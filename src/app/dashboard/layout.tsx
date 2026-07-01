@@ -4,6 +4,7 @@ import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
+import { Logo } from "@/components/Logo";
 
 export default async function DashboardLayout({
   children,
@@ -36,8 +37,8 @@ export default async function DashboardLayout({
       <header className="border-b-[0.5px] border-border bg-background">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="text-lg font-bold text-brand">
-              Stayful
+            <Link href="/dashboard" aria-label="Stayful dashboard">
+              <Logo height={32} priority />
             </Link>
             <nav className="hidden items-center gap-1 sm:flex">
               {nav.map((item) => (

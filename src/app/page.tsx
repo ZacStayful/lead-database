@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Logo } from "@/components/Logo";
 import { Check, MapPin, ShieldCheck, Zap } from "lucide-react";
 
 export default function LandingPage() {
@@ -9,7 +10,9 @@ export default function LandingPage() {
       {/* Nav */}
       <header className="border-b-[0.5px] border-border">
         <div className="container flex h-16 items-center justify-between">
-          <span className="text-lg font-bold text-brand">Stayful</span>
+          <Link href="/" aria-label="Stayful home">
+            <Logo height={36} priority />
+          </Link>
           <nav className="flex items-center gap-2">
             <Button variant="ghost" size="sm" asChild>
               <Link href="/login">Log in</Link>
@@ -23,12 +26,15 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="container py-24 text-center">
+        <div className="mb-8 flex justify-center">
+          <Logo height={48} priority />
+        </div>
         <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-tight sm:text-5xl">
-          Warm landlord leads. No ad spend required.
+          20 pre-screened landlord leads a month.
         </h1>
         <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-          Stayful shares pre-screened landlord enquiries with a small number of
-          STR operators each month. £300 per month. 20 leads. No contracts.
+          Stayful passes warm, Google-sourced landlord enquiries to a small
+          number of STR operators. £300 per month. 20 leads. No contracts.
         </p>
         <div className="mt-8 flex justify-center">
           <Button size="lg" asChild>

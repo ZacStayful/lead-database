@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Logo } from "@/components/Logo";
 
 export default function SignupPage() {
   const [form, setForm] = useState({
@@ -52,8 +53,8 @@ export default function SignupPage() {
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <Link href="/" className="text-lg font-bold text-brand">
-            Stayful
+          <Link href="/" aria-label="Stayful home" className="flex justify-center">
+            <Logo height={36} priority />
           </Link>
           <CardTitle className="pt-2">Apply for access</CardTitle>
           <p className="text-sm text-muted-foreground">

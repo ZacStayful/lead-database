@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Logo } from "@/components/Logo";
 
 export default function LoginPage() {
   return (
@@ -56,8 +57,8 @@ function LoginForm() {
     <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <Link href="/" className="text-lg font-bold text-brand">
-            Stayful
+          <Link href="/" aria-label="Stayful home" className="flex justify-center">
+            <Logo height={36} priority />
           </Link>
           <CardTitle className="pt-2">Log in to your portal</CardTitle>
         </CardHeader>

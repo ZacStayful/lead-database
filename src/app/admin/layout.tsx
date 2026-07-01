@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUser, isAdminUser } from "@/lib/auth";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
+import { Logo } from "@/components/Logo";
 
 export default async function AdminLayout({
   children,
@@ -23,8 +24,8 @@ export default async function AdminLayout({
       <header className="border-b-[0.5px] border-border bg-background">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-6">
-            <Link href="/admin" className="flex items-center gap-2">
-              <span className="text-lg font-bold text-brand">Stayful</span>
+            <Link href="/admin" className="flex items-center gap-2" aria-label="Stayful admin">
+              <Logo height={32} priority />
               <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
                 Admin
               </span>

@@ -4,6 +4,11 @@
 
 @layer base {
   :root {
+    /* Stayful brand palette */
+    --stayful-green: #5d8156;
+    --stayful-green-light: #eaf3de;
+    --stayful-green-dark: #3b6d11;
+
     --background: 0 0% 100%;
     --foreground: 0 0% 10%;
 
@@ -16,7 +21,7 @@
     --accent: 120 6% 95%;
     --accent-foreground: 0 0% 10%;
 
-    /* Stayful green #5D8156 as the primary accent */
+    /* Primary === Stayful green #5D8156 (108 19% 42%) */
     --primary: 108 19% 42%;
     --primary-foreground: 0 0% 100%;
 
@@ -37,6 +42,10 @@
 @layer base {
   * {
     @apply border-border;
+  }
+  html {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   }
   body {
     @apply bg-background text-foreground;
