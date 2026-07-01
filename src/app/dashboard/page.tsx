@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { formatDate } from "@/lib/utils";
+import { computePacing, pacingMessage } from "@/lib/pacing";
 import type { AssignmentWithLead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,7 @@ export default async function DashboardPage() {
 
   const isActive = customer.subscription_status === "active";
   const renewalDate = nextRenewalDate();
+  const pacing = computePacing(customer);
 
   const stats = [
     {
@@ -95,6 +97,19 @@ export default async function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      <p
+        className={
+          "text-sm font-medium " +
+          (pacing.status === "behind"
+            ? "text-amber-600"
+            : pacing.status === "ahead"
+              ? "text-muted-foreground"
+              : "text-brand")
+        }
+      >
+        {pacingMessage(pacing.deficit)}
+      </p>
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>

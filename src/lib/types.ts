@@ -20,6 +20,7 @@ export interface Customer {
   overflow_enabled: boolean;
   is_active: boolean;
   last_assignment_at: string | null;
+  billing_cycle_anchor: string | null;
   created_at: string;
   updated_at: string;
 }

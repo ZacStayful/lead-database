@@ -6,6 +6,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Convert a Stripe unix timestamp (seconds) to a YYYY-MM-DD date string. */
+function toDateString(unixSeconds: number | null | undefined): string | null {
+  if (!unixSeconds) return null;
+  return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
+}
+
 /** Map a Stripe subscription status onto our customers.subscription_status. */
 function mapStatus(status: Stripe.Subscription.Status): string {
   switch (status) {
@@ -56,13 +62,18 @@ export async function POST(request: NextRequest) {
             ? "canceled"
             : mapStatus(sub.status);
 
+        const update: Record<string, unknown> = {
+          stripe_subscription_id: sub.id,
+          subscription_status: status,
+          updated_at: new Date().toISOString(),
+        };
+        // Anchor the billing cycle to the current period start.
+        const anchor = toDateString(sub.current_period_start);
+        if (anchor) update.billing_cycle_anchor = anchor;
+
         await admin
           .from("customers")
-          .update({
-            stripe_subscription_id: sub.id,
-            subscription_status: status,
-            updated_at: new Date().toISOString(),
-          })
+          .update(update)
           .eq("stripe_customer_id", customerId);
         break;
       }
@@ -91,13 +102,18 @@ export async function POST(request: NextRequest) {
             status: "paid",
           });
 
-          // Keep the subscription marked active on successful renewal.
+          // Keep the subscription marked active and re-anchor the billing
+          // cycle to the start of the period this invoice covers.
+          const renewalUpdate: Record<string, unknown> = {
+            subscription_status: "active",
+            updated_at: new Date().toISOString(),
+          };
+          const renewalAnchor = toDateString(invoice.period_start);
+          if (renewalAnchor) renewalUpdate.billing_cycle_anchor = renewalAnchor;
+
           await admin
             .from("customers")
-            .update({
-              subscription_status: "active",
-              updated_at: new Date().toISOString(),
-            })
+            .update(renewalUpdate)
             .eq("id", customer.id);
         }
         break;
