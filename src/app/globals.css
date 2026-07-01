@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+
+    --muted: 120 6% 96%;
+    --muted-foreground: 120 4% 42%;
+
+    --accent: 120 6% 95%;
+    --accent-foreground: 0 0% 10%;
+
+    /* Stayful green #5D8156 as the primary accent */
+    --primary: 108 19% 42%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 120 6% 96%;
+    --secondary-foreground: 0 0% 10%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 120 6% 86%;
+    --input: 120 6% 86%;
+    --ring: 108 19% 42%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Signature element: unread lead cards get a 3px solid brand left border. */
+.lead-card-unread {
+  border-left: 3px solid #5d8156;
+}
+.lead-card-viewed {
+  border-left: 0.5px solid hsl(var(--border));
+}

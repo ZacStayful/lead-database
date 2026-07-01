@@ -1,0 +1,179 @@
+"use client";
+
+import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { cn, initials, formatDate } from "@/lib/utils";
+import type { AssignmentWithLead } from "@/lib/types";
+import { BarChart3, Check, Mail, Phone, MapPin, Calendar } from "lucide-react";
+
+export function LeadCard({
+  assignment: initial,
+}: {
+  assignment: AssignmentWithLead;
+}) {
+  const [assignment, setAssignment] = useState(initial);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const lead = assignment.lead;
+  const isUnread = !assignment.viewed_at;
+  const contacted = assignment.status === "contacted";
+
+  async function markViewed() {
+    if (assignment.viewed_at) return;
+    // Optimistically clear the "new" state.
+    setAssignment((a) => ({ ...a, viewed_at: new Date().toISOString() }));
+    try {
+      await fetch(`/api/customer/assignments/${assignment.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ viewed: true }),
+      });
+    } catch {
+      /* non-blocking */
+    }
+  }
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next) void markViewed();
+  }
+
+  async function markContacted() {
+    setBusy(true);
+    setAssignment((a) => ({ ...a, status: "contacted" }));
+    try {
+      await fetch(`/api/customer/assignments/${assignment.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contacted: true }),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg bg-card transition-colors",
+        isUnread ? "lead-card-unread" : "lead-card-viewed"
+      )}
+    >
+      <button
+        onClick={toggle}
+        className="flex w-full items-center gap-4 p-4 text-left"
+      >
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand/10 text-sm font-semibold text-brand">
+          {initials(lead.lead_name)}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium">{lead.lead_name}</span>
+            {isUnread ? (
+              <Badge variant="brand">New</Badge>
+            ) : (
+              <Badge variant="muted">Viewed</Badge>
+            )}
+            {contacted && <Badge variant="outline">Contacted</Badge>}
+          </div>
+          <p className="truncate text-sm text-muted-foreground">
+            {lead.address ?? "Address on file"}
+          </p>
+        </div>
+        <div className="hidden shrink-0 items-center gap-3 sm:flex">
+          {lead.bedrooms && (
+            <span className="text-sm text-muted-foreground">
+              {lead.bedrooms} bed
+            </span>
+          )}
+          {lead.estimated_monthly_income && (
+            <span className="rounded-full bg-brand/10 px-3 py-1 text-sm font-medium text-brand">
+              {lead.estimated_monthly_income}
+            </span>
+          )}
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t-[0.5px] border-border px-4 py-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Detail icon={Mail} label="Email" value={lead.email} isEmail />
+            <Detail icon={Phone} label="Phone" value={lead.phone} isPhone />
+            <Detail icon={MapPin} label="Full address" value={lead.address} />
+            <Detail
+              icon={Calendar}
+              label="Enquiry date"
+              value={formatDate(lead.enquiry_date)}
+            />
+          </div>
+          {lead.lead_profile && (
+            <div className="mt-3 rounded-md bg-muted/50 p-3 text-sm">
+              <p className="mb-1 font-medium text-muted-foreground">
+                Lead profile notes
+              </p>
+              <p>{lead.lead_profile}</p>
+            </div>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button size="sm" asChild>
+              <a
+                href="https://intelligence.stayful.co.uk"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <BarChart3 className="h-4 w-4" />
+                Open STR Analyser
+              </a>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={markContacted}
+              disabled={busy || contacted}
+            >
+              <Check className="h-4 w-4" />
+              {contacted ? "Contacted" : "Mark as contacted"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Detail({
+  icon: Icon,
+  label,
+  value,
+  isEmail,
+  isPhone,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value?: string | null;
+  isEmail?: boolean;
+  isPhone?: boolean;
+}) {
+  const display = value || "—";
+  return (
+    <div className="flex items-start gap-2">
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        {isEmail && value ? (
+          <a href={`mailto:${value}`} className="text-sm text-brand hover:underline">
+            {value}
+          </a>
+        ) : isPhone && value ? (
+          <a href={`tel:${value}`} className="text-sm text-brand hover:underline">
+            {value}
+          </a>
+        ) : (
+          <p className="truncate text-sm">{display}</p>
+        )}
+      </div>
+    </div>
+  );
+}
