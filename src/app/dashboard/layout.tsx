@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
@@ -31,6 +31,9 @@ export default async function DashboardLayout({
     { href: "/dashboard/notifications", label: "Notifications" },
     { href: "/dashboard/settings", label: "Settings" },
   ];
+  if (isAdminUser(user)) {
+    nav.push({ href: "/admin", label: "Admin" });
+  }
 
   return (
     <div className="min-h-screen bg-muted/20">

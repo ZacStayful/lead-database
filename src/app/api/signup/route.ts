@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
+import { isOwnerEmail } from "@/lib/owner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,13 +35,21 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createAdminClient();
+  const owner = isOwnerEmail(email);
 
   // 1. Create the auth user (confirmed so they can log in immediately).
+  // Owner accounts are provisioned as admin; app_metadata.role is not editable
+  // from the browser client, so it's the trustworthy place to grant admin.
   const { data: created, error: userError } = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
-    user_metadata: { role: "customer", business_name, contact_name },
+    app_metadata: owner ? { role: "admin" } : { role: "customer" },
+    user_metadata: {
+      role: owner ? "admin" : "customer",
+      business_name,
+      contact_name,
+    },
   });
 
   if (userError || !created.user) {
@@ -50,6 +59,24 @@ export async function POST(request: NextRequest) {
   }
 
   const userId = created.user.id;
+
+  // Owner override: skip the payment wall. Provision an active customer record
+  // (no Stripe) so both the customer portal and the admin panel are usable.
+  if (owner) {
+    const { error: ownerError } = await admin.from("customers").insert({
+      user_id: userId,
+      business_name,
+      contact_name,
+      email,
+      phone: phone ?? null,
+      subscription_status: "active",
+    });
+    if (ownerError) {
+      await admin.auth.admin.deleteUser(userId).catch(() => {});
+      return NextResponse.json({ error: ownerError.message }, { status: 500 });
+    }
+    return NextResponse.json({ url: "/admin" });
+  }
 
   try {
     // 2. Create the Stripe customer.
