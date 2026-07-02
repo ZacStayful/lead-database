@@ -25,12 +25,17 @@ cp .env.example .env.local   # fill in the values
 npm run dev
 ```
 
-### 1. Database
+### 1. Database (required — the app 500s until this is done)
 
-Run the SQL migrations in order in the Supabase SQL editor:
+Easiest: open the Supabase SQL editor and paste the whole of
+**`supabase/schema.sql`** (a consolidated, idempotent copy of all migrations)
+and run it once.
+
+Or run the individual migrations in order:
 
 1. `supabase/migrations/0001_init.sql` — tables, functions, RLS policies
-2. `supabase/migrations/0002_cron.sql` — monthly `leads_received_this_month` reset
+2. `supabase/migrations/0003_pacing.sql` — pacing column + deficit ordering
+3. `supabase/migrations/0002_cron.sql` — monthly `leads_received_this_month` reset (needs pg_cron)
 
 ### 2. Auth
 
