@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
+import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
   const [form, setForm] = useState({
@@ -41,7 +42,21 @@ export default function SignupPage() {
         setLoading(false);
         return;
       }
-      // Redirect to Stripe Checkout.
+
+      if (data.mode === "login") {
+        // Owner account: sign in so the session cookie is set, then go to /admin.
+        const supabase = createClient();
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: form.email,
+          password: form.password,
+        });
+        window.location.href = signInError
+          ? "/login"
+          : (data.redirect ?? "/dashboard");
+        return;
+      }
+
+      // Standard flow: redirect to Stripe Checkout.
       window.location.href = data.url;
     } catch {
       setError("Something went wrong. Please try again.");
