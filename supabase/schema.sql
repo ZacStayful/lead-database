@@ -21,6 +21,8 @@ create table if not exists public.customers (
   monthly_allocation        integer default 20,
   leads_received_this_month integer default 0,
   lead_balance              integer not null default 0,
+  account_status            text not null default 'waitlisted'
+    check (account_status in ('waitlisted', 'invited', 'active', 'cancelled')),
   is_active                 boolean default true,
   last_assignment_at        timestamptz,
   billing_cycle_anchor      date,
@@ -34,7 +36,23 @@ alter table public.customers
 alter table public.customers
   add column if not exists billing_cycle_anchor date;
 alter table public.customers
+  add column if not exists account_status text not null default 'waitlisted';
+alter table public.customers
   drop column if exists overflow_enabled;
+-- Existing customers predate capacity management — treat live rows as active.
+update public.customers set account_status = 'active'
+  where is_active = true and account_status = 'waitlisted';
+
+-- System settings: admin-tunable key/value store (capacity cap lives here).
+create table if not exists public.system_settings (
+  key        text primary key,
+  value      text not null,
+  updated_at timestamptz not null default now()
+);
+insert into public.system_settings (key, value)
+  values ('max_active_customers', '10')
+  on conflict (key) do nothing;
+alter table public.system_settings enable row level security;
 
 create table if not exists public.leads (
   id                       uuid primary key default gen_random_uuid(),
@@ -218,6 +236,7 @@ as $$
   select c.id
   from public.customers c
   where c.is_active = true
+    and c.account_status = 'active'
     and c.subscription_status = 'active'
     and c.lead_balance > 0
     and not (c.id = any (coalesce(p_exclude_customer_ids, '{}'::uuid[])))

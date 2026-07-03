@@ -94,6 +94,14 @@ export async function POST(request: NextRequest) {
             console.error("increment_lead_balance failed", balanceError);
           }
 
+          // Promote invited → active on the first successful payment. The
+          // account_status guard makes this a no-op on later renewals.
+          await admin
+            .from("customers")
+            .update({ account_status: "active" })
+            .eq("stripe_customer_id", customerId)
+            .eq("account_status", "invited");
+
           const { data: customer } = await admin
             .from("customers")
             .select("id")

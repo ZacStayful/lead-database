@@ -56,6 +56,12 @@ export default function SignupPage() {
         return;
       }
 
+      if (data.mode === "waitlisted") {
+        // No capacity — account created and held on the waitlist.
+        window.location.href = data.redirect ?? "/waitlisted";
+        return;
+      }
+
       // Standard flow: redirect to Stripe Checkout.
       window.location.href = data.url;
     } catch {
