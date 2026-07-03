@@ -6,7 +6,7 @@ import { isAdminUser } from "@/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Manually adjust a customer's monthly allocation / overflow / active flag. Admin only. */
+/** Manually adjust a customer's monthly allocation / active flag. Admin only. */
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -22,7 +22,6 @@ export async function POST(
 
   let body: {
     monthly_allocation?: number;
-    overflow_enabled?: boolean;
     is_active?: boolean;
     leads_received_this_month?: number;
   };
@@ -35,9 +34,6 @@ export async function POST(
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (typeof body.monthly_allocation === "number") {
     update.monthly_allocation = Math.max(0, Math.floor(body.monthly_allocation));
-  }
-  if (typeof body.overflow_enabled === "boolean") {
-    update.overflow_enabled = body.overflow_enabled;
   }
   if (typeof body.is_active === "boolean") {
     update.is_active = body.is_active;

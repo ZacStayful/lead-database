@@ -3,15 +3,16 @@
 A vertically integrated lead subscription platform for [Stayful](https://stayful.co.uk),
 a UK short-term-rental property management company. Unqualified landlord
 enquiries are sold to other STR operators via a subscription portal:
-**£300 / month for 20 leads**, max 2 operators per lead, £20 overflow leads for
-opted-in customers.
+**£300 / month for 20 leads**, max 2 operators per lead. Each payment tops up a
+running `lead_balance` of credits, so any leads not received in a cycle carry
+forward automatically.
 
 ## Stack
 
 - **Framework:** Next.js 14 (App Router)
 - **Hosting:** Vercel
 - **Database & auth:** Supabase (Postgres + RLS + Realtime)
-- **Payments:** Stripe (subscription + overflow invoice items)
+- **Payments:** Stripe (monthly subscription)
 - **Lead ingestion:** n8n webhook (Monday.com board `18420117742`)
 - **Email:** Resend
 - **Excel export:** SheetJS (server-generated `.xlsx`)
@@ -35,7 +36,10 @@ Or run the individual migrations in order:
 
 1. `supabase/migrations/0001_init.sql` — tables, functions, RLS policies
 2. `supabase/migrations/0003_pacing.sql` — pacing column + deficit ordering
-3. `supabase/migrations/0002_cron.sql` — monthly `leads_received_this_month` reset (needs pg_cron)
+3. `supabase/migrations/0004_remove_overflow.sql` — drop the overflow flag
+4. `supabase/migrations/0005_add_lead_balance.sql` — lead credit balance + balance-gated assignment
+5. `supabase/migrations/0006_add_reject.sql` — assignment status set + atomic reject
+6. `supabase/migrations/0002_cron.sql` — monthly `leads_received_this_month` reset (needs pg_cron)
 
 ### 2. Auth
 
@@ -49,7 +53,6 @@ Or run the individual migrations in order:
 Create two products and copy the price IDs into env:
 
 - **Stayful Lead Subscription** — £300 / month recurring → `STRIPE_MONTHLY_PRICE_ID`
-- **Stayful Overflow Lead** — £20 one-time → `STRIPE_OVERFLOW_PRICE_ID`
 
 Add a webhook endpoint → `{APP_URL}/api/webhook/stripe` listening for
 `customer.subscription.{created,updated,deleted}`, `invoice.paid`,
@@ -80,10 +83,12 @@ Point the Monday.com "item created" automation at
 ```
 
 Flow: validate bearer token → idempotency check on `monday_item_id` → insert
-lead → `get_next_customers_for_lead` (max 2, round-robin by
-`last_assignment_at`) → `assign_lead_to_customer` atomically for each →
-notification row + Resend email → threshold emails at 18 / allocation → £20
-overflow charge when over allocation.
+lead → `get_next_customers_for_lead` (max 2, deficit-first pacing, positive
+`lead_balance` required) → `assign_lead_to_customer` atomically for each (spends
+one lead credit) → notification row + Resend email → threshold emails at 18 /
+allocation. On each subscription `invoice.paid`, `lead_balance` is topped up by
+20. Customers may reject a `new` assignment, which refunds one credit and
+reassigns the lead to the next eligible customer.
 
 ## Routes
 
@@ -92,7 +97,7 @@ overflow charge when over allocation.
 | Public | `/`, `/login`, `/signup` | Landing, auth, Stripe checkout |
 | Customer | `/dashboard`, `/dashboard/leads`, `/dashboard/notifications`, `/dashboard/settings` | Realtime lead feed |
 | Admin | `/admin`, `/admin/customers`, `/admin/customers/[id]`, `/admin/leads`, `/admin/leads/[id]` | Requires `role: admin` |
-| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation` | Plus customer overflow / assignment / billing-portal helpers |
+| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation` | Plus customer assignment / lead reject / billing-portal helpers |
 
 ## Design
 

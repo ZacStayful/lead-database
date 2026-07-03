@@ -82,39 +82,52 @@ export async function POST(request: NextRequest) {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
 
-        const { data: customer } = await admin
-          .from("customers")
-          .select("id")
-          .eq("stripe_customer_id", customerId)
-          .maybeSingle();
+        // Only subscription renewals grant lead credit. Every invoice this
+        // integration receives is a subscription invoice.
+        if (invoice.subscription) {
+          // Subscription renewal — add 20 leads of credit.
+          const { error: balanceError } = await admin.rpc(
+            "increment_lead_balance",
+            { p_stripe_customer_id: customerId, p_amount: 20 }
+          );
+          if (balanceError) {
+            console.error("increment_lead_balance failed", balanceError);
+          }
 
-        if (customer) {
-          // Determine whether this is the monthly subscription or an overflow charge.
-          const isSubscription = Boolean(invoice.subscription);
-          await admin.from("payments").insert({
-            customer_id: customer.id,
-            stripe_invoice_id: invoice.id,
-            stripe_payment_intent_id:
-              (invoice.payment_intent as string | null) ?? null,
-            amount_pence: invoice.amount_paid ?? 0,
-            credits_added: isSubscription ? 20 : null,
-            payment_type: isSubscription ? "subscription" : "overflow",
-            status: "paid",
-          });
-
-          // Keep the subscription marked active and re-anchor the billing
-          // cycle to the start of the period this invoice covers.
-          const renewalUpdate: Record<string, unknown> = {
-            subscription_status: "active",
-            updated_at: new Date().toISOString(),
-          };
-          const renewalAnchor = toDateString(invoice.period_start);
-          if (renewalAnchor) renewalUpdate.billing_cycle_anchor = renewalAnchor;
-
-          await admin
+          const { data: customer } = await admin
             .from("customers")
-            .update(renewalUpdate)
-            .eq("id", customer.id);
+            .select("id")
+            .eq("stripe_customer_id", customerId)
+            .maybeSingle();
+
+          if (customer) {
+            // Record the payment.
+            await admin.from("payments").insert({
+              customer_id: customer.id,
+              stripe_invoice_id: invoice.id,
+              stripe_payment_intent_id:
+                (invoice.payment_intent as string | null) ?? null,
+              amount_pence: invoice.amount_paid ?? 0,
+              credits_added: 20,
+              payment_type: "subscription",
+              status: "paid",
+            });
+
+            // Keep the subscription marked active and re-anchor the billing
+            // cycle to the start of the period this invoice covers.
+            const renewalUpdate: Record<string, unknown> = {
+              subscription_status: "active",
+              updated_at: new Date().toISOString(),
+            };
+            const renewalAnchor = toDateString(invoice.period_start);
+            if (renewalAnchor)
+              renewalUpdate.billing_cycle_anchor = renewalAnchor;
+
+            await admin
+              .from("customers")
+              .update(renewalUpdate)
+              .eq("id", customer.id);
+          }
         }
         break;
       }

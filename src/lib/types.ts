@@ -17,7 +17,7 @@ export interface Customer {
   subscription_status: SubscriptionStatus | string;
   monthly_allocation: number;
   leads_received_this_month: number;
-  overflow_enabled: boolean;
+  lead_balance: number;
   is_active: boolean;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;

@@ -12,7 +12,6 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
   const router = useRouter();
   const [allocation, setAllocation] = useState(customer.monthly_allocation);
   const [received, setReceived] = useState(customer.leads_received_this_month);
-  const [overflow, setOverflow] = useState(customer.overflow_enabled);
   const [active, setActive] = useState(customer.is_active);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -29,7 +28,6 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
           body: JSON.stringify({
             monthly_allocation: Number(allocation),
             leads_received_this_month: Number(received),
-            overflow_enabled: overflow,
             is_active: active,
           }),
         }
@@ -73,16 +71,6 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             Manual credit adjustment — lower this to grant more leads this month.
           </p>
         </div>
-      </div>
-
-      <div className="flex items-center justify-between rounded-md border-[0.5px] border-border p-3">
-        <div>
-          <p className="text-sm font-medium">Overflow enabled</p>
-          <p className="text-xs text-muted-foreground">
-            Allow leads beyond the monthly allocation at £20 each.
-          </p>
-        </div>
-        <Switch checked={overflow} onCheckedChange={setOverflow} />
       </div>
 
       <div className="flex items-center justify-between rounded-md border-[0.5px] border-border p-3">

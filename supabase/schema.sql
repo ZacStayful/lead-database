@@ -1,15 +1,7 @@
 -- ============================================================================
 -- Stayful Lead Marketplace — full database setup (consolidated)
 -- Paste this entire file into the Supabase SQL editor and run it once.
--- Idempotent: safe to re-run. Combines migrations 0001 + 0002 + 0003.
--- ============================================================================
-
--- >>> 0001_init.sql >>>
--- ============================================================================
--- Stayful Lead Marketplace — initial schema
--- Tables, functions, RLS policies.
--- Run this in the Supabase SQL editor (or via the Supabase CLI) before
--- deploying application code.
+-- Idempotent: safe to re-run. Reflects migrations 0001 → 0006.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -28,12 +20,21 @@ create table if not exists public.customers (
   subscription_status       text default 'inactive',
   monthly_allocation        integer default 20,
   leads_received_this_month integer default 0,
-  overflow_enabled          boolean default false,
+  lead_balance              integer not null default 0,
   is_active                 boolean default true,
   last_assignment_at        timestamptz,
+  billing_cycle_anchor      date,
   created_at                timestamptz default now(),
   updated_at                timestamptz default now()
 );
+
+-- Older databases: bring the customers table up to the current shape.
+alter table public.customers
+  add column if not exists lead_balance integer not null default 0;
+alter table public.customers
+  add column if not exists billing_cycle_anchor date;
+alter table public.customers
+  drop column if exists overflow_enabled;
 
 create table if not exists public.leads (
   id                       uuid primary key default gen_random_uuid(),
@@ -59,10 +60,25 @@ create table if not exists public.lead_assignments (
   notification_sent boolean default false,
   email_sent        boolean default false,
   viewed_at         timestamptz,
-  status            text default 'active',
+  status            text default 'new',
   assigned_at       timestamptz default now(),
   unique (lead_id, customer_id)
 );
+
+-- Canonical assignment status set (adds 'rejected'). Normalise legacy 'active'
+-- rows to 'new' before applying the constraint.
+update public.lead_assignments
+  set status = 'new'
+  where status is null
+     or status not in
+        ('new', 'contacted', 'in_discussion', 'won', 'not_relevant', 'rejected');
+alter table public.lead_assignments
+  alter column status set default 'new';
+alter table public.lead_assignments
+  drop constraint if exists lead_assignments_status_check;
+alter table public.lead_assignments
+  add constraint lead_assignments_status_check
+  check (status in ('new', 'contacted', 'in_discussion', 'won', 'not_relevant', 'rejected'));
 
 create table if not exists public.payments (
   id                       uuid primary key default gen_random_uuid(),
@@ -98,10 +114,30 @@ create index if not exists idx_leads_created_at on public.leads(created_at desc)
 -- Functions
 -- ---------------------------------------------------------------------------
 
+-- Add lead credit for a customer, keyed on their Stripe customer id. Called by
+-- the Stripe webhook on every successful subscription payment.
+create or replace function public.increment_lead_balance(
+  p_stripe_customer_id text,
+  p_amount integer
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.customers
+    set lead_balance = lead_balance + p_amount,
+        updated_at = now()
+    where stripe_customer_id = p_stripe_customer_id;
+end;
+$$;
+
 -- Atomically assign a lead to a customer with all invariant checks.
 -- Runs with security definer so the webhook (service role) and admin routes
 -- share a single, race-safe code path. Row locks prevent double-assignment
--- when two leads/webhooks race.
+-- when two leads/webhooks race. Lead balance is the sole allocation gate and is
+-- decremented in the same transaction as the assignment insert.
 create or replace function public.assign_lead_to_customer(
   p_lead_id uuid,
   p_customer_id uuid,
@@ -117,7 +153,6 @@ declare
   v_customer public.customers%rowtype;
   v_assignment_id uuid;
 begin
-  -- Lock the lead and customer rows for the duration of the transaction.
   select * into v_lead from public.leads
     where id = p_lead_id for update;
   if not found then
@@ -130,31 +165,26 @@ begin
     raise exception 'Customer % not found', p_customer_id;
   end if;
 
-  -- Lead capacity check.
   if v_lead.assignment_count >= v_lead.max_assignments then
     raise exception 'Lead % is at max assignments (%/%)',
       p_lead_id, v_lead.assignment_count, v_lead.max_assignments;
   end if;
 
-  -- Customer allocation check: must have remaining allocation OR overflow enabled.
-  if v_customer.leads_received_this_month >= v_customer.monthly_allocation
-     and not v_customer.overflow_enabled then
-    raise exception 'Customer % has no remaining allocation and overflow disabled',
-      p_customer_id;
+  if v_customer.lead_balance <= 0 then
+    raise exception 'Customer % has no remaining lead balance', p_customer_id;
   end if;
 
-  -- Insert the assignment (unique constraint guards against duplicates).
   insert into public.lead_assignments (lead_id, customer_id, price_paid)
     values (p_lead_id, p_customer_id, p_price)
     returning id into v_assignment_id;
 
-  -- Increment counters.
   update public.leads
     set assignment_count = assignment_count + 1
     where id = p_lead_id;
 
   update public.customers
     set leads_received_this_month = leads_received_this_month + 1,
+        lead_balance = lead_balance - 1,
         last_assignment_at = now(),
         updated_at = now()
     where id = p_customer_id;
@@ -163,12 +193,22 @@ begin
 end;
 $$;
 
--- Return up to p_max eligible customers for a lead, ordered for round-robin
--- fairness (least-recently-assigned first, nulls first so brand-new customers
--- get served promptly).
+-- Return up to p_max eligible customers for a lead, ordered deficit-first
+-- (customers behind pace served first). Eligibility requires an active
+-- subscription and a positive lead_balance, and excludes customers already
+-- assigned this lead or listed in p_exclude_customer_ids.
+--
+--   days_elapsed = today - billing_cycle_anchor   (clamped 0..30)
+--   expected     = ROUND((days_elapsed / 30) * monthly_allocation)
+--   deficit      = expected - leads_received_this_month
+--
+-- billing_cycle_anchor falls back to created_at when the subscription webhook
+-- hasn't landed yet.
+drop function if exists public.get_next_customers_for_lead(uuid, integer);
 create or replace function public.get_next_customers_for_lead(
   p_lead_id uuid,
-  p_max integer
+  p_max integer,
+  p_exclude_customer_ids uuid[] default '{}'::uuid[]
 )
 returns table (customer_id uuid)
 language sql
@@ -179,22 +219,68 @@ as $$
   from public.customers c
   where c.is_active = true
     and c.subscription_status = 'active'
-    -- not already assigned this lead
+    and c.lead_balance > 0
+    and not (c.id = any (coalesce(p_exclude_customer_ids, '{}'::uuid[])))
     and not exists (
       select 1 from public.lead_assignments la
       where la.lead_id = p_lead_id
         and la.customer_id = c.id
     )
-    -- has remaining allocation, or overflow enabled
-    and (
-      c.leads_received_this_month < c.monthly_allocation
-      or c.overflow_enabled = true
-    )
-  order by c.last_assignment_at asc nulls first, c.created_at asc
+  order by
+    round(
+      (least(greatest(
+        extract(day from now() - coalesce(c.billing_cycle_anchor, c.created_at::date)),
+        0), 30) / 30.0)
+      * c.monthly_allocation
+    ) - c.leads_received_this_month desc,
+    c.last_assignment_at asc nulls first,
+    c.created_at asc
   limit p_max;
 $$;
 
+-- Atomic rejection: flip a 'new' assignment to 'rejected', restore one lead
+-- credit, decrement the monthly counter, and reopen the lead's assignment slot.
+create or replace function public.reject_lead_assignment(
+  p_assignment_id uuid,
+  p_customer_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_lead_id uuid;
+begin
+  select lead_id into v_lead_id
+  from public.lead_assignments
+  where id = p_assignment_id
+    and customer_id = p_customer_id
+    and status = 'new';
+
+  if not found then
+    raise exception 'Assignment not found, not owned by this customer, or not rejectable';
+  end if;
+
+  update public.lead_assignments
+    set status = 'rejected'
+    where id = p_assignment_id;
+
+  update public.customers
+    set lead_balance = lead_balance + 1,
+        leads_received_this_month = greatest(leads_received_this_month - 1, 0),
+        updated_at = now()
+    where id = p_customer_id;
+
+  update public.leads
+    set assignment_count = greatest(assignment_count - 1, 0)
+    where id = v_lead_id;
+end;
+$$;
+
 -- Reset monthly lead counters. Wire to Supabase cron on the 1st of the month.
+-- This only touches leads_received_this_month; lead_balance is independent and
+-- never reset here.
 create or replace function public.reset_monthly_counts()
 returns void
 language sql
@@ -216,10 +302,10 @@ alter table public.lead_assignments enable row level security;
 alter table public.notifications    enable row level security;
 alter table public.payments         enable row level security;
 
--- Customers: a user can read only their own row. Writes (overflow toggle,
--- allocation changes) are intentionally NOT exposed to the browser client —
--- they go through server routes using the service role so a customer cannot
--- self-grant allocation or flip billing flags.
+-- Customers: a user can read only their own row. Writes (allocation changes,
+-- billing flags) are intentionally NOT exposed to the browser client — they go
+-- through server routes using the service role so a customer cannot self-grant
+-- allocation or flip billing flags.
 drop policy if exists "customers_select_own" on public.customers;
 create policy "customers_select_own" on public.customers
   for select using (auth.uid() = user_id);
@@ -308,72 +394,12 @@ begin
   end if;
 end $$;
 
--- >>> 0003_pacing.sql >>>
--- ============================================================================
--- Lead pacing system.
--- Adds billing_cycle_anchor and switches lead assignment from round-robin to
--- deficit-first ordering so leads are distributed proportionally across the
--- billing cycle. Customers behind pace are served first.
--- ============================================================================
-
-alter table public.customers
-  add column if not exists billing_cycle_anchor date;
-
--- Deficit-first assignment. Still returns just customer_id so the webhook
--- contract is unchanged; the pacing deficit is used only for ordering.
---
---   days_elapsed = today - billing_cycle_anchor   (clamped 0..30)
---   expected     = ROUND((days_elapsed / 30) * monthly_allocation)
---   deficit      = expected - leads_received_this_month
---
--- Highest deficit (most behind pace) wins; ties fall back to
--- last_assignment_at ascending for fairness. billing_cycle_anchor falls back to
--- created_at for customers whose subscription webhook hasn't landed yet.
-create or replace function public.get_next_customers_for_lead(
-  p_lead_id uuid,
-  p_max integer
-)
-returns table (customer_id uuid)
-language sql
-security definer
-set search_path = public
-as $$
-  select c.id
-  from public.customers c
-  where c.is_active = true
-    and c.subscription_status = 'active'
-    and not exists (
-      select 1 from public.lead_assignments la
-      where la.lead_id = p_lead_id
-        and la.customer_id = c.id
-    )
-    and (
-      c.leads_received_this_month < c.monthly_allocation
-      or c.overflow_enabled = true
-    )
-  order by
-    round(
-      (least(greatest(
-        extract(day from now() - coalesce(c.billing_cycle_anchor, c.created_at::date)),
-        0), 30) / 30.0)
-      * c.monthly_allocation
-    ) - c.leads_received_this_month desc,
-    c.last_assignment_at asc nulls first,
-    c.created_at asc
-  limit p_max;
-$$;
-
--- >>> 0002_cron.sql (requires pg_cron; run last) >>>
--- ============================================================================
--- Monthly reset cron.
--- Requires the pg_cron extension (enable it in the Supabase dashboard under
--- Database → Extensions, or via the statement below).
+-- ---------------------------------------------------------------------------
+-- Monthly reset cron (requires pg_cron; run last).
 -- Runs reset_monthly_counts() at 00:05 on the 1st of every month.
--- ============================================================================
-
+-- ---------------------------------------------------------------------------
 create extension if not exists pg_cron;
 
--- Remove any prior schedule with the same name before (re)creating it.
 select cron.unschedule('reset-monthly-lead-counts')
 where exists (
   select 1 from cron.job where jobname = 'reset-monthly-lead-counts'

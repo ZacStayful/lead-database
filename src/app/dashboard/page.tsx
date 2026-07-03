@@ -49,16 +49,29 @@ export default async function DashboardPage() {
   const isActive = customer.subscription_status === "active";
   const renewalDate = nextRenewalDate();
   const pacing = computePacing(customer);
+  const exhausted = customer.lead_balance === 0;
+  const carriedForward = customer.lead_balance - customer.monthly_allocation;
 
-  const stats = [
+  const stats: {
+    label: string;
+    value: string;
+    accent?: boolean;
+    valueClass?: string;
+    secondary?: string;
+  }[] = [
     {
       label: "Subscription",
       value: isActive ? "Active" : titleCase(customer.subscription_status),
       accent: isActive,
     },
     {
-      label: "Leads this month",
-      value: `${customer.leads_received_this_month} of ${customer.monthly_allocation}`,
+      label: "Leads remaining",
+      value: String(customer.lead_balance),
+      valueClass: exhausted ? "text-amber-600" : undefined,
+      secondary:
+        carriedForward > 0
+          ? `includes ${carriedForward} carried forward`
+          : undefined,
     },
     {
       label: "Unread new leads",
@@ -91,25 +104,41 @@ export default async function DashboardPage() {
                 {s.accent && (
                   <span className="h-2 w-2 rounded-full bg-brand" />
                 )}
-                <span className="text-2xl font-semibold">{s.value}</span>
+                <span
+                  className={"text-2xl font-semibold " + (s.valueClass ?? "")}
+                >
+                  {s.value}
+                </span>
               </div>
+              {s.secondary && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {s.secondary}
+                </p>
+              )}
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <p
-        className={
-          "text-sm font-medium " +
-          (pacing.status === "behind"
-            ? "text-amber-600"
-            : pacing.status === "ahead"
-              ? "text-muted-foreground"
-              : "text-brand")
-        }
-      >
-        {pacingMessage(pacing.deficit)}
-      </p>
+      {exhausted ? (
+        <p className="text-sm font-medium text-amber-600">
+          You have no remaining lead credit. Your balance will update when your
+          next payment is processed on {renewalDate}.
+        </p>
+      ) : (
+        <p
+          className={
+            "text-sm font-medium " +
+            (pacing.status === "behind"
+              ? "text-amber-600"
+              : pacing.status === "ahead"
+                ? "text-muted-foreground"
+                : "text-brand")
+          }
+        >
+          {pacingMessage(pacing.deficit)}
+        </p>
+      )}
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>

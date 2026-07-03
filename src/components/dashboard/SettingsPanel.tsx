@@ -1,33 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Customer } from "@/lib/types";
 
 export function SettingsPanel({ customer }: { customer: Customer }) {
-  const [overflow, setOverflow] = useState(customer.overflow_enabled);
-  const [saving, setSaving] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
-
-  async function toggleOverflow(next: boolean) {
-    setOverflow(next);
-    setSaving(true);
-    try {
-      const res = await fetch("/api/customer/overflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ overflow_enabled: next }),
-      });
-      if (!res.ok) throw new Error();
-    } catch {
-      setOverflow(!next); // revert on failure
-      alert("Could not update overflow setting. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function openPortal() {
     setPortalLoading(true);
@@ -72,28 +51,6 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
             >
               {portalLoading ? "Opening…" : "Manage billing"}
             </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Overflow leads</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium">Enable overflow</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Keep receiving leads after your 20 included leads are used, at
-                £20 per additional lead.
-              </p>
-            </div>
-            <Switch
-              checked={overflow}
-              onCheckedChange={toggleOverflow}
-              disabled={saving}
-            />
           </div>
         </CardContent>
       </Card>

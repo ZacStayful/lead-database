@@ -73,7 +73,6 @@ export default async function AdminCustomersPage() {
               <TableHead>Status</TableHead>
               <TableHead>Leads</TableHead>
               <TableHead>Pacing</TableHead>
-              <TableHead>Overflow</TableHead>
               <TableHead>Last lead</TableHead>
               <TableHead className="text-right">Edit</TableHead>
             </TableRow>
@@ -98,13 +97,6 @@ export default async function AdminCustomersPage() {
                 <TableCell>
                   <PacingBadge status={pacing.status} />
                 </TableCell>
-                <TableCell>
-                  {c.overflow_enabled ? (
-                    <Badge variant="outline">On</Badge>
-                  ) : (
-                    <span className="text-muted-foreground">Off</span>
-                  )}
-                </TableCell>
                 <TableCell className="text-muted-foreground">
                   {c.last_assignment_at ? formatDate(c.last_assignment_at) : "—"}
                 </TableCell>
@@ -121,7 +113,7 @@ export default async function AdminCustomersPage() {
             {customers.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={8}
+                  colSpan={7}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No customers yet.

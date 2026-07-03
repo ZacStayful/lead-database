@@ -225,18 +225,6 @@ export default function LandingPage() {
             body="On your billing cycle date, your lead count resets and your next 20 leads begin arriving. Leads are distributed throughout the month as they are qualified — you will not receive everything on day one and then wait three weeks. If your allocation is not met in any month, the shortfall carries forward automatically to the next cycle."
           />
         </div>
-
-        <div className="mt-6 flex items-start gap-4 rounded-xl bg-[#EAF3DE] p-5">
-          <span className="mt-0.5 flex-shrink-0 text-lg leading-none text-[#3B6D11]">
-            ℹ
-          </span>
-          <p className="text-sm leading-relaxed text-[#5D8156]">
-            If you opt in to overflow leads from your account settings, you
-            receive additional leads beyond your 20-lead allocation at £20 each.
-            Useful during months when lead volume is higher than usual and you
-            want to capture more of the pipeline.
-          </p>
-        </div>
       </Section>
 
       {/* 6. Sample lead card */}
@@ -558,7 +546,6 @@ export default function LandingPage() {
               "Real-time in-portal and email notification on each assignment",
               "Leads carry forward if your monthly allocation is not met",
               "Cancel anytime — no lock-in, no penalty",
-              "Overflow leads available at £20/lead if you opt in",
             ].map((f) => (
               <li key={f} className="flex items-start gap-3 text-sm text-[#52514e]">
                 <span className="font-medium text-[#3B6D11]">✓</span>

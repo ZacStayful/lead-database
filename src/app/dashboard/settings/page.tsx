@@ -14,7 +14,7 @@ export default async function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          Manage your subscription and overflow preferences.
+          Manage your subscription.
         </p>
       </div>
       <SettingsPanel customer={customer} />
