@@ -4,7 +4,6 @@ import {
   sendLowCreditsEmail,
   sendCreditsExhaustedEmail,
 } from "@/lib/emails";
-import { chargeOverflowLead } from "@/lib/billing";
 import { extractCity } from "@/lib/utils";
 import type { Customer, Lead, N8nLeadPayload } from "@/lib/types";
 
@@ -32,7 +31,7 @@ export interface IngestResult {
 
 /**
  * Idempotently insert a lead and assign it to eligible customers, sending the
- * in-portal notification, Resend email, threshold warnings and overflow charge.
+ * in-portal notification, Resend email and threshold warnings.
  *
  * Shared by the n8n webhook and the Monday pull-sync so both paths behave
  * identically. Keyed on monday_item_id, so re-running never double-inserts.
@@ -159,11 +158,6 @@ export async function ingestLead(
         to: typedCustomer.email,
         remaining: typedCustomer.monthly_allocation - newCount,
       });
-    }
-
-    // Overflow billing when over allocation (only reachable with overflow on).
-    if (newCount > typedCustomer.monthly_allocation) {
-      await chargeOverflowLead(typedCustomer);
     }
   }
 

@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, initials, formatDate } from "@/lib/utils";
+import { statusBadge } from "@/components/dashboard/leadStatus";
 import type { AssignmentWithLead } from "@/lib/types";
 import { BarChart3, Check, Mail, Phone, MapPin, Calendar } from "lucide-react";
 
@@ -16,8 +18,10 @@ export function LeadCard({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const lead = assignment.lead;
-  const isUnread = !assignment.viewed_at;
+  const rejected = assignment.status === "rejected";
+  const isUnread = !assignment.viewed_at && !rejected;
   const contacted = assignment.status === "contacted";
+  const badge = statusBadge(assignment.status);
 
   async function markViewed() {
     if (assignment.viewed_at) return;
@@ -58,7 +62,11 @@ export function LeadCard({
     <div
       className={cn(
         "rounded-lg bg-card transition-colors",
-        isUnread ? "lead-card-unread" : "lead-card-viewed"
+        rejected
+          ? "opacity-50"
+          : isUnread
+            ? "lead-card-unread"
+            : "lead-card-viewed"
       )}
     >
       <button
@@ -71,12 +79,15 @@ export function LeadCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-medium">{lead.lead_name}</span>
-            {isUnread ? (
-              <Badge variant="brand">New</Badge>
-            ) : (
-              <Badge variant="muted">Viewed</Badge>
+            {isUnread && (
+              <span
+                className="h-2 w-2 shrink-0 rounded-full bg-brand"
+                title="Unread"
+              />
             )}
-            {contacted && <Badge variant="outline">Contacted</Badge>}
+            <Badge variant="outline" className={badge.className}>
+              {badge.label}
+            </Badge>
           </div>
           <p className="truncate text-sm text-muted-foreground">
             {lead.address ?? "Address on file"}
@@ -127,15 +138,20 @@ export function LeadCard({
                 Open STR Analyser
               </a>
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={markContacted}
-              disabled={busy || contacted}
-            >
-              <Check className="h-4 w-4" />
-              {contacted ? "Contacted" : "Mark as contacted"}
+            <Button size="sm" variant="outline" asChild>
+              <Link href={`/dashboard/leads/${lead.id}`}>Open lead</Link>
             </Button>
+            {!rejected && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={markContacted}
+                disabled={busy || contacted}
+              >
+                <Check className="h-4 w-4" />
+                {contacted ? "Contacted" : "Mark as contacted"}
+              </Button>
+            )}
           </div>
         </div>
       )}

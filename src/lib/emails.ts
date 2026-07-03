@@ -86,8 +86,8 @@ export async function sendLowCreditsEmail(params: {
   const subject = `${remaining} lead${remaining === 1 ? "" : "s"} remaining this month`;
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Your allocation is almost full</h1>
-    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${remaining}</strong> lead${remaining === 1 ? "" : "s"} left in your monthly allocation. Enable overflow to keep receiving leads beyond your plan at £20 per lead.</p>
-    ${button(`${APP_URL}/dashboard/settings`, "Manage overflow")}
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${remaining}</strong> lead${remaining === 1 ? "" : "s"} left in your monthly allocation. Any leads you do not receive this cycle carry forward automatically.</p>
+    ${button(`${APP_URL}/dashboard`, "View your leads")}
   `;
   try {
     const { data, error } = await getResend().emails.send({
@@ -110,8 +110,8 @@ export async function sendCreditsExhaustedEmail(params: {
   const subject = `Your lead allocation is full for this month`;
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Allocation reached</h1>
-    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have received all the leads included in your plan this month. No further leads will be sent until your subscription renews — unless you enable overflow to receive additional leads at £20 each.</p>
-    ${button(`${APP_URL}/dashboard/settings`, "Enable overflow")}
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have received all the leads included in your plan this month. Your balance will top up automatically when your subscription renews, and any shortfall carries forward.</p>
+    ${button(`${APP_URL}/dashboard`, "View your leads")}
   `;
   try {
     const { data, error } = await getResend().emails.send({

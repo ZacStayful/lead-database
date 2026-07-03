@@ -1,874 +1,2054 @@
-import Link from "next/link";
-import { CompoundingChart } from "@/components/landing/CompoundingChart";
-import { FaqAccordion } from "@/components/landing/FaqAccordion";
-import { LeadCardSample } from "@/components/landing/LeadCardSample";
+"use client";
 
 /* eslint-disable @next/next/no-img-element */
 
-// ── Shared building blocks ──────────────────────────────────────────────────
+import { useEffect, useState, type CSSProperties } from "react";
+import Link from "next/link";
+import { BucketChart } from "@/components/landing/BucketChart";
+import { RevenueChart } from "@/components/landing/RevenueChart";
 
-function Eyebrow({
+// Local copy of the dark-green wordmark (sourced from the Squarespace CDN).
+const LOGO = "/logo.png";
+
+const display = (extra?: CSSProperties): CSSProperties => ({
+  fontFamily: "var(--sf-display)",
+  ...extra,
+});
+
+// Reveal-on-scroll wrapper (fallback: forced visible after 1.8s in effect).
+function Reveal({
   children,
-  className = "text-[#898781]",
+  style,
 }: {
   children: React.ReactNode;
-  className?: string;
+  style?: CSSProperties;
 }) {
   return (
-    <p className={`mb-8 text-xs uppercase tracking-widest ${className}`}>
+    <div
+      data-reveal
+      style={{
+        opacity: 0,
+        transform: "translateY(18px)",
+        transition: "opacity .7s, transform .7s",
+        ...style,
+      }}
+    >
       {children}
-    </p>
+    </div>
   );
 }
 
-function SectionHeadline({ children }: { children: React.ReactNode }) {
+// Count-up number; the effect animates it on view. Renders the final value so
+// it is correct even without JS.
+function Count({ n }: { n: number }) {
   return (
-    <h2 className="mb-8 text-2xl font-medium leading-snug text-[#1a1a19]">
-      {children}
-    </h2>
+    <span className="sf-count" data-count={n}>
+      {n}
+    </span>
   );
 }
 
-function Section({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <section className="border-b border-black/10">
-      <div className={`mx-auto max-w-5xl px-6 py-20 ${className}`}>{children}</div>
-    </section>
-  );
-}
-
-const PRIMARY_BTN =
-  "inline-block rounded-lg bg-[#3B6D11] px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-[#2d5409]";
-
-// ── Page ────────────────────────────────────────────────────────────────────
+const FAQ: { q: string; a: string }[] = [
+  {
+    q: "Can you guarantee 20 leads a month?",
+    a: "We only take on customers when we know we can fill the demand. Stayful assesses available lead volume before onboarding anyone new, so what's estimated is what's delivered. In the rare event we fall short in a billing period, the shortfall is credited and those leads are owed to you — you never pay for leads you don't receive.",
+  },
+  {
+    q: "Are these genuinely interested landlords or just anyone who filled in a form?",
+    a: "Every lead comes from an organic Google search for STR property management followed by a completed enquiry form. Before reaching subscribers, each lead is run through a financial model comparing projected STR income against their current arrangement using live Airbnb data for their postcode. These are people who went looking for what you do.",
+  },
+  {
+    q: "What happens if I receive a poor-quality lead?",
+    a: "Every lead is delivered with the full information received — name, address, phone, email, bedroom count, estimated income, and a written profile. If a lead's contact details are factually incorrect, contact the Stayful team and it will be reviewed. Leads that simply don't convert are not refundable — the 5% conversion rate is a long-run average across thousands of enquiries, not a per-lead guarantee.",
+  },
+  {
+    q: "Can I cancel? Is there a minimum commitment?",
+    a: "Cancel anytime from your billing settings. There is no minimum term and no cancellation penalty. If your monthly allocation isn't met in any billing period, the shortfall carries forward to the following month — you always receive the leads you have paid for.",
+  },
+  {
+    q: "How is this different from running my own Google Ads?",
+    a: "A Google Ads click on a property management keyword in a competitive UK city costs £8–25 — a click, not a name, phone number, or completed enquiry with property details and estimated income. At £15 per financially modelled, Google-intent enquiry, the cost is for the output of a campaign, not a step within one. And you don't need to build, manage, or optimise a campaign to receive the leads.",
+  },
+];
 
 export default function LandingPage() {
-  return (
-    <main className="bg-white text-[#1a1a19]">
-      {/* 1. Nav */}
-      <header className="sticky top-0 z-50 border-b border-black/10 bg-white">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <Link href="/" aria-label="Stayful home">
-            <img
-              src="/logo.png"
-              alt="Stayful"
-              width={62}
-              height={36}
-              className="h-9 w-auto"
-            />
-          </Link>
-          <nav className="flex items-center gap-5">
-            <Link
-              href="/login"
-              className="hidden text-sm text-[#52514e] hover:text-[#1a1a19] sm:inline"
-            >
-              Sign in
-            </Link>
-            <Link href="/signup" className={PRIMARY_BTN}>
-              Claim founding membership
-            </Link>
-          </nav>
-        </div>
-      </header>
+  const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-      {/* 2. Hero */}
-      <section className="border-b border-black/10">
-        <div className="mx-auto max-w-3xl px-6 py-28 text-center md:text-left">
-          <p className="mb-4 text-xs font-medium uppercase tracking-widest text-[#5D8156]">
-            Founding member access · limited places
-          </p>
-          <h1 className="text-4xl font-medium leading-tight text-[#1a1a19] md:text-5xl">
-            20 landlords are looking for an STR operator this month.
-          </h1>
-          <p className="mt-4 max-w-2xl text-lg leading-relaxed text-[#52514e]">
-            {
-              "The Stayful Lead Marketplace delivers financially modelled, Google-intent landlord enquiries to STR management companies at a fixed monthly cost. No campaigns to run. No marketing expertise required. Just leads from people who searched for what you do."
+  useEffect(() => {
+    const revealEls = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-reveal]")
+    );
+    const show = (el: HTMLElement) => {
+      el.style.opacity = "1";
+      el.style.transform = "none";
+    };
+
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+    const runCount = (el: HTMLElement) => {
+      const target = parseFloat(el.getAttribute("data-count") || "0");
+      const dur = 1200;
+      const start = performance.now();
+      const tick = (now: number) => {
+        const p = Math.min(1, (now - start) / dur);
+        el.textContent = Math.round(target * ease(p)).toLocaleString();
+        if (p < 1) requestAnimationFrame(tick);
+        else el.textContent = target.toLocaleString();
+      };
+      requestAnimationFrame(tick);
+    };
+    const countEls = Array.from(
+      document.querySelectorAll<HTMLElement>(".sf-count")
+    );
+
+    let fallback: ReturnType<typeof setTimeout> | undefined;
+    if ("IntersectionObserver" in window) {
+      const rio = new IntersectionObserver(
+        (entries) =>
+          entries.forEach((e) => {
+            if (e.isIntersecting) {
+              show(e.target as HTMLElement);
+              rio.unobserve(e.target);
             }
+          }),
+        { threshold: 0.15 }
+      );
+      revealEls.forEach((el) => rio.observe(el));
+      fallback = setTimeout(() => revealEls.forEach(show), 1800);
+
+      const cio = new IntersectionObserver(
+        (entries) =>
+          entries.forEach((e) => {
+            if (e.isIntersecting) {
+              runCount(e.target as HTMLElement);
+              cio.unobserve(e.target);
+            }
+          }),
+        { threshold: 0.6 }
+      );
+      countEls.forEach((el) => cio.observe(el));
+
+      return () => {
+        rio.disconnect();
+        cio.disconnect();
+        if (fallback) clearTimeout(fallback);
+      };
+    } else {
+      revealEls.forEach(show);
+    }
+  }, []);
+
+  return (
+    <main
+      style={{
+        fontFamily: "var(--sf-sans)",
+        color: "var(--sf-body)",
+        background: "#fff",
+        lineHeight: 1.6,
+      }}
+    >
+      {/* ============ NAV ============ */}
+      <nav
+        style={{
+          background: "#fff",
+          borderBottom: "1px solid var(--sf-border)",
+          padding: "0 32px",
+          position: "sticky",
+          top: 0,
+          zIndex: 100,
+          height: 62,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <img src={LOGO} alt="Stayful" style={{ height: 28 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
+          <a href="#how" style={navLink}>
+            How it works
+          </a>
+          <a href="#data" style={navLink}>
+            The data
+          </a>
+          <a href="#pricing" style={navLink}>
+            Pricing
+          </a>
+          <Link
+            href="/signup"
+            style={{
+              background: "var(--sf-dark)",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "10px 18px",
+              borderRadius: 8,
+              textDecoration: "none",
+            }}
+          >
+            Claim your place
+          </Link>
+        </div>
+      </nav>
+
+      {/* ============ HERO ============ */}
+      <section style={{ background: "var(--sf-sage)", padding: "64px 32px 72px" }}>
+        <div style={{ maxWidth: 820, margin: "0 auto", textAlign: "center" }}>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              background: "rgba(93,129,86,.16)",
+              border: "1px solid rgba(93,129,86,.32)",
+              borderRadius: 100,
+              padding: "6px 16px",
+              fontSize: 11,
+              fontWeight: 700,
+              color: "var(--sf-dark)",
+              letterSpacing: ".06em",
+              textTransform: "uppercase",
+              marginBottom: 22,
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: "var(--sf-dark)",
+                animation: "sfpulse 1.8s infinite",
+              }}
+            />
+            Founding member access — limited places
+          </div>
+          <h1
+            style={display({
+              fontSize: "clamp(32px,4.6vw,50px)",
+              fontWeight: 700,
+              lineHeight: 1.04,
+              letterSpacing: "-.03em",
+              color: "var(--sf-green)",
+              marginBottom: 20,
+            })}
+          >
+            <Count n={20} /> landlords are looking for an STR operator this month.
+          </h1>
+          <p
+            style={{
+              fontSize: 17,
+              fontWeight: 500,
+              color: "var(--sf-green)",
+              opacity: 0.85,
+              maxWidth: 580,
+              margin: "0 auto 28px",
+              lineHeight: 1.65,
+            }}
+          >
+            Financially modelled, Google-intent landlord enquiries delivered to
+            your dashboard at a fixed monthly cost. No campaigns. No marketing
+            expertise. Just people who searched for what you do.
           </p>
-          <div className="mt-8 flex flex-wrap items-center gap-4">
-            <Link href="/signup" className={PRIMARY_BTN}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              marginBottom: 14,
+              justifyContent: "center",
+            }}
+          >
+            <Link href="/signup" style={heroPrimary}>
               Claim your founding membership
             </Link>
+            <a href="#how" style={heroSecondary}>
+              See how it works →
+            </a>
           </div>
-          <p className="mt-3 text-sm text-[#898781]">
-            £300/month · 20 leads included · cancel anytime
+          <p style={{ fontSize: 12.5, color: "var(--sf-green)", opacity: 0.7 }}>
+            £300/month · 20 leads included · cancel anytime · allocation carries
+            forward
           </p>
+        </div>
+      </section>
 
-          <div className="mt-10 flex flex-wrap gap-8">
+      {/* ============ PAIN ============ */}
+      <section style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-green)">
+            The problem this solves
+          </Eyebrow>
+          <h2 style={centerHeadline()}>
+            Growing a managed portfolio has one persistent problem.
+          </h2>
+          <div style={cardGrid(260)}>
             {[
-              { n: "1,100+", l: "enquiries validated" },
-              { n: "5%", l: "long-run conversion rate" },
-              { n: "£289", l: "avg monthly management revenue per property" },
-            ].map((s) => (
-              <div key={s.l}>
-                <div className="text-2xl font-medium text-[#3B6D11]">{s.n}</div>
-                <div className="mt-1 max-w-[9rem] text-xs text-[#898781]">
-                  {s.l}
-                </div>
-              </div>
+              {
+                title: "Unpredictable growth",
+                body: "Referrals arrive when they arrive. Ads are expensive and competitive on every keyword. Most months, you don't know how many new landlord conversations are coming.",
+              },
+              {
+                title: "The leaking bucket",
+                body: "Every portfolio loses clients — landlords sell, switch, or move back in. Without a steady inflow, a portfolio doesn't stay flat. It quietly shrinks year on year.",
+              },
+              {
+                title: "A different skill set",
+                body: "Paid search, SEO, and nurture sequences are a full-time specialism. You're an expert at managing properties. Acquiring them at volume is a different job entirely.",
+              },
+            ].map((c) => (
+              <Reveal
+                key={c.title}
+                style={{
+                  background: "#fff",
+                  border: "1px solid var(--sf-border)",
+                  borderRadius: 16,
+                  padding: 26,
+                }}
+              >
+                <h3 style={display({ fontSize: 17, fontWeight: 700, marginBottom: 8 })}>
+                  {c.title}
+                </h3>
+                <p style={{ fontSize: 14, color: "var(--sf-secondary)", lineHeight: 1.65 }}>
+                  {c.body}
+                </p>
+              </Reveal>
             ))}
           </div>
         </div>
       </section>
 
-      {/* 3. Pain recognition */}
-      <Section>
-        <Eyebrow>The problem this solves</Eyebrow>
-        <h2 className="mb-10 text-2xl font-medium text-[#1a1a19]">
-          Growing a managed property portfolio has one persistent problem.
-        </h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <PainCard
-            title="Unpredictable growth"
-            body="Referrals arrive when they arrive. Google Ads are expensive to run, hard to measure, and competitive on every relevant keyword. Most months, you don't know how many new landlord conversations are coming in."
-          />
-          <PainCard
-            accent
-            title="The leaking bucket"
-            body="Every portfolio loses clients. Landlords sell properties, switch operators, or move in themselves. Without a steady source of new enquiries, your portfolio doesn't stay flat — it quietly shrinks year on year."
-          />
-          <PainCard
-            title="A different skill set"
-            body="Running lead generation at scale — paid search, SEO, nurturing sequences — is a full-time specialism. You are an expert at managing properties. Acquiring them at volume is a different job entirely."
-          />
-        </div>
-      </Section>
-
-      {/* 4. Mechanism */}
-      <Section>
-        <Eyebrow>A different model</Eyebrow>
-        <SectionHeadline>
-          Stayful generates landlord enquiries. You buy the conversation.
-        </SectionHeadline>
-        <div className="max-w-2xl space-y-4 text-base leading-relaxed text-[#52514e]">
-          <p>
-            {
-              "Stayful receives approximately 150 landlord enquiries each month from people who searched Google for STR property management and filled out an enquiry form. Around 60% don't qualify for Stayful's own management service — wrong geography, wrong income profile, or already working with another operator."
-            }
+      {/* ============ MECHANISM ============ */}
+      <section style={{ background: "var(--sf-sage)", padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-dark)">
+            A different model
+          </Eyebrow>
+          <h2 style={centerHeadline({ color: "var(--sf-green)", maxWidth: 760 })}>
+            Stayful generates the enquiry. You buy the conversation.
+          </h2>
+          <p style={centerLede()}>
+            Around 60% of the landlords who find Stayful don't fit our own
+            management service. Instead of discarding those conversations, we
+            hand them to STR operators at a fixed, predictable cost.
           </p>
-          <p>
-            {
-              "Instead of discarding those conversations, we make them available to STR management companies at a fixed, predictable cost. You don't run campaigns. You don't optimise keywords. You follow up on leads from people who are already in the market."
-            }
-          </p>
-        </div>
-        <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
-          <StepCard
-            step="Step 01 — the lead"
-            title="A landlord searches Google"
-            body={`They type 'short-term rental management [city]' and submit an enquiry form. They are not cold. They have already decided they want to explore STR management. They just haven't found their operator yet.`}
-          />
-          <StepCard
-            step="Step 02 — the filter"
-            title="Every lead is financially modelled"
-            body="Before any lead reaches you, a full financial model is run. Projected net STR income — using live Airbnb data for their postcode — is compared against their current income. Leads available in the marketplace typically show a positive financial case for switching to STR."
-          />
-          <StepCard
-            highlight
-            step="Step 03 — the warm hand-off"
-            title="The landlord is expecting your call"
-            body="Before assignment fires, the landlord receives an email explaining that Stayful couldn't take them on directly, but has arranged for a trusted local STR operator to be in touch. They have consented. They are waiting. This is not cold outreach."
-          />
-        </div>
-      </Section>
 
-      {/* 5. Subscriber experience timeline */}
-      <Section>
-        <Eyebrow>What happens after you subscribe</Eyebrow>
-        <SectionHeadline>
-          From signup to first conversation — here is the exact experience.
-        </SectionHeadline>
-
-        <div className="relative mt-10 before:absolute before:bottom-8 before:left-[19px] before:top-8 before:w-px before:bg-[#EAF3DE]">
-          <TimelineStep
-            n={1}
-            title="You subscribe through Stripe checkout"
-            body="Your dashboard is live immediately after payment. You see your monthly allocation, your billing cycle dates, and your pacing indicator — showing how many leads you should expect to have received by today based on where you are in the cycle. Before your first lead arrives, everything is set up and waiting."
-          />
-          <TimelineStep
-            n={2}
-            title="A landlord enquiry is financially modelled"
-            body="When a landlord submits an enquiry to Stayful, it is run through a financial model comparing projected net STR income against their current income. If the numbers make a case for STR, the lead enters the assignment queue. The pacing system identifies which subscribers are most behind their expected allocation and routes the lead to them first."
-          />
-          <TimelineStep
-            n={3}
-            highlight
-            title="You receive the lead in real time"
-            body="The moment a lead is assigned to you, two things happen simultaneously. Your dashboard shows a notification and the lead card appears at the top of your feed. You receive an email with the full lead details. The landlord has already received a Stayful email explaining they will be contacted shortly by a trusted local STR operator. They are expecting your call."
-            note="Lead delivery is within minutes of assignment — not batched or delayed."
-          />
-          <TimelineStep
-            n={4}
-            title="Everything you need before you dial"
-            body="Your dashboard reveals the lead in full — name, address, direct phone number, email address, bedroom count, estimated monthly STR income, and a written lead profile covering the landlord's situation, their current arrangement, and any concerns or motivations they raised during the enquiry. You know who you are calling and what matters to them before you pick up the phone."
-          />
-          <TimelineStep
-            n={5}
-            title="You call. They are expecting it."
-            body="The landlord has been told a trusted local operator will be in touch. This is not a cold call. The lead profile gives you the context for a relevant opening — their current income, their mortgage, what they asked about. You are not introducing yourself to a stranger. You are following up on a conversation Stayful has already started on your behalf."
-          />
-          <TimelineStep
-            n={6}
-            title="Mark progress and keep your pipeline clean"
-            body="From your dashboard, mark each lead as Contacted, In Discussion, Won, or Not Relevant. Your full lead history is visible at any time — every lead you have ever received, its current status, and when it was assigned. Nothing gets lost and nothing goes cold without you knowing."
-          />
-          <TimelineStep
-            n={7}
-            last
-            title="Twenty fresh leads, every billing cycle"
-            body="On your billing cycle date, your lead count resets and your next 20 leads begin arriving. Leads are distributed throughout the month as they are qualified — you will not receive everything on day one and then wait three weeks. If your allocation is not met in any month, the shortfall carries forward automatically to the next cycle."
-          />
-        </div>
-
-        <div className="mt-6 flex items-start gap-4 rounded-xl bg-[#EAF3DE] p-5">
-          <span className="mt-0.5 flex-shrink-0 text-lg leading-none text-[#3B6D11]">
-            ℹ
-          </span>
-          <p className="text-sm leading-relaxed text-[#5D8156]">
-            If you opt in to overflow leads from your account settings, you
-            receive additional leads beyond your 20-lead allocation at £20 each.
-            Useful during months when lead volume is higher than usual and you
-            want to capture more of the pipeline.
-          </p>
-        </div>
-      </Section>
-
-      {/* 6. Sample lead card */}
-      <Section>
-        <Eyebrow>What a lead looks like</Eyebrow>
-        <SectionHeadline>
-          Full contact details, property profile, and financial context —
-          delivered the moment the lead is assigned.
-        </SectionHeadline>
-        <p className="mb-8 max-w-xl text-sm text-[#52514e]">
-          You receive each lead in your dashboard and by email within minutes of
-          it being assigned. Phone number and email address are visible
-          immediately on subscription. Below is an example of what you receive.
-        </p>
-        <LeadCardSample />
-        <p className="mt-4 text-xs text-[#898781]">
-          Lead profile, phone, and email are included with every lead. All leads
-          are maximum 2 operators simultaneously.
-        </p>
-      </Section>
-
-      {/* 7. Data */}
-      <Section>
-        <Eyebrow>The numbers behind the model</Eyebrow>
-        <SectionHeadline>
-          Three years of data. Real portfolio performance.
-        </SectionHeadline>
-        <p className="mb-10 max-w-xl text-sm text-[#52514e]">
-          The conversion rates and revenue figures below are not projections.
-          They are derived from the qualification model that powers this
-          marketplace, validated across more than 1,100 Google-sourced STR
-          management enquiries, and from live portfolio data across UK operators
-          running at 12–15% management fees.
-        </p>
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          {/* Conversion card */}
-          <div className="rounded-xl border border-black/10 bg-white p-6">
-            <div className="text-4xl font-medium text-[#3B6D11]">1 in 20</div>
-            <div className="mt-1 text-sm text-[#52514e]">
-              enquiries converts to a managed property client
-            </div>
-            <p className="mt-3 text-xs leading-relaxed text-[#898781]">
-              Across two full calendar years and 480 mature enquiries. 2024:
-              5.7%. 2025: 4.7%. Long-run average: 5.0%. 2026 figure excluded —
-              year in progress, rate immature.
-            </p>
-            <div className="mt-5 space-y-2">
-              <YearBar year="2024" pct={57} label="5.7%" fill="#5D8156" />
-              <YearBar year="2025" pct={47} label="4.7%" fill="#5D8156" />
-              <YearBar year="Avg" pct={50} label="5.0%" fill="#3B6D11" />
+          <div style={cardGrid(280)}>
+            {[
+              {
+                n: "01",
+                title: "The lead",
+                body: "A landlord searches Google for STR management and submits an enquiry. Not cold — they've decided to explore. They just haven't found their operator.",
+              },
+              {
+                n: "02",
+                title: "The filter",
+                body: "A full financial model runs first — projected net STR income vs. their current income, using live Airbnb data for their postcode. Every lead is modelled before it reaches you.",
+              },
+            ].map((s) => (
+              <div
+                key={s.n}
+                style={{ background: "#fff", borderRadius: 16, padding: 24 }}
+              >
+                <StepHead n={s.n} title={s.title} />
+                <p style={{ fontSize: 13.5, color: "var(--sf-secondary)", lineHeight: 1.6 }}>
+                  {s.body}
+                </p>
+              </div>
+            ))}
+            <div style={{ background: "var(--sf-green)", borderRadius: 16, padding: 24 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 14,
+                }}
+              >
+                <span style={stepNum("#fff", "var(--sf-green)")}>03</span>
+                <h3 style={display({ fontSize: 16, fontWeight: 700, color: "#fff" })}>
+                  The warm hand-off
+                </h3>
+              </div>
+              <span
+                style={{
+                  display: "inline-block",
+                  background: "rgba(255,255,255,.16)",
+                  color: "#fff",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: ".06em",
+                  textTransform: "uppercase",
+                  padding: "3px 9px",
+                  borderRadius: 100,
+                  marginBottom: 10,
+                }}
+              >
+                Your key differentiator
+              </span>
+              <p style={{ fontSize: 13.5, color: "#fff", opacity: 0.92, lineHeight: 1.6 }}>
+                Before any assignment fires, the landlord gets a Stayful email
+                introducing you. They've consented. They're expecting your call.
+                This is a structured introduction — not cold outreach.
+              </p>
             </div>
           </div>
-          {/* Revenue card */}
-          <div className="rounded-xl border border-black/10 bg-white p-6">
-            <div className="text-4xl font-medium text-[#3B6D11]">£289</div>
-            <div className="mt-1 text-sm text-[#52514e]">
-              average monthly management revenue per managed property
+
+          {/* email mock */}
+          <Reveal
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              overflow: "hidden",
+              maxWidth: 600,
+              boxShadow: "0 20px 50px -28px rgba(59,109,17,.5)",
+              marginTop: 16,
+            }}
+          >
+            <div
+              style={{
+                background: "var(--sf-dark)",
+                padding: "14px 20px",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: "50%",
+                    background: "rgba(255,255,255,.35)",
+                  }}
+                />
+              ))}
+              <span style={{ marginLeft: 8, fontSize: 12, color: "#fff", fontWeight: 600 }}>
+                New message — from Stayful
+              </span>
             </div>
-            <p className="mt-3 text-xs leading-relaxed text-[#898781]">
-              Based on live portfolio data from UK STR operators, 12–15%
-              management rates, including software recharge. June 2026 actuals.
+            <div style={{ padding: "22px 24px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 16,
+                  paddingBottom: 16,
+                  borderBottom: "1px solid var(--sf-border)",
+                }}
+              >
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: "50%",
+                    background: "var(--sf-sage)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontFamily: "var(--sf-display)",
+                    fontWeight: 700,
+                    color: "var(--sf-dark)",
+                  }}
+                >
+                  S
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>Stayful</div>
+                  <div style={{ fontSize: 12, color: "var(--sf-muted)" }}>
+                    to Sarah Mitchell · 2 min ago
+                  </div>
+                </div>
+              </div>
+              <div style={display({ fontSize: 17, fontWeight: 700, marginBottom: 12 })}>
+                We&apos;ve arranged for a local STR operator to be in touch
+              </div>
+              <p
+                style={{
+                  fontSize: 14,
+                  color: "var(--sf-secondary)",
+                  lineHeight: 1.7,
+                  marginBottom: 16,
+                }}
+              >
+                Hi Sarah — thanks for your enquiry. We aren&apos;t able to take on
+                your Darlington property directly right now, but we&apos;ve
+                arranged for a{" "}
+                <strong style={{ color: "var(--sf-green)" }}>
+                  trusted local STR operator
+                </strong>{" "}
+                to contact you shortly about managing it. They already have the
+                details you shared. Expect a call in the next day or two.
+              </p>
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "var(--sf-sage)",
+                  color: "var(--sf-dark)",
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  padding: "8px 14px",
+                  borderRadius: 100,
+                }}
+              >
+                ✓ Landlord consented &amp; expecting your call
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ============ HOW IT WORKS ============ */}
+      <section id="how" style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 920, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-green)">
+            What happens after you subscribe
+          </Eyebrow>
+          <h2 style={centerHeadline({ marginBottom: 48, maxWidth: 700 })}>
+            From signup to first conversation.
+          </h2>
+
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <Timeline n={1} title="You subscribe via Stripe">
+              <p style={timelineBody}>
+                Your dashboard is live immediately — allocation, billing dates,
+                and a pacing indicator showing how many leads you should have
+                received by today.
+              </p>
+              <div
+                style={{
+                  background: "#fff",
+                  border: "1px solid var(--sf-border)",
+                  borderRadius: 12,
+                  padding: 16,
+                  maxWidth: 360,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    marginBottom: 8,
+                  }}
+                >
+                  <span style={{ color: "var(--sf-muted)" }}>Monthly pacing</span>
+                  <span style={{ color: "var(--sf-dark)" }}>7 / 20 leads</span>
+                </div>
+                <div
+                  style={{
+                    height: 8,
+                    background: "var(--sf-olive)",
+                    borderRadius: 100,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "35%",
+                      height: "100%",
+                      background: "var(--sf-green)",
+                      borderRadius: 100,
+                    }}
+                  />
+                </div>
+              </div>
+            </Timeline>
+
+            <Timeline n={2} title="An enquiry is financially modelled">
+              <p style={{ ...timelineBody, marginBottom: 0 }}>
+                Each new landlord enquiry is run through the model — projected net
+                STR income vs. current income. If the numbers make a case for STR,
+                the lead enters the assignment queue.
+              </p>
+            </Timeline>
+
+            <Timeline n={3} title="You receive it in real time">
+              <p style={timelineBody}>
+                The moment a lead is assigned, your dashboard notifies you and an
+                email lands with full details. Delivery is within minutes of
+                assignment — never batched or delayed.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  background: "#fff",
+                  border: "1px solid var(--sf-border)",
+                  borderLeft: "3px solid var(--sf-green)",
+                  borderRadius: 10,
+                  padding: "12px 16px",
+                  maxWidth: 360,
+                  animation: "sffloat 3s ease-in-out infinite",
+                }}
+              >
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 8,
+                    background: "var(--sf-sage)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 16,
+                  }}
+                >
+                  🔔
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>New lead assigned</div>
+                  <div style={{ fontSize: 12, color: "var(--sf-muted)" }}>
+                    Sarah M. · Darlington · just now
+                  </div>
+                </div>
+              </div>
+            </Timeline>
+
+            <Timeline n={4} title="Everything you need before you dial">
+              <p style={timelineBody}>
+                Name, address, direct phone, email, bedroom count, estimated
+                monthly STR income, and a written profile of their situation,
+                current arrangement, and motivations.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                {[
+                  "Name & address",
+                  "Direct phone",
+                  "Email",
+                  "Est. STR income",
+                  "Lead profile",
+                ].map((t) => (
+                  <span key={t} style={oliveChip}>
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </Timeline>
+
+            <Timeline n={5} title="You call. They're expecting it.">
+              <p style={{ ...timelineBody, marginBottom: 0 }}>
+                The landlord has been told a trusted local operator will be in
+                touch. The profile gives you a relevant opening — their income,
+                their mortgage, what they asked about. Not a stranger.
+              </p>
+            </Timeline>
+
+            <Timeline n={6} title="Track progress, reset monthly" last>
+              <p style={timelineBody}>
+                Mark each lead as you go. On your billing date, your count resets
+                and the next 20 begin arriving throughout the month. Shortfalls
+                carry forward automatically.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                <span style={statusChip()}>Contacted</span>
+                <span style={statusChip()}>In discussion</span>
+                <span style={statusChip(true)}>Won</span>
+                <span style={statusChip(false, "var(--sf-muted)")}>Not relevant</span>
+              </div>
+            </Timeline>
+          </div>
+        </div>
+      </section>
+
+      {/* ============ SAMPLE LEAD ============ */}
+      <section style={{ background: "var(--sf-olive)", padding: "88px 32px" }}>
+        <div
+          style={{
+            maxWidth: 1040,
+            margin: "0 auto",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))",
+            gap: 44,
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <Eyebrow center color="var(--sf-dark)">
+              What a lead looks like
+            </Eyebrow>
+            <h2
+              style={display({
+                fontSize: "clamp(24px,3.4vw,34px)",
+                fontWeight: 700,
+                letterSpacing: "-.02em",
+                lineHeight: 1.1,
+                color: "var(--sf-green)",
+                marginBottom: 16,
+                textAlign: "center",
+              })}
+            >
+              Full contact details, property profile, financial context.
+            </h2>
+            <p
+              style={{
+                fontSize: 15.5,
+                color: "var(--sf-green)",
+                opacity: 0.82,
+                lineHeight: 1.7,
+                marginBottom: 20,
+                textAlign: "center",
+              }}
+            >
+              Delivered to your dashboard and by email within minutes of
+              assignment. Phone and email are visible immediately on subscription.
             </p>
-            <div className="mt-5 text-sm text-[#52514e]">
-              <BreakdownRow label="Management fee (avg 13% on STR income)" value="£247/mo" />
-              <BreakdownRow label="Software recharge" value="£42/mo" />
-              <div className="mt-3 border-t border-black/10 pt-3">
-                <BreakdownRow label="Total per property" value="£289/mo" bold />
-                <BreakdownRow label="Annual per property" value="£3,468/yr" bold />
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {[
+                "Every field visible — nothing paywalled per-lead",
+                "A written profile, not just a row in a spreadsheet",
+                "Estimated monthly STR income modelled up front",
+              ].map((t) => (
+                <div
+                  key={t}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    fontSize: 14,
+                    color: "var(--sf-green)",
+                    fontWeight: 600,
+                  }}
+                >
+                  <span style={{ color: "var(--sf-dark)" }}>✓</span>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              overflow: "hidden",
+              borderLeft: "3px solid var(--sf-green)",
+              boxShadow: "0 20px 50px -30px rgba(59,109,17,.55)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "15px 22px",
+                borderBottom: "1px solid var(--sf-border)",
+              }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 700 }}>New lead assigned</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span
+                  style={{
+                    background: "var(--sf-sage)",
+                    color: "var(--sf-dark)",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "4px 10px",
+                    borderRadius: 100,
+                  }}
+                >
+                  New
+                </span>
+                <span style={{ fontSize: 12, color: "var(--sf-muted)" }}>3 Jul 2026</span>
+              </div>
+            </div>
+            <div style={{ padding: 22 }}>
+              <div style={display({ fontSize: 20, fontWeight: 700, marginBottom: 3 })}>
+                Sarah Mitchell
+              </div>
+              <div style={{ fontSize: 14, color: "var(--sf-secondary)", marginBottom: 14 }}>
+                3-bed terraced · Darlington, County Durham
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <span style={sageChip}>3 bedrooms</span>
+                <span style={sageChip}>Est. £1,890/mo</span>
+              </div>
+              <LeadRow label="Phone">
+                07███ ██████{" "}
+                <span style={unlockedPill}>Unlocked on subscription</span>
+              </LeadRow>
+              <LeadRow label="Email">
+                s.mitchell@███████.com{" "}
+                <span style={unlockedPill}>Unlocked on subscription</span>
+              </LeadRow>
+              <LeadRow label="Estimated monthly STR income">£1,890/month</LeadRow>
+              <div style={{ padding: "12px 0 0" }}>
+                <div style={leadLabel}>Lead profile</div>
+                <div
+                  style={{
+                    fontSize: 13.5,
+                    color: "var(--sf-secondary)",
+                    lineHeight: 1.65,
+                    padding: 12,
+                    background: "#fafafa",
+                    borderRadius: 8,
+                    border: "1px solid var(--sf-border)",
+                  }}
+                >
+                  Currently renting long-term at £750/month, mortgage £420/month.
+                  Enquired about holiday letting before but didn&apos;t proceed.
+                  Interested in STR but wants reassurance on void periods and
+                  management reliability. Two Airbnb stays as a guest.
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </Section>
+      </section>
 
-      {/* 8. Acquisition model */}
-      <Section>
-        <Eyebrow>The cost-per-acquisition model</Eyebrow>
-        <SectionHeadline>One conversion pays for itself in 31 days.</SectionHeadline>
+      {/* ============ DATA / ROI ============ */}
+      <section id="data" style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-green)">
+            The numbers behind the model
+          </Eyebrow>
+          <h2 style={centerHeadline({ maxWidth: 640 })}>
+            Three years of data. Real portfolio performance.
+          </h2>
+          <p style={centerLede({ color: "var(--sf-secondary)" })}>
+            Not projections. Derived from the qualification model powering this
+            marketplace, validated across thousands of Google-sourced enquiries
+            and live portfolio data from UK operators at 12–15% fees.
+          </p>
 
-        <div className="mt-8 flex flex-col items-stretch gap-2 md:flex-row md:items-center">
-          <EquationBox big="£300" sub="per month" note="20 leads included" />
-          <Arrow />
-          <EquationBox big="1 property" sub="per 20 leads" note="5% conversion rate" />
-          <Arrow />
-          <EquationBox big="£289/mo" sub="recurring revenue" note="per managed property" />
-          <Arrow />
-          <EquationBox
-            highlight
-            big="31 days"
-            sub="payback period"
-            note="then it compounds"
-          />
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-          <MiniStat value="31 days" label="Payback on one acquisition" />
-          <MiniStat value="£3,168" label="Year 1 net return per acquired property" />
-          <MiniStat value="£3,468" label="Year 2 net return (no acquisition cost)" />
-          <MiniStat value="10×" label="Year 2 return on subscription" />
-        </div>
-      </Section>
-
-      {/* 9. Leaking bucket comparison */}
-      <Section>
-        <Eyebrow>Solving the leaking bucket</Eyebrow>
-        <SectionHeadline>
-          What happens to a typical 25-property portfolio — with and without a
-          steady lead supply.
-        </SectionHeadline>
-        <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2">
-          {/* Without */}
-          <div className="rounded-xl border border-black/10 bg-white p-6">
-            <div className="mb-3 text-xs uppercase tracking-widest text-[#898781]">
-              Without steady leads
+          <div style={{ ...cardGrid(260), marginBottom: 44 }}>
+            <div style={statCard}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 10,
+                  marginBottom: 8,
+                }}
+              >
+                <span
+                  style={display({
+                    fontSize: 44,
+                    fontWeight: 700,
+                    color: "var(--sf-dark)",
+                    letterSpacing: "-.03em",
+                    lineHeight: 1,
+                  })}
+                >
+                  1 in 20
+                </span>
+                <span
+                  style={{
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: "var(--sf-green)",
+                    background: "var(--sf-sage)",
+                    padding: "4px 11px",
+                    borderRadius: 100,
+                  }}
+                >
+                  = 5% avg
+                </span>
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+                Enquiries convert to a managed client
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "var(--sf-secondary)",
+                  lineHeight: 1.55,
+                  marginBottom: 16,
+                }}
+              >
+                A 5% average conversion rate, measured across three years of lead
+                data and thousands of enquiries.
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+                {[
+                  { y: "2023", v: "5.3%", h: 46, dark: false },
+                  { y: "2024", v: "5.7%", h: 50, dark: false },
+                  { y: "2025", v: "4.7%", h: 41, dark: false },
+                  { y: "Avg", v: "5.0%", h: 44, dark: true },
+                ].map((b) => (
+                  <div key={b.y} style={{ flex: 1, textAlign: "center" }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: "var(--sf-dark)",
+                        marginBottom: 4,
+                      }}
+                    >
+                      {b.v}
+                    </div>
+                    <div
+                      style={{
+                        height: 52,
+                        display: "flex",
+                        alignItems: "flex-end",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: "100%",
+                          maxWidth: 30,
+                          height: b.h,
+                          background: b.dark ? "var(--sf-dark)" : "var(--sf-green)",
+                          borderRadius: "4px 4px 0 0",
+                        }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--sf-muted)",
+                        fontWeight: 600,
+                        marginTop: 5,
+                      }}
+                    >
+                      {b.y}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="mb-4 text-sm font-medium text-[#1a1a19]">
-              A typical 25-property portfolio
+
+            <div style={statCard}>
+              <div
+                style={display({
+                  fontSize: 44,
+                  fontWeight: 700,
+                  color: "var(--sf-dark)",
+                  letterSpacing: "-.03em",
+                  lineHeight: 1,
+                  marginBottom: 8,
+                })}
+              >
+                £<Count n={289} />
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+                Avg monthly revenue per property
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "var(--sf-secondary)",
+                  lineHeight: 1.55,
+                  marginBottom: 16,
+                }}
+              >
+                Live UK portfolio data at 12–15% fees. June 2026 actuals.
+              </div>
+              <StatRow k="Management fee (13%)" v="£247/mo" />
+              <StatRow k="Software recharge" v="£42/mo" />
+              <StatRow k="Total per property" v="£289/mo" bold />
             </div>
-            <div className="divide-y divide-black/10">
-              <BucketRow label="Starting portfolio" value="25 properties" />
-              <BucketRow
-                label="Annual churn (typical 10–12%)"
-                value="−3 properties"
-                valueClass="text-[#A32D2D] font-medium"
-              />
-              <BucketRow label="New from referrals / ads" value="+1 (unpredictable)" />
-              <BucketRow
-                label="New from marketplace"
-                value="none"
-                valueClass="text-[#898781]"
-              />
-            </div>
-            <div className="mt-4 flex items-center justify-between rounded-lg bg-red-50 p-3">
-              <span className="text-sm text-[#A32D2D]">Year-end portfolio</span>
-              <span className="text-sm font-medium text-[#A32D2D]">
-                23 properties — shrinking
-              </span>
+
+            <div style={statCard}>
+              <div
+                style={display({
+                  fontSize: 44,
+                  fontWeight: 700,
+                  color: "var(--sf-dark)",
+                  letterSpacing: "-.03em",
+                  lineHeight: 1,
+                  marginBottom: 8,
+                })}
+              >
+                <Count n={31} />
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+                Days payback on one acquisition
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "var(--sf-secondary)",
+                  lineHeight: 1.55,
+                  marginBottom: 16,
+                }}
+              >
+                One converted property recovers the full £300 subscription within
+                its first month.
+              </div>
+              <StatRow k="Year 1 net return" v="£3,168" />
+              <StatRow k="Year 2 net return" v="£3,468" bold />
+              <StatRow k="Year 2 ROI" v="10×" bold />
             </div>
           </div>
-          {/* With */}
-          <div className="rounded-xl border border-[#C0DD97] bg-[#EAF3DE] p-6">
-            <div className="mb-3 text-xs uppercase tracking-widest text-[#5D8156]">
-              With the marketplace
+
+          {/* payback flow */}
+          <h3
+            style={display({
+              fontSize: 20,
+              fontWeight: 700,
+              marginBottom: 20,
+              textAlign: "center",
+            })}
+          >
+            One conversion pays for itself in 31 days.
+          </h3>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))",
+              gap: 14,
+              marginBottom: 20,
+            }}
+          >
+            <FlowCard big="£300" small="per month" sub="20 leads included" />
+            <FlowCard big="1" small="property / 20 leads" sub="5% conversion rate" />
+            <FlowCard big="£289" small="recurring / month" sub="per managed property" />
+            <FlowCard
+              big="31"
+              small="days payback"
+              sub="then compounds indefinitely"
+              green
+            />
+          </div>
+
+          {/* ads comparison */}
+          <div style={{ background: "var(--sf-sage)", borderRadius: 16, padding: 28 }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: "var(--sf-dark)",
+                marginBottom: 6,
+              }}
+            >
+              What you pay for, vs. what running ads buys
             </div>
-            <div className="mb-4 text-sm font-medium text-[#3B6D11]">
-              Same 25-property portfolio
+            <div
+              style={{
+                fontSize: 12.5,
+                color: "var(--sf-green)",
+                opacity: 0.82,
+                lineHeight: 1.55,
+                marginBottom: 20,
+                maxWidth: 660,
+              }}
+            >
+              Paid ads aren&apos;t just costly — they&apos;re a specialism. All of
+              that campaign work is stripped away and replaced with one simple
+              monthly price per lead.
             </div>
-            <div className="divide-y divide-[#C0DD97]">
-              <BucketRow label="Starting portfolio" value="25 properties" />
-              <BucketRow
-                label="Annual churn (typical 10–12%)"
-                value="−3 properties"
-                valueClass="text-[#A32D2D] font-medium"
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <AdBar
+                label="Google Ads — one click on a management keyword"
+                price="£8–25"
+                pct="64%"
+                note="A click — not a name, a number, or a completed enquiry. And the campaign is technical to build, measure, and optimise."
               />
-              <BucketRow
-                label="New from referrals / ads"
-                value="+1 (still comes in)"
-                valueClass="text-[#3B6D11] font-medium"
+              <AdBar
+                label="Facebook Ads — one lead"
+                price="£10–25"
+                pct="78%"
+                note="Even harder — constant testing of creatives, angles, hooks, and CTAs just to keep cost per lead down."
               />
-              <BucketRow
-                label="New from marketplace (conservative)"
-                value="+3 to 6 properties"
-                valueClass="text-[#3B6D11] font-medium"
+              <AdBar
+                label="Stayful — one financially modelled, consented enquiry"
+                price="£15 flat"
+                pct="44%"
+                note="No campaigns, no creative testing — a simple monthly price per lead. The output of a campaign with none of the work."
+                green
               />
-            </div>
-            <div className="mt-4 flex items-center justify-between rounded-lg bg-white/60 p-3">
-              <span className="text-sm text-[#3B6D11]">Year-end portfolio</span>
-              <span className="text-sm font-medium text-[#3B6D11]">
-                27–29 properties — growing
-              </span>
             </div>
           </div>
         </div>
-        <p className="mt-4 text-xs text-[#898781]">
-          Conservative model: 20 leads/month at 5% conversion = 12 potential
-          properties per year. Shown at 25–50% of that rate to reflect realistic
-          close timelines of 4–12 weeks.
-        </p>
-      </Section>
+      </section>
 
-      {/* 10. Compounding chart */}
-      <Section>
-        <Eyebrow>What consistency builds</Eyebrow>
-        <SectionHeadline>
-          Properties added from the marketplace over 24 months — at one new
-          property every two months from month three.
-        </SectionHeadline>
-
-        <div className="rounded-xl border border-black/10 bg-white p-4">
-          <CompoundingChart />
-          <div className="mt-4 flex flex-wrap gap-6 px-2 text-xs text-[#52514e]">
-            <span className="flex items-center gap-2">
-              <span className="inline-block h-0.5 w-5 bg-[#3B6D11]" />
-              Monthly management revenue from marketplace properties
-            </span>
-            <span className="flex items-center gap-2">
-              <span className="inline-block h-0 w-5 border-t border-dashed border-[#898781]" />
-              Monthly subscription cost (£300)
-            </span>
+      {/* ============ LEAKING BUCKET CHART ============ */}
+      <section style={{ background: "var(--sf-sage)", padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-dark)">
+            Solving the leaking bucket
+          </Eyebrow>
+          <h2 style={centerHeadline({ color: "var(--sf-green)", maxWidth: 680 })}>
+            A 25-property portfolio, over 24 months.
+          </h2>
+          <p style={centerLede({ maxWidth: 640, marginBottom: 36 })}>
+            Same starting point, same 10–12% annual churn. The only difference is
+            a steady supply of new leads.
+          </p>
+          <div style={{ background: "#fff", borderRadius: 16, padding: "26px 24px 20px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 20, marginBottom: 14 }}>
+              <LegendItem color="var(--sf-green)" label="With the marketplace" value="→ 30 properties" valueColor="var(--sf-dark)" />
+              <LegendItem color="var(--sf-muted)" label="Without" value="→ 21 properties" valueColor="#b45309" />
+            </div>
+            <div style={{ position: "relative", height: 300 }}>
+              <BucketChart />
+            </div>
           </div>
-        </div>
-
-        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-          <Milestone month="Month 6" count="3 new properties" rev="£867/mo recurring" note="Subscription paying for itself 3×" />
-          <Milestone month="Month 12" count="5 new properties" rev="£1,445/mo recurring" note="Subscription paying for itself 5×" />
-          <Milestone
-            highlight
-            month="Month 24"
-            count="11 new properties"
-            rev="£3,179/mo recurring"
-            note="Subscription paying for itself 10×"
-          />
-        </div>
-
-        <div className="mt-6 rounded-r-xl border-l-4 border-[#EF9F27] bg-amber-50 py-4 pl-4 pr-5">
-          <div className="text-sm font-medium text-amber-800">
-            Leads take time to close — plan for the long term
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">
-            STR management is not an instant-return vehicle. Landlords typically
-            take 4 to 12 weeks from first contact to a signed management
-            agreement. The model above is conservative and reflects this. The
-            operators who benefit most treat the marketplace as a long-term
-            acquisition channel: each month of leads adds to a growing pipeline,
-            and each property won generates recurring revenue indefinitely.
-            Consistency is the only requirement.
+          <p
+            style={{
+              fontSize: 12,
+              color: "var(--sf-green)",
+              opacity: 0.72,
+              marginTop: 16,
+              lineHeight: 1.6,
+              maxWidth: 760,
+            }}
+          >
+            Conservative model: 20 leads/month at 5% conversion = ~12 potential
+            properties per year, shown at 25–50% of that rate to reflect realistic
+            4–12 week close timelines.
           </p>
         </div>
-      </Section>
+      </section>
 
-      {/* 11. Founding member (dark) */}
-      <section className="border-b border-black/10 bg-[#3B6D11] px-6 py-20">
-        <div className="mx-auto grid max-w-5xl grid-cols-1 items-center gap-12 md:grid-cols-2">
-          <div>
-            <p className="mb-4 text-xs uppercase tracking-widest text-[#9FE1CB]">
+      {/* ============ COMPOUNDING CHART ============ */}
+      <section style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-green)">
+            What consistency builds
+          </Eyebrow>
+          <h2 style={centerHeadline({ maxWidth: 680 })}>
+            Recurring revenue added, month by month.
+          </h2>
+          <p style={centerLede({ color: "var(--sf-secondary)", maxWidth: 660, marginBottom: 32 })}>
+            At roughly one new property every two months from month three —
+            conservative for 4–12 week close timelines.
+          </p>
+          <div
+            style={{
+              background: "#fff",
+              border: "1px solid var(--sf-border)",
+              borderRadius: 16,
+              padding: "26px 24px 18px",
+              marginBottom: 24,
+            }}
+          >
+            <div style={{ position: "relative", height: 270 }}>
+              <RevenueChart />
+            </div>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
+              gap: 16,
+            }}
+          >
+            <MilestoneCard month="Month 6" big="3 new properties" mrr="£867/mo recurring" sub="Subscription paid 3×" />
+            <MilestoneCard month="Month 12" big="5 new properties" mrr="£1,445/mo recurring" sub="Subscription paid 5×" />
+            <MilestoneCard month="Month 24" big="11 new properties" mrr="£3,179/mo recurring" sub="Subscription paid 10×" green />
+          </div>
+        </div>
+      </section>
+
+      {/* ============ FOUNDING MEMBER ============ */}
+      <section id="founding" style={{ background: "var(--sf-green)", padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <div style={{ textAlign: "center" }}>
+            <span
+              style={{
+                display: "inline-block",
+                background: "rgba(185,213,198,.18)",
+                border: "1px solid rgba(185,213,198,.32)",
+                borderRadius: 100,
+                padding: "6px 16px",
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--sf-sage)",
+                letterSpacing: ".07em",
+                textTransform: "uppercase",
+                marginBottom: 18,
+              }}
+            >
               Founding member access
-            </p>
-            <h2 className="text-3xl font-medium leading-tight text-white">
+            </span>
+            <h2
+              style={display({
+                fontSize: "clamp(26px,4vw,38px)",
+                fontWeight: 700,
+                letterSpacing: "-.02em",
+                lineHeight: 1.08,
+                color: "#fff",
+                marginBottom: 14,
+                maxWidth: 620,
+                marginLeft: "auto",
+                marginRight: "auto",
+              })}
+            >
               Lock your rate. Join before this fills.
             </h2>
-            <div className="mt-4 space-y-4 text-sm leading-relaxed text-[#C0DD97]">
-              <p>
-                The first cohort of Stayful Lead Marketplace subscribers
-                receives founding member pricing — the rate you join at is
-                guaranteed for as long as you remain subscribed. As the lead
-                volume and subscriber base grows, founding members maintain
-                priority position in the pacing queue.
-              </p>
-              <p>
-                This cohort is limited. When founding membership closes, standard
-                pricing and standard terms apply.
-              </p>
-            </div>
-            <Link
-              href="/signup"
-              className="mt-8 inline-block rounded-lg bg-white px-6 py-3 text-sm font-medium text-[#3B6D11] transition-colors hover:bg-[#EAF3DE]"
+            <p
+              style={{
+                fontSize: 16,
+                color: "var(--sf-sage)",
+                opacity: 0.9,
+                lineHeight: 1.65,
+                maxWidth: 600,
+                margin: "0 auto 40px",
+              }}
             >
-              Claim your founding membership
-            </Link>
-            <p className="mt-3 text-xs text-[#9FE1CB]">
-              £300/month · 20 leads/month · cancel anytime · allocation carries
-              forward
+              The first cohort receives founding member pricing — the rate you
+              join at is guaranteed for as long as you stay subscribed. When
+              founding membership closes, standard pricing applies.
             </p>
           </div>
 
-          <div className="space-y-4">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))",
+              gap: 14,
+              marginBottom: 40,
+            }}
+          >
+            <FoundingCard
+              title="Founding rate guaranteed"
+              body="Your £300/month is locked regardless of future pricing, for as long as you stay subscribed."
+            />
+            <FoundingCard
+              title="Priority pacing position"
+              body="Prioritised in the lead queue throughout your subscription — ahead of all future standard subscribers."
+            />
+            <FoundingCard
+              title="Shape the product"
+              body="Founding members influence which cities, lead types, and features are prioritised next."
+            />
+          </div>
+
+          <div style={{ textAlign: "center" }}>
+            <Link
+              href="/signup"
+              style={{
+                display: "inline-block",
+                background: "#fff",
+                color: "var(--sf-dark)",
+                fontSize: 15,
+                fontWeight: 700,
+                padding: "16px 36px",
+                borderRadius: 9,
+                textDecoration: "none",
+                marginBottom: 20,
+              }}
+            >
+              Claim your founding membership
+            </Link>
+          </div>
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap", justifyContent: "center" }}>
             {[
-              {
-                t: "Founding rate guaranteed",
-                d: "Your £300/month rate is locked regardless of future pricing changes.",
-              },
-              {
-                t: "Priority pacing position",
-                d: "Founding members are prioritised in the lead queue throughout their subscription.",
-              },
-              {
-                t: "Direct access",
-                d: "Questions about a lead, a landlord's situation, or the platform? Reach Zac directly.",
-              },
-              {
-                t: "Shape the product",
-                d: "Founding members influence which cities, lead types, and features are prioritised next.",
-              },
-            ].map((item) => (
-              <div key={item.t} className="flex gap-3">
-                <span className="mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[#9FE1CB]" />
-                <div>
-                  <div className="text-sm font-medium text-white">{item.t}</div>
-                  <div className="mt-0.5 text-sm text-[#C0DD97]">{item.d}</div>
-                </div>
-              </div>
+              "Cancel anytime — no lock-in",
+              "Allocation carries forward",
+              "Leads distributed through the month",
+            ].map((t) => (
+              <span
+                key={t}
+                style={{
+                  fontSize: 12.5,
+                  color: "#fff",
+                  opacity: 0.85,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                ✓ {t}
+              </span>
             ))}
           </div>
         </div>
       </section>
 
-      {/* 12. Pricing */}
-      <Section>
-        <Eyebrow>Pricing</Eyebrow>
-        <SectionHeadline>
-          One subscription. Fixed cost. No hidden fees.
-        </SectionHeadline>
-
-        <div className="mx-auto mt-10 max-w-md rounded-xl border border-black/10 bg-white p-8">
-          <div>
-            <span className="text-5xl font-medium text-[#1a1a19]">£300</span>
-            <span className="text-xl text-[#898781]">/month</span>
+      {/* ============ PRICING ============ */}
+      <section id="pricing" style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto", textAlign: "center" }}>
+          <Eyebrow center color="var(--sf-green)">
+            Pricing
+          </Eyebrow>
+          <h2
+            style={display({
+              fontSize: "clamp(26px,4vw,38px)",
+              fontWeight: 700,
+              letterSpacing: "-.02em",
+              lineHeight: 1.08,
+              marginBottom: 10,
+            })}
+          >
+            One subscription. Fixed cost. No hidden fees.
+          </h2>
+          <p style={{ fontSize: 15, color: "var(--sf-secondary)", marginBottom: 40 }}>
+            Everything included — full contact details, real-time delivery,
+            tracking dashboard.
+          </p>
+          <div
+            style={{
+              background: "#fff",
+              border: "1px solid var(--sf-border)",
+              borderRadius: 18,
+              padding: 40,
+              maxWidth: 480,
+              margin: "0 auto",
+              textAlign: "left",
+              boxShadow: "0 24px 60px -34px rgba(59,109,17,.4)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+              <span
+                style={display({
+                  fontSize: 52,
+                  fontWeight: 700,
+                  color: "var(--sf-dark)",
+                  letterSpacing: "-.03em",
+                  lineHeight: 1,
+                })}
+              >
+                £300
+              </span>
+              <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
+                /month
+              </span>
+            </div>
+            <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
+              + VAT
+            </div>
+            <ul style={{ listStyle: "none", marginBottom: 28 }}>
+              {[
+                "20 financially modelled leads per month",
+                "Full contact details: name, address, phone, email, profile",
+                "Estimated monthly STR income per lead",
+                "Real-time in-portal and email notification",
+                "Leads carry forward if allocation isn't met",
+                "Cancel anytime — no lock-in, no penalty",
+              ].map((f, i, arr) => (
+                <li
+                  key={f}
+                  style={{
+                    fontSize: 14,
+                    padding: "10px 0",
+                    borderBottom:
+                      i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
+                    ✓
+                  </span>
+                  {f}
+                </li>
+              ))}
+            </ul>
+            <Link
+              href="/signup"
+              style={{
+                display: "block",
+                background: "var(--sf-dark)",
+                color: "#fff",
+                fontSize: 15,
+                fontWeight: 700,
+                padding: 16,
+                borderRadius: 9,
+                textAlign: "center",
+                textDecoration: "none",
+                marginBottom: 12,
+              }}
+            >
+              Start your subscription
+            </Link>
+            <p
+              style={{
+                fontSize: 12.5,
+                color: "var(--sf-muted)",
+                textAlign: "center",
+                lineHeight: 1.55,
+              }}
+            >
+              Exclusive leads (one operator only) available at £25/lead. Contact
+              the Stayful team to discuss exclusive allocation.
+            </p>
           </div>
-          <div className="text-sm text-[#898781]">+ VAT</div>
-
-          <div className="my-6 border-t border-black/10" />
-
-          <ul className="space-y-3">
-            {[
-              "20 financially modelled leads per month",
-              "Full contact details: name, address, phone, email, lead profile",
-              "Estimated monthly STR income per lead",
-              "Maximum 2 operators per lead — you are never in a crowd",
-              "Real-time in-portal and email notification on each assignment",
-              "Leads carry forward if your monthly allocation is not met",
-              "Cancel anytime — no lock-in, no penalty",
-              "Overflow leads available at £20/lead if you opt in",
-            ].map((f) => (
-              <li key={f} className="flex items-start gap-3 text-sm text-[#52514e]">
-                <span className="font-medium text-[#3B6D11]">✓</span>
-                <span>{f}</span>
-              </li>
-            ))}
-          </ul>
-
-          <Link href="/signup" className={`mt-8 w-full text-center ${PRIMARY_BTN}`}>
-            Start your subscription
-          </Link>
         </div>
+      </section>
 
-        <p className="mx-auto mt-4 max-w-sm text-center text-xs text-[#898781]">
-          Exclusive leads (one operator only) are available at £25/lead. Contact
-          Zac directly to discuss exclusive allocation.
-        </p>
-      </Section>
-
-      {/* 13. FAQ */}
-      <Section>
-        <Eyebrow>Common questions</Eyebrow>
-        <SectionHeadline>Answers before you ask.</SectionHeadline>
-        <div className="mt-2">
-          <FaqAccordion />
+      {/* ============ FAQ ============ */}
+      <section style={{ background: "var(--sf-olive)", padding: "88px 32px" }}>
+        <div style={{ maxWidth: 820, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-dark)">
+            Common questions
+          </Eyebrow>
+          <h2
+            style={display({
+              fontSize: "clamp(26px,4vw,38px)",
+              fontWeight: 700,
+              letterSpacing: "-.02em",
+              lineHeight: 1.08,
+              color: "var(--sf-green)",
+              marginBottom: 36,
+              textAlign: "center",
+            })}
+          >
+            Answers before you ask.
+          </h2>
+          <div>
+            {FAQ.map((item, i) => {
+              const open = openFaq === i;
+              return (
+                <div key={item.q} style={{ borderBottom: "1px solid rgba(93,129,86,.28)" }}>
+                  <button
+                    onClick={() => setOpenFaq(open ? null : i)}
+                    style={{
+                      width: "100%",
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: 15.5,
+                      fontWeight: 600,
+                      color: "var(--sf-green)",
+                      padding: "20px 0",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 16,
+                      textAlign: "left",
+                      fontFamily: "var(--sf-sans)",
+                    }}
+                  >
+                    {item.q}
+                    <span
+                      style={{
+                        fontSize: 22,
+                        color: "var(--sf-green)",
+                        flexShrink: 0,
+                        transition: "transform .2s",
+                        transform: open ? "rotate(45deg)" : "none",
+                        fontWeight: 300,
+                      }}
+                    >
+                      +
+                    </span>
+                  </button>
+                  <div
+                    style={{
+                      fontSize: 14,
+                      color: "var(--sf-green)",
+                      opacity: 0.85,
+                      lineHeight: 1.75,
+                      maxHeight: open ? 400 : 0,
+                      overflow: "hidden",
+                      transition: "max-height .3s ease, padding .2s",
+                      paddingBottom: open ? 20 : 0,
+                    }}
+                  >
+                    {item.a}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </Section>
+      </section>
 
-      {/* 14. Final CTA */}
-      <section className="border-b border-black/10 bg-[#EAF3DE] px-6 py-20">
-        <div className="mx-auto max-w-3xl text-center">
-          <h2 className="mb-4 text-3xl font-medium text-[#3B6D11]">
+      {/* ============ FINAL CTA ============ */}
+      <section
+        id="signup"
+        style={{ background: "var(--sf-olive)", padding: "88px 32px", textAlign: "center" }}
+      >
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              gap: 40,
+              flexWrap: "wrap",
+              marginBottom: 40,
+            }}
+          >
+            <FinalStat prefix="£" n={15} label="per lead" />
+            <div>
+              <div
+                style={display({
+                  fontSize: 32,
+                  fontWeight: 700,
+                  color: "var(--sf-dark)",
+                  lineHeight: 1,
+                })}
+              >
+                1 in 20
+              </div>
+              <div style={{ fontSize: 12, color: "var(--sf-green)", marginTop: 4, fontWeight: 600 }}>
+                converts to a client
+              </div>
+            </div>
+            <FinalStat prefix="£" n={289} label="avg monthly per property" />
+          </div>
+          <h2
+            style={display({
+              fontSize: "clamp(24px,3.6vw,34px)",
+              fontWeight: 700,
+              letterSpacing: "-.02em",
+              color: "var(--sf-green)",
+              marginBottom: 14,
+              lineHeight: 1.1,
+            })}
+          >
             A fixed cost. A known return. A growing portfolio.
           </h2>
-          <p className="mx-auto mb-8 max-w-xl text-base leading-relaxed text-[#5D8156]">
-            £300 per month for 20 financially modelled leads. Each lead goes to a
-            maximum of two operators. No campaigns to run, no algorithms to
-            manage, no expertise required. Just a consistent pipeline of
-            landlords who searched for what you do.
+          <p
+            style={{
+              fontSize: 15.5,
+              color: "var(--sf-green)",
+              opacity: 0.82,
+              marginBottom: 32,
+              lineHeight: 1.65,
+            }}
+          >
+            £300 per month for 20 financially modelled leads. No campaigns to run,
+            no algorithms to manage. Just a consistent pipeline of landlords who
+            searched for what you do.
           </p>
-          <div className="mb-10 flex flex-wrap justify-center gap-8">
-            {[
-              { n: "£15", l: "per lead" },
-              { n: "1 in 20", l: "converts to a managed property" },
-              { n: "£289", l: "avg monthly revenue per property" },
-              { n: "max 2", l: "operators per lead" },
-            ].map((s) => (
-              <div key={s.l}>
-                <div className="text-2xl font-medium text-[#3B6D11]">{s.n}</div>
-                <div className="text-xs text-[#5D8156]">{s.l}</div>
-              </div>
-            ))}
-          </div>
-          <Link href="/signup" className={PRIMARY_BTN}>
+          <Link
+            href="/signup"
+            style={{
+              display: "inline-block",
+              background: "var(--sf-dark)",
+              color: "#fff",
+              fontSize: 15,
+              fontWeight: 700,
+              padding: "16px 42px",
+              borderRadius: 9,
+              textDecoration: "none",
+              marginBottom: 18,
+            }}
+          >
             Claim your founding membership
           </Link>
-          <p className="mt-3 text-xs text-[#5D8156]">
-            Cancel anytime · allocation carries forward · founding rate locked
-          </p>
+          <div style={{ display: "flex", gap: 22, justifyContent: "center", flexWrap: "wrap" }}>
+            {["Cancel anytime", "Allocation carries forward", "Founding rate locked"].map(
+              (t) => (
+                <span
+                  key={t}
+                  style={{
+                    fontSize: 13,
+                    color: "var(--sf-green)",
+                    opacity: 0.8,
+                    display: "flex",
+                    gap: 6,
+                    alignItems: "center",
+                  }}
+                >
+                  ✓ {t}
+                </span>
+              )
+            )}
+          </div>
         </div>
       </section>
 
-      {/* 15. Footer */}
-      <footer className="px-6 py-8">
-        <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 sm:flex-row">
-          <div className="flex items-center gap-3 text-xs text-[#898781]">
-            <img
-              src="/logo.png"
-              alt="Stayful"
-              width={35}
-              height={20}
-              className="h-5 w-auto"
-            />
-            <span>© 2026 Stayful. All rights reserved.</span>
-          </div>
-          <div className="flex items-center gap-5 text-xs text-[#898781]">
-            <Link href="/login" className="hover:text-[#52514e]">
-              Sign in
-            </Link>
-            <a href="#" className="hover:text-[#52514e]">
-              Privacy
-            </a>
-            <a href="#" className="hover:text-[#52514e]">
-              Contact
-            </a>
-          </div>
+      {/* ============ FOOTER ============ */}
+      <footer
+        style={{
+          background: "#fff",
+          borderTop: "1px solid var(--sf-border)",
+          padding: "40px 32px",
+          textAlign: "center",
+        }}
+      >
+        <img
+          src={LOGO}
+          alt="Stayful"
+          style={{ height: 26, margin: "0 auto 16px", display: "block" }}
+        />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: 24,
+            flexWrap: "wrap",
+            marginBottom: 14,
+          }}
+        >
+          <a href="https://www.stayful.co.uk" style={footerLink}>
+            stayful.co.uk
+          </a>
+          <Link href="/login" style={footerLink}>
+            Sign in
+          </Link>
+          <a href="mailto:zac@stayful.co.uk" style={footerLink}>
+            Contact
+          </a>
         </div>
+        <p style={{ fontSize: 12.5, color: "var(--sf-muted)" }}>
+          © 2026 Stayful. All rights reserved.
+        </p>
       </footer>
     </main>
   );
 }
 
-// ── Small presentational helpers ────────────────────────────────────────────
+// ── Small style helpers & sub-components ────────────────────────────────────
 
-function PainCard({
-  title,
-  body,
-  accent = false,
+const navLink: CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 600,
+  color: "var(--sf-secondary)",
+  textDecoration: "none",
+};
+
+const heroPrimary: CSSProperties = {
+  display: "inline-block",
+  background: "var(--sf-dark)",
+  color: "#fff",
+  fontSize: 15,
+  fontWeight: 600,
+  padding: "15px 30px",
+  borderRadius: 9,
+  textDecoration: "none",
+};
+
+const heroSecondary: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  border: "1.5px solid rgba(93,129,86,.45)",
+  color: "var(--sf-green)",
+  fontSize: 15,
+  fontWeight: 600,
+  padding: "15px 26px",
+  borderRadius: 9,
+  textDecoration: "none",
+};
+
+const oliveChip: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  background: "var(--sf-olive)",
+  color: "var(--sf-dark)",
+  padding: "5px 11px",
+  borderRadius: 100,
+};
+
+const sageChip: CSSProperties = {
+  background: "var(--sf-sage)",
+  color: "var(--sf-dark)",
+  fontSize: 12,
+  fontWeight: 600,
+  padding: "4px 10px",
+  borderRadius: 7,
+};
+
+const unlockedPill: CSSProperties = {
+  fontSize: 10.5,
+  color: "var(--sf-dark)",
+  fontWeight: 600,
+  background: "var(--sf-sage)",
+  padding: "2px 8px",
+  borderRadius: 100,
+};
+
+const leadLabel: CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: ".07em",
+  color: "var(--sf-muted)",
+  marginBottom: 6,
+};
+
+const statCard: CSSProperties = {
+  background: "#fff",
+  border: "1px solid var(--sf-border)",
+  borderRadius: 16,
+  padding: 26,
+};
+
+const timelineBody: CSSProperties = {
+  fontSize: 14,
+  color: "var(--sf-secondary)",
+  lineHeight: 1.65,
+  marginBottom: 14,
+};
+
+const footerLink: CSSProperties = {
+  fontSize: 13,
+  color: "var(--sf-muted)",
+  textDecoration: "none",
+};
+
+function cardGrid(min: number): CSSProperties {
+  return {
+    display: "grid",
+    gridTemplateColumns: `repeat(auto-fit,minmax(${min}px,1fr))`,
+    gap: 18,
+  };
+}
+
+function Eyebrow({
+  children,
+  color = "var(--sf-green)",
 }: {
-  title: string;
-  body: string;
-  accent?: boolean;
+  children: React.ReactNode;
+  center?: boolean;
+  color?: string;
 }) {
   return (
-    <div
-      className={`rounded-xl border border-black/10 bg-white p-6 ${
-        accent ? "border-l-4 border-l-[#5D8156]" : ""
-      }`}
+    <p
+      style={{
+        fontSize: 11,
+        fontWeight: 700,
+        textTransform: "uppercase",
+        letterSpacing: ".12em",
+        color,
+        marginBottom: 12,
+        textAlign: "center",
+      }}
     >
-      <div className="mb-2 text-sm font-medium text-[#1a1a19]">{title}</div>
-      <p className="text-sm leading-relaxed text-[#52514e]">{body}</p>
+      {children}
+    </p>
+  );
+}
+
+function centerHeadline(extra?: CSSProperties): CSSProperties {
+  return display({
+    fontSize: "clamp(26px,4vw,38px)",
+    fontWeight: 700,
+    letterSpacing: "-.02em",
+    lineHeight: 1.08,
+    marginBottom: 44,
+    maxWidth: 720,
+    textAlign: "center",
+    marginLeft: "auto",
+    marginRight: "auto",
+    ...extra,
+  });
+}
+
+function centerLede(extra?: CSSProperties): CSSProperties {
+  return {
+    fontSize: 16,
+    color: "var(--sf-green)",
+    opacity: 0.82,
+    lineHeight: 1.7,
+    maxWidth: 700,
+    marginBottom: 44,
+    textAlign: "center",
+    marginLeft: "auto",
+    marginRight: "auto",
+    ...extra,
+  };
+}
+
+function stepNum(bg: string, fg: string): CSSProperties {
+  return {
+    width: 34,
+    height: 34,
+    borderRadius: "50%",
+    background: bg,
+    color: fg,
+    fontFamily: "var(--sf-display)",
+    fontWeight: 700,
+    fontSize: 13,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
+}
+
+function StepHead({ n, title }: { n: string; title: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+      <span style={stepNum("var(--sf-green)", "#fff")}>{n}</span>
+      <h3 style={display({ fontSize: 16, fontWeight: 700, color: "var(--sf-green)" })}>
+        {title}
+      </h3>
     </div>
   );
 }
 
-function StepCard({
-  step,
-  title,
-  body,
-  highlight = false,
-}: {
-  step: string;
-  title: string;
-  body: string;
-  highlight?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-xl border p-6 ${
-        highlight
-          ? "border-[#C0DD97] bg-[#EAF3DE]"
-          : "border-black/10 bg-white"
-      }`}
-    >
-      <div className="mb-2 text-xs uppercase tracking-widest text-[#5D8156]">
-        {step}
-      </div>
-      <div className="mb-2 text-sm font-medium text-[#1a1a19]">{title}</div>
-      <p className="text-sm leading-relaxed text-[#52514e]">{body}</p>
-    </div>
-  );
-}
-
-function TimelineStep({
+function Timeline({
   n,
   title,
-  body,
-  note,
-  highlight = false,
-  last = false,
+  children,
+  last,
 }: {
   n: number;
   title: string;
-  body: string;
-  note?: string;
-  highlight?: boolean;
+  children: React.ReactNode;
   last?: boolean;
 }) {
   return (
-    <div className={`relative flex items-start gap-5 ${last ? "" : "pb-8"}`}>
-      <div
-        className={`z-10 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-medium ${
-          highlight ? "bg-[#3B6D11] text-white" : "bg-[#EAF3DE] text-[#3B6D11]"
-        }`}
-      >
-        {n}
-      </div>
-      <div>
-        <div className="mb-1 text-sm font-medium text-[#1a1a19]">{title}</div>
-        <p className="text-sm leading-relaxed text-[#52514e]">{body}</p>
-        {note && (
-          <p className="mt-2 text-xs font-medium text-[#5D8156]">{note}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function YearBar({
-  year,
-  pct,
-  label,
-  fill,
-}: {
-  year: string;
-  pct: number;
-  label: string;
-  fill: string;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-10 text-xs text-[#52514e]">{year}</span>
-      <div className="h-5 flex-1 rounded-sm bg-[#EAF3DE]">
-        <div
-          className="flex h-full items-center rounded-sm px-2"
-          style={{ width: `${pct}%`, backgroundColor: fill }}
+    <div style={{ display: "grid", gridTemplateColumns: "44px 1fr", gap: 22 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <span
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: "50%",
+            background: last ? "var(--sf-dark)" : "var(--sf-green)",
+            color: "#fff",
+            fontFamily: "var(--sf-display)",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
         >
-          <span className="text-xs font-medium text-white">{label}</span>
-        </div>
+          {n}
+        </span>
+        {!last && <span style={{ flex: 1, width: 2, background: "var(--sf-border)" }} />}
+      </div>
+      <div style={{ paddingBottom: last ? 0 : 34 }}>
+        <h3 style={display({ fontSize: 17, fontWeight: 700, marginBottom: 6 })}>{title}</h3>
+        {children}
       </div>
     </div>
   );
 }
 
-function BreakdownRow({
-  label,
-  value,
-  bold = false,
-}: {
-  label: string;
-  value: string;
-  bold?: boolean;
-}) {
+function statusChip(won?: boolean, color?: string): CSSProperties {
+  if (won) {
+    return {
+      fontSize: 12,
+      fontWeight: 700,
+      background: "var(--sf-green)",
+      color: "#fff",
+      padding: "5px 12px",
+      borderRadius: 7,
+    };
+  }
+  return {
+    fontSize: 12,
+    fontWeight: 700,
+    background: "#fff",
+    border: "1px solid var(--sf-border)",
+    color: color || "var(--sf-secondary)",
+    padding: "5px 12px",
+    borderRadius: 7,
+  };
+}
+
+function LeadRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className={`flex justify-between py-1 ${bold ? "font-medium text-[#1a1a19]" : ""}`}>
-      <span>{label}</span>
-      <span>{value}</span>
+    <div style={{ padding: "9px 0", borderBottom: "1px solid var(--sf-border)" }}>
+      <div style={leadLabel}>{label}</div>
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 500,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
 
-function EquationBox({
+function StatRow({ k, v, bold }: { k: string; v: string; bold?: boolean }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 13,
+        padding: "7px 0",
+        borderBottom: "1px solid var(--sf-border)",
+      }}
+    >
+      <span style={{ color: "var(--sf-secondary)", fontWeight: bold ? 700 : 400 }}>{k}</span>
+      <span style={{ fontWeight: bold ? 700 : 600, color: bold ? "var(--sf-dark)" : undefined }}>
+        {v}
+      </span>
+    </div>
+  );
+}
+
+function FlowCard({
   big,
+  small,
   sub,
-  note,
-  highlight = false,
+  green,
 }: {
   big: string;
+  small: string;
   sub: string;
-  note: string;
-  highlight?: boolean;
+  green?: boolean;
 }) {
   return (
     <div
-      className={`flex-1 rounded-xl border p-5 text-center ${
-        highlight ? "border-[#C0DD97] bg-[#EAF3DE]" : "border-black/10 bg-white"
-      }`}
+      style={{
+        background: green ? "var(--sf-green)" : "#fff",
+        border: green ? "none" : "1px solid var(--sf-border)",
+        borderRadius: 14,
+        padding: "22px 18px",
+        textAlign: "center",
+      }}
     >
       <div
-        className={`text-3xl font-medium ${
-          highlight ? "text-[#3B6D11]" : "text-[#1a1a19]"
-        }`}
+        style={display({
+          fontSize: 30,
+          fontWeight: 700,
+          color: green ? "#fff" : "var(--sf-dark)",
+          lineHeight: 1,
+          marginBottom: 5,
+        })}
       >
         {big}
       </div>
-      <div className="mt-1 text-xs text-[#52514e]">{sub}</div>
-      <div className="mt-1 text-xs text-[#898781]">{note}</div>
+      <div style={{ fontSize: 12, color: green ? "var(--sf-sage)" : "var(--sf-muted)", marginBottom: 8 }}>
+        {small}
+      </div>
+      <div
+        style={{
+          fontSize: 12.5,
+          color: green ? "#fff" : "var(--sf-secondary)",
+          opacity: green ? 0.9 : 1,
+          lineHeight: 1.45,
+        }}
+      >
+        {sub}
+      </div>
     </div>
   );
 }
 
-function Arrow() {
-  return (
-    <div className="hidden items-center justify-center text-[#898781] md:flex">
-      →
-    </div>
-  );
-}
-
-function MiniStat({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="rounded-xl border border-black/10 bg-white p-4">
-      <div className="text-xl font-medium text-[#1a1a19]">{value}</div>
-      <div className="mt-1 text-xs text-[#52514e]">{label}</div>
-    </div>
-  );
-}
-
-function BucketRow({
+function AdBar({
   label,
-  value,
-  valueClass = "text-[#1a1a19]",
+  price,
+  pct,
+  note,
+  green,
 }: {
   label: string;
-  value: string;
-  valueClass?: string;
+  price: string;
+  pct: string;
+  note: string;
+  green?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between py-2.5 text-sm">
-      <span className="text-[#52514e]">{label}</span>
-      <span className={valueClass}>{value}</span>
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, marginBottom: 6 }}>
+        <span style={{ color: "var(--sf-green)", fontWeight: green ? 700 : 600 }}>{label}</span>
+        <span style={{ fontWeight: 700, color: green ? "var(--sf-dark)" : "var(--sf-green)" }}>
+          {price}
+        </span>
+      </div>
+      <div style={{ height: 14, background: "rgba(93,129,86,.18)", borderRadius: 100, overflow: "hidden" }}>
+        <div
+          style={{
+            width: pct,
+            height: "100%",
+            background: green ? "var(--sf-green)" : "var(--sf-muted)",
+            borderRadius: 100,
+          }}
+        />
+      </div>
+      <div style={{ fontSize: 12, color: "var(--sf-green)", opacity: 0.75, marginTop: 5 }}>{note}</div>
     </div>
   );
 }
 
-function Milestone({
+function LegendItem({
+  color,
+  label,
+  value,
+  valueColor,
+}: {
+  color: string;
+  label: string;
+  value: string;
+  valueColor: string;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ width: 22, height: 4, borderRadius: 2, background: color }} />
+      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--sf-body)" }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: valueColor }}>{value}</span>
+    </div>
+  );
+}
+
+function MilestoneCard({
   month,
-  count,
-  rev,
-  note,
-  highlight = false,
+  big,
+  mrr,
+  sub,
+  green,
 }: {
   month: string;
-  count: string;
-  rev: string;
-  note: string;
-  highlight?: boolean;
+  big: string;
+  mrr: string;
+  sub: string;
+  green?: boolean;
 }) {
   return (
     <div
-      className={`rounded-xl border p-5 ${
-        highlight ? "border-[#C0DD97] bg-[#EAF3DE]" : "border-black/10 bg-white"
-      }`}
+      style={{
+        background: green ? "var(--sf-green)" : "#fff",
+        border: green ? "none" : "1px solid var(--sf-border)",
+        borderRadius: 14,
+        padding: 22,
+      }}
     >
-      <div className="mb-2 text-xs uppercase tracking-widest text-[#898781]">
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: ".07em",
+          color: green ? "var(--sf-sage)" : "var(--sf-muted)",
+          marginBottom: 8,
+        }}
+      >
         {month}
       </div>
-      <div className="mb-1 text-2xl font-medium text-[#3B6D11]">{count}</div>
-      <div className="mb-2 text-sm font-medium text-[#1a1a19]">{rev}</div>
-      <div className="text-xs text-[#898781]">{note}</div>
+      <div style={display({ fontSize: 24, fontWeight: 700, color: green ? "#fff" : "var(--sf-dark)" })}>
+        {big}
+      </div>
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 600,
+          color: green ? "var(--sf-sage)" : "var(--sf-green)",
+          marginBottom: 4,
+        }}
+      >
+        {mrr}
+      </div>
+      <div style={{ fontSize: 12, color: green ? "#fff" : "var(--sf-secondary)", opacity: green ? 0.85 : 1 }}>
+        {sub}
+      </div>
+    </div>
+  );
+}
+
+function FoundingCard({ title, body }: { title: string; body: string }) {
+  return (
+    <div
+      style={{
+        padding: 22,
+        background: "rgba(255,255,255,.08)",
+        border: "1px solid rgba(185,213,198,.22)",
+        borderRadius: 14,
+      }}
+    >
+      <div style={{ fontSize: 14.5, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 13, color: "var(--sf-sage)", opacity: 0.88, lineHeight: 1.55 }}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
+function FinalStat({ prefix, n, label }: { prefix?: string; n: number; label: string }) {
+  return (
+    <div>
+      <div style={display({ fontSize: 32, fontWeight: 700, color: "var(--sf-dark)", lineHeight: 1 })}>
+        {prefix}
+        <Count n={n} />
+      </div>
+      <div style={{ fontSize: 12, color: "var(--sf-green)", marginTop: 4, fontWeight: 600 }}>
+        {label}
+      </div>
     </div>
   );
 }

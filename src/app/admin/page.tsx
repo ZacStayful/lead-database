@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
+import { CapacityPanel } from "@/components/admin/CapacityPanel";
 import type { Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,21 @@ export default async function AdminOverviewPage() {
   const activeCustomers = customers.filter(
     (c) => c.subscription_status === "active" && c.is_active
   );
+
+  // Capacity management uses account_status (admin approval), independent of
+  // Stripe billing state.
+  const activeAccounts = customers.filter(
+    (c) => c.account_status === "active"
+  ).length;
+  const waitlistedAccounts = customers.filter(
+    (c) => c.account_status === "waitlisted"
+  ).length;
+  const { data: capacitySetting } = await admin
+    .from("system_settings")
+    .select("value")
+    .eq("key", "max_active_customers")
+    .maybeSingle();
+  const capacityLimit = parseInt(capacitySetting?.value ?? "10", 10);
 
   const mrr = activeCustomers.length * MONTHLY_PRICE_GBP;
   const leadsThisMonth = customers.reduce(
@@ -45,6 +61,11 @@ export default async function AdminOverviewPage() {
           System health at a glance.
         </p>
       </div>
+      <CapacityPanel
+        activeCount={activeAccounts}
+        initialLimit={capacityLimit}
+        waitlistedCount={waitlistedAccounts}
+      />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label}>

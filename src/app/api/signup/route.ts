@@ -99,6 +99,7 @@ export async function POST(request: NextRequest) {
         email,
         phone: phone ?? null,
         subscription_status: "active",
+        account_status: "active",
       });
       if (ownerError) {
         await admin.auth.admin.deleteUser(userId).catch(() => {});
@@ -110,7 +111,53 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ mode: "login", redirect: "/admin" });
     }
 
-    // 3. Standard flow: Stripe customer + inactive customer row + Checkout.
+    // 3. Standard flow: create the customer row (waitlisted by default), then
+    // gate on capacity. Room available → mark invited and send them to Stripe
+    // Checkout; full → hold on the waitlist with no Stripe session created.
+    const { data: newCustomer, error: customerError } = await admin
+      .from("customers")
+      .insert({
+        user_id: userId,
+        business_name,
+        contact_name,
+        email,
+        phone: phone ?? null,
+        subscription_status: "inactive",
+      })
+      .select("id")
+      .single();
+
+    if (customerError || !newCustomer) {
+      await admin.auth.admin.deleteUser(userId).catch(() => {});
+      return NextResponse.json(
+        {
+          error: `Could not create customer record: ${
+            customerError?.message ?? "insert failed"
+          }`,
+        },
+        { status: 500 }
+      );
+    }
+
+    // Capacity check: how many customers are currently active vs the cap?
+    const { data: setting } = await admin
+      .from("system_settings")
+      .select("value")
+      .eq("key", "max_active_customers")
+      .single();
+    const maxActive = parseInt(setting?.value ?? "10", 10);
+    const { count: activeCount } = await admin
+      .from("customers")
+      .select("*", { count: "exact", head: true })
+      .eq("account_status", "active");
+
+    if ((activeCount ?? 0) >= maxActive) {
+      // No capacity — leave account_status as 'waitlisted', create no Stripe
+      // session. The client redirects to the waitlist confirmation page.
+      return NextResponse.json({ mode: "waitlisted", redirect: "/waitlisted" });
+    }
+
+    // Capacity available — provision Stripe, mark invited, and open Checkout.
     const stripe = getStripe();
     const stripeCustomer = await stripe.customers.create({
       email,
@@ -119,23 +166,13 @@ export async function POST(request: NextRequest) {
       metadata: { supabase_user_id: userId },
     });
 
-    const { error: customerError } = await admin.from("customers").insert({
-      user_id: userId,
-      business_name,
-      contact_name,
-      email,
-      phone: phone ?? null,
-      stripe_customer_id: stripeCustomer.id,
-      subscription_status: "inactive",
-    });
-
-    if (customerError) {
-      await admin.auth.admin.deleteUser(userId).catch(() => {});
-      return NextResponse.json(
-        { error: `Could not create customer record: ${customerError.message}` },
-        { status: 500 }
-      );
-    }
+    await admin
+      .from("customers")
+      .update({
+        stripe_customer_id: stripeCustomer.id,
+        account_status: "invited",
+      })
+      .eq("id", newCustomer.id);
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
