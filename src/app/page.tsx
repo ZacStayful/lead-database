@@ -161,7 +161,20 @@ export default function LandingPage() {
           justifyContent: "space-between",
         }}
       >
-        <img src={LOGO} alt="Stayful" style={{ height: 28 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <img src={LOGO} alt="Stayful" style={{ height: 28 }} />
+          <span
+            style={{
+              fontSize: 16,
+              fontWeight: 600,
+              color: "var(--sf-green)",
+              letterSpacing: "-.01em",
+              whiteSpace: "nowrap",
+            }}
+          >
+            lead generation
+          </span>
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
           <a href="#how" style={navLink}>
             How it works
@@ -230,7 +243,8 @@ export default function LandingPage() {
               marginBottom: 20,
             })}
           >
-            <Count n={20} /> landlords are looking for an STR operator this month.
+            Get <Count n={20} /> leads in your inbox every month with Stayful
+            lead generation.
           </h1>
           <p
             style={{
