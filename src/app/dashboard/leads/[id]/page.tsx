@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/dashboard/LeadDetail";
-import type { AssignmentWithLead } from "@/lib/types";
+import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -27,5 +27,18 @@ export default async function LeadDetailPage({
     notFound();
   }
 
-  return <LeadDetail assignment={data as AssignmentWithLead} />;
+  const assignment = data as AssignmentWithLead;
+
+  const { data: notesData } = await admin
+    .from("lead_notes")
+    .select("id, lead_assignment_id, customer_id, body, created_at")
+    .eq("lead_assignment_id", assignment.id)
+    .order("created_at", { ascending: false });
+
+  return (
+    <LeadDetail
+      assignment={assignment}
+      notes={(notesData ?? []) as LeadNote[]}
+    />
+  );
 }

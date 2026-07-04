@@ -7,13 +7,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
-import type { AssignmentWithLead } from "@/lib/types";
+import { LeadNotes } from "@/components/dashboard/LeadNotes";
+import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 import { ArrowLeft, BarChart3, Mail, Phone, MapPin, Calendar } from "lucide-react";
 
 export function LeadDetail({
   assignment,
+  notes,
 }: {
   assignment: AssignmentWithLead;
+  notes: LeadNote[];
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -171,6 +174,8 @@ export function LeadDetail({
           </div>
         )}
       </div>
+
+      <LeadNotes assignmentId={assignment.id} initialNotes={notes} />
     </div>
   );
 }

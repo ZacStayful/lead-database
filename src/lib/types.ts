@@ -57,6 +57,14 @@ export interface AssignmentWithLead extends LeadAssignment {
   lead: Lead;
 }
 
+export interface LeadNote {
+  id: string;
+  lead_assignment_id: string;
+  customer_id: string;
+  body: string;
+  created_at: string;
+}
+
 export interface Notification {
   id: string;
   customer_id: string;

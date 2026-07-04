@@ -32,7 +32,7 @@ export function ExportButton() {
   return (
     <Button variant="outline" size="sm" onClick={onExport} disabled={loading}>
       <Download className="h-4 w-4" />
-      {loading ? "Exporting…" : "Export"}
+      {loading ? "Exporting…" : "Export all leads"}
     </Button>
   );
 }
