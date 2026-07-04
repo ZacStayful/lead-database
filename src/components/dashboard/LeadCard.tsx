@@ -99,11 +99,6 @@ export function LeadCard({
               {lead.bedrooms} bed
             </span>
           )}
-          {lead.estimated_monthly_income && (
-            <span className="rounded-full bg-brand/10 px-3 py-1 text-sm font-medium text-brand">
-              {lead.estimated_monthly_income}
-            </span>
-          )}
         </div>
       </button>
 

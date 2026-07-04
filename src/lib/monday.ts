@@ -18,7 +18,6 @@ const COLUMN_MAP = {
   address: "text6", // "Address"
   bedrooms: "text5", // "Bedrooms"
   enquiry_date: "date", // "Date added"
-  estimated_monthly_income: "text_mm2eawgk", // "STR Profit"
   status: "status5", // "Status"
 } as const;
 
@@ -112,10 +111,6 @@ export async function fetchMondayLeads(): Promise<N8nLeadPayload[]> {
         address: textFor(item, COLUMN_MAP.address),
         bedrooms: textFor(item, COLUMN_MAP.bedrooms),
         enquiry_date: textFor(item, COLUMN_MAP.enquiry_date),
-        estimated_monthly_income: textFor(
-          item,
-          COLUMN_MAP.estimated_monthly_income
-        ),
       });
     }
   } while (cursor);

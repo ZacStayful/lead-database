@@ -48,7 +48,6 @@ export async function sendNewLeadEmail(params: {
     ["Name", lead.lead_name],
     ["Address", lead.address ?? "—"],
     ["Bedrooms", lead.bedrooms ?? "—"],
-    ["Estimated monthly income", lead.estimated_monthly_income ?? "—"],
     ["Lead profile", lead.lead_profile ?? "—"],
   ]
     .map(

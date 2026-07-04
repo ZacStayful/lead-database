@@ -36,7 +36,6 @@ export interface Lead {
   lead_profile: string | null;
   bedrooms: string | null;
   enquiry_date: string | null;
-  estimated_monthly_income: string | null;
   assignment_count: number;
   max_assignments: number;
   created_at: string;
@@ -91,5 +90,4 @@ export interface N8nLeadPayload {
   lead_profile: string;
   bedrooms: string;
   enquiry_date: string;
-  estimated_monthly_income: string;
 }

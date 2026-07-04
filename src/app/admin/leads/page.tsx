@@ -19,7 +19,6 @@ interface LeadRow {
   id: string;
   lead_name: string;
   address: string | null;
-  estimated_monthly_income: string | null;
   assignment_count: number;
   max_assignments: number;
   created_at: string;
@@ -33,7 +32,7 @@ export default async function AdminLeadsPage() {
   const { data } = await admin
     .from("leads")
     .select(
-      "id, lead_name, address, estimated_monthly_income, assignment_count, max_assignments, created_at, lead_assignments(customers(business_name))"
+      "id, lead_name, address, assignment_count, max_assignments, created_at, lead_assignments(customers(business_name))"
     )
     .order("created_at", { ascending: false });
 
@@ -56,7 +55,6 @@ export default async function AdminLeadsPage() {
             <TableRow>
               <TableHead>Lead</TableHead>
               <TableHead>Address</TableHead>
-              <TableHead>Income</TableHead>
               <TableHead>Assigned</TableHead>
               <TableHead>Recipients</TableHead>
               <TableHead>Received</TableHead>
@@ -74,9 +72,6 @@ export default async function AdminLeadsPage() {
                   <TableCell className="font-medium">{l.lead_name}</TableCell>
                   <TableCell className="max-w-[220px] truncate text-muted-foreground">
                     {l.address ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {l.estimated_monthly_income ?? "—"}
                   </TableCell>
                   <TableCell>
                     <Badge variant={full ? "muted" : "brand"}>
@@ -103,7 +98,7 @@ export default async function AdminLeadsPage() {
             {leads.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={6}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No leads yet.

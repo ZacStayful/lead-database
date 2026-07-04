@@ -41,7 +41,6 @@ export async function GET() {
     Email: a.lead?.email ?? "",
     Phone: a.lead?.phone ?? "",
     Bedrooms: a.lead?.bedrooms ?? "",
-    "Estimated monthly income": a.lead?.estimated_monthly_income ?? "",
     "Lead profile": a.lead?.lead_profile ?? "",
     "Enquiry date": a.lead?.enquiry_date ?? "",
     "Received on": a.assigned_at
@@ -58,7 +57,6 @@ export async function GET() {
     { wch: 26 },
     { wch: 16 },
     { wch: 10 },
-    { wch: 22 },
     { wch: 40 },
     { wch: 14 },
     { wch: 14 },

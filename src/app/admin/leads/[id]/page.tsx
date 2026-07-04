@@ -53,10 +53,8 @@ export default async function AdminLeadDetailPage({
     ["Phone", lead.phone],
     ["Address", lead.address],
     ["Bedrooms", lead.bedrooms],
-    ["Estimated monthly income", lead.estimated_monthly_income],
     ["Lead profile", lead.lead_profile],
     ["Enquiry date", lead.enquiry_date],
-    ["Monday item ID", lead.monday_item_id],
     ["Ingested", formatDate(lead.created_at)],
   ];
 

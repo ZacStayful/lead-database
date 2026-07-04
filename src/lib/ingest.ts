@@ -19,7 +19,6 @@ const LEAD_FIELDS: (keyof N8nLeadPayload)[] = [
   "lead_profile",
   "bedrooms",
   "enquiry_date",
-  "estimated_monthly_income",
 ];
 
 export interface IngestResult {

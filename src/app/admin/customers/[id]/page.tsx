@@ -77,7 +77,6 @@ export default async function AdminCustomerDetailPage({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-6">Lead</TableHead>
-                    <TableHead>Income</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Received</TableHead>
                   </TableRow>
@@ -87,9 +86,6 @@ export default async function AdminCustomerDetailPage({
                     <TableRow key={a.id}>
                       <TableCell className="pl-6 font-medium">
                         {a.lead?.lead_name}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {a.lead?.estimated_monthly_income ?? "—"}
                       </TableCell>
                       <TableCell>
                         {a.viewed_at ? (
@@ -106,7 +102,7 @@ export default async function AdminCustomerDetailPage({
                   {assignments.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={4}
+                        colSpan={3}
                         className="py-10 text-center text-muted-foreground"
                       >
                         No leads assigned yet.

@@ -103,10 +103,6 @@ export function LeadDetail({
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <FieldRow label="Bedrooms" value={lead.bedrooms} />
-          <FieldRow
-            label="Estimated monthly income"
-            value={lead.estimated_monthly_income}
-          />
         </div>
 
         {lead.lead_profile && (
