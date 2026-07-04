@@ -43,12 +43,15 @@ function LoginForm() {
       return;
     }
 
-    const role =
-      (data.user?.app_metadata?.role as string | undefined) ??
-      (data.user?.user_metadata?.role as string | undefined);
+    const role = data.user?.app_metadata?.role as string | undefined;
     const redirectedFrom = params.get("redirectedFrom");
+    // Only follow same-site paths — never an absolute URL from the query string.
+    const safeRedirect =
+      redirectedFrom && redirectedFrom.startsWith("/") && !redirectedFrom.startsWith("//")
+        ? redirectedFrom
+        : null;
     const target =
-      redirectedFrom ?? (role === "admin" ? "/admin" : "/dashboard");
+      safeRedirect ?? (role === "admin" ? "/admin" : "/dashboard");
     router.push(target);
     router.refresh();
   }

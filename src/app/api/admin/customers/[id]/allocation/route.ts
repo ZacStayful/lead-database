@@ -32,16 +32,18 @@ export async function POST(
   }
 
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (typeof body.monthly_allocation === "number") {
-    update.monthly_allocation = Math.max(0, Math.floor(body.monthly_allocation));
+  // Number.isFinite rejects NaN/Infinity, which pass a bare typeof check when
+  // the form submits an empty number input.
+  if (Number.isFinite(body.monthly_allocation)) {
+    update.monthly_allocation = Math.max(0, Math.floor(body.monthly_allocation!));
   }
   if (typeof body.is_active === "boolean") {
     update.is_active = body.is_active;
   }
-  if (typeof body.leads_received_this_month === "number") {
+  if (Number.isFinite(body.leads_received_this_month)) {
     update.leads_received_this_month = Math.max(
       0,
-      Math.floor(body.leads_received_this_month)
+      Math.floor(body.leads_received_this_month!)
     );
   }
 

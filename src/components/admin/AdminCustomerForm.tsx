@@ -17,6 +17,10 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
   const [message, setMessage] = useState<string | null>(null);
 
   async function save() {
+    if (!Number.isFinite(allocation) || !Number.isFinite(received)) {
+      setMessage("Allocation and leads received must be numbers.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     try {

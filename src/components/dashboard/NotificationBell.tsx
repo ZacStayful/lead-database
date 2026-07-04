@@ -20,6 +20,12 @@ export function NotificationBell({
   const router = useRouter();
   const [count, setCount] = useState(initialCount);
 
+  // Re-sync when the server re-renders the layout (e.g. after notifications
+  // are marked read) — useState alone would keep the stale initial value.
+  useEffect(() => {
+    setCount(initialCount);
+  }, [initialCount]);
+
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase

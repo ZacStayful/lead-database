@@ -2,9 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
-import { sendNewLeadEmail } from "@/lib/emails";
-import { extractCity } from "@/lib/utils";
-import type { Customer, Lead } from "@/lib/types";
+import { completeAssignment } from "@/lib/ingest";
+import type { Lead } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,50 +54,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Notify the customer just like the automated path.
+  // Same follow-through as the automated path: notification, email,
+  // threshold warnings, and the overflow charge where applicable.
   const { data: lead } = await admin
     .from("leads")
     .select("*")
     .eq("id", lead_id)
     .single();
-  const { data: customer } = await admin
-    .from("customers")
-    .select("*")
-    .eq("id", customer_id)
-    .single();
 
-  const typedLead = lead as Lead | null;
-  const typedCustomer = customer as Customer | null;
-
-  if (typedLead && typedCustomer) {
-    const city = extractCity(typedLead.address);
-    const { data: notification } = await admin
-      .from("notifications")
-      .insert({
-        customer_id,
-        lead_assignment_id: assignmentId,
-        notification_type: "new_lead",
-        message: `New lead: ${typedLead.lead_name}${city ? ` in ${city}` : ""}`,
-      })
-      .select("id")
-      .single();
-
-    const { error: emailError } = await sendNewLeadEmail({
-      to: typedCustomer.email,
-      lead: typedLead,
-    });
-
-    await admin
-      .from("lead_assignments")
-      .update({ notification_sent: true, email_sent: !emailError })
-      .eq("id", assignmentId);
-
-    if (notification) {
-      await admin
-        .from("notifications")
-        .update({ email_sent: !emailError })
-        .eq("id", notification.id);
-    }
+  if (lead) {
+    await completeAssignment(admin, lead as Lead, customer_id, assignmentId);
   }
 
   return NextResponse.json({ status: "ok", assignment_id: assignmentId });

@@ -31,7 +31,12 @@ export default async function AdminOverviewPage() {
     .maybeSingle();
   const capacityLimit = parseInt(capacitySetting?.value ?? "10", 10);
 
-  const mrr = activeCustomers.length * MONTHLY_PRICE_GBP;
+  // MRR counts only customers on a real Stripe subscription — comped/owner
+  // accounts are active but generate no revenue.
+  const payingCustomers = activeCustomers.filter(
+    (c) => c.stripe_subscription_id
+  );
+  const mrr = payingCustomers.length * MONTHLY_PRICE_GBP;
   const leadsThisMonth = customers.reduce(
     (sum, c) => sum + (c.leads_received_this_month ?? 0),
     0

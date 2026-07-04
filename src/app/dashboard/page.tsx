@@ -47,7 +47,7 @@ export default async function DashboardPage() {
   const unreadLeads = assignments.filter((a) => !a.viewed_at).length;
 
   const isActive = customer.subscription_status === "active";
-  const renewalDate = nextRenewalDate();
+  const renewalDate = nextRenewalDate(customer.billing_cycle_anchor);
   const pacing = computePacing(customer);
   const exhausted = customer.lead_balance === 0;
   const carriedForward = customer.lead_balance - customer.monthly_allocation;
@@ -152,7 +152,18 @@ function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function nextRenewalDate(): string {
+function nextRenewalDate(anchor: string | null): string {
+  // The anchor is re-set to the current period start on every invoice.paid,
+  // so the next renewal is one month after it. Fall back to the 1st of next
+  // month for accounts with no Stripe billing anchor yet.
+  if (anchor) {
+    const a = new Date(anchor);
+    if (!isNaN(a.getTime())) {
+      const next = new Date(a);
+      next.setMonth(next.getMonth() + 1);
+      return formatDate(next.toISOString());
+    }
+  }
   const now = new Date();
   const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   return formatDate(next.toISOString());

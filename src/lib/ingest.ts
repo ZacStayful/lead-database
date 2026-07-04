@@ -110,55 +110,7 @@ export async function ingestLead(
     if (assignError || !assignmentId) continue;
     assignmentsMade += 1;
 
-    const { data: customer } = await supabase
-      .from("customers")
-      .select("*")
-      .eq("id", customerId)
-      .single();
-
-    const typedCustomer = customer as Customer | null;
-    if (!typedCustomer) continue;
-
-    // In-portal notification (feeds the realtime subscription).
-    const city = extractCity(typedLead.address);
-    const { data: notification } = await supabase
-      .from("notifications")
-      .insert({
-        customer_id: customerId,
-        lead_assignment_id: assignmentId,
-        notification_type: "new_lead",
-        message: `New lead: ${typedLead.lead_name}${city ? ` in ${city}` : ""}`,
-      })
-      .select("id")
-      .single();
-
-    const { error: emailError } = await sendNewLeadEmail({
-      to: typedCustomer.email,
-      lead: typedLead,
-    });
-
-    await supabase
-      .from("lead_assignments")
-      .update({ notification_sent: true, email_sent: !emailError })
-      .eq("id", assignmentId);
-
-    if (notification) {
-      await supabase
-        .from("notifications")
-        .update({ email_sent: !emailError })
-        .eq("id", notification.id);
-    }
-
-    // Threshold emails (post-increment count; RPC already incremented).
-    const newCount = typedCustomer.leads_received_this_month;
-    if (newCount === typedCustomer.monthly_allocation) {
-      await sendCreditsExhaustedEmail({ to: typedCustomer.email });
-    } else if (newCount === LOW_CREDITS_THRESHOLD) {
-      await sendLowCreditsEmail({
-        to: typedCustomer.email,
-        remaining: typedCustomer.monthly_allocation - newCount,
-      });
-    }
+    await completeAssignment(supabase, typedLead, customerId, assignmentId);
   }
 
   return {
@@ -166,4 +118,66 @@ export async function ingestLead(
     lead_id: typedLead.id,
     assignments_made: assignmentsMade,
   };
+}
+
+/**
+ * Post-assignment follow-through: in-portal notification, new-lead email,
+ * delivery flags, and threshold warnings. Shared by the automated ingest path
+ * and the admin force-assign route so both behave identically.
+ */
+export async function completeAssignment(
+  supabase: ReturnType<typeof createAdminClient>,
+  lead: Lead,
+  customerId: string,
+  assignmentId: string
+): Promise<void> {
+  const { data: customer } = await supabase
+    .from("customers")
+    .select("*")
+    .eq("id", customerId)
+    .single();
+
+  const typedCustomer = customer as Customer | null;
+  if (!typedCustomer) return;
+
+  // In-portal notification (feeds the realtime subscription).
+  const city = extractCity(lead.address);
+  const { data: notification } = await supabase
+    .from("notifications")
+    .insert({
+      customer_id: customerId,
+      lead_assignment_id: assignmentId,
+      notification_type: "new_lead",
+      message: `New lead: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
+    })
+    .select("id")
+    .single();
+
+  const { error: emailError } = await sendNewLeadEmail({
+    to: typedCustomer.email,
+    lead,
+  });
+
+  await supabase
+    .from("lead_assignments")
+    .update({ notification_sent: true, email_sent: !emailError })
+    .eq("id", assignmentId);
+
+  if (notification) {
+    await supabase
+      .from("notifications")
+      .update({ email_sent: !emailError })
+      .eq("id", notification.id);
+  }
+
+  // Threshold emails (post-increment count; RPC already incremented).
+  const newCount = typedCustomer.leads_received_this_month;
+  if (newCount === typedCustomer.monthly_allocation) {
+    await sendCreditsExhaustedEmail({ to: typedCustomer.email });
+  } else if (newCount === LOW_CREDITS_THRESHOLD) {
+    await sendLowCreditsEmail({
+      to: typedCustomer.email,
+      remaining: typedCustomer.monthly_allocation - newCount,
+    });
+  }
 }

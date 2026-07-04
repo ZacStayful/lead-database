@@ -5,10 +5,9 @@ import type { Customer } from "@/lib/types";
 
 export function isAdminUser(user: User | null): boolean {
   if (!user) return false;
-  const role =
-    (user.app_metadata?.role as string | undefined) ??
-    (user.user_metadata?.role as string | undefined);
-  return role === "admin";
+  // Only app_metadata is trustworthy: users can edit their own user_metadata
+  // from the browser via supabase.auth.updateUser, so it must never grant admin.
+  return (user.app_metadata?.role as string | undefined) === "admin";
 }
 
 /** Current authenticated user, or null. */

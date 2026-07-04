@@ -48,9 +48,9 @@ export async function updateSession(request: NextRequest) {
   }
 
   if (isAdmin && user) {
-    const role =
-      (user.app_metadata?.role as string | undefined) ??
-      (user.user_metadata?.role as string | undefined);
+    // Only app_metadata is trustworthy — user_metadata is self-editable from
+    // the browser and must never grant admin.
+    const role = user.app_metadata?.role as string | undefined;
     if (role !== "admin") {
       const url = request.nextUrl.clone();
       url.pathname = "/dashboard";
