@@ -35,6 +35,84 @@ function shell(inner: string): string {
 </body></html>`;
 }
 
+/** Where feature requests / bug reports are delivered. */
+function feedbackTo(): string {
+  return process.env.FEEDBACK_EMAIL ?? "zac@stayful.co.uk";
+}
+
+function esc(v: string): string {
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Feature request / bug report email sent to the Stayful team. */
+export async function sendFeedbackEmail(params: {
+  type: "feature" | "bug";
+  name: string;
+  email: string;
+  business?: string | null;
+  subject: string;
+  details: string;
+  page?: string | null;
+  account?: {
+    customer_id: string;
+    business_name: string;
+    contact_name: string;
+    email: string;
+    phone: string | null;
+  } | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const label = params.type === "bug" ? "Bug report" : "Feature request";
+  const subject = `[${label}] ${params.subject}`;
+
+  const row = (k: string, v: string) =>
+    `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:150px;vertical-align:top">${k}</td><td style="padding:6px 0;font-size:14px">${v}</td></tr>`;
+
+  const submitterRows = [
+    row("Type", label),
+    row("Name", esc(params.name)),
+    row("Email", esc(params.email)),
+    params.business ? row("Business", esc(params.business)) : "",
+    params.page ? row("Page", esc(params.page)) : "",
+  ].join("");
+
+  const accountRows = params.account
+    ? [
+        `<h2 style="margin:20px 0 6px;font-size:14px">Account on file</h2>`,
+        `<table style="width:100%;border-collapse:collapse">`,
+        row("Business", esc(params.account.business_name)),
+        row("Contact", esc(params.account.contact_name)),
+        row("Account email", esc(params.account.email)),
+        params.account.phone ? row("Phone", esc(params.account.phone)) : "",
+        row("Customer ID", params.account.customer_id),
+        `</table>`,
+      ].join("")
+    : `<p style="margin:16px 0 0;color:#6b706a;font-size:13px">Submitted while signed out — no account attached.</p>`;
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">${label}: ${esc(params.subject)}</h1>
+    <table style="width:100%;border-collapse:collapse;margin-top:8px">${submitterRows}</table>
+    <h2 style="margin:20px 0 6px;font-size:14px">Details</h2>
+    <div style="white-space:pre-wrap;font-size:14px;line-height:1.6">${esc(params.details)}</div>
+    ${accountRows}
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to: feedbackTo(),
+      replyTo: params.email,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** New lead notification email. */
 export async function sendNewLeadEmail(params: {
   to: string;

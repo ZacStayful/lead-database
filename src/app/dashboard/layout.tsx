@@ -69,6 +69,16 @@ export default async function DashboardLayout({
         </div>
       </header>
       <main className="container py-8">{children}</main>
+      <footer className="border-t-[0.5px] border-border">
+        <div className="container flex h-14 items-center justify-center gap-6 text-xs text-muted-foreground">
+          <Link href="/feedback?type=feature" className="hover:text-foreground">
+            Request a feature
+          </Link>
+          <Link href="/feedback?type=bug" className="hover:text-foreground">
+            Report a bug
+          </Link>
+        </div>
+      </footer>
     </div>
   );
 }

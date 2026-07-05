@@ -1825,9 +1825,12 @@ export default function LandingPage() {
           <Link href="/login" style={footerLink}>
             Sign in
           </Link>
-          <a href="mailto:zac@stayful.co.uk" style={footerLink}>
-            Contact
-          </a>
+          <Link href="/feedback?type=feature" style={footerLink}>
+            Request a feature
+          </Link>
+          <Link href="/feedback?type=bug" style={footerLink}>
+            Report a bug
+          </Link>
         </div>
         <p style={{ fontSize: 12.5, color: "var(--sf-muted)" }}>
           © 2026 Stayful. All rights reserved.
