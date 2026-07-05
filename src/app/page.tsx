@@ -180,6 +180,20 @@ export default function LandingPage() {
             Pricing
           </a>
           <Link
+            href="/login"
+            style={{
+              color: "var(--sf-dark)",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "9px 16px",
+              borderRadius: 8,
+              border: "1px solid var(--sf-border)",
+              textDecoration: "none",
+            }}
+          >
+            Log in
+          </Link>
+          <Link
             href="/signup"
             style={{
               background: "var(--sf-dark)",
