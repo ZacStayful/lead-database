@@ -7,7 +7,7 @@ import {
   PIPELINE_STAGES,
   pipelineBadgeClass,
 } from "@/components/dashboard/pipelineStage";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatGBP } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -29,13 +29,14 @@ export default async function AnalyticsPage() {
 
   const { data: rows } = await admin
     .from("lead_assignments")
-    .select("status, pipeline_stage, viewed_at")
+    .select("status, pipeline_stage, viewed_at, income_estimate")
     .eq("customer_id", customer.id);
 
   const assignments = (rows ?? []) as {
     status: string;
     pipeline_stage: string;
     viewed_at: string | null;
+    income_estimate: number | null;
   }[];
 
   // Notes + files activity (files table may not exist yet — tolerate errors).
@@ -70,6 +71,17 @@ export default async function AnalyticsPage() {
     )
   ).length;
   const meetingsAttended = pipelineCounts.get("web_meeting_attended") ?? 0;
+
+  // Income aggregates from the customer's own per-lead estimates.
+  const sumIncome = (rows: typeof assignments) =>
+    rows.reduce((s, a) => s + (a.income_estimate ?? 0), 0);
+  const totalIncome = sumIncome(assignments);
+  const wonIncome = sumIncome(assignments.filter((a) => a.status === "won"));
+  const pipelineIncome = sumIncome(
+    assignments.filter((a) =>
+      ["new", "contacted", "in_discussion"].includes(a.status)
+    )
+  );
 
   const stats = [
     { label: "Total leads", value: String(total) },
@@ -144,6 +156,23 @@ export default async function AnalyticsPage() {
         </CardContent>
       </Card>
 
+      {/* Estimated income */}
+      <Card>
+        <CardContent className="pt-6">
+          <h2 className="mb-1 text-lg font-semibold">
+            Estimated monthly income
+          </h2>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Based on the income figures you&apos;ve entered against each lead.
+          </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Metric label="In pipeline" money value={pipelineIncome} />
+            <Metric label="Won" money value={wonIncome} />
+            <Metric label="Across all leads" money value={totalIncome} />
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Activity */}
       <Card>
         <CardContent className="pt-6">
@@ -197,10 +226,20 @@ function FunnelRow({
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({
+  label,
+  value,
+  money = false,
+}: {
+  label: string;
+  value: number;
+  money?: boolean;
+}) {
   return (
     <div className="rounded-lg border-[0.5px] border-border p-4">
-      <p className="text-2xl font-semibold">{value}</p>
+      <p className="text-2xl font-semibold">
+        {money ? formatGBP(value) : value}
+      </p>
       <p className="mt-1 text-xs text-muted-foreground">{label}</p>
     </div>
   );

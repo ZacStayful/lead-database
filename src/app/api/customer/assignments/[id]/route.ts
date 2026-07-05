@@ -31,11 +31,23 @@ export async function PATCH(
     contacted?: boolean;
     pipeline_stage?: string;
     due_to_call_date?: string | null;
+    income_estimate?: number | null;
   };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (
+    body.income_estimate !== undefined &&
+    body.income_estimate !== null &&
+    !Number.isFinite(body.income_estimate)
+  ) {
+    return NextResponse.json(
+      { error: "income_estimate must be a number" },
+      { status: 400 }
+    );
   }
 
   if (
@@ -78,6 +90,10 @@ export async function PATCH(
     // Empty string clears the date.
     update.due_to_call_date = body.due_to_call_date || null;
   }
+  if (body.income_estimate !== undefined) {
+    update.income_estimate =
+      body.income_estimate === null ? null : Number(body.income_estimate);
+  }
 
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ status: "noop" });
@@ -87,7 +103,9 @@ export async function PATCH(
     .from("lead_assignments")
     .update(update)
     .eq("id", params.id)
-    .select("id, viewed_at, status, pipeline_stage, due_to_call_date")
+    .select(
+      "id, viewed_at, status, pipeline_stage, due_to_call_date, income_estimate"
+    )
     .single();
 
   if (error) {

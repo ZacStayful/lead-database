@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { cn, initials, formatDate } from "@/lib/utils";
+import { cn, initials, formatDate, formatGBP } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import type { AssignmentWithLead } from "@/lib/types";
@@ -114,6 +114,11 @@ export function LeadCard({
           {lead.bedrooms && (
             <span className="text-sm text-muted-foreground">
               {lead.bedrooms} bed
+            </span>
+          )}
+          {assignment.income_estimate != null && (
+            <span className="rounded-full bg-brand/10 px-3 py-1 text-sm font-medium text-brand">
+              {formatGBP(assignment.income_estimate)}/mo
             </span>
           )}
         </div>

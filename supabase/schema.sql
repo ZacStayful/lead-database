@@ -629,3 +629,14 @@ create policy "lead_files_object_delete" on storage.objects
     bucket_id = 'lead-files'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- >>> 0012_income_estimate.sql >>>
+-- ============================================================================
+-- Per-lead income estimate.
+-- The customer's own estimated monthly income for a lead/property, entered in
+-- their portal. Lives on lead_assignments (per customer/lead), independent of
+-- anything pulled from Monday. Feeds the analytics income totals.
+-- ============================================================================
+
+alter table public.lead_assignments
+  add column if not exists income_estimate numeric;

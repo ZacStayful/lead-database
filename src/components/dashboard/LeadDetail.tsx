@@ -50,6 +50,9 @@ export function LeadDetail({
   const [status, setStatus] = useState(assignment.status);
   const [pipelineStage, setPipelineStage] = useState(assignment.pipeline_stage);
   const [dueDate, setDueDate] = useState(assignment.due_to_call_date ?? "");
+  const [income, setIncome] = useState(
+    assignment.income_estimate != null ? String(assignment.income_estimate) : ""
+  );
   const [editingPipeline, setEditingPipeline] = useState(false);
   const [hasNotes, setHasNotes] = useState(notes.length > 0);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
@@ -163,6 +166,23 @@ export function LeadDetail({
     }
   }
 
+  async function saveIncome() {
+    const raw = income.trim();
+    const value = raw === "" ? null : Number(raw);
+    if (value !== null && !Number.isFinite(value)) {
+      setToast("Income must be a number.");
+      return;
+    }
+    // Normalise the displayed value.
+    setIncome(value === null ? "" : String(value));
+    try {
+      const res = await patch({ income_estimate: value });
+      if (!res.ok) throw new Error();
+    } catch {
+      setToast("Could not update the income estimate.");
+    }
+  }
+
   const badge = statusBadge(status);
   const canDiscard = status === "new" && !hasNotes;
 
@@ -263,6 +283,31 @@ export function LeadDetail({
               onChange={(e) => changeDueDate(e.target.value)}
               className="mt-0.5 block rounded-md border-[0.5px] border-input bg-background px-2 py-1 text-sm"
             />
+          </div>
+          <div>
+            <label
+              htmlFor="income"
+              className="text-xs text-muted-foreground"
+            >
+              Estimated monthly income (£)
+            </label>
+            <div className="mt-0.5 flex items-center rounded-md border-[0.5px] border-input bg-background px-2">
+              <span className="text-sm text-muted-foreground">£</span>
+              <input
+                id="income"
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={income}
+                onChange={(e) => setIncome(e.target.value)}
+                onBlur={saveIncome}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+                placeholder="0"
+                className="w-full bg-transparent py-1 pl-1 text-sm focus:outline-none"
+              />
+            </div>
           </div>
         </div>
 

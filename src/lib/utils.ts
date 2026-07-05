@@ -40,6 +40,15 @@ export function formatCurrencyPence(pence: number): string {
   }).format(pence / 100);
 }
 
+/** Format a whole-pound amount, e.g. 1890 → "£1,890". */
+export function formatGBP(amount: number): string {
+  return new Intl.NumberFormat("en-GB", {
+    style: "currency",
+    currency: "GBP",
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
+
 export function formatDate(value?: string | null): string {
   if (!value) return "—";
   const d = new Date(value);

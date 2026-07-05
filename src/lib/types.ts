@@ -60,6 +60,7 @@ export interface LeadAssignment {
   status: string;
   pipeline_stage: PipelineStage | string;
   due_to_call_date: string | null;
+  income_estimate: number | null;
   assigned_at: string;
 }
 
