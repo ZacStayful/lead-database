@@ -165,7 +165,20 @@ export default function LandingPage() {
           justifyContent: "space-between",
         }}
       >
-        <img src={LOGO} alt="Stayful" style={{ height: 28 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <img src={LOGO} alt="Stayful" style={{ height: 28 }} />
+          <span
+            style={{
+              borderLeft: "1px solid var(--sf-line, #d9dbd8)",
+              paddingLeft: 10,
+              fontSize: 16,
+              fontWeight: 600,
+              color: "var(--sf-green)",
+            }}
+          >
+            Lead Database
+          </span>
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
           <a href="#how" style={navLink}>
             How it works
@@ -251,7 +264,7 @@ export default function LandingPage() {
               marginBottom: 20,
             })}
           >
-            <Count n={20} /> landlords are looking for an STR operator this month.
+            <Count n={20} /> leads in your inbox every month.
           </h1>
           <p
             style={{
