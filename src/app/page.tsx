@@ -813,60 +813,230 @@ export default function LandingPage() {
           <Eyebrow center color="var(--sf-green)">
             Track every lead
           </Eyebrow>
-          <h2 style={centerHeadline({ marginBottom: 20, maxWidth: 720 })}>
-            Watch each lead move through the stages, from first contact to a
-            signed management agreement.
+          <h2 style={centerHeadline({ marginBottom: 20, maxWidth: 760 })}>
+            A mini CRM for your pipeline — track every lead from first contact
+            to a signed management agreement.
           </h2>
           <p
             style={{
               textAlign: "center",
-              maxWidth: 660,
+              maxWidth: 680,
               margin: "0 auto 40px",
               color: "var(--sf-muted)",
               fontSize: 16,
             }}
           >
-            Every lead you receive has its own pipeline. Move it through stages
-            as you work it — cold, interested, web meeting booked, attended —
-            and set a date for when it is due to be called. A built-in priority
-            call list orders your leads by who is due next, so you always know
-            where to pick up. Notes, pipeline stages and the priority list are
-            included with your subscription.
+            Every lead gets its own pipeline. Move it through the stages as you
+            work it, set a date for when it is due to be called, and let the
+            priority list order who to call next. Store your STR Analyser
+            reports and income figures against each lead, keep timestamped
+            notes, and watch your whole funnel — with your conversion rate at
+            every stage — on one dashboard you can export to PDF.
           </p>
+          {/* Visual pipeline flow */}
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              justifyContent: "center",
+              alignItems: "center",
+              marginBottom: 14,
+            }}
+          >
+            {[
+              { label: "Cold", bg: "#dbeafe", fg: "#1d4ed8" },
+              { label: "Interested", bg: "#dcfce7", fg: "#15803d" },
+              { label: "Web meeting booked", bg: "#fef3c7", fg: "#92400e" },
+              { label: "Web meeting attended", bg: "#fee2e2", fg: "#b91c1c" },
+            ].flatMap((s, i, arr) => {
+              const chip = (
+                <span
+                  key={s.label}
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    borderRadius: 100,
+                    padding: "8px 16px",
+                    background: s.bg,
+                    color: s.fg,
+                  }}
+                >
+                  {s.label}
+                </span>
+              );
+              return i < arr.length - 1
+                ? [
+                    chip,
+                    <span key={s.label + "-a"} style={{ color: "var(--sf-muted)" }}>
+                      →
+                    </span>,
+                  ]
+                : [chip];
+            })}
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              justifyContent: "center",
+              alignItems: "center",
+              marginBottom: 48,
+              fontSize: 13,
+              color: "var(--sf-muted)",
+            }}
+          >
+            <span>Off-track at any time:</span>
+            <span
+              style={{
+                fontWeight: 600,
+                borderRadius: 100,
+                padding: "6px 14px",
+                background: "#1e3a8a",
+                color: "#fff",
+              }}
+            >
+              Booked — did not attend
+            </span>
+            <span
+              style={{
+                fontWeight: 600,
+                borderRadius: 100,
+                padding: "6px 14px",
+                background: "#4b5563",
+                color: "#fff",
+              }}
+            >
+              Abandoned
+            </span>
+          </div>
+
+          {/* Feature cards */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+              gap: 16,
+            }}
+          >
+            {[
+              {
+                t: "Your own pipeline",
+                d: "Move each lead through its stages, set a due-to-call date, and the priority list surfaces who is due next.",
+              },
+              {
+                t: "Funnel analytics",
+                d: "See how many leads sit at each status and stage — in numbers and percentages — with your conversion rate through the funnel, exportable to PDF.",
+              },
+              {
+                t: "Everything on the lead",
+                d: "Attach your STR Analyser PDF and income figures, and keep timestamped notes, so the full picture is there when you call.",
+              },
+            ].map((f) => (
+              <div
+                key={f.t}
+                style={{
+                  background: "#fff",
+                  border: "1px solid var(--sf-border)",
+                  borderRadius: 12,
+                  padding: 20,
+                  textAlign: "left",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: "var(--sf-dark)",
+                    marginBottom: 6,
+                  }}
+                >
+                  {f.t}
+                </div>
+                <p style={{ fontSize: 14, color: "var(--sf-muted)", margin: 0 }}>
+                  {f.d}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Analytics dashboard preview */}
           <div
             style={{
               background: "#fff",
               border: "1px solid var(--sf-border)",
               borderRadius: 12,
               padding: 24,
-              maxWidth: 620,
-              margin: "0 auto",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 10,
-              justifyContent: "center",
+              maxWidth: 600,
+              margin: "32px auto 0",
             }}
           >
-            {[
-              "Cold",
-              "Interested in the future",
-              "Web meeting booked",
-              "Web meeting attended",
-            ].map((stage) => (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 16,
+              }}
+            >
               <span
-                key={stage}
+                style={{ fontSize: 14, fontWeight: 700, color: "var(--sf-dark)" }}
+              >
+                Your lead funnel
+              </span>
+              <span
                 style={{
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: 600,
-                  color: "var(--sf-dark)",
-                  background: "rgba(93,129,86,.10)",
-                  border: "1px solid var(--sf-border)",
+                  color: "var(--sf-green)",
+                  background: "rgba(93,129,86,.12)",
                   borderRadius: 100,
-                  padding: "8px 16px",
+                  padding: "4px 12px",
                 }}
               >
-                {stage}
+                Live in your dashboard
               </span>
+            </div>
+            {[
+              { label: "New", pct: 100, n: 12 },
+              { label: "Contacted", pct: 58, n: 7 },
+              { label: "In discussion", pct: 33, n: 4 },
+              { label: "Won", pct: 8, n: 1 },
+            ].map((row) => (
+              <div key={row.label} style={{ marginBottom: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: 12,
+                    color: "var(--sf-muted)",
+                    marginBottom: 4,
+                  }}
+                >
+                  <span>{row.label}</span>
+                  <span>
+                    {row.n} · {row.pct}%
+                  </span>
+                </div>
+                <div
+                  style={{
+                    height: 8,
+                    background: "var(--sf-sage)",
+                    borderRadius: 100,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      height: 8,
+                      width: `${row.pct}%`,
+                      background: "var(--sf-green)",
+                      borderRadius: 100,
+                    }}
+                  />
+                </div>
+              </div>
             ))}
           </div>
         </div>
