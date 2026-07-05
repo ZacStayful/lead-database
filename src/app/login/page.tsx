@@ -43,15 +43,22 @@ function LoginForm() {
     }
   }, []);
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
+    // Read the live field values from the form, not just React state — browser
+    // password-manager autofill doesn't always fire onChange, which would
+    // otherwise submit an empty password.
+    const fd = new FormData(e.currentTarget);
+    const emailVal = (String(fd.get("email") ?? email)).trim();
+    const passwordVal = String(fd.get("password") ?? password);
+
     const supabase = createClient();
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+      email: emailVal,
+      password: passwordVal,
     });
 
     if (error) {
@@ -63,7 +70,7 @@ function LoginForm() {
     // Remember (or forget) the email for next time — never the password.
     try {
       if (remember) {
-        window.localStorage.setItem(REMEMBER_KEY, email);
+        window.localStorage.setItem(REMEMBER_KEY, emailVal);
       } else {
         window.localStorage.removeItem(REMEMBER_KEY);
       }
