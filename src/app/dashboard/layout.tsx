@@ -42,8 +42,15 @@ export default async function DashboardLayout({
       <header className="border-b-[0.5px] border-border bg-background">
         <div className="container flex h-16 items-center justify-between">
           <div className="flex items-center gap-6">
-            <Link href="/dashboard" aria-label="Stayful dashboard">
+            <Link
+              href="/dashboard"
+              aria-label="Stayful Lead Database"
+              className="flex items-center gap-2.5"
+            >
               <Logo height={32} priority />
+              <span className="border-l border-border pl-2.5 text-base font-semibold text-foreground">
+                Lead Database
+              </span>
             </Link>
             <nav className="hidden items-center gap-1 sm:flex">
               {nav.map((item) => (
