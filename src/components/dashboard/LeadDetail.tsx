@@ -1,42 +1,97 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
+import {
+  pipelineLabel,
+  pipelineBadgeClass,
+  PIPELINE_STAGES,
+} from "@/components/dashboard/pipelineStage";
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import type { AssignmentWithLead, LeadNote } from "@/lib/types";
-import { ArrowLeft, BarChart3, Mail, Phone, MapPin, Calendar } from "lucide-react";
+import type { LeadSource } from "@/lib/leadOrder";
+import {
+  ArrowLeft,
+  BarChart3,
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
+  Mail,
+  MapPin,
+  Phone,
+  Trash2,
+} from "lucide-react";
 
 export function LeadDetail({
   assignment,
   notes,
+  from,
+  prevLeadId,
+  nextLeadId,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
+  from: LeadSource;
+  prevLeadId: string | null;
+  nextLeadId: string | null;
 }) {
   const router = useRouter();
   const lead = assignment.lead;
   const [status, setStatus] = useState(assignment.status);
+  const [pipelineStage, setPipelineStage] = useState(assignment.pipeline_stage);
+  const [dueDate, setDueDate] = useState(assignment.due_to_call_date ?? "");
+  const [editingPipeline, setEditingPipeline] = useState(false);
+  const [hasNotes, setHasNotes] = useState(notes.length > 0);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  const prevHref = prevLeadId ? `/dashboard/leads/${prevLeadId}?from=${from}` : null;
+  const nextHref = nextLeadId ? `/dashboard/leads/${nextLeadId}?from=${from}` : null;
+
+  // Keyboard prev/next — ignored while a text field or date picker is focused.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el?.isContentEditable
+      ) {
+        return;
+      }
+      if (e.key === "ArrowLeft" && prevHref) router.push(prevHref);
+      if (e.key === "ArrowRight" && nextHref) router.push(nextHref);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [prevHref, nextHref, router]);
+
+  async function patch(payload: Record<string, unknown>) {
+    return fetch(`/api/customer/assignments/${assignment.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
 
   async function handleAccept() {
     setBusy(true);
     setStatus("contacted");
     try {
-      await fetch(`/api/customer/assignments/${assignment.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contacted: true }),
-      });
+      await patch({ contacted: true });
       router.refresh();
     } catch {
-      setStatus(assignment.status); // revert on failure
+      setStatus(assignment.status);
     } finally {
       setBusy(false);
     }
@@ -62,17 +117,70 @@ export function LeadDetail({
     }
   }
 
+  async function handleDiscard() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/leads/${assignment.lead_id}/discard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignment_id: assignment.id }),
+      });
+      if (!res.ok) throw new Error();
+      router.push("/dashboard/leads");
+    } catch {
+      setToast("Could not discard this lead. Please try again.");
+      setBusy(false);
+    }
+  }
+
+  async function changePipeline(stage: string) {
+    const previous = pipelineStage;
+    setPipelineStage(stage);
+    setEditingPipeline(false);
+    try {
+      const res = await patch({ pipeline_stage: stage });
+      if (!res.ok) throw new Error();
+    } catch {
+      setPipelineStage(previous);
+      setToast("Could not update pipeline stage.");
+    }
+  }
+
+  async function changeDueDate(value: string) {
+    const previous = dueDate;
+    setDueDate(value);
+    try {
+      const res = await patch({ due_to_call_date: value });
+      if (!res.ok) throw new Error();
+    } catch {
+      setDueDate(previous);
+      setToast("Could not update the call-back date.");
+    }
+  }
+
   const badge = statusBadge(status);
+  const canDiscard = status === "new" && !hasNotes;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <Link
-        href="/dashboard/leads"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        All leads
-      </Link>
+      {/* Back + prev/next */}
+      <div className="flex items-center justify-between">
+        <Link
+          href="/dashboard/leads"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          All leads
+        </Link>
+        <div className="flex items-center gap-1">
+          <ArrowControl href={prevHref} label="Previous lead">
+            <ChevronLeft className="h-4 w-4" />
+          </ArrowControl>
+          <ArrowControl href={nextHref} label="Next lead">
+            <ChevronRight className="h-4 w-4" />
+          </ArrowControl>
+        </div>
+      </div>
 
       {toast && (
         <div className="rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3 text-sm">
@@ -88,9 +196,39 @@ export function LeadDetail({
               Assigned {formatDate(assignment.assigned_at)}
             </p>
           </div>
-          <Badge variant="outline" className={badge.className}>
-            {badge.label}
-          </Badge>
+          <div className="flex flex-col items-end gap-2">
+            <Badge variant="outline" className={badge.className}>
+              {badge.label}
+            </Badge>
+            {/* Pipeline stage — independent of status, click to edit */}
+            {editingPipeline ? (
+              <select
+                autoFocus
+                value={pipelineStage}
+                onChange={(e) => changePipeline(e.target.value)}
+                onBlur={() => setEditingPipeline(false)}
+                className="rounded-md border-[0.5px] border-input bg-background px-2 py-1 text-xs"
+              >
+                {PIPELINE_STAGES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button
+                onClick={() => setEditingPipeline(true)}
+                title="Click to change pipeline stage"
+              >
+                <Badge
+                  variant="outline"
+                  className={pipelineBadgeClass(pipelineStage)}
+                >
+                  {pipelineLabel(pipelineStage)}
+                </Badge>
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -106,6 +244,21 @@ export function LeadDetail({
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <FieldRow label="Bedrooms" value={lead.bedrooms} />
+          <div>
+            <label
+              htmlFor="due-date"
+              className="text-xs text-muted-foreground"
+            >
+              Due to call
+            </label>
+            <input
+              id="due-date"
+              type="date"
+              value={dueDate}
+              onChange={(e) => changeDueDate(e.target.value)}
+              className="mt-0.5 block rounded-md border-[0.5px] border-input bg-background px-2 py-1 text-sm"
+            />
+          </div>
         </div>
 
         {lead.lead_profile && (
@@ -171,12 +324,83 @@ export function LeadDetail({
                 </div>
               </div>
             )}
+
+            {/* Discard — only while brand new and un-noted. */}
+            {canDiscard &&
+              (!showDiscardConfirm ? (
+                <button
+                  onClick={() => setShowDiscardConfirm(true)}
+                  disabled={busy}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-black/10 px-6 py-3 text-sm font-medium text-[#898781] transition-colors hover:bg-gray-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Discard lead
+                </button>
+              ) : (
+                <div className="rounded-xl border border-black/10 bg-white p-4">
+                  <p className="mb-3 text-sm text-[#52514e]">
+                    Discard this lead? It will be released for another operator.
+                    You can only do this before adding a note or changing the
+                    status, and it still counts toward your monthly allocation.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleDiscard()}
+                      disabled={busy}
+                      className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                    >
+                      Confirm discard
+                    </button>
+                    <button
+                      onClick={() => setShowDiscardConfirm(false)}
+                      disabled={busy}
+                      className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ))}
           </div>
         )}
       </div>
 
-      <LeadNotes assignmentId={assignment.id} initialNotes={notes} />
+      <LeadNotes
+        assignmentId={assignment.id}
+        initialNotes={notes}
+        onNoteAdded={() => setHasNotes(true)}
+      />
     </div>
+  );
+}
+
+function ArrowControl({
+  href,
+  label,
+  children,
+}: {
+  href: string | null;
+  label: string;
+  children: React.ReactNode;
+}) {
+  if (!href) {
+    return (
+      <span
+        aria-hidden
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground/30"
+      >
+        {children}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      aria-label={label}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      {children}
+    </Link>
   );
 }
 

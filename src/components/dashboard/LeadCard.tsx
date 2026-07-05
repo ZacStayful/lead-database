@@ -6,13 +6,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, initials, formatDate } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
+import { pipelineLabel, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import type { AssignmentWithLead } from "@/lib/types";
 import { BarChart3, Check, Mail, Phone, MapPin, Calendar } from "lucide-react";
 
 export function LeadCard({
   assignment: initial,
+  from = "leads",
 }: {
   assignment: AssignmentWithLead;
+  from?: string;
 }) {
   const [assignment, setAssignment] = useState(initial);
   const [open, setOpen] = useState(false);
@@ -88,6 +91,20 @@ export function LeadCard({
             <Badge variant="outline" className={badge.className}>
               {badge.label}
             </Badge>
+            <Badge
+              variant="outline"
+              className={pipelineBadgeClass(assignment.pipeline_stage)}
+            >
+              {pipelineLabel(assignment.pipeline_stage)}
+            </Badge>
+            {assignment.due_to_call_date && (
+              <Badge
+                variant="outline"
+                className="border-transparent bg-amber-100 text-amber-700"
+              >
+                Call {formatDate(assignment.due_to_call_date)}
+              </Badge>
+            )}
           </div>
           <p className="truncate text-sm text-muted-foreground">
             {lead.address ?? "Address on file"}
@@ -134,7 +151,9 @@ export function LeadCard({
               </a>
             </Button>
             <Button size="sm" variant="outline" asChild>
-              <Link href={`/dashboard/leads/${lead.id}`}>Open lead</Link>
+              <Link href={`/dashboard/leads/${lead.id}?from=${from}`}>
+                Open lead
+              </Link>
             </Button>
             {!rejected && (
               <Button

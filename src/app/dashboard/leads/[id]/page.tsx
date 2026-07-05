@@ -2,14 +2,17 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/dashboard/LeadDetail";
+import { fetchOrderedAssignments, parseSource } from "@/lib/leadOrder";
 import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function LeadDetailPage({
   params,
+  searchParams,
 }: {
   params: { id: string };
+  searchParams: { from?: string };
 }) {
   const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
@@ -35,10 +38,21 @@ export default async function LeadDetailPage({
     .eq("lead_assignment_id", assignment.id)
     .order("created_at", { ascending: false });
 
+  // Prev/next navigation within whichever list this lead was opened from.
+  const from = parseSource(searchParams.from);
+  const ordered = await fetchOrderedAssignments(customer.id, from);
+  const idx = ordered.findIndex((a) => a.id === assignment.id);
+  const prevLeadId = idx > 0 ? ordered[idx - 1].lead_id : null;
+  const nextLeadId =
+    idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].lead_id : null;
+
   return (
     <LeadDetail
       assignment={assignment}
       notes={(notesData ?? []) as LeadNote[]}
+      from={from}
+      prevLeadId={prevLeadId}
+      nextLeadId={nextLeadId}
     />
   );
 }

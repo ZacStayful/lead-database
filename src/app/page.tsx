@@ -69,6 +69,10 @@ const FAQ: { q: string; a: string }[] = [
     q: "How is this different from running my own Google Ads?",
     a: "A Google Ads click on a property management keyword in a competitive UK city costs £8–25 — a click, not a name, phone number, or completed enquiry with property details and estimated income. At £15 per financially modelled, Google-intent enquiry, the cost is for the output of a campaign, not a step within one. And you don't need to build, manage, or optimise a campaign to receive the leads.",
   },
+  {
+    q: "What if I get a lead I want to pass on immediately?",
+    a: "If you haven't updated the lead's status or added any notes, you can discard it and it will be reassigned to another operator. Once you've made any update — a status change or a note — the lead is yours to see through, win or lose. This keeps the system fair: a landlord who has been contacted by one operator won't also hear from a second. Discarded leads still count toward your monthly allocation, since the lead itself was still delivered and qualified — discard reflects lead fit, not lead delivery.",
+  },
 ];
 
 export default function LandingPage() {
@@ -165,6 +169,9 @@ export default function LandingPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
           <a href="#how" style={navLink}>
             How it works
+          </a>
+          <a href="#pipeline" style={navLink}>
+            Pipeline
           </a>
           <a href="#data" style={navLink}>
             The data
@@ -796,6 +803,71 @@ export default function LandingPage() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ============ PIPELINE TRACKING ============ */}
+      <section id="pipeline" style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 920, margin: "0 auto" }}>
+          <Eyebrow center color="var(--sf-green)">
+            Track every lead
+          </Eyebrow>
+          <h2 style={centerHeadline({ marginBottom: 20, maxWidth: 720 })}>
+            Watch each lead move through the stages, from first contact to a
+            signed management agreement.
+          </h2>
+          <p
+            style={{
+              textAlign: "center",
+              maxWidth: 660,
+              margin: "0 auto 40px",
+              color: "var(--sf-muted)",
+              fontSize: 16,
+            }}
+          >
+            Every lead you receive has its own pipeline. Move it through stages
+            as you work it — cold, interested, web meeting booked, attended —
+            and set a date for when it is due to be called. A built-in priority
+            call list orders your leads by who is due next, so you always know
+            where to pick up. Notes, pipeline stages and the priority list are
+            included with your subscription.
+          </p>
+          <div
+            style={{
+              background: "#fff",
+              border: "1px solid var(--sf-border)",
+              borderRadius: 12,
+              padding: 24,
+              maxWidth: 620,
+              margin: "0 auto",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 10,
+              justifyContent: "center",
+            }}
+          >
+            {[
+              "Cold",
+              "Interested in the future",
+              "Web meeting booked",
+              "Web meeting attended",
+            ].map((stage) => (
+              <span
+                key={stage}
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "var(--sf-dark)",
+                  background: "rgba(93,129,86,.10)",
+                  border: "1px solid var(--sf-border)",
+                  borderRadius: 100,
+                  padding: "8px 16px",
+                }}
+              >
+                {stage}
+              </span>
+            ))}
           </div>
         </div>
       </section>

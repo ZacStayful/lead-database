@@ -41,6 +41,14 @@ export interface Lead {
   created_at: string;
 }
 
+export type PipelineStage =
+  | "cold"
+  | "interested_in_the_future"
+  | "web_meeting_booked"
+  | "web_meeting_no_show"
+  | "web_meeting_attended"
+  | "abandoned";
+
 export interface LeadAssignment {
   id: string;
   lead_id: string;
@@ -50,6 +58,8 @@ export interface LeadAssignment {
   email_sent: boolean;
   viewed_at: string | null;
   status: string;
+  pipeline_stage: PipelineStage | string;
+  due_to_call_date: string | null;
   assigned_at: string;
 }
 

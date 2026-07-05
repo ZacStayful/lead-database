@@ -1,13 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { PIPELINE_STAGES } from "@/components/dashboard/pipelineStage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const PIPELINE_VALUES = new Set(PIPELINE_STAGES.map((s) => s.value));
+
 /**
  * Update the authenticated customer's own lead assignment.
- * Supports: mark viewed (sets viewed_at) and mark contacted (status).
+ * Supports: mark viewed (viewed_at), mark contacted (status), set the
+ * pipeline_stage, and set/clear the due_to_call_date.
  */
 export async function PATCH(
   request: NextRequest,
@@ -22,11 +26,26 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { viewed?: boolean; contacted?: boolean };
+  let body: {
+    viewed?: boolean;
+    contacted?: boolean;
+    pipeline_stage?: string;
+    due_to_call_date?: string | null;
+  };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (
+    body.pipeline_stage !== undefined &&
+    !PIPELINE_VALUES.has(body.pipeline_stage as never)
+  ) {
+    return NextResponse.json(
+      { error: "Invalid pipeline_stage" },
+      { status: 400 }
+    );
   }
 
   const admin = createAdminClient();
@@ -52,6 +71,13 @@ export async function PATCH(
   if (body.contacted) {
     update.status = "contacted";
   }
+  if (body.pipeline_stage !== undefined) {
+    update.pipeline_stage = body.pipeline_stage;
+  }
+  if (body.due_to_call_date !== undefined) {
+    // Empty string clears the date.
+    update.due_to_call_date = body.due_to_call_date || null;
+  }
 
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ status: "noop" });
@@ -61,7 +87,7 @@ export async function PATCH(
     .from("lead_assignments")
     .update(update)
     .eq("id", params.id)
-    .select("id, viewed_at, status")
+    .select("id, viewed_at, status, pipeline_stage, due_to_call_date")
     .single();
 
   if (error) {

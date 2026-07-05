@@ -14,9 +14,11 @@ import { StickyNote } from "lucide-react";
 export function LeadNotes({
   assignmentId,
   initialNotes,
+  onNoteAdded,
 }: {
   assignmentId: string;
   initialNotes: LeadNote[];
+  onNoteAdded?: () => void;
 }) {
   const [notes, setNotes] = useState<LeadNote[]>(initialNotes);
   const [text, setText] = useState("");
@@ -40,6 +42,7 @@ export function LeadNotes({
       }
       setNotes((prev) => [data.note as LeadNote, ...prev]);
       setText("");
+      onNoteAdded?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save note");
     } finally {
