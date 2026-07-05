@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
@@ -23,8 +23,25 @@ function LoginForm() {
   const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const REMEMBER_KEY = "stayful:rememberedEmail";
+
+  // Pre-fill the email from the last "remember me" login. We never store the
+  // password — the browser's password manager handles that securely.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(REMEMBER_KEY);
+      if (saved) {
+        setEmail(saved);
+        setRemember(true);
+      }
+    } catch {
+      /* localStorage unavailable — ignore */
+    }
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,6 +58,17 @@ function LoginForm() {
       setError(error.message);
       setLoading(false);
       return;
+    }
+
+    // Remember (or forget) the email for next time — never the password.
+    try {
+      if (remember) {
+        window.localStorage.setItem(REMEMBER_KEY, email);
+      } else {
+        window.localStorage.removeItem(REMEMBER_KEY);
+      }
+    } catch {
+      /* ignore */
     }
 
     const role = data.user?.app_metadata?.role as string | undefined;
@@ -71,6 +99,7 @@ function LoginForm() {
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -82,6 +111,7 @@ function LoginForm() {
               <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
+                name="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -89,6 +119,15 @@ function LoginForm() {
                 autoComplete="current-password"
               />
             </div>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                className="h-4 w-4 rounded border-input accent-brand"
+              />
+              Remember my email on this device
+            </label>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Signing in…" : "Log in"}
