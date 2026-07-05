@@ -76,6 +76,20 @@
   border-left: 0.5px solid hsl(var(--border));
 }
 
+/* Print / PDF export: hide the dashboard chrome so only the content prints. */
+@media print {
+  header,
+  .no-print {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  body {
+    background: #fff !important;
+  }
+}
+
 /* ── Landing page (design comp) animations ───────────────────────────────── */
 @keyframes sfpulse {
   0%,
