@@ -3,7 +3,7 @@ import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/dashboard/LeadDetail";
 import { fetchOrderedAssignments, parseSource } from "@/lib/leadOrder";
-import type { AssignmentWithLead, LeadNote } from "@/lib/types";
+import type { AssignmentWithLead, LeadNote, LeadFile } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +38,12 @@ export default async function LeadDetailPage({
     .eq("lead_assignment_id", assignment.id)
     .order("created_at", { ascending: false });
 
+  const { data: filesData } = await admin
+    .from("lead_files")
+    .select("*")
+    .eq("lead_assignment_id", assignment.id)
+    .order("created_at", { ascending: false });
+
   // Prev/next navigation within whichever list this lead was opened from.
   const from = parseSource(searchParams.from);
   const ordered = await fetchOrderedAssignments(customer.id, from);
@@ -50,6 +56,8 @@ export default async function LeadDetailPage({
     <LeadDetail
       assignment={assignment}
       notes={(notesData ?? []) as LeadNote[]}
+      files={(filesData ?? []) as LeadFile[]}
+      userId={user.id}
       from={from}
       prevLeadId={prevLeadId}
       nextLeadId={nextLeadId}

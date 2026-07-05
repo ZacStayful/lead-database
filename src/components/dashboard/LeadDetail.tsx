@@ -8,12 +8,13 @@ import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
-  pipelineLabel,
+  pipelineStatusText,
   pipelineBadgeClass,
   PIPELINE_STAGES,
 } from "@/components/dashboard/pipelineStage";
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
-import type { AssignmentWithLead, LeadNote } from "@/lib/types";
+import { LeadFiles } from "@/components/dashboard/LeadFiles";
+import type { AssignmentWithLead, LeadNote, LeadFile } from "@/lib/types";
 import type { LeadSource } from "@/lib/leadOrder";
 import {
   ArrowLeft,
@@ -30,12 +31,16 @@ import {
 export function LeadDetail({
   assignment,
   notes,
+  files,
+  userId,
   from,
   prevLeadId,
   nextLeadId,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
+  files: LeadFile[];
+  userId: string;
   from: LeadSource;
   prevLeadId: string | null;
   nextLeadId: string | null;
@@ -224,7 +229,7 @@ export function LeadDetail({
                   variant="outline"
                   className={pipelineBadgeClass(pipelineStage)}
                 >
-                  {pipelineLabel(pipelineStage)}
+                  {pipelineStatusText(pipelineStage)}
                 </Badge>
               </button>
             )}
@@ -364,6 +369,12 @@ export function LeadDetail({
           </div>
         )}
       </div>
+
+      <LeadFiles
+        assignmentId={assignment.id}
+        userId={userId}
+        initialFiles={files}
+      />
 
       <LeadNotes
         assignmentId={assignment.id}

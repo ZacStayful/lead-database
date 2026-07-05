@@ -75,6 +75,17 @@ export interface LeadNote {
   created_at: string;
 }
 
+export interface LeadFile {
+  id: string;
+  lead_assignment_id: string;
+  customer_id: string;
+  file_name: string;
+  storage_path: string;
+  size_bytes: number | null;
+  mime_type: string | null;
+  created_at: string;
+}
+
 export interface Notification {
   id: string;
   customer_id: string;

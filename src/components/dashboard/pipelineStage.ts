@@ -22,13 +22,31 @@ export function pipelineLabel(stage: string): string {
   return LABELS[stage] ?? stage;
 }
 
-/** Muted badge styling; kept subtle so it reads as a secondary sub-label. */
+/** Badge text shown to customers — makes clear it is an editable status. */
+export function pipelineStatusText(stage: string): string {
+  return `Status: ${pipelineLabel(stage)}`;
+}
+
+/**
+ * Colour per pipeline stage:
+ *   cold → blue · interested → green · web meeting booked → amber
+ *   booked no-show → dark blue · web meeting attended → red · abandoned → dark grey
+ */
 export function pipelineBadgeClass(stage: string): string {
-  if (stage === "abandoned") {
-    return "border-transparent bg-gray-100 text-gray-500";
+  switch (stage) {
+    case "cold":
+      return "border-transparent bg-blue-100 text-blue-700";
+    case "interested_in_the_future":
+      return "border-transparent bg-green-100 text-green-700";
+    case "web_meeting_booked":
+      return "border-transparent bg-amber-100 text-amber-800";
+    case "web_meeting_no_show":
+      return "border-transparent bg-blue-900 text-white";
+    case "web_meeting_attended":
+      return "border-transparent bg-red-100 text-red-700";
+    case "abandoned":
+      return "border-transparent bg-gray-600 text-white";
+    default:
+      return "border-transparent bg-slate-100 text-slate-600";
   }
-  if (stage === "cold") {
-    return "border-transparent bg-slate-100 text-slate-600";
-  }
-  return "border-transparent bg-brand/10 text-brand";
 }

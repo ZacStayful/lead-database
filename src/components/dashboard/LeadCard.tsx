@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, initials, formatDate } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
-import { pipelineLabel, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
+import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import type { AssignmentWithLead } from "@/lib/types";
 import { BarChart3, Check, Mail, Phone, MapPin, Calendar } from "lucide-react";
 
@@ -95,7 +95,7 @@ export function LeadCard({
               variant="outline"
               className={pipelineBadgeClass(assignment.pipeline_stage)}
             >
-              {pipelineLabel(assignment.pipeline_stage)}
+              {pipelineStatusText(assignment.pipeline_stage)}
             </Badge>
             {assignment.due_to_call_date && (
               <Badge
