@@ -192,6 +192,22 @@ export default function LandingPage() {
           <a href="#pricing" style={navLink}>
             Pricing
           </a>
+          <a
+            href="https://calendly.com/zac-stayful/stayful-lead-database"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: "var(--sf-green)",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "9px 16px",
+              borderRadius: 8,
+              border: "1px solid var(--sf-green)",
+              textDecoration: "none",
+            }}
+          >
+            Book a demo
+          </a>
           <Link
             href="/login"
             style={{
