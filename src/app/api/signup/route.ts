@@ -42,6 +42,20 @@ export async function POST(request: NextRequest) {
 
   const owner = isOwnerEmail(email);
 
+  // Self-serve signup is retired — all new customers come through the enquiry
+  // form (/enquiry → /api/enquiry) and are activated by an admin. This route is
+  // kept only to bootstrap owner/admin accounts.
+  if (!owner) {
+    return NextResponse.json(
+      {
+        error:
+          "Please enquire via our contact form and we'll get you set up.",
+        redirect: "/enquiry",
+      },
+      { status: 403 }
+    );
+  }
+
   // Fail fast with a clear message if the server isn't configured. The build
   // succeeds without these, so this is the most common cause of a runtime 500.
   const missing: string[] = [];

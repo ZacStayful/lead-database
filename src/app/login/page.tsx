@@ -158,6 +158,14 @@ function LoginForm() {
               {loading ? "Signing in…" : "Log in"}
             </Button>
           </form>
+          <p className="mt-3 text-center text-sm">
+            <Link
+              href="/forgot-password"
+              className="text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Forgot your password?
+            </Link>
+          </p>
           <p className="mt-4 text-center text-sm text-muted-foreground">
             No account?{" "}
             <Link href="/signup" className="text-brand hover:underline">

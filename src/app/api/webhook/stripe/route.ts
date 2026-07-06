@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { planForAllocation } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +68,10 @@ export async function POST(request: NextRequest) {
           subscription_status: status,
           updated_at: new Date().toISOString(),
         };
+        // A cancelled subscription must also release its capacity slot —
+        // capacity is counted by account_status = 'active'. Without this the
+        // slot would be held forever by a non-paying account.
+        if (status === "canceled") update.account_status = "cancelled";
         // Anchor the billing cycle to the current period start.
         const anchor = toDateString(sub.current_period_start);
         if (anchor) update.billing_cycle_anchor = anchor;
@@ -85,10 +90,34 @@ export async function POST(request: NextRequest) {
         // Only subscription renewals grant lead credit. Every invoice this
         // integration receives is a subscription invoice.
         if (invoice.subscription) {
-          // Subscription renewal — add 20 leads of credit.
+          // The credit granted each month is the customer's plan allocation
+          // (10 or 20). Read the customer first so we can both size the credit
+          // and detect a mismatched Stripe id (which would otherwise silently
+          // grant nothing).
+          const { data: customer } = await admin
+            .from("customers")
+            .select("id, monthly_allocation")
+            .eq("stripe_customer_id", customerId)
+            .maybeSingle();
+
+          if (!customer) {
+            // No matching customer — crediting would be a silent no-op. Log and
+            // acknowledge so Stripe stops retrying, but surface it for triage.
+            console.error(
+              "invoice.paid for unknown stripe_customer_id — no credit granted",
+              customerId
+            );
+            break;
+          }
+
+          // Derive credits from the plan so the amount always matches the
+          // advertised tier (and the price the invite charged).
+          const credits = planForAllocation(customer.monthly_allocation ?? 20).leads;
+
+          // Subscription renewal — add this plan's leads of credit.
           const { error: balanceError } = await admin.rpc(
             "increment_lead_balance",
-            { p_stripe_customer_id: customerId, p_amount: 20 }
+            { p_stripe_customer_id: customerId, p_amount: credits }
           );
           if (balanceError) {
             console.error("increment_lead_balance failed", balanceError);
@@ -102,12 +131,6 @@ export async function POST(request: NextRequest) {
             .eq("stripe_customer_id", customerId)
             .eq("account_status", "invited");
 
-          const { data: customer } = await admin
-            .from("customers")
-            .select("id")
-            .eq("stripe_customer_id", customerId)
-            .maybeSingle();
-
           if (customer) {
             // Record the payment.
             await admin.from("payments").insert({
@@ -116,7 +139,7 @@ export async function POST(request: NextRequest) {
               stripe_payment_intent_id:
                 (invoice.payment_intent as string | null) ?? null,
               amount_pence: invoice.amount_paid ?? 0,
-              credits_added: 20,
+              credits_added: credits,
               payment_type: "subscription",
               status: "paid",
             });

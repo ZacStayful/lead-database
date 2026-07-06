@@ -38,6 +38,94 @@ function textFor(item: MondayItem, columnId: string): string {
   return item.column_values.find((c) => c.id === columnId)?.text ?? "";
 }
 
+/** Board 18420649520 "Stayful Lead database enquiries" (landing-page form). */
+function enquiryBoardId(): string {
+  return process.env.MONDAY_ENQUIRY_BOARD_ID ?? "18420649520";
+}
+
+/**
+ * Column-id → enquiry-field mapping for the enquiries board. If the board
+ * schema changes, update these ids (from get_board_info).
+ */
+const ENQUIRY_COLUMN_MAP = {
+  email: "text_mm50e3d7", // "Email"
+  mobile: "text_mm50hfvg", // "Mobile"
+  website_url: "text_mm50y8an", // "Website URL"
+  properties_managed: "text_mm50mt3h", // "Number of properties manage"
+  date_added: "date_mm50brxt", // "Date added"
+} as const;
+
+/**
+ * Create a contact item on the enquiries board from a landing-page form
+ * submission. Returns the new Monday item id. Requires MONDAY_API_TOKEN.
+ */
+export async function createEnquiryContact(input: {
+  name: string;
+  email: string;
+  mobile: string;
+  websiteUrl: string;
+  propertiesManaged: string;
+}): Promise<string> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) {
+    throw new Error(
+      "Missing MONDAY_API_TOKEN. Add it in Vercel → Settings → Environment Variables."
+    );
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const columnValues: Record<string, unknown> = {
+    [ENQUIRY_COLUMN_MAP.email]: input.email,
+    [ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
+    [ENQUIRY_COLUMN_MAP.website_url]: input.websiteUrl,
+    [ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
+    [ENQUIRY_COLUMN_MAP.date_added]: { date: today },
+  };
+
+  // Monday's create_item takes column_values as a JSON string, and because it
+  // is passed as a GraphQL variable we don't need to escape it by hand.
+  const query = `mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+    create_item(board_id: $boardId, group_id: "topics", item_name: $itemName, column_values: $columnValues) { id }
+  }`;
+
+  const res = await fetch(MONDAY_API, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: token,
+      "API-Version": "2024-10",
+    },
+    body: JSON.stringify({
+      query,
+      variables: {
+        boardId: enquiryBoardId(),
+        itemName: input.name,
+        columnValues: JSON.stringify(columnValues),
+      },
+    }),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Monday API HTTP ${res.status}`);
+  }
+
+  const json: {
+    data?: { create_item?: { id: string } };
+    errors?: { message: string }[];
+  } = await res.json();
+
+  if (json.errors) {
+    throw new Error(
+      `Monday API error: ${json.errors.map((e) => e.message).join("; ")}`
+    );
+  }
+
+  const id = json.data?.create_item?.id;
+  if (!id) throw new Error("Monday create_item returned no item id");
+  return id;
+}
+
 /**
  * Pull every sellable lead from the Monday board and map each to the same
  * payload shape the n8n webhook receives. Requires MONDAY_API_TOKEN.

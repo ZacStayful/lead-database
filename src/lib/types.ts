@@ -22,6 +22,8 @@ export interface Customer {
   is_active: boolean;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;
+  website_url: string | null;
+  properties_managed: string | null;
   created_at: string;
   updated_at: string;
 }
