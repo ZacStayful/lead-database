@@ -266,7 +266,7 @@ export default function LandingPage() {
                 animation: "sfpulse 1.8s infinite",
               }}
             />
-            Founding member access — limited places
+            For STR operators · founding places limited
           </div>
           <h1
             style={display({
@@ -278,7 +278,7 @@ export default function LandingPage() {
               marginBottom: 20,
             })}
           >
-            <Count n={20} /> leads in your inbox every month.
+            You manage the property. We bring you the landlords.
           </h1>
           <p
             style={{
@@ -286,14 +286,16 @@ export default function LandingPage() {
               fontWeight: 500,
               color: "var(--sf-green)",
               opacity: 0.85,
-              maxWidth: 580,
+              maxWidth: 600,
               margin: "0 auto 28px",
               lineHeight: 1.65,
             }}
           >
-            Financially modelled, Google-intent landlord enquiries delivered to
-            your dashboard at a fixed monthly cost. No campaigns. No marketing
-            expertise. Just people who searched for what you do.
+            You&apos;re brilliant at running properties — winning them is a
+            different job. Stayful generates the enquiries and hands you a
+            steady flow of <Count n={20} /> financially modelled, consented
+            landlord leads a month, for a fixed price. No campaigns, no
+            marketing team. We handle how the leads get found; you close them.
           </p>
           <div
             style={{
@@ -325,7 +327,7 @@ export default function LandingPage() {
             The problem this solves
           </Eyebrow>
           <h2 style={centerHeadline()}>
-            Growing a managed portfolio has one persistent problem.
+            Growing a portfolio is a different problem to running one.
           </h2>
           <div style={cardGrid(260)}>
             {[
@@ -1555,8 +1557,10 @@ export default function LandingPage() {
             Two plans. Fixed cost. No hidden fees.
           </h2>
           <p style={{ fontSize: 15, color: "var(--sf-secondary)", marginBottom: 40 }}>
-            Everything included — full contact details, real-time delivery,
-            tracking dashboard. Pick the volume that fits.
+            A steady flow of landlord leads for a fixed monthly price — you
+            manage, we handle the lead generation. Everything included: full
+            contact details, real-time delivery, tracking dashboard. Pick the
+            volume that fits.
           </p>
           <div
             style={{
@@ -1815,9 +1819,10 @@ export default function LandingPage() {
               lineHeight: 1.65,
             }}
           >
-            £300 per month for 20 financially modelled leads. No campaigns to run,
-            no algorithms to manage. Just a consistent pipeline of landlords who
-            searched for what you do.
+            From £150 per month for a steady flow of financially modelled leads.
+            No campaigns to run, no algorithms to manage — you focus on managing
+            and winning property, we handle finding the landlords. Just a
+            consistent pipeline of people who searched for what you do.
           </p>
           <Link
             href="/enquiry"
