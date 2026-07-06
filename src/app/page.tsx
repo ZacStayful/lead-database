@@ -77,6 +77,7 @@ const FAQ: { q: string; a: string }[] = [
 
 export default function LandingPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const revealEls = Array.from(
@@ -179,7 +180,8 @@ export default function LandingPage() {
             Lead Database
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
+        {/* Desktop nav row (hidden on mobile via CSS) */}
+        <div className="sf-nav-desktop">
           <a href="#how" style={navLink}>
             How it works
           </a>
@@ -192,45 +194,89 @@ export default function LandingPage() {
           <a href="#pricing" style={navLink}>
             Pricing
           </a>
+          <Link href="/enquiry" style={navOutlineBtn}>
+            Book a call
+          </Link>
+          <Link href="/login" style={navGhostBtn}>
+            Log in
+          </Link>
+          <Link href="/enquiry" style={navSolidBtn}>
+            Claim your place
+          </Link>
+        </div>
+
+        {/* Hamburger (shown on mobile via CSS) */}
+        <button
+          type="button"
+          className="sf-nav-hamburger"
+          aria-label="Toggle menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((o) => !o)}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+          >
+            {menuOpen ? (
+              <>
+                <line x1="6" y1="6" x2="18" y2="18" />
+                <line x1="6" y1="18" x2="18" y2="6" />
+              </>
+            ) : (
+              <>
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="17" x2="20" y2="17" />
+              </>
+            )}
+          </svg>
+        </button>
+
+        {/* Mobile dropdown panel */}
+        <div className={"sf-nav-mobile" + (menuOpen ? " open" : "")}>
+          <a href="#how" style={navMobileLink} onClick={() => setMenuOpen(false)}>
+            How it works
+          </a>
+          <a
+            href="#pipeline"
+            style={navMobileLink}
+            onClick={() => setMenuOpen(false)}
+          >
+            Pipeline
+          </a>
+          <a href="#data" style={navMobileLink} onClick={() => setMenuOpen(false)}>
+            The data
+          </a>
+          <a
+            href="#pricing"
+            style={navMobileLink}
+            onClick={() => setMenuOpen(false)}
+          >
+            Pricing
+          </a>
           <Link
             href="/enquiry"
-            style={{
-              color: "var(--sf-green)",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "9px 16px",
-              borderRadius: 8,
-              border: "1px solid var(--sf-green)",
-              textDecoration: "none",
-            }}
+            style={navMobileOutline}
+            onClick={() => setMenuOpen(false)}
           >
             Book a call
           </Link>
           <Link
             href="/login"
-            style={{
-              color: "var(--sf-dark)",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "9px 16px",
-              borderRadius: 8,
-              border: "1px solid var(--sf-border)",
-              textDecoration: "none",
-            }}
+            style={navMobileGhost}
+            onClick={() => setMenuOpen(false)}
           >
             Log in
           </Link>
           <Link
             href="/enquiry"
-            style={{
-              background: "var(--sf-dark)",
-              color: "#fff",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "10px 18px",
-              borderRadius: 8,
-              textDecoration: "none",
-            }}
+            style={navMobileSolid}
+            onClick={() => setMenuOpen(false)}
           >
             Claim your place
           </Link>
@@ -1913,6 +1959,77 @@ const navLink: CSSProperties = {
   fontSize: 13.5,
   fontWeight: 600,
   color: "var(--sf-secondary)",
+  textDecoration: "none",
+};
+
+// Desktop nav buttons (kept identical to the original inline styles).
+const navOutlineBtn: CSSProperties = {
+  color: "var(--sf-green)",
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "9px 16px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-green)",
+  textDecoration: "none",
+};
+const navGhostBtn: CSSProperties = {
+  color: "var(--sf-dark)",
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "9px 16px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-border)",
+  textDecoration: "none",
+};
+const navSolidBtn: CSSProperties = {
+  background: "var(--sf-dark)",
+  color: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "10px 18px",
+  borderRadius: 8,
+  textDecoration: "none",
+};
+
+// Mobile dropdown items (full-width variants of the same styling).
+const navMobileLink: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 600,
+  color: "var(--sf-body)",
+  textDecoration: "none",
+  padding: "10px 4px",
+};
+const navMobileOutline: CSSProperties = {
+  display: "block",
+  textAlign: "center",
+  color: "var(--sf-green)",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "12px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-green)",
+  textDecoration: "none",
+};
+const navMobileGhost: CSSProperties = {
+  display: "block",
+  textAlign: "center",
+  color: "var(--sf-dark)",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "12px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-border)",
+  textDecoration: "none",
+};
+const navMobileSolid: CSSProperties = {
+  display: "block",
+  textAlign: "center",
+  background: "var(--sf-dark)",
+  color: "#fff",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "12px",
+  borderRadius: 8,
   textDecoration: "none",
 };
 
