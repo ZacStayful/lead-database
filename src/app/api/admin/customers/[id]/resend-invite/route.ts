@@ -62,40 +62,51 @@ export async function POST(
     );
   }
 
-  // Generate a fresh Checkout session (the previous one has expired).
-  const stripe = getStripe();
-  const plan = planForAllocation(customer.monthly_allocation ?? 20);
-  const session = await stripe.checkout.sessions.create({
-    customer: customer.stripe_customer_id,
-    mode: "subscription",
-    line_items: [
-      { price: stripePriceIdFor(customer.monthly_allocation ?? 20), quantity: 1 },
-    ],
-    success_url: `${APP_URL}/dashboard?checkout=success`,
-    cancel_url: `${APP_URL}/signup?checkout=cancelled`,
-    metadata: { supabase_customer_id: customer.id },
-  });
-
-  let setPasswordUrl: string | null = null;
   try {
-    const { data: link } = await admin.auth.admin.generateLink({
-      type: "recovery",
-      email: customer.email,
-      options: { redirectTo: `${APP_URL}/login` },
+    // Generate a fresh Checkout session (the previous one has expired).
+    // stripePriceIdFor throws if the plan's price env var is missing — caught
+    // below and surfaced as a descriptive error instead of an opaque 500.
+    const stripe = getStripe();
+    const plan = planForAllocation(customer.monthly_allocation ?? 20);
+    const session = await stripe.checkout.sessions.create({
+      customer: customer.stripe_customer_id,
+      mode: "subscription",
+      line_items: [
+        { price: stripePriceIdFor(customer.monthly_allocation ?? 20), quantity: 1 },
+      ],
+      success_url: `${APP_URL}/dashboard?checkout=success`,
+      cancel_url: `${APP_URL}/signup?checkout=cancelled`,
+      metadata: { supabase_customer_id: customer.id },
     });
-    setPasswordUrl = link?.properties?.action_link ?? null;
+    if (!session.url) {
+      throw new Error("Stripe did not return a checkout URL");
+    }
+
+    let setPasswordUrl: string | null = null;
+    try {
+      const { data: link } = await admin.auth.admin.generateLink({
+        type: "recovery",
+        email: customer.email,
+        options: { redirectTo: `${APP_URL}/login` },
+      });
+      setPasswordUrl = link?.properties?.action_link ?? null;
+    } catch (err) {
+      console.error("generateLink (set password) failed", err);
+    }
+
+    await sendActivationEmail({
+      to: customer.email,
+      contactName: customer.contact_name,
+      checkoutUrl: session.url,
+      leads: plan.leads,
+      priceGbp: plan.priceGbp,
+      setPasswordUrl,
+    });
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("generateLink (set password) failed", err);
+    const message = err instanceof Error ? err.message : "Resend failed";
+    console.error("resend-invite route error", err);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  await sendActivationEmail({
-    to: customer.email,
-    contactName: customer.contact_name,
-    checkoutUrl: session.url!,
-    leads: plan.leads,
-    priceGbp: plan.priceGbp,
-    setPasswordUrl,
-  });
-
-  return NextResponse.json({ ok: true });
 }

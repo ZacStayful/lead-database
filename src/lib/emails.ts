@@ -130,7 +130,7 @@ export async function sendNewLeadEmail(params: {
   ]
     .map(
       ([k, v]) =>
-        `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:180px;vertical-align:top">${k}</td><td style="padding:6px 0;font-size:14px">${v}</td></tr>`
+        `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:180px;vertical-align:top">${esc(k)}</td><td style="padding:6px 0;font-size:14px">${esc(v)}</td></tr>`
     )
     .join("");
 
@@ -154,7 +154,7 @@ export async function sendNewLeadEmail(params: {
   }
 }
 
-/** Low credits warning — triggered when leads_received_this_month reaches 18. */
+/** Low credits warning — triggered when a customer's lead_balance runs low. */
 export async function sendLowCreditsEmail(params: {
   to: string;
   remaining: number;

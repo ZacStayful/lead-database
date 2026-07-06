@@ -8,7 +8,9 @@ import { extractCity } from "@/lib/utils";
 import type { Customer, Lead, N8nLeadPayload } from "@/lib/types";
 
 const LEAD_PRICE = 15.0;
-const LOW_CREDITS_THRESHOLD = 18;
+// Warn when the customer has this many lead credits left (the real allocation
+// gate is lead_balance, not the monthly counter, and this is plan-agnostic).
+const LOW_CREDITS_REMAINING = 2;
 
 const LEAD_FIELDS: (keyof N8nLeadPayload)[] = [
   "monday_item_id",
@@ -169,14 +171,15 @@ export async function completeAssignment(
       .eq("id", notification.id);
   }
 
-  // Threshold emails (post-increment count; RPC already incremented).
-  const newCount = typedCustomer.leads_received_this_month;
-  if (newCount === typedCustomer.monthly_allocation) {
+  // Threshold emails, keyed on the real allocation gate (lead_balance, already
+  // decremented by the assignment RPC) so they work for any plan size.
+  const balance = typedCustomer.lead_balance;
+  if (balance === 0) {
     await sendCreditsExhaustedEmail({ to: typedCustomer.email });
-  } else if (newCount === LOW_CREDITS_THRESHOLD) {
+  } else if (balance === LOW_CREDITS_REMAINING) {
     await sendLowCreditsEmail({
       to: typedCustomer.email,
-      remaining: typedCustomer.monthly_allocation - newCount,
+      remaining: balance,
     });
   }
 }

@@ -1,11 +1,10 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
+import { planForAllocation } from "@/lib/plans";
 import type { Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-const MONTHLY_PRICE_GBP = 300;
 
 export default async function AdminOverviewPage() {
   const admin = createAdminClient();
@@ -36,7 +35,10 @@ export default async function AdminOverviewPage() {
   const payingCustomers = activeCustomers.filter(
     (c) => c.stripe_subscription_id
   );
-  const mrr = payingCustomers.length * MONTHLY_PRICE_GBP;
+  const mrr = payingCustomers.reduce(
+    (sum, c) => sum + planForAllocation(c.monthly_allocation).priceGbp,
+    0
+  );
   const leadsThisMonth = customers.reduce(
     (sum, c) => sum + (c.leads_received_this_month ?? 0),
     0

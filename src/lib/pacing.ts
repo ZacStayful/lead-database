@@ -26,16 +26,19 @@ export interface Pacing {
  */
 export function computePacing(customer: Customer, now: Date = new Date()): Pacing {
   const anchorStr = customer.billing_cycle_anchor ?? customer.created_at;
+  // Match the SQL (coalesce(billing_cycle_anchor, created_at::date)): count from
+  // midnight of the anchor date, not the exact created_at instant, so the
+  // dashboard deficit agrees with the value used for lead-ordering.
   const anchor = new Date(anchorStr);
+  anchor.setHours(0, 0, 0, 0);
 
   const msPerDay = 1000 * 60 * 60 * 24;
   const rawElapsed = Math.floor((now.getTime() - anchor.getTime()) / msPerDay);
   const daysElapsed = Math.max(0, Math.min(rawElapsed, DAYS_IN_CYCLE));
   const daysRemaining = Math.max(0, DAYS_IN_CYCLE - daysElapsed);
 
-  const expected = Math.round(
-    (daysElapsed / DAYS_IN_CYCLE) * customer.monthly_allocation
-  );
+  const allocation = customer.monthly_allocation ?? 20;
+  const expected = Math.round((daysElapsed / DAYS_IN_CYCLE) * allocation);
   const deficit = expected - customer.leads_received_this_month;
 
   return { daysElapsed, daysRemaining, expected, deficit, status: statusFor(deficit) };

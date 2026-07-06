@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { randomUUID } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createEnquiryContact } from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
@@ -108,39 +107,23 @@ export async function POST(request: NextRequest) {
           .eq("id", existing.id);
       }
     } else {
-      // New prospect: create an auth user (random password — they'll set a real
-      // one via the link in the activation email) so the customer row has a
-      // user_id like every other account and the invite flow works unchanged.
-      const { data: created, error: userError } =
-        await admin.auth.admin.createUser({
-          email,
-          password: `${randomUUID()}${randomUUID()}`,
-          email_confirm: true,
-          app_metadata: { role: "customer" },
-          user_metadata: { role: "customer", contact_name: name },
-        });
-
-      if (userError || !created.user) {
-        // A pre-existing auth user (without a customers row) lands here — still
-        // treat the enquiry as received rather than surfacing a hard error.
-        console.error("Enquiry auth user creation failed", userError);
-      } else {
-        const { error: customerError } = await admin.from("customers").insert({
-          user_id: created.user.id,
-          business_name: name,
-          contact_name: name,
-          email,
-          phone: mobile || null,
-          monthly_allocation: monthlyAllocation,
-          subscription_status: "inactive",
-          account_status: "waitlisted",
-          website_url: websiteUrl || null,
-          properties_managed: propertiesManaged || null,
-        });
-        if (customerError) {
-          await admin.auth.admin.deleteUser(created.user.id).catch(() => {});
-          console.error("Enquiry customer insert failed", customerError);
-        }
+      // New prospect: create the waitlisted customer row only (user_id stays
+      // null). The Supabase auth user is created later, at admin invite time —
+      // so a public form never provisions a confirmed login for an arbitrary
+      // email, and there's no auth-user/customer-row split to get out of sync.
+      const { error: customerError } = await admin.from("customers").insert({
+        business_name: name,
+        contact_name: name,
+        email,
+        phone: mobile || null,
+        monthly_allocation: monthlyAllocation,
+        subscription_status: "inactive",
+        account_status: "waitlisted",
+        website_url: websiteUrl || null,
+        properties_managed: propertiesManaged || null,
+      });
+      if (customerError) {
+        console.error("Enquiry customer insert failed", customerError);
       }
     }
   } catch (err) {
