@@ -523,14 +523,13 @@ export default function LandingPage() {
                   marginBottom: 16,
                 }}
               >
-                Hi Sarah — thanks for your enquiry. We aren&apos;t able to take on
-                your Darlington property directly right now, but we&apos;ve
-                arranged for a{" "}
+                Hi Sarah — thanks for your enquiry. We&apos;ve matched you with a{" "}
                 <strong style={{ color: "var(--sf-green)" }}>
                   trusted local STR operator
                 </strong>{" "}
-                to contact you shortly about managing it. They already have the
-                details you shared. Expect a call in the next day or two.
+                who&apos;ll be in touch shortly about managing your Darlington
+                property. They already have the details you shared. Expect a
+                call in the next day or two.
               </p>
               <div
                 style={{
