@@ -28,7 +28,17 @@ export default function ForgotPasswordPage() {
     // Don't reveal whether an account exists — always show the same confirmation
     // on success. Surface only genuine configuration/transport errors.
     if (error) {
-      setError(error.message);
+      const status = (error as { status?: number }).status;
+      const msg = error.message?.toLowerCase() ?? "";
+      const rateLimited =
+        status === 429 ||
+        msg.includes("rate limit") ||
+        msg.includes("you can only request");
+      setError(
+        rateLimited
+          ? "We can only send a limited number of reset emails per hour, and that limit has just been reached. Please wait about an hour and try again."
+          : error.message
+      );
       setLoading(false);
       return;
     }
