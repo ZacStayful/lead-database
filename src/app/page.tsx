@@ -375,9 +375,11 @@ export default function LandingPage() {
             Stayful generates the enquiry. You buy the conversation.
           </h2>
           <p style={centerLede()}>
-            Around 60% of the landlords who find Stayful don't fit our own
-            management service. Instead of discarding those conversations, we
-            hand them to STR operators at a fixed, predictable cost.
+            Getting found by landlords searching for STR management is a
+            specialism of its own — and it&apos;s the part most operators
+            don&apos;t have time to run. Stayful does that work and hands the
+            enquiries it generates to STR operators in a steady flow, at a
+            fixed and predictable cost.
           </p>
 
           <div style={cardGrid(280)}>
