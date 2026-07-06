@@ -26,6 +26,8 @@ create table if not exists public.customers (
   is_active                 boolean default true,
   last_assignment_at        timestamptz,
   billing_cycle_anchor      date,
+  website_url               text,
+  properties_managed        text,
   created_at                timestamptz default now(),
   updated_at                timestamptz default now()
 );
@@ -37,6 +39,10 @@ alter table public.customers
   add column if not exists billing_cycle_anchor date;
 alter table public.customers
   add column if not exists account_status text not null default 'waitlisted';
+alter table public.customers
+  add column if not exists website_url text;
+alter table public.customers
+  add column if not exists properties_managed text;
 alter table public.customers
   drop column if exists overflow_enabled;
 -- Existing customers predate capacity management — treat live rows as active.

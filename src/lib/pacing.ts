@@ -47,8 +47,12 @@ export function statusFor(deficit: number): PacingStatus {
   return "on_track";
 }
 
-/** Contextual sentence shown to the customer on their dashboard. */
-export function pacingMessage(deficit: number): string {
+/**
+ * Contextual sentence shown to the customer on their dashboard. Pass the
+ * customer's monthly allocation so the "on track" copy reflects their plan
+ * (10 or 20 leads) rather than a hardcoded number.
+ */
+export function pacingMessage(deficit: number, monthlyAllocation = 20): string {
   const status = statusFor(deficit);
   if (status === "behind") {
     return "You are behind pace this month — your leads are being prioritised.";
@@ -56,5 +60,5 @@ export function pacingMessage(deficit: number): string {
   if (status === "ahead") {
     return "You are ahead of pace this month.";
   }
-  return "You are on track to receive your 20 leads this month.";
+  return `You are on track to receive your ${monthlyAllocation} leads this month.`;
 }

@@ -5,6 +5,7 @@ import { getStripe } from "@/lib/stripe";
 import { isAdminUser } from "@/lib/auth";
 import { APP_URL } from "@/lib/env";
 import { sendActivationEmail } from "@/lib/emails/activation";
+import { planForAllocation, stripePriceIdFor } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,19 +64,37 @@ export async function POST(
 
   // Generate a fresh Checkout session (the previous one has expired).
   const stripe = getStripe();
+  const plan = planForAllocation(customer.monthly_allocation ?? 20);
   const session = await stripe.checkout.sessions.create({
     customer: customer.stripe_customer_id,
     mode: "subscription",
-    line_items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID!, quantity: 1 }],
+    line_items: [
+      { price: stripePriceIdFor(customer.monthly_allocation ?? 20), quantity: 1 },
+    ],
     success_url: `${APP_URL}/dashboard?checkout=success`,
     cancel_url: `${APP_URL}/signup?checkout=cancelled`,
     metadata: { supabase_customer_id: customer.id },
   });
 
+  let setPasswordUrl: string | null = null;
+  try {
+    const { data: link } = await admin.auth.admin.generateLink({
+      type: "recovery",
+      email: customer.email,
+      options: { redirectTo: `${APP_URL}/login` },
+    });
+    setPasswordUrl = link?.properties?.action_link ?? null;
+  } catch (err) {
+    console.error("generateLink (set password) failed", err);
+  }
+
   await sendActivationEmail({
     to: customer.email,
     contactName: customer.contact_name,
     checkoutUrl: session.url!,
+    leads: plan.leads,
+    priceGbp: plan.priceGbp,
+    setPasswordUrl,
   });
 
   return NextResponse.json({ ok: true });

@@ -85,10 +85,19 @@ export async function POST(request: NextRequest) {
         // Only subscription renewals grant lead credit. Every invoice this
         // integration receives is a subscription invoice.
         if (invoice.subscription) {
-          // Subscription renewal — add 20 leads of credit.
+          // The credit granted each month equals the customer's plan
+          // allocation (10 or 20). Read it before topping up.
+          const { data: customer } = await admin
+            .from("customers")
+            .select("id, monthly_allocation")
+            .eq("stripe_customer_id", customerId)
+            .maybeSingle();
+          const credits = customer?.monthly_allocation ?? 20;
+
+          // Subscription renewal — add this plan's leads of credit.
           const { error: balanceError } = await admin.rpc(
             "increment_lead_balance",
-            { p_stripe_customer_id: customerId, p_amount: 20 }
+            { p_stripe_customer_id: customerId, p_amount: credits }
           );
           if (balanceError) {
             console.error("increment_lead_balance failed", balanceError);
@@ -102,12 +111,6 @@ export async function POST(request: NextRequest) {
             .eq("stripe_customer_id", customerId)
             .eq("account_status", "invited");
 
-          const { data: customer } = await admin
-            .from("customers")
-            .select("id")
-            .eq("stripe_customer_id", customerId)
-            .maybeSingle();
-
           if (customer) {
             // Record the payment.
             await admin.from("payments").insert({
@@ -116,7 +119,7 @@ export async function POST(request: NextRequest) {
               stripe_payment_intent_id:
                 (invoice.payment_intent as string | null) ?? null,
               amount_pence: invoice.amount_paid ?? 0,
-              credits_added: 20,
+              credits_added: credits,
               payment_type: "subscription",
               status: "paid",
             });

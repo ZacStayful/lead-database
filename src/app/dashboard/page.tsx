@@ -136,7 +136,7 @@ export default async function DashboardPage() {
                 : "text-brand")
           }
         >
-          {pacingMessage(pacing.deficit)}
+          {pacingMessage(pacing.deficit, customer.monthly_allocation)}
         </p>
       )}
 

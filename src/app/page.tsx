@@ -192,10 +192,8 @@ export default function LandingPage() {
           <a href="#pricing" style={navLink}>
             Pricing
           </a>
-          <a
-            href="https://calendly.com/zac-stayful/stayful-lead-database"
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            href="/enquiry"
             style={{
               color: "var(--sf-green)",
               fontSize: 13,
@@ -206,8 +204,8 @@ export default function LandingPage() {
               textDecoration: "none",
             }}
           >
-            Book a demo
-          </a>
+            Book a call
+          </Link>
           <Link
             href="/login"
             style={{
@@ -223,7 +221,7 @@ export default function LandingPage() {
             Log in
           </Link>
           <Link
-            href="/signup"
+            href="/enquiry"
             style={{
               background: "var(--sf-dark)",
               color: "#fff",
@@ -306,7 +304,7 @@ export default function LandingPage() {
               justifyContent: "center",
             }}
           >
-            <Link href="/signup" style={heroPrimary}>
+            <Link href="/enquiry" style={heroPrimary}>
               Claim your founding membership
             </Link>
             <a href="#how" style={heroSecondary}>
@@ -314,8 +312,8 @@ export default function LandingPage() {
             </a>
           </div>
           <p style={{ fontSize: 12.5, color: "var(--sf-green)", opacity: 0.7 }}>
-            £300/month · 20 leads included · cancel anytime · allocation carries
-            forward
+            From £150/month · 10 or 20 leads · cancel anytime · allocation
+            carries forward
           </p>
         </div>
       </section>
@@ -1499,7 +1497,7 @@ export default function LandingPage() {
 
           <div style={{ textAlign: "center" }}>
             <Link
-              href="/signup"
+              href="/enquiry"
               style={{
                 display: "inline-block",
                 background: "#fff",
@@ -1554,100 +1552,134 @@ export default function LandingPage() {
               marginBottom: 10,
             })}
           >
-            One subscription. Fixed cost. No hidden fees.
+            Two plans. Fixed cost. No hidden fees.
           </h2>
           <p style={{ fontSize: 15, color: "var(--sf-secondary)", marginBottom: 40 }}>
             Everything included — full contact details, real-time delivery,
-            tracking dashboard.
+            tracking dashboard. Pick the volume that fits.
           </p>
           <div
             style={{
-              background: "#fff",
-              border: "1px solid var(--sf-border)",
-              borderRadius: 18,
-              padding: 40,
-              maxWidth: 480,
-              margin: "0 auto",
-              textAlign: "left",
-              boxShadow: "0 24px 60px -34px rgba(59,109,17,.4)",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 24,
+              justifyContent: "center",
+              alignItems: "stretch",
             }}
           >
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
-              <span
-                style={display({
-                  fontSize: 52,
-                  fontWeight: 700,
-                  color: "var(--sf-dark)",
-                  letterSpacing: "-.03em",
-                  lineHeight: 1,
-                })}
+            {[
+              {
+                plan: "lead_10",
+                price: "£150",
+                leads: 10,
+                highlight: false,
+              },
+              {
+                plan: "lead_20",
+                price: "£300",
+                leads: 20,
+                highlight: true,
+              },
+            ].map((tier) => (
+              <div
+                key={tier.plan}
+                style={{
+                  background: "#fff",
+                  border: tier.highlight
+                    ? "2px solid var(--sf-green)"
+                    : "1px solid var(--sf-border)",
+                  borderRadius: 18,
+                  padding: 36,
+                  width: 380,
+                  maxWidth: "100%",
+                  textAlign: "left",
+                  boxShadow: tier.highlight
+                    ? "0 24px 60px -34px rgba(59,109,17,.4)"
+                    : "0 16px 40px -34px rgba(59,109,17,.3)",
+                }}
               >
-                £300
-              </span>
-              <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
-                /month
-              </span>
-            </div>
-            <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
-              + VAT
-            </div>
-            <ul style={{ listStyle: "none", marginBottom: 28 }}>
-              {[
-                "20 financially modelled leads per month",
-                "Full contact details: name, address, phone, email, profile",
-                "Estimated monthly STR income per lead",
-                "Real-time in-portal and email notification",
-                "Leads carry forward if allocation isn't met",
-                "Cancel anytime — no lock-in, no penalty",
-              ].map((f, i, arr) => (
-                <li
-                  key={f}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+                  <span
+                    style={display({
+                      fontSize: 48,
+                      fontWeight: 700,
+                      color: "var(--sf-dark)",
+                      letterSpacing: "-.03em",
+                      lineHeight: 1,
+                    })}
+                  >
+                    {tier.price}
+                  </span>
+                  <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
+                    /month
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
+                  {tier.leads} leads / month · + VAT
+                </div>
+                <ul style={{ listStyle: "none", marginBottom: 28 }}>
+                  {[
+                    `${tier.leads} financially modelled leads per month`,
+                    "Full contact details: name, address, phone, email, profile",
+                    "Estimated monthly STR income per lead",
+                    "Real-time in-portal and email notification",
+                    "Leads carry forward if allocation isn't met",
+                    "Cancel anytime — no lock-in, no penalty",
+                  ].map((f, i, arr) => (
+                    <li
+                      key={f}
+                      style={{
+                        fontSize: 14,
+                        padding: "10px 0",
+                        borderBottom:
+                          i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "flex-start",
+                      }}
+                    >
+                      <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
+                        ✓
+                      </span>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href={`/enquiry?plan=${tier.plan}`}
                   style={{
-                    fontSize: 14,
-                    padding: "10px 0",
-                    borderBottom:
-                      i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
-                    display: "flex",
-                    gap: 10,
-                    alignItems: "flex-start",
+                    display: "block",
+                    background: tier.highlight ? "var(--sf-dark)" : "#fff",
+                    color: tier.highlight ? "#fff" : "var(--sf-dark)",
+                    border: tier.highlight ? "none" : "1px solid var(--sf-dark)",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    padding: 16,
+                    borderRadius: 9,
+                    textAlign: "center",
+                    textDecoration: "none",
                   }}
                 >
-                  <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
-                    ✓
-                  </span>
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <Link
-              href="/signup"
-              style={{
-                display: "block",
-                background: "var(--sf-dark)",
-                color: "#fff",
-                fontSize: 15,
-                fontWeight: 700,
-                padding: 16,
-                borderRadius: 9,
-                textAlign: "center",
-                textDecoration: "none",
-                marginBottom: 12,
-              }}
-            >
-              Start your subscription
-            </Link>
-            <p
-              style={{
-                fontSize: 12.5,
-                color: "var(--sf-muted)",
-                textAlign: "center",
-                lineHeight: 1.55,
-              }}
-            >
-              Exclusive leads (one operator only) available at £25/lead. Contact
-              the Stayful team to discuss exclusive allocation.
-            </p>
+                  Enquire about {tier.leads} leads
+                </Link>
+              </div>
+            ))}
           </div>
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "var(--sf-muted)",
+              textAlign: "center",
+              lineHeight: 1.55,
+              marginTop: 28,
+              maxWidth: 480,
+              marginLeft: "auto",
+              marginRight: "auto",
+            }}
+          >
+            Exclusive leads (one operator only) available at £25/lead. Contact
+            the Stayful team to discuss exclusive allocation.
+          </p>
         </div>
       </section>
 
@@ -1788,7 +1820,7 @@ export default function LandingPage() {
             searched for what you do.
           </p>
           <Link
-            href="/signup"
+            href="/enquiry"
             style={{
               display: "inline-block",
               background: "var(--sf-dark)",

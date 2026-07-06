@@ -5,6 +5,7 @@ import { getStripe } from "@/lib/stripe";
 import { isAdminUser } from "@/lib/auth";
 import { APP_URL } from "@/lib/env";
 import { sendActivationEmail } from "@/lib/emails/activation";
+import { planForAllocation, stripePriceIdFor } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,15 +83,33 @@ export async function POST(
       .eq("id", customer.id);
   }
 
-  // Fresh Checkout session for the £300 subscription.
+  // Fresh Checkout session for this customer's plan (10 or 20 leads).
+  const plan = planForAllocation(customer.monthly_allocation ?? 20);
   const session = await stripe.checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "subscription",
-    line_items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID!, quantity: 1 }],
+    line_items: [
+      { price: stripePriceIdFor(customer.monthly_allocation ?? 20), quantity: 1 },
+    ],
     success_url: `${APP_URL}/dashboard?checkout=success`,
     cancel_url: `${APP_URL}/signup?checkout=cancelled`,
     metadata: { supabase_customer_id: customer.id },
   });
+
+  // Enquiry-form accounts never chose a password. Generate a set-password link
+  // so they can access their dashboard after paying. Best-effort — if it fails
+  // (e.g. no auth user), the customer can still use "forgot password".
+  let setPasswordUrl: string | null = null;
+  try {
+    const { data: link } = await admin.auth.admin.generateLink({
+      type: "recovery",
+      email: customer.email,
+      options: { redirectTo: `${APP_URL}/login` },
+    });
+    setPasswordUrl = link?.properties?.action_link ?? null;
+  } catch (err) {
+    console.error("generateLink (set password) failed", err);
+  }
 
   // Mark invited, then send the activation email with the checkout link.
   await admin
@@ -102,6 +121,9 @@ export async function POST(
     to: customer.email,
     contactName: customer.contact_name,
     checkoutUrl: session.url!,
+    leads: plan.leads,
+    priceGbp: plan.priceGbp,
+    setPasswordUrl,
   });
 
   return NextResponse.json({ ok: true });
