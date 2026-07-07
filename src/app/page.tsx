@@ -192,6 +192,9 @@ export default function LandingPage() {
           <a href="#pricing" style={navLink}>
             Pricing
           </a>
+          <Link href="/guaranteed-rent" style={navLink}>
+            Guaranteed Rent
+          </Link>
           <a
             href="https://calendly.com/zac-stayful/stayful-lead-database"
             target="_blank"

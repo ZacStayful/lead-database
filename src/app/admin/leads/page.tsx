@@ -18,6 +18,7 @@ export const dynamic = "force-dynamic";
 interface LeadRow {
   id: string;
   lead_name: string;
+  lead_type: string;
   address: string | null;
   assignment_count: number;
   max_assignments: number;
@@ -32,7 +33,7 @@ export default async function AdminLeadsPage() {
   const { data } = await admin
     .from("leads")
     .select(
-      "id, lead_name, address, assignment_count, max_assignments, created_at, lead_assignments(customers(business_name))"
+      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, lead_assignments(customers(business_name))"
     )
     .order("created_at", { ascending: false });
 
@@ -54,6 +55,7 @@ export default async function AdminLeadsPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Lead</TableHead>
+              <TableHead>Type</TableHead>
               <TableHead>Address</TableHead>
               <TableHead>Assigned</TableHead>
               <TableHead>Recipients</TableHead>
@@ -70,6 +72,11 @@ export default async function AdminLeadsPage() {
               return (
                 <TableRow key={l.id}>
                   <TableCell className="font-medium">{l.lead_name}</TableCell>
+                  <TableCell>
+                    {l.lead_type === "guaranteed_rent"
+                      ? "Guaranteed Rent"
+                      : "Management"}
+                  </TableCell>
                   <TableCell className="max-w-[220px] truncate text-muted-foreground">
                     {l.address ?? "—"}
                   </TableCell>
@@ -98,7 +105,7 @@ export default async function AdminLeadsPage() {
             {leads.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No leads yet.

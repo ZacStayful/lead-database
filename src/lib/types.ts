@@ -5,6 +5,8 @@ export type SubscriptionStatus =
   | "canceled"
   | "trialing";
 
+export type LeadType = "management" | "guaranteed_rent";
+
 export interface Customer {
   id: string;
   user_id: string | null;
@@ -22,6 +24,15 @@ export interface Customer {
   is_active: boolean;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;
+  // Guaranteed Rent subscription (independent of the management subscription).
+  gr_subscription_status: SubscriptionStatus | string;
+  gr_stripe_subscription_id: string | null;
+  gr_stripe_price_id: string | null;
+  gr_monthly_allocation: number;
+  gr_leads_received_this_month: number;
+  gr_billing_cycle_anchor: string | null;
+  gr_last_assignment_at: string | null;
+  gr_lead_balance: number;
   created_at: string;
   updated_at: string;
 }
@@ -36,9 +47,17 @@ export interface Lead {
   lead_profile: string | null;
   bedrooms: string | null;
   enquiry_date: string | null;
+  lead_type: LeadType;
   assignment_count: number;
   max_assignments: number;
   created_at: string;
+  // GR-specific fields (null for management leads).
+  last_contact: string | null;
+  desired_rent: string | null;
+  pmi_analysis: string | null;
+  tenancy_agreement: string | null;
+  sourcing_agreement: string | null;
+  formula: string | null;
 }
 
 export type PipelineStage =
@@ -47,7 +66,10 @@ export type PipelineStage =
   | "web_meeting_booked"
   | "web_meeting_no_show"
   | "web_meeting_attended"
-  | "abandoned";
+  | "abandoned"
+  | "viewing_booked"
+  | "contract_sent"
+  | "contract_signed";
 
 export interface LeadAssignment {
   id: string;
@@ -110,14 +132,24 @@ export interface Payment {
   created_at: string;
 }
 
-/** Exact shape n8n POSTs to /api/webhook/n8n. */
+/**
+ * Shape n8n POSTs to /api/webhook/n8n.
+ *
+ * Management leads carry the fixed field set below. Guaranteed-rent leads set
+ * `lead_type: "guaranteed_rent"` and carry the GR board fields keyed by their
+ * Monday column id (or the equivalent friendly name), so the payload is left
+ * open with an index signature. The two banned GR columns are stripped at the
+ * webhook entry point before this payload reaches ingest.
+ */
 export interface N8nLeadPayload {
   monday_item_id: string;
   lead_name: string;
-  address: string;
-  phone: string;
-  email: string;
-  lead_profile: string;
-  bedrooms: string;
-  enquiry_date: string;
+  lead_type?: LeadType;
+  address?: string;
+  phone?: string;
+  email?: string;
+  lead_profile?: string;
+  bedrooms?: string;
+  enquiry_date?: string;
+  [key: string]: unknown;
 }

@@ -38,12 +38,27 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
+  // Resolve the lead first so we assign against the correct product pool.
+  const { data: lead } = await admin
+    .from("leads")
+    .select("*")
+    .eq("id", lead_id)
+    .single();
+
+  if (!lead) {
+    return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  }
+
+  const typedLead = lead as Lead;
+  const defaultPrice = typedLead.lead_type === "guaranteed_rent" ? 10.0 : LEAD_PRICE;
+
   const { data: assignmentId, error: assignError } = await admin.rpc(
     "assign_lead_to_customer",
     {
       p_lead_id: lead_id,
       p_customer_id: customer_id,
-      p_price: body.price ?? LEAD_PRICE,
+      p_price: body.price ?? defaultPrice,
+      p_lead_type: typedLead.lead_type,
     }
   );
 
@@ -54,17 +69,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Same follow-through as the automated path: notification, email,
-  // threshold warnings, and the overflow charge where applicable.
-  const { data: lead } = await admin
-    .from("leads")
-    .select("*")
-    .eq("id", lead_id)
-    .single();
-
-  if (lead) {
-    await completeAssignment(admin, lead as Lead, customer_id, assignmentId);
-  }
+  // Same follow-through as the automated path: notification, email, and
+  // threshold warnings (management only).
+  await completeAssignment(admin, typedLead, customer_id, assignmentId);
 
   return NextResponse.json({ status: "ok", assignment_id: assignmentId });
 }

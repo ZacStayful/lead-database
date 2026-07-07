@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +10,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 import { createClient } from "@/lib/supabase/client";
 
-export default function SignupPage() {
+function SignupForm() {
+  const searchParams = useSearchParams();
+  const product = searchParams.get("product");
+  const isGuaranteedRent = product === "guaranteed-rent";
+
   const [form, setForm] = useState({
     business_name: "",
     contact_name: "",
@@ -34,7 +39,9 @@ export default function SignupPage() {
       const res = await fetch("/api/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(
+          isGuaranteedRent ? { ...form, product: "guaranteed-rent" } : form
+        ),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -77,9 +84,15 @@ export default function SignupPage() {
           <Link href="/" aria-label="Stayful home" className="flex justify-center">
             <Logo height={36} priority />
           </Link>
-          <CardTitle className="pt-2">Apply for access</CardTitle>
+          <CardTitle className="pt-2">
+            {isGuaranteedRent
+              ? "Start receiving guaranteed rent leads"
+              : "Apply for access"}
+          </CardTitle>
           <p className="text-sm text-muted-foreground">
-            £300 / month · 20 leads · no contracts
+            {isGuaranteedRent
+              ? "£100 / month · 10 leads · no contracts"
+              : "£300 / month · 20 leads · no contracts"}
           </p>
         </CardHeader>
         <CardContent>
@@ -148,5 +161,13 @@ export default function SignupPage() {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignupForm />
+    </Suspense>
   );
 }

@@ -62,14 +62,33 @@ export async function POST(request: NextRequest) {
             ? "canceled"
             : mapStatus(sub.status);
 
+        // A customer can hold both a management and a GR subscription against
+        // the same Stripe customer. Route the lifecycle event to the matching
+        // column set by inspecting the subscription's price id, so a GR event
+        // never clobbers management state (and vice-versa).
+        const subPriceIds = (sub.items?.data ?? [])
+          .map((item) => item.price?.id)
+          .filter((id): id is string => Boolean(id));
+        const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
+        const isGuaranteedRent = Boolean(
+          grPriceId && subPriceIds.includes(grPriceId)
+        );
+
         const update: Record<string, unknown> = {
-          stripe_subscription_id: sub.id,
-          subscription_status: status,
           updated_at: new Date().toISOString(),
         };
-        // Anchor the billing cycle to the current period start.
         const anchor = toDateString(sub.current_period_start);
-        if (anchor) update.billing_cycle_anchor = anchor;
+
+        if (isGuaranteedRent) {
+          update.gr_subscription_status = status;
+          update.gr_stripe_subscription_id = sub.id;
+          update.gr_stripe_price_id = subPriceIds[0] ?? null;
+          if (anchor) update.gr_billing_cycle_anchor = anchor;
+        } else {
+          update.stripe_subscription_id = sub.id;
+          update.subscription_status = status;
+          if (anchor) update.billing_cycle_anchor = anchor;
+        }
 
         await admin
           .from("customers")
@@ -85,7 +104,66 @@ export async function POST(request: NextRequest) {
         // Only subscription renewals grant lead credit. Every invoice this
         // integration receives is a subscription invoice.
         if (invoice.subscription) {
-          // Subscription renewal — add 20 leads of credit.
+          // Determine the product from the invoice line item price id.
+          const priceIds = (invoice.lines?.data ?? [])
+            .map((line) => line.price?.id)
+            .filter((id): id is string => Boolean(id));
+          const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
+          const isGuaranteedRent = Boolean(
+            grPriceId && priceIds.includes(grPriceId)
+          );
+
+          if (isGuaranteedRent) {
+            // Guaranteed Rent renewal — add 10 GR leads of credit and mark the
+            // GR subscription active. Management fields are left untouched.
+            const { error: grBalanceError } = await admin.rpc(
+              "increment_gr_lead_balance",
+              { p_stripe_customer_id: customerId, p_amount: 10 }
+            );
+            if (grBalanceError) {
+              console.error("increment_gr_lead_balance failed", grBalanceError);
+            }
+
+            const { data: customer } = await admin
+              .from("customers")
+              .select("id, gr_billing_cycle_anchor")
+              .eq("stripe_customer_id", customerId)
+              .maybeSingle();
+
+            if (customer) {
+              const grUpdate: Record<string, unknown> = {
+                gr_subscription_status: "active",
+                gr_stripe_subscription_id: invoice.subscription as string,
+                updated_at: new Date().toISOString(),
+              };
+              // Anchor the GR billing cycle on first activation only.
+              if (!customer.gr_billing_cycle_anchor) {
+                const anchor =
+                  toDateString(invoice.period_start) ??
+                  toDateString(invoice.created);
+                if (anchor) grUpdate.gr_billing_cycle_anchor = anchor;
+              }
+
+              await admin
+                .from("customers")
+                .update(grUpdate)
+                .eq("id", customer.id);
+
+              await admin.from("payments").insert({
+                customer_id: customer.id,
+                stripe_invoice_id: invoice.id,
+                stripe_payment_intent_id:
+                  (invoice.payment_intent as string | null) ?? null,
+                amount_pence: invoice.amount_paid ?? 0,
+                credits_added: 10,
+                payment_type: "gr_subscription",
+                status: "paid",
+              });
+            }
+            break;
+          }
+
+          // Management subscription renewal — add 20 leads of credit.
           const { error: balanceError } = await admin.rpc(
             "increment_lead_balance",
             { p_stripe_customer_id: customerId, p_amount: 20 }

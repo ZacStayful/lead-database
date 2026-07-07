@@ -63,23 +63,28 @@ export async function POST(
     return NextResponse.json({ error: rejectError.message }, { status: 400 });
   }
 
-  // Reassignment — find the next eligible customer, excluding the rejector.
+  // Confirm the lead still has capacity (the reject reopened one slot) and
+  // resolve its type so the replacement routes to the right product pool.
   const lead_id = params.id;
+  const { data: lead } = await admin
+    .from("leads")
+    .select("*")
+    .eq("id", lead_id)
+    .single();
+
+  const leadType = (lead as Lead | null)?.lead_type ?? "management";
+  const price = leadType === "guaranteed_rent" ? 10.0 : LEAD_PRICE;
+
+  // Reassignment — find the next eligible customer, excluding the rejector.
   const { data: nextCustomers } = await admin.rpc(
     "get_next_customers_for_lead",
     {
       p_lead_id: lead_id,
       p_max: 1,
       p_exclude_customer_ids: [customer.id],
+      p_lead_type: leadType,
     }
   );
-
-  // Confirm the lead still has capacity (the reject reopened one slot).
-  const { data: lead } = await admin
-    .from("leads")
-    .select("*")
-    .eq("id", lead_id)
-    .single();
 
   let reassigned = false;
   if (
@@ -95,7 +100,8 @@ export async function POST(
       {
         p_lead_id: lead_id,
         p_customer_id: nextCustomerId,
-        p_price: LEAD_PRICE,
+        p_price: price,
+        p_lead_type: leadType,
       }
     );
 

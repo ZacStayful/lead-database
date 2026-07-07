@@ -49,6 +49,10 @@ export default async function AdminLeadDetailPage({
 
   const fields: [string, string | null][] = [
     ["Lead name", lead.lead_name],
+    [
+      "Lead type",
+      lead.lead_type === "guaranteed_rent" ? "Guaranteed Rent" : "Management",
+    ],
     ["Email", lead.email],
     ["Phone", lead.phone],
     ["Address", lead.address],
