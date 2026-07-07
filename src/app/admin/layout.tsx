@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUser, isAdminUser } from "@/lib/auth";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
+import { MobileNav } from "@/components/dashboard/MobileNav";
 import { Logo } from "@/components/Logo";
 
 export default async function AdminLayout({
@@ -22,10 +23,10 @@ export default async function AdminLayout({
 
   return (
     <div className="min-h-screen bg-muted/20">
-      <header className="border-b-[0.5px] border-border bg-background">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link href="/admin" className="flex items-center gap-2" aria-label="Stayful admin">
+      <header className="relative border-b-[0.5px] border-border bg-background">
+        <div className="container flex h-16 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-6">
+            <Link href="/admin" className="flex min-w-0 items-center gap-2" aria-label="Stayful admin">
               <Logo height={32} priority />
               <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
                 Admin
@@ -43,7 +44,10 @@ export default async function AdminLayout({
               ))}
             </nav>
           </div>
-          <SignOutButton />
+          <div className="flex flex-shrink-0 items-center gap-1">
+            <SignOutButton />
+            <MobileNav items={nav} />
+          </div>
         </div>
       </header>
       <main className="container py-8">{children}</main>
