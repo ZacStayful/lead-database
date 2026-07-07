@@ -248,6 +248,10 @@ export async function POST(request: NextRequest) {
         phone: phone ?? null,
         subscription_status: "active",
         account_status: "active",
+        // Owner accounts get both products active for preview/testing.
+        gr_subscription_status: "active",
+        gr_monthly_allocation: 10,
+        gr_lead_balance: 10,
       });
       if (ownerError) {
         await admin.auth.admin.deleteUser(userId).catch(() => {});
