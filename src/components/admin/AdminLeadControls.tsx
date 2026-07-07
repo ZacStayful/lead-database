@@ -95,10 +95,13 @@ export function AdminLeadControls({
           <SelectContent>
             <SelectItem value="1">1</SelectItem>
             <SelectItem value="2">2</SelectItem>
+            <SelectItem value="3">3</SelectItem>
+            <SelectItem value="4">4</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Currently {assignmentCount} of {max} assigned.
+          Currently {assignmentCount} of {max} assigned. Default is 2 — raise up
+          to 4 to place a lead with more operators.
         </p>
       </div>
 
