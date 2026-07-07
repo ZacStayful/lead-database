@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
     email?: string;
     website_url?: string;
     properties_managed?: string;
+    current_lead_source?: string;
     plan?: string;
     product?: string;
   };
@@ -50,6 +51,7 @@ export async function POST(request: NextRequest) {
     websiteUrl = `https://${websiteUrl}`;
   }
   const propertiesManaged = body.properties_managed?.trim() ?? "";
+  const currentLeadSource = body.current_lead_source?.trim() ?? "";
 
   if (!name || !email) {
     return NextResponse.json(
@@ -90,6 +92,7 @@ export async function POST(request: NextRequest) {
         email,
         mobile,
         propertiesManaged,
+        currentLeadSource,
       });
     } else {
       await createEnquiryContact({
@@ -99,6 +102,7 @@ export async function POST(request: NextRequest) {
         websiteUrl,
         propertiesManaged,
         preferredPlan,
+        currentLeadSource,
       });
     }
   } catch (err) {

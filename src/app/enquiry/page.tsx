@@ -26,6 +26,7 @@ function EnquiryForm() {
     email: "",
     website_url: "",
     properties_managed: "",
+    current_lead_source: "",
   });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -164,6 +165,19 @@ function EnquiryForm() {
               id="properties_managed"
               value={form.properties_managed}
               onChange={update("properties_managed")}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="current_lead_source">
+              {isGuaranteedRent
+                ? "How do you currently get guaranteed rent leads?"
+                : "How do you currently get management leads?"}
+            </Label>
+            <Input
+              id="current_lead_source"
+              value={form.current_lead_source}
+              onChange={update("current_lead_source")}
               required
             />
           </div>

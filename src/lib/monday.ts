@@ -89,6 +89,7 @@ const ENQUIRY_COLUMN_MAP = {
   website_url: "text_mm50y8an", // "Website URL"
   properties_managed: "text_mm50mt3h", // "Number of properties manage"
   preferred_plan: "text_mm50w01q", // "Preffered plan"
+  current_lead_source: "text_mm51bgh6", // "How do you currently get management leads"
   date_added: "date_mm50brxt", // "Date added"
 } as const;
 
@@ -101,6 +102,7 @@ const GR_ENQUIRY_COLUMN_MAP = {
   email: "text_mm50e3d7", // "Email"
   mobile: "text_mm50hfvg", // "Mobile"
   properties_managed: "text_mm50mt3h", // "Number of properties"
+  current_lead_source: "text_mm515b3c", // "How do you currently get guaranteed rent leads"
   date_added: "date_mm50brxt", // "Date added"
 } as const;
 
@@ -175,6 +177,7 @@ export async function createEnquiryContact(input: {
   websiteUrl: string;
   propertiesManaged: string;
   preferredPlan?: string;
+  currentLeadSource?: string;
 }): Promise<string> {
   const today = new Date().toISOString().slice(0, 10);
   return createBoardContact(enquiryBoardId(), input.name, {
@@ -183,6 +186,7 @@ export async function createEnquiryContact(input: {
     [ENQUIRY_COLUMN_MAP.website_url]: input.websiteUrl,
     [ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
     [ENQUIRY_COLUMN_MAP.preferred_plan]: input.preferredPlan ?? "",
+    [ENQUIRY_COLUMN_MAP.current_lead_source]: input.currentLeadSource ?? "",
     [ENQUIRY_COLUMN_MAP.date_added]: { date: today },
   });
 }
@@ -197,12 +201,14 @@ export async function createGuaranteedRentEnquiryContact(input: {
   email: string;
   mobile: string;
   propertiesManaged: string;
+  currentLeadSource?: string;
 }): Promise<string> {
   const today = new Date().toISOString().slice(0, 10);
   return createBoardContact(grEnquiryBoardId(), input.name, {
     [GR_ENQUIRY_COLUMN_MAP.email]: input.email,
     [GR_ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
     [GR_ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
+    [GR_ENQUIRY_COLUMN_MAP.current_lead_source]: input.currentLeadSource ?? "",
     [GR_ENQUIRY_COLUMN_MAP.date_added]: { date: today },
   });
 }
