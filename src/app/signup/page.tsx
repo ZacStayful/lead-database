@@ -15,6 +15,8 @@ function SignupForm() {
   const product = searchParams.get("product");
   const isGuaranteedRent =
     product === "guaranteed-rent" || product === "guaranteed_rent";
+  // Management tier: ?plan=10 → 10-lead / £150; default → 20-lead / £300.
+  const isTenPlan = !isGuaranteedRent && searchParams.get("plan") === "10";
 
   const [form, setForm] = useState({
     business_name: "",
@@ -41,7 +43,11 @@ function SignupForm() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          isGuaranteedRent ? { ...form, product: "guaranteed-rent" } : form
+          isGuaranteedRent
+            ? { ...form, product: "guaranteed-rent" }
+            : isTenPlan
+              ? { ...form, plan: "10" }
+              : form
         ),
       });
       const data = await res.json();
@@ -93,7 +99,9 @@ function SignupForm() {
           <p className="text-sm text-muted-foreground">
             {isGuaranteedRent
               ? "£100 / month · 10 leads · no contracts"
-              : "£300 / month · 20 leads · no contracts"}
+              : isTenPlan
+                ? "£150 / month · 10 leads · no contracts"
+                : "£300 / month · 20 leads · no contracts"}
           </p>
         </CardHeader>
         <CardContent>

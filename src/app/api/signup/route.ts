@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
     phone?: string;
     password?: string;
     product?: string;
+    plan?: string;
   };
   try {
     body = await request.json();
@@ -33,7 +34,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { business_name, contact_name, email, phone, password, product } = body;
+  const { business_name, contact_name, email, phone, password, product, plan } =
+    body;
   if (!business_name || !contact_name || !email || !password) {
     return NextResponse.json(
       { error: "business_name, contact_name, email and password are required" },
@@ -45,6 +47,13 @@ export async function POST(request: NextRequest) {
   // subscription; anything else is the default management subscription.
   const isGuaranteedRent =
     product === "guaranteed-rent" || product === "guaranteed_rent";
+
+  // Management tier: ?plan=10 → 10-lead plan; anything else → 20-lead (default).
+  const isTenPlan = !isGuaranteedRent && plan === "10";
+  const managementPriceId = isTenPlan
+    ? process.env.STRIPE_MONTHLY_10_PRICE_ID
+    : process.env.STRIPE_MONTHLY_PRICE_ID;
+  const managementAllocation = isTenPlan ? 10 : 20;
 
   const owner = isOwnerEmail(email);
 
@@ -58,6 +67,9 @@ export async function POST(request: NextRequest) {
     if (isGuaranteedRent) {
       if (!process.env.STRIPE_GR_MONTHLY_PRICE_ID)
         missing.push("STRIPE_GR_MONTHLY_PRICE_ID");
+    } else if (isTenPlan) {
+      if (!process.env.STRIPE_MONTHLY_10_PRICE_ID)
+        missing.push("STRIPE_MONTHLY_10_PRICE_ID");
     } else if (!process.env.STRIPE_MONTHLY_PRICE_ID) {
       missing.push("STRIPE_MONTHLY_PRICE_ID");
     }
@@ -279,6 +291,7 @@ export async function POST(request: NextRequest) {
         email,
         phone: phone ?? null,
         subscription_status: "inactive",
+        monthly_allocation: managementAllocation,
       })
       .select("id")
       .single();
@@ -333,7 +346,7 @@ export async function POST(request: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: stripeCustomer.id,
-      line_items: [{ price: process.env.STRIPE_MONTHLY_PRICE_ID!, quantity: 1 }],
+      line_items: [{ price: managementPriceId!, quantity: 1 }],
       success_url: `${APP_URL}/dashboard?checkout=success`,
       cancel_url: `${APP_URL}/signup?checkout=cancelled`,
       subscription_data: { metadata: { supabase_user_id: userId } },

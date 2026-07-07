@@ -1557,7 +1557,7 @@ export default function LandingPage() {
               marginBottom: 10,
             })}
           >
-            One subscription. Fixed cost. No hidden fees.
+            Choose your plan. Fixed cost. No hidden fees.
           </h2>
           <p style={{ fontSize: 15, color: "var(--sf-secondary)", marginBottom: 40 }}>
             Everything included — full contact details, real-time delivery,
@@ -1565,92 +1565,128 @@ export default function LandingPage() {
           </p>
           <div
             style={{
-              background: "#fff",
-              border: "1px solid var(--sf-border)",
-              borderRadius: 18,
-              padding: 40,
-              maxWidth: 480,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))",
+              gap: 20,
+              maxWidth: 760,
               margin: "0 auto",
-              textAlign: "left",
-              boxShadow: "0 24px 60px -34px rgba(59,109,17,.4)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
-              <span
-                style={display({
-                  fontSize: 52,
-                  fontWeight: 700,
-                  color: "var(--sf-dark)",
-                  letterSpacing: "-.03em",
-                  lineHeight: 1,
-                })}
+            {[
+              { price: "£150", leads: "10", plan: "10", highlight: false },
+              { price: "£300", leads: "20", plan: "20", highlight: true },
+            ].map((p) => (
+              <div
+                key={p.plan}
+                style={{
+                  position: "relative",
+                  background: "#fff",
+                  border: p.highlight
+                    ? "2px solid var(--sf-green)"
+                    : "1px solid var(--sf-border)",
+                  borderRadius: 18,
+                  padding: 36,
+                  textAlign: "left",
+                  boxShadow: "0 24px 60px -34px rgba(59,109,17,.4)",
+                }}
               >
-                £300
-              </span>
-              <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
-                /month
-              </span>
-            </div>
-            <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
-              + VAT
-            </div>
-            <ul style={{ listStyle: "none", marginBottom: 28 }}>
-              {[
-                "20 financially modelled leads per month",
-                "Full contact details: name, address, phone, email, profile",
-                "Estimated monthly STR income per lead",
-                "Real-time in-portal and email notification",
-                "Leads carry forward if allocation isn't met",
-                "Cancel anytime — no lock-in, no penalty",
-              ].map((f, i, arr) => (
-                <li
-                  key={f}
+                {p.highlight && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 18,
+                      right: 18,
+                      background: "var(--sf-sage)",
+                      color: "var(--sf-dark)",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: ".04em",
+                      textTransform: "uppercase",
+                      padding: "4px 10px",
+                      borderRadius: 100,
+                    }}
+                  >
+                    Most popular
+                  </span>
+                )}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+                  <span
+                    style={display({
+                      fontSize: 52,
+                      fontWeight: 700,
+                      color: "var(--sf-dark)",
+                      letterSpacing: "-.03em",
+                      lineHeight: 1,
+                    })}
+                  >
+                    {p.price}
+                  </span>
+                  <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
+                    /month
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
+                  + VAT
+                </div>
+                <ul style={{ listStyle: "none", marginBottom: 28 }}>
+                  {[
+                    `${p.leads} financially modelled leads per month`,
+                    "Full contact details: name, address, phone, email, profile",
+                    "Estimated monthly STR income per lead",
+                    "Real-time in-portal and email notification",
+                    "Leads carry forward if allocation isn't met",
+                    "Cancel anytime — no lock-in, no penalty",
+                  ].map((f, i, arr) => (
+                    <li
+                      key={f}
+                      style={{
+                        fontSize: 14,
+                        padding: "10px 0",
+                        borderBottom:
+                          i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "flex-start",
+                      }}
+                    >
+                      <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
+                        ✓
+                      </span>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href={`/signup?plan=${p.plan}`}
                   style={{
-                    fontSize: 14,
-                    padding: "10px 0",
-                    borderBottom:
-                      i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
-                    display: "flex",
-                    gap: 10,
-                    alignItems: "flex-start",
+                    display: "block",
+                    background: "var(--sf-dark)",
+                    color: "#fff",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    padding: 16,
+                    borderRadius: 9,
+                    textAlign: "center",
+                    textDecoration: "none",
                   }}
                 >
-                  <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
-                    ✓
-                  </span>
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <Link
-              href="/signup"
-              style={{
-                display: "block",
-                background: "var(--sf-dark)",
-                color: "#fff",
-                fontSize: 15,
-                fontWeight: 700,
-                padding: 16,
-                borderRadius: 9,
-                textAlign: "center",
-                textDecoration: "none",
-                marginBottom: 12,
-              }}
-            >
-              Start your subscription
-            </Link>
-            <p
-              style={{
-                fontSize: 12.5,
-                color: "var(--sf-muted)",
-                textAlign: "center",
-                lineHeight: 1.55,
-              }}
-            >
-              Exclusive leads (one operator only) available at £25/lead. Contact
-              the Stayful team to discuss exclusive allocation.
-            </p>
+                  Start your subscription
+                </Link>
+              </div>
+            ))}
           </div>
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "var(--sf-muted)",
+              textAlign: "center",
+              lineHeight: 1.55,
+              marginTop: 20,
+            }}
+          >
+            Exclusive leads (one operator only) available at £25/lead. Contact
+            the Stayful team to discuss exclusive allocation.
+          </p>
         </div>
       </section>
 

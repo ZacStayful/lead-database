@@ -102,6 +102,10 @@ export async function POST(request: NextRequest) {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
           if (anchor) update.billing_cycle_anchor = anchor;
+          // Keep monthly_allocation in sync with the management tier.
+          const tenPriceId = process.env.STRIPE_MONTHLY_10_PRICE_ID;
+          update.monthly_allocation =
+            tenPriceId && subPriceIds.includes(tenPriceId) ? 10 : 20;
         }
 
         await admin
@@ -177,10 +181,16 @@ export async function POST(request: NextRequest) {
             break;
           }
 
-          // Management subscription renewal — add 20 leads of credit.
+          // Management subscription renewal. The 10-lead tier grants 10 credits
+          // (allocation 10); the 20-lead tier grants 20 (allocation 20).
+          const tenPriceId = process.env.STRIPE_MONTHLY_10_PRICE_ID;
+          const isTenPlan = Boolean(tenPriceId && priceIds.includes(tenPriceId));
+          const credits = isTenPlan ? 10 : 20;
+          const allocation = isTenPlan ? 10 : 20;
+
           const { error: balanceError } = await admin.rpc(
             "increment_lead_balance",
-            { p_stripe_customer_id: customerId, p_amount: 20 }
+            { p_stripe_customer_id: customerId, p_amount: credits }
           );
           if (balanceError) {
             console.error("increment_lead_balance failed", balanceError);
@@ -208,15 +218,16 @@ export async function POST(request: NextRequest) {
               stripe_payment_intent_id:
                 (invoice.payment_intent as string | null) ?? null,
               amount_pence: invoice.amount_paid ?? 0,
-              credits_added: 20,
+              credits_added: credits,
               payment_type: "subscription",
               status: "paid",
             });
 
-            // Keep the subscription marked active and re-anchor the billing
-            // cycle to the start of the period this invoice covers.
+            // Keep the subscription marked active, set the tier's monthly
+            // allocation, and re-anchor the billing cycle to this period start.
             const renewalUpdate: Record<string, unknown> = {
               subscription_status: "active",
+              monthly_allocation: allocation,
               updated_at: new Date().toISOString(),
             };
             const renewalAnchor = toDateString(invoice.period_start);
