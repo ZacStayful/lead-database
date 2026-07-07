@@ -70,7 +70,7 @@ export function GuaranteedRentNav() {
         <Link href="/login" style={navGhostBtn}>
           Log in
         </Link>
-        <Link href="/signup?product=guaranteed-rent" style={navCta}>
+        <Link href="/enquiry?product=guaranteed-rent" style={navCta}>
           Start receiving leads →
         </Link>
       </div>
@@ -137,7 +137,7 @@ export function GuaranteedRentNav() {
           Log in
         </Link>
         <Link
-          href="/signup?product=guaranteed-rent"
+          href="/enquiry?product=guaranteed-rent"
           style={navMobileSolid}
           onClick={() => setMenuOpen(false)}
         >

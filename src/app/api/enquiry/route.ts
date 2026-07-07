@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createEnquiryContact } from "@/lib/monday";
+import {
+  createEnquiryContact,
+  createGuaranteedRentEnquiryContact,
+} from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -26,12 +29,16 @@ export async function POST(request: NextRequest) {
     website_url?: string;
     properties_managed?: string;
     plan?: string;
+    product?: string;
   };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  const isGuaranteedRent =
+    body.product === "guaranteed-rent" || body.product === "guaranteed_rent";
 
   const name = body.name?.trim();
   const email = body.email?.trim().toLowerCase();
@@ -74,15 +81,26 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   // 1. Push to Monday. Non-fatal — we still create the account if this fails.
+  //    Guaranteed Rent enquiries go to their own board (no website/plan columns);
+  //    management enquiries go to the management enquiries board.
   try {
-    await createEnquiryContact({
-      name,
-      email,
-      mobile,
-      websiteUrl,
-      propertiesManaged,
-      preferredPlan,
-    });
+    if (isGuaranteedRent) {
+      await createGuaranteedRentEnquiryContact({
+        name,
+        email,
+        mobile,
+        propertiesManaged,
+      });
+    } else {
+      await createEnquiryContact({
+        name,
+        email,
+        mobile,
+        websiteUrl,
+        propertiesManaged,
+        preferredPlan,
+      });
+    }
   } catch (err) {
     console.error("Monday enquiry push failed", err);
   }

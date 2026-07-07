@@ -157,7 +157,7 @@ export default function GuaranteedRentPage() {
             against live Airbnb data for their postcode, and expecting a local
             operator to be in touch.
           </p>
-          <Link href="/signup?product=guaranteed-rent" style={heroPrimary}>
+          <Link href="/enquiry?product=guaranteed-rent" style={heroPrimary}>
             Start receiving leads →
           </Link>
         </div>
@@ -985,7 +985,7 @@ export default function GuaranteedRentPage() {
               ))}
             </ul>
             <Link
-              href="/signup?product=guaranteed-rent"
+              href="/enquiry?product=guaranteed-rent"
               style={{
                 display: "block",
                 background: "var(--sf-dark)",
