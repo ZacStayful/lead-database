@@ -194,6 +194,9 @@ export default function LandingPage() {
           <a href="#pricing" style={navLink}>
             Pricing
           </a>
+          <Link href="/guaranteed-rent" style={navLink}>
+            Guaranteed Rent
+          </Link>
           <Link href="/enquiry" style={navOutlineBtn}>
             Book a call
           </Link>
@@ -259,6 +262,13 @@ export default function LandingPage() {
           >
             Pricing
           </a>
+          <Link
+            href="/guaranteed-rent"
+            style={navMobileLink}
+            onClick={() => setMenuOpen(false)}
+          >
+            Guaranteed Rent
+          </Link>
           <Link
             href="/enquiry"
             style={navMobileOutline}

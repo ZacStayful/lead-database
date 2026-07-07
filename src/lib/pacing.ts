@@ -44,6 +44,29 @@ export function computePacing(customer: Customer, now: Date = new Date()): Pacin
   return { daysElapsed, daysRemaining, expected, deficit, status: statusFor(deficit) };
 }
 
+/**
+ * GR pacing — the same maths as computePacing but on the guaranteed-rent
+ * columns (gr_billing_cycle_anchor, gr_monthly_allocation,
+ * gr_leads_received_this_month), mirroring the GR branch of
+ * get_next_customers_for_lead.
+ */
+export function computeGrPacing(customer: Customer, now: Date = new Date()): Pacing {
+  const anchorStr = customer.gr_billing_cycle_anchor ?? customer.created_at;
+  const anchor = new Date(anchorStr);
+
+  const msPerDay = 1000 * 60 * 60 * 24;
+  const rawElapsed = Math.floor((now.getTime() - anchor.getTime()) / msPerDay);
+  const daysElapsed = Math.max(0, Math.min(rawElapsed, DAYS_IN_CYCLE));
+  const daysRemaining = Math.max(0, DAYS_IN_CYCLE - daysElapsed);
+
+  const expected = Math.round(
+    (daysElapsed / DAYS_IN_CYCLE) * customer.gr_monthly_allocation
+  );
+  const deficit = expected - customer.gr_leads_received_this_month;
+
+  return { daysElapsed, daysRemaining, expected, deficit, status: statusFor(deficit) };
+}
+
 export function statusFor(deficit: number): PacingStatus {
   if (deficit >= 3) return "behind";
   if (deficit <= -3) return "ahead";

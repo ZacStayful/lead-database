@@ -114,6 +114,15 @@ export function LeadCard({
           </p>
         </div>
         <div className="hidden shrink-0 items-center gap-3 sm:flex">
+          {lead.lead_type === "guaranteed_rent" ? (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+              Guaranteed Rent
+            </span>
+          ) : (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[#EAF3DE] text-[#3B6D11]">
+              Management
+            </span>
+          )}
           {lead.bedrooms && (
             <span className="text-sm text-muted-foreground">
               {lead.bedrooms} bed

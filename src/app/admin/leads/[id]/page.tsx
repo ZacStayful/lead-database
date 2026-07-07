@@ -43,12 +43,24 @@ export default async function AdminLeadDetailPage({
     .select("*")
     .eq("is_active", true)
     .order("business_name");
+  // Only offer customers subscribed to this lead's product, so a GR lead is
+  // never force-assigned to a management-only customer (and vice-versa).
+  const isGuaranteedRent = lead.lead_type === "guaranteed_rent";
   const availableCustomers = ((customersRaw ?? []) as Customer[])
     .filter((c) => !assignedIds.has(c.id))
+    .filter((c) =>
+      isGuaranteedRent
+        ? c.gr_subscription_status === "active"
+        : c.subscription_status === "active"
+    )
     .map((c) => ({ id: c.id, business_name: c.business_name }));
 
   const fields: [string, string | null][] = [
     ["Lead name", lead.lead_name],
+    [
+      "Lead type",
+      lead.lead_type === "guaranteed_rent" ? "Guaranteed Rent" : "Management",
+    ],
     ["Email", lead.email],
     ["Phone", lead.phone],
     ["Address", lead.address],
@@ -134,6 +146,7 @@ export default async function AdminLeadDetailPage({
                 maxAssignments={lead.max_assignments}
                 assignmentCount={lead.assignment_count}
                 customers={availableCustomers}
+                leadType={lead.lead_type}
               />
             </CardContent>
           </Card>

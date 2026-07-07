@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
     email?: string;
     phone?: string;
     password?: string;
+    product?: string;
   };
   try {
     body = await request.json();
@@ -32,13 +33,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { business_name, contact_name, email, phone, password } = body;
+  const { business_name, contact_name, email, phone, password, product } = body;
   if (!business_name || !contact_name || !email || !password) {
     return NextResponse.json(
       { error: "business_name, contact_name, email and password are required" },
       { status: 400 }
     );
   }
+
+  // Product routing: ?product=guaranteed-rent signs the customer up for the GR
+  // subscription; anything else is the default management subscription.
+  const isGuaranteedRent =
+    product === "guaranteed-rent" || product === "guaranteed_rent";
 
   const owner = isOwnerEmail(email);
 
@@ -61,9 +67,14 @@ export async function POST(request: NextRequest) {
   const missing: string[] = [];
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) missing.push("NEXT_PUBLIC_SUPABASE_URL");
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) missing.push("SUPABASE_SERVICE_ROLE_KEY");
-  if (!owner) {
+  if (!owner || isGuaranteedRent) {
     if (!process.env.STRIPE_SECRET_KEY) missing.push("STRIPE_SECRET_KEY");
-    if (!process.env.STRIPE_MONTHLY_PRICE_ID) missing.push("STRIPE_MONTHLY_PRICE_ID");
+    if (isGuaranteedRent) {
+      if (!process.env.STRIPE_GR_MONTHLY_PRICE_ID)
+        missing.push("STRIPE_GR_MONTHLY_PRICE_ID");
+    } else if (!process.env.STRIPE_MONTHLY_PRICE_ID) {
+      missing.push("STRIPE_MONTHLY_PRICE_ID");
+    }
   }
   if (missing.length > 0) {
     return NextResponse.json(
@@ -78,6 +89,147 @@ export async function POST(request: NextRequest) {
 
   try {
     const admin = createAdminClient();
+
+    // ── Guaranteed Rent product ───────────────────────────────────────────
+    // GR is an independent subscription that can be added alongside an existing
+    // management subscription without affecting it. If the customer already has
+    // an active GR subscription, block a duplicate. New customers are created
+    // (no capacity gate — GR has its own allocation); existing customers reuse
+    // their row and Stripe customer.
+    //
+    // Owners are excluded here so an owner using the GR link still falls through
+    // to the owner override below (admin account, both products active, no
+    // Stripe), rather than being provisioned as a plain non-admin customer.
+    if (isGuaranteedRent && !owner) {
+      const stripe = getStripe();
+      const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID!;
+
+      const { data: existing } = await admin
+        .from("customers")
+        .select("id, stripe_customer_id, gr_subscription_status, user_id")
+        .eq("email", email)
+        .maybeSingle();
+
+      const createGrCheckout = async (
+        customerId: string,
+        stripeCustomerId: string,
+        userId: string | null
+      ) => {
+        const session = await stripe.checkout.sessions.create({
+          mode: "subscription",
+          customer: stripeCustomerId,
+          line_items: [{ price: grPriceId, quantity: 1 }],
+          success_url: `${APP_URL}/dashboard?checkout=success&product=guaranteed-rent`,
+          cancel_url: `${APP_URL}/signup?product=guaranteed-rent&checkout=cancelled`,
+          subscription_data: {
+            metadata: {
+              product_type: "guaranteed_rent",
+              ...(userId ? { supabase_user_id: userId } : {}),
+            },
+          },
+          metadata: { product_type: "guaranteed_rent" },
+        });
+        return session;
+      };
+
+      if (existing) {
+        if (existing.gr_subscription_status === "active") {
+          return NextResponse.json(
+            { error: "You already have an active Guaranteed Rent subscription." },
+            { status: 409 }
+          );
+        }
+
+        // Ensure the customer has a Stripe customer id to bill against.
+        let stripeCustomerId = existing.stripe_customer_id;
+        if (!stripeCustomerId) {
+          const stripeCustomer = await stripe.customers.create({
+            email,
+            name: business_name,
+            phone: phone || undefined,
+            metadata: existing.user_id
+              ? { supabase_user_id: existing.user_id }
+              : {},
+          });
+          stripeCustomerId = stripeCustomer.id;
+          await admin
+            .from("customers")
+            .update({ stripe_customer_id: stripeCustomerId })
+            .eq("id", existing.id);
+        }
+
+        const session = await createGrCheckout(
+          existing.id,
+          stripeCustomerId,
+          existing.user_id
+        );
+        return NextResponse.json({ mode: "checkout", url: session.url });
+      }
+
+      // Brand-new GR customer: create the auth user + customer row, then open
+      // GR Checkout. GR provisioning (status/credit/anchor) happens in the
+      // Stripe webhook on invoice.paid.
+      const { data: created, error: userError } =
+        await admin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          app_metadata: { role: "customer" },
+          user_metadata: { role: "customer", business_name, contact_name },
+        });
+
+      if (userError || !created.user) {
+        const msg = userError?.message ?? "Could not create account";
+        const status = /already|exists|registered/i.test(msg) ? 409 : 400;
+        return NextResponse.json({ error: msg }, { status });
+      }
+
+      const userId = created.user.id;
+
+      const { data: grCustomer, error: grCustomerError } = await admin
+        .from("customers")
+        .insert({
+          user_id: userId,
+          business_name,
+          contact_name,
+          email,
+          phone: phone ?? null,
+          subscription_status: "inactive",
+        })
+        .select("id")
+        .single();
+
+      if (grCustomerError || !grCustomer) {
+        await admin.auth.admin.deleteUser(userId).catch(() => {});
+        return NextResponse.json(
+          {
+            error: `Could not create customer record: ${
+              grCustomerError?.message ?? "insert failed"
+            }`,
+          },
+          { status: 500 }
+        );
+      }
+
+      const stripeCustomer = await stripe.customers.create({
+        email,
+        name: business_name,
+        phone: phone || undefined,
+        metadata: { supabase_user_id: userId },
+      });
+
+      await admin
+        .from("customers")
+        .update({ stripe_customer_id: stripeCustomer.id })
+        .eq("id", grCustomer.id);
+
+      const session = await createGrCheckout(
+        grCustomer.id,
+        stripeCustomer.id,
+        userId
+      );
+      return NextResponse.json({ mode: "checkout", url: session.url });
+    }
 
     // 1. Create the auth user (confirmed so they can log in immediately).
     // app_metadata.role can't be set from the browser, so it's where we grant
@@ -114,6 +266,10 @@ export async function POST(request: NextRequest) {
         phone: phone ?? null,
         subscription_status: "active",
         account_status: "active",
+        // Owner accounts get both products active for preview/testing.
+        gr_subscription_status: "active",
+        gr_monthly_allocation: 10,
+        gr_lead_balance: 10,
       });
       if (ownerError) {
         await admin.auth.admin.deleteUser(userId).catch(() => {});

@@ -3,7 +3,7 @@
  * Independent of status — a lead can be at any pipeline stage regardless of
  * whether it is new, contacted, won, etc.
  */
-import type { PipelineStage } from "@/lib/types";
+import type { LeadType, PipelineStage } from "@/lib/types";
 
 export const PIPELINE_STAGES: { value: PipelineStage; label: string }[] = [
   { value: "cold", label: "Cold" },
@@ -14,8 +14,23 @@ export const PIPELINE_STAGES: { value: PipelineStage; label: string }[] = [
   { value: "abandoned", label: "Abandoned" },
 ];
 
+/** Guaranteed-rent leads run a shorter, viewing-to-contract pipeline. */
+export const GR_PIPELINE_STAGES: { value: PipelineStage; label: string }[] = [
+  { value: "cold", label: "Cold" },
+  { value: "viewing_booked", label: "Viewing booked" },
+  { value: "contract_sent", label: "Contract sent" },
+  { value: "contract_signed", label: "Contract signed" },
+];
+
+/** The stage options to show for a given lead type. */
+export function stagesForLeadType(
+  leadType: LeadType | string | undefined
+): { value: PipelineStage; label: string }[] {
+  return leadType === "guaranteed_rent" ? GR_PIPELINE_STAGES : PIPELINE_STAGES;
+}
+
 const LABELS: Record<string, string> = Object.fromEntries(
-  PIPELINE_STAGES.map((s) => [s.value, s.label])
+  [...PIPELINE_STAGES, ...GR_PIPELINE_STAGES].map((s) => [s.value, s.label])
 );
 
 export function pipelineLabel(stage: string): string {
@@ -46,6 +61,12 @@ export function pipelineBadgeClass(stage: string): string {
       return "border-transparent bg-red-100 text-red-700";
     case "abandoned":
       return "border-transparent bg-gray-600 text-white";
+    case "viewing_booked":
+      return "border-transparent bg-amber-100 text-amber-800";
+    case "contract_sent":
+      return "border-transparent bg-indigo-100 text-indigo-700";
+    case "contract_signed":
+      return "border-transparent bg-green-100 text-green-700";
     default:
       return "border-transparent bg-slate-100 text-slate-600";
   }
