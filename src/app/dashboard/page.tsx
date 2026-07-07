@@ -55,13 +55,12 @@ export default async function DashboardPage() {
   const carriedForward = customer.lead_balance - customer.monthly_allocation;
 
   // Split what the customer has received by product so management and
-  // guaranteed rent are kept clearly separate. Rejected leads were refunded and
-  // reassigned, so they are excluded from "received".
-  const heldAssignments = assignments.filter((a) => a.status !== "rejected");
-  const grReceived = heldAssignments.filter(
+  // guaranteed rent are kept clearly separate. Every delivered lead counts
+  // (including rejected ones — rejection no longer refunds or replaces).
+  const grReceived = assignments.filter(
     (a) => a.lead?.lead_type === "guaranteed_rent"
   ).length;
-  const managementReceived = heldAssignments.length - grReceived;
+  const managementReceived = assignments.length - grReceived;
   // Which products this customer actually holds (active sub or leads received).
   const hasManagement = isActive || managementReceived > 0;
   const hasGr = hasGuaranteedRent || grReceived > 0;

@@ -119,7 +119,7 @@ export function LeadDetail({
       if (!res.ok) throw new Error();
       setStatus("rejected");
       setShowRejectConfirm(false);
-      setToast("Lead rejected — a replacement will arrive shortly");
+      setToast("Lead marked as rejected.");
       router.refresh();
     } catch {
       setToast("Could not reject this lead. Please try again.");
@@ -373,8 +373,9 @@ export function LeadDetail({
             ) : (
               <div className="rounded-xl border border-black/10 bg-white p-4">
                 <p className="mb-3 text-sm text-[#52514e]">
-                  Are you sure? This lead will be reassigned and you will receive
-                  another lead in its place.
+                  Mark this lead as rejected? It still counts toward your leads
+                  this month and won&apos;t be replaced — this just records that
+                  you&apos;re passing on it.
                 </p>
                 <div className="flex gap-2">
                   <button
