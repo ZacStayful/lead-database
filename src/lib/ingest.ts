@@ -62,6 +62,16 @@ function buildManagementInsert(payload: N8nLeadPayload): Record<string, unknown>
   return row;
 }
 
+/** GR target columns that are DATE-typed in the DB and must be ISO or null. */
+const GR_DATE_TARGETS = new Set(["last_contact"]);
+
+/** Return an ISO (YYYY-MM-DD) date string or null — never an invalid date. */
+function toIsoDateOrNull(raw: unknown): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
 /** Build the leads insert row for a guaranteed-rent lead. */
 function buildGuaranteedRentInsert(
   payload: N8nLeadPayload
@@ -74,7 +84,13 @@ function buildGuaranteedRentInsert(
   for (const [columnId, target] of Object.entries(GR_COLUMN_MAP)) {
     // Prefer the Monday column id key, fall back to the friendly name.
     const raw = payload[columnId] ?? payload[target];
-    row[target] = raw != null && raw !== "" ? String(raw) : null;
+    if (GR_DATE_TARGETS.has(target)) {
+      // DATE columns reject non-ISO strings, which would fail the whole insert
+      // and drop the lead. Coerce anything non-ISO to null instead.
+      row[target] = toIsoDateOrNull(raw);
+    } else {
+      row[target] = raw != null && raw !== "" ? String(raw) : null;
+    }
   }
   return row;
 }

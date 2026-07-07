@@ -60,7 +60,11 @@ export default async function DashboardPage() {
     (a) => a.lead?.lead_type === "guaranteed_rent"
   ).length;
   const managementReceived = assignments.length - grReceived;
-  const showProductSplit = hasGuaranteedRent || grReceived > 0;
+  // Which products this customer actually holds (active sub or leads received).
+  const hasManagement = isActive || managementReceived > 0;
+  const hasGr = hasGuaranteedRent || grReceived > 0;
+  const showProductSplit = hasGr;
+  const anySubActive = isActive || hasGuaranteedRent;
 
   const stats: {
     label: string;
@@ -71,8 +75,8 @@ export default async function DashboardPage() {
   }[] = [
     {
       label: "Subscription",
-      value: isActive ? "Active" : titleCase(customer.subscription_status),
-      accent: isActive,
+      value: anySubActive ? "Active" : titleCase(customer.subscription_status),
+      accent: anySubActive,
     },
     // Single-product customers keep the simple remaining card; dual-product
     // customers see the per-product split card below instead.
@@ -138,6 +142,8 @@ export default async function DashboardPage() {
 
       {showProductSplit && (
         <LeadsByProduct
+          showManagement={hasManagement}
+          showGr={hasGr}
           managementReceived={managementReceived}
           managementRemaining={customer.lead_balance}
           grReceived={grReceived}
@@ -145,26 +151,29 @@ export default async function DashboardPage() {
         />
       )}
 
-      {exhausted ? (
-        <p className="text-sm font-medium text-amber-600">
-          You have no remaining {showProductSplit ? "management " : ""}lead
-          credit. Your balance will update when your next payment is processed on{" "}
-          {renewalDate}.
-        </p>
-      ) : (
-        <p
-          className={
-            "text-sm font-medium " +
-            (pacing.status === "behind"
-              ? "text-amber-600"
-              : pacing.status === "ahead"
-                ? "text-muted-foreground"
-                : "text-brand")
-          }
-        >
-          {pacingMessage(pacing.deficit)}
-        </p>
-      )}
+      {/* Management pacing/credit message — only for customers who hold the
+          management product (GR uses the per-product card above). */}
+      {hasManagement &&
+        (exhausted ? (
+          <p className="text-sm font-medium text-amber-600">
+            You have no remaining {showProductSplit ? "management " : ""}lead
+            credit. Your balance will update when your next payment is processed
+            on {renewalDate}.
+          </p>
+        ) : (
+          <p
+            className={
+              "text-sm font-medium " +
+              (pacing.status === "behind"
+                ? "text-amber-600"
+                : pacing.status === "ahead"
+                  ? "text-muted-foreground"
+                  : "text-brand")
+            }
+          >
+            {pacingMessage(pacing.deficit)}
+          </p>
+        ))}
 
       {hasGuaranteedRent && <CompanyLetAgreement compact />}
 
@@ -177,30 +186,39 @@ export default async function DashboardPage() {
 }
 
 function LeadsByProduct({
+  showManagement,
+  showGr,
   managementReceived,
   managementRemaining,
   grReceived,
   grRemaining,
 }: {
+  showManagement: boolean;
+  showGr: boolean;
   managementReceived: number;
   managementRemaining: number;
   grReceived: number;
   grRemaining: number;
 }) {
   const rows = [
-    {
+    showManagement && {
       label: "Management",
       badge: "bg-[#EAF3DE] text-[#3B6D11]",
       received: managementReceived,
       remaining: managementRemaining,
     },
-    {
+    showGr && {
       label: "Guaranteed Rent",
       badge: "bg-blue-50 text-blue-700",
       received: grReceived,
       remaining: grRemaining,
     },
-  ];
+  ].filter(Boolean) as {
+    label: string;
+    badge: string;
+    received: number;
+    remaining: number;
+  }[];
 
   return (
     <Card>

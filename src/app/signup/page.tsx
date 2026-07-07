@@ -13,7 +13,8 @@ import { createClient } from "@/lib/supabase/client";
 function SignupForm() {
   const searchParams = useSearchParams();
   const product = searchParams.get("product");
-  const isGuaranteedRent = product === "guaranteed-rent";
+  const isGuaranteedRent =
+    product === "guaranteed-rent" || product === "guaranteed_rent";
 
   const [form, setForm] = useState({
     business_name: "",

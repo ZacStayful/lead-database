@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
 
             const { data: customer } = await admin
               .from("customers")
-              .select("id, gr_billing_cycle_anchor")
+              .select("id")
               .eq("stripe_customer_id", customerId)
               .maybeSingle();
 
@@ -136,13 +136,13 @@ export async function POST(request: NextRequest) {
                 gr_stripe_subscription_id: invoice.subscription as string,
                 updated_at: new Date().toISOString(),
               };
-              // Anchor the GR billing cycle on first activation only.
-              if (!customer.gr_billing_cycle_anchor) {
-                const anchor =
-                  toDateString(invoice.period_start) ??
-                  toDateString(invoice.created);
-                if (anchor) grUpdate.gr_billing_cycle_anchor = anchor;
-              }
+              // Re-anchor the GR billing cycle to this period's start on every
+              // renewal, mirroring the management invoice.paid handler so the
+              // two products pace consistently.
+              const anchor =
+                toDateString(invoice.period_start) ??
+                toDateString(invoice.created);
+              if (anchor) grUpdate.gr_billing_cycle_anchor = anchor;
 
               await admin
                 .from("customers")

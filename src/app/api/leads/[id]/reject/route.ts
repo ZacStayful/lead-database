@@ -53,18 +53,9 @@ export async function POST(
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });
   }
 
-  // Atomic rejection. Fails (400) if the assignment is not owned by this
-  // customer or is no longer in 'new' status.
-  const { error: rejectError } = await admin.rpc("reject_lead_assignment", {
-    p_assignment_id: assignment_id,
-    p_customer_id: customer.id,
-  });
-  if (rejectError) {
-    return NextResponse.json({ error: rejectError.message }, { status: 400 });
-  }
-
-  // Confirm the lead still has capacity (the reject reopened one slot) and
-  // resolve its type so the replacement routes to the right product pool.
+  // Resolve the lead first so both the refund and the reassignment act on the
+  // correct product — a rejected GR lead must refund the GR balance, not the
+  // management one.
   const lead_id = params.id;
   const { data: lead } = await admin
     .from("leads")
@@ -74,6 +65,18 @@ export async function POST(
 
   const leadType = (lead as Lead | null)?.lead_type ?? "management";
   const price = leadType === "guaranteed_rent" ? 10.0 : LEAD_PRICE;
+
+  // Atomic rejection. Fails (400) if the assignment is not owned by this
+  // customer or is no longer in 'new' status. p_lead_type routes the credit
+  // refund to the management or GR balance.
+  const { error: rejectError } = await admin.rpc("reject_lead_assignment", {
+    p_assignment_id: assignment_id,
+    p_customer_id: customer.id,
+    p_lead_type: leadType,
+  });
+  if (rejectError) {
+    return NextResponse.json({ error: rejectError.message }, { status: 400 });
+  }
 
   // Reassignment — find the next eligible customer, excluding the rejector.
   const { data: nextCustomers } = await admin.rpc(
