@@ -50,6 +50,20 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
+  // Idempotency: claim this event id before doing any crediting. Stripe retries
+  // deliver the same event more than once; a unique-violation here means we've
+  // already processed it, so acknowledge and skip. If the claim fails for any
+  // other reason we fall through and process rather than dropping the event.
+  const { error: claimError } = await admin
+    .from("stripe_events")
+    .insert({ id: event.id, type: event.type });
+  if (claimError) {
+    if (claimError.code === "23505") {
+      return NextResponse.json({ received: true, deduped: true });
+    }
+    console.error("stripe_events claim failed", claimError);
+  }
+
   try {
     switch (event.type) {
       case "customer.subscription.created":
@@ -253,6 +267,8 @@ export async function POST(request: NextRequest) {
     }
   } catch (err) {
     console.error("Stripe webhook handler error", err);
+    // Release the idempotency claim so Stripe's retry can reprocess this event.
+    await admin.from("stripe_events").delete().eq("id", event.id);
     return NextResponse.json({ error: "Handler error" }, { status: 500 });
   }
 
