@@ -27,9 +27,13 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  if (body.max_assignments !== 1 && body.max_assignments !== 2) {
+  if (
+    !Number.isInteger(body.max_assignments) ||
+    body.max_assignments! < 1 ||
+    body.max_assignments! > 4
+  ) {
     return NextResponse.json(
-      { error: "max_assignments must be 1 or 2" },
+      { error: "max_assignments must be between 1 and 4" },
       { status: 400 }
     );
   }

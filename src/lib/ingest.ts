@@ -5,12 +5,15 @@ import {
   sendCreditsExhaustedEmail,
 } from "@/lib/emails";
 import { extractCity } from "@/lib/utils";
-import type { Customer, Lead, N8nLeadPayload } from "@/lib/types";
+import type { Customer, Lead, LeadType, N8nLeadPayload } from "@/lib/types";
 
 const LEAD_PRICE = 15.0;
-const LOW_CREDITS_THRESHOLD = 18;
+const GR_LEAD_PRICE = 10.0;
+// Warn when the customer has this many lead credits left (the real allocation
+// gate is lead_balance, not the monthly counter, and this is plan-agnostic).
+const LOW_CREDITS_REMAINING = 2;
 
-const LEAD_FIELDS: (keyof N8nLeadPayload)[] = [
+const LEAD_FIELDS: string[] = [
   "monday_item_id",
   "lead_name",
   "address",
@@ -20,6 +23,79 @@ const LEAD_FIELDS: (keyof N8nLeadPayload)[] = [
   "bedrooms",
   "enquiry_date",
 ];
+
+/**
+ * GR (Guaranteed Rent) board 18396542480 field mapping: Monday column id →
+ * target leads column. The payload from n8n may key GR fields by either the
+ * Monday column id or the friendly snake_case name, so ingest reads both.
+ *
+ * The shared identity/contact fields (Address, Phone, Email, Number of
+ * bedrooms, Date) map onto the existing generic leads columns. The two banned
+ * columns (text_mkzxkfns "Rent offered", text_mkztftwn "Profit after
+ * guaranteed rent") are absent here and additionally stripped at the webhook.
+ */
+const GR_COLUMN_MAP: Record<string, string> = {
+  text_mkzxhyv9: "address",
+  text_mkztq5xb: "phone",
+  text_mkztseha: "email",
+  text_mkzxxzjc: "bedrooms",
+  date4: "enquiry_date",
+  date_mkztg8w1: "last_contact",
+  text_mkztg3z9: "desired_rent",
+  file_mkzt6hf1: "pmi_analysis",
+  file_mkzttt0h: "tenancy_agreement",
+  file_mkzthq5b: "sourcing_agreement",
+  formula_mm29p0r0: "formula",
+};
+
+/** GR board columns that must never be stored. */
+export const GR_BANNED_COLUMNS = ["text_mkzxkfns", "text_mkztftwn"] as const;
+
+function leadTypeOf(payload: N8nLeadPayload): LeadType {
+  return payload.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
+}
+
+/** Build the leads insert row for a management lead. */
+function buildManagementInsert(payload: N8nLeadPayload): Record<string, unknown> {
+  const row: Record<string, unknown> = { lead_type: "management" };
+  for (const field of LEAD_FIELDS) {
+    row[field] = payload[field] != null ? String(payload[field]) : "";
+  }
+  return row;
+}
+
+/** GR target columns that are DATE-typed in the DB and must be ISO or null. */
+const GR_DATE_TARGETS = new Set(["last_contact"]);
+
+/** Return an ISO (YYYY-MM-DD) date string or null — never an invalid date. */
+function toIsoDateOrNull(raw: unknown): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+/** Build the leads insert row for a guaranteed-rent lead. */
+function buildGuaranteedRentInsert(
+  payload: N8nLeadPayload
+): Record<string, unknown> {
+  const row: Record<string, unknown> = {
+    lead_type: "guaranteed_rent",
+    monday_item_id: String(payload.monday_item_id),
+    lead_name: String(payload.lead_name),
+  };
+  for (const [columnId, target] of Object.entries(GR_COLUMN_MAP)) {
+    // Prefer the Monday column id key, fall back to the friendly name.
+    const raw = payload[columnId] ?? payload[target];
+    if (GR_DATE_TARGETS.has(target)) {
+      // DATE columns reject non-ISO strings, which would fail the whole insert
+      // and drop the lead. Coerce anything non-ISO to null instead.
+      row[target] = toIsoDateOrNull(raw);
+    } else {
+      row[target] = raw != null && raw !== "" ? String(raw) : null;
+    }
+  }
+  return row;
+}
 
 export interface IngestResult {
   status: "created" | "duplicate" | "error";
@@ -51,11 +127,12 @@ export async function ingestLead(
     return { status: "duplicate", lead_id: existing.id, assignments_made: 0 };
   }
 
-  // Insert the lead.
-  const insertPayload: Record<string, string> = {};
-  for (const field of LEAD_FIELDS) {
-    insertPayload[field] = payload[field] != null ? String(payload[field]) : "";
-  }
+  // Insert the lead, mapping fields per product type.
+  const leadType = leadTypeOf(payload);
+  const insertPayload =
+    leadType === "guaranteed_rent"
+      ? buildGuaranteedRentInsert(payload)
+      : buildManagementInsert(payload);
 
   const { data: lead, error: insertError } = await supabase
     .from("leads")
@@ -81,7 +158,11 @@ export async function ingestLead(
   // Find eligible customers (deficit-first, up to max_assignments).
   const { data: candidates, error: candidateError } = await supabase.rpc(
     "get_next_customers_for_lead",
-    { p_lead_id: typedLead.id, p_max: typedLead.max_assignments ?? 2 }
+    {
+      p_lead_id: typedLead.id,
+      p_max: typedLead.max_assignments ?? 2,
+      p_lead_type: leadType,
+    }
   );
 
   if (candidateError) {
@@ -100,10 +181,17 @@ export async function ingestLead(
 
   let assignmentsMade = 0;
 
+  const price = leadType === "guaranteed_rent" ? GR_LEAD_PRICE : LEAD_PRICE;
+
   for (const customerId of customerIds) {
     const { data: assignmentId, error: assignError } = await supabase.rpc(
       "assign_lead_to_customer",
-      { p_lead_id: typedLead.id, p_customer_id: customerId, p_price: LEAD_PRICE }
+      {
+        p_lead_id: typedLead.id,
+        p_customer_id: customerId,
+        p_price: price,
+        p_lead_type: leadType,
+      }
     );
 
     if (assignError || !assignmentId) continue;
@@ -169,14 +257,19 @@ export async function completeAssignment(
       .eq("id", notification.id);
   }
 
-  // Threshold emails (post-increment count; RPC already incremented).
-  const newCount = typedCustomer.leads_received_this_month;
-  if (newCount === typedCustomer.monthly_allocation) {
-    await sendCreditsExhaustedEmail({ to: typedCustomer.email });
-  } else if (newCount === LOW_CREDITS_THRESHOLD) {
-    await sendLowCreditsEmail({
-      to: typedCustomer.email,
-      remaining: typedCustomer.monthly_allocation - newCount,
-    });
+  // Threshold emails apply only to the management allocation, keyed on the real
+  // allocation gate (lead_balance, already decremented by the assignment RPC) so
+  // they work for any plan size. GR leads spend gr_lead_balance and must not
+  // trigger management credit warnings.
+  if (lead.lead_type !== "guaranteed_rent") {
+    const balance = typedCustomer.lead_balance;
+    if (balance === 0) {
+      await sendCreditsExhaustedEmail({ to: typedCustomer.email });
+    } else if (balance === LOW_CREDITS_REMAINING) {
+      await sendLowCreditsEmail({
+        to: typedCustomer.email,
+        remaining: balance,
+      });
+    }
   }
 }

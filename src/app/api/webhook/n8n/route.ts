@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ingestLead } from "@/lib/ingest";
+import { ingestLead, GR_BANNED_COLUMNS } from "@/lib/ingest";
 import type { N8nLeadPayload } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -14,12 +14,23 @@ export async function POST(request: NextRequest) {
   }
 
   // 2. Parse the JSON body.
-  let body: N8nLeadPayload;
+  let raw: Record<string, unknown>;
   try {
-    body = (await request.json()) as N8nLeadPayload;
+    raw = (await request.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  // 2a. Strip the permanently-banned GR columns from any payload before any
+  // processing, so they can never be stored regardless of lead type.
+  for (const banned of GR_BANNED_COLUMNS) {
+    delete raw[banned];
+  }
+
+  // 2b. Detect lead type. Management is the default; the GR board sends
+  // lead_type = "guaranteed_rent". Field mapping per type happens in ingest.
+  const body = raw as N8nLeadPayload;
+  body.lead_type = body.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
 
   if (!body.monday_item_id || !body.lead_name) {
     return NextResponse.json(

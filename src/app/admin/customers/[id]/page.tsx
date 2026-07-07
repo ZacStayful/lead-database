@@ -13,6 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { formatDate } from "@/lib/utils";
+import { computeGrPacing } from "@/lib/pacing";
+import { Download } from "lucide-react";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -53,10 +55,29 @@ export default async function AdminCustomerDetailPage({
           {customer.contact_name} · {customer.email}
           {customer.phone ? ` · ${customer.phone}` : ""}
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Plan: <span className="font-medium text-foreground">{customer.monthly_allocation} leads / month</span>
+          {customer.website_url ? (
+            <>
+              {" · "}
+              <a
+                href={customer.website_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand hover:underline"
+              >
+                {customer.website_url}
+              </a>
+            </>
+          ) : null}
+          {customer.properties_managed
+            ? ` · Manages ${customer.properties_managed} properties`
+            : ""}
+        </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Manage account</CardTitle>
@@ -65,6 +86,8 @@ export default async function AdminCustomerDetailPage({
               <AdminCustomerForm customer={customer} />
             </CardContent>
           </Card>
+
+          <GrSubscriptionCard customer={customer} />
         </div>
 
         <div className="lg:col-span-2">
@@ -116,5 +139,93 @@ export default async function AdminCustomerDetailPage({
         </div>
       </div>
     </div>
+  );
+}
+
+function GrSubscriptionCard({ customer }: { customer: Customer }) {
+  const active = customer.gr_subscription_status === "active";
+  const pacing = computeGrPacing(customer);
+  const pacingLabel =
+    pacing.status === "behind"
+      ? "Behind"
+      : pacing.status === "ahead"
+        ? "Ahead"
+        : "On track";
+  const pacingClass =
+    pacing.status === "behind"
+      ? "bg-amber-100 text-amber-800"
+      : pacing.status === "ahead"
+        ? "bg-muted text-muted-foreground"
+        : "bg-brand/10 text-brand";
+
+  return (
+    <Card className={active ? undefined : "opacity-60"}>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Guaranteed Rent</CardTitle>
+          {active ? (
+            <Badge variant="brand">Active</Badge>
+          ) : (
+            <Badge variant="muted">No GR subscription</Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {active ? (
+          <dl className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <dt className="text-xs text-muted-foreground">This month</dt>
+              <dd className="mt-0.5 font-medium">
+                {customer.gr_leads_received_this_month} /{" "}
+                {customer.gr_monthly_allocation}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Lead balance</dt>
+              <dd className="mt-0.5 font-medium">
+                {customer.gr_lead_balance} credit
+                {customer.gr_lead_balance === 1 ? "" : "s"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Pacing</dt>
+              <dd className="mt-0.5">
+                <span
+                  className={
+                    "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium " +
+                    pacingClass
+                  }
+                >
+                  {pacingLabel}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Last GR lead</dt>
+              <dd className="mt-0.5 font-medium">
+                {customer.gr_last_assignment_at
+                  ? formatDate(customer.gr_last_assignment_at)
+                  : "—"}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This customer has no active Guaranteed Rent subscription.
+          </p>
+        )}
+
+        <div className="mt-4 border-t border-border pt-4">
+          <a
+            href="/company-let-tenancy-agreement.docx"
+            download
+            className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline"
+          >
+            <Download className="h-4 w-4" />
+            Download company let agreement
+          </a>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

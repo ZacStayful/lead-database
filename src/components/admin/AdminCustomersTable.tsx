@@ -24,6 +24,21 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "invited", label: "Invited" },
 ];
 
+type ProductTab = "all" | "management" | "guaranteed_rent" | "both";
+
+const PRODUCT_TABS: { key: ProductTab; label: string }[] = [
+  { key: "all", label: "All products" },
+  { key: "management", label: "Management" },
+  { key: "guaranteed_rent", label: "Guaranteed Rent" },
+  { key: "both", label: "Both" },
+];
+
+// Mirror the routing gate: management leads only reach customers who are both
+// account-active and subscription-active (see get_next_customers_for_lead).
+const hasManagement = (c: Customer) =>
+  c.subscription_status === "active" && c.account_status === "active";
+const hasGuaranteedRent = (c: Customer) => c.gr_subscription_status === "active";
+
 const ACCOUNT_BADGE: Record<string, string> = {
   active: "border-transparent bg-green-100 text-green-700",
   invited: "border-transparent bg-amber-100 text-amber-700",
@@ -33,6 +48,7 @@ const ACCOUNT_BADGE: Record<string, string> = {
 
 export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
   const [tab, setTab] = useState<Tab>("all");
+  const [product, setProduct] = useState<ProductTab>("all");
   // Local overrides so a row's badge updates after invite without a reload.
   const [statusOverride, setStatusOverride] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -42,6 +58,12 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
 
   const rows = useMemo(() => {
     let list = customers.filter((c) => tab === "all" || accountStatus(c) === tab);
+    list = list.filter((c) => {
+      if (product === "management") return hasManagement(c);
+      if (product === "guaranteed_rent") return hasGuaranteedRent(c);
+      if (product === "both") return hasManagement(c) && hasGuaranteedRent(c);
+      return true;
+    });
     if (tab === "waitlisted") {
       // Earliest signup first.
       list = [...list].sort(
@@ -50,7 +72,7 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, tab, statusOverride]);
+  }, [customers, tab, product, statusOverride]);
 
   async function handleInvite(id: string, email: string) {
     setBusyId(id);
@@ -101,21 +123,40 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-1">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={
-              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-              (tab === t.key
-                ? "bg-brand text-brand-foreground"
-                : "text-muted-foreground hover:bg-accent")
-            }
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+                (tab === t.key
+                  ? "bg-brand text-brand-foreground"
+                  : "text-muted-foreground hover:bg-accent")
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="hidden h-5 w-px bg-border sm:block" />
+        <div className="flex gap-1">
+          {PRODUCT_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setProduct(t.key)}
+              className={
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+                (product === t.key
+                  ? "bg-brand text-brand-foreground"
+                  : "text-muted-foreground hover:bg-accent")
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {toast && (
@@ -130,6 +171,7 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
             <TableRow>
               <TableHead>Business</TableHead>
               <TableHead>Email</TableHead>
+              <TableHead>Products</TableHead>
               <TableHead>Account</TableHead>
               <TableHead>Billing</TableHead>
               <TableHead>Leads</TableHead>
@@ -146,6 +188,29 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
                 <TableRow key={c.id}>
                   <TableCell className="font-medium">{c.business_name}</TableCell>
                   <TableCell className="text-muted-foreground">{c.email}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {hasManagement(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-transparent bg-[#EAF3DE] text-[#3B6D11]"
+                        >
+                          Management
+                        </Badge>
+                      )}
+                      {hasGuaranteedRent(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-transparent bg-blue-50 text-blue-700"
+                        >
+                          Guaranteed Rent
+                        </Badge>
+                      )}
+                      {!hasManagement(c) && !hasGuaranteedRent(c) && (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <Badge
                       variant="outline"
@@ -209,7 +274,7 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
             {rows.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={8}
+                  colSpan={9}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No customers in this view.

@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDateTime } from "@/lib/utils";
+import { statusBadge } from "@/components/dashboard/leadStatus";
 import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -62,7 +63,7 @@ export async function GET() {
     "Received on": a.assigned_at
       ? new Date(a.assigned_at).toLocaleDateString("en-GB")
       : "",
-    Status: a.status ?? (a.viewed_at ? "Viewed" : "New"),
+    Status: statusBadge(a.status).label,
     Notes: (notesByAssignment.get(a.id) ?? [])
       .map((n) => `[${formatDateTime(n.created_at)}] ${n.body}`)
       .join("\n"),

@@ -13,8 +13,17 @@ interface SyncResult {
   errors?: string[];
 }
 
-/** Admin button: pulls sellable leads from the Monday board into the app. */
-export function SyncMondayButton() {
+/**
+ * Admin button: pulls sellable leads from a Monday board into the app.
+ * Defaults to the management board; pass `endpoint`/`label` for the GR board.
+ */
+export function SyncMondayButton({
+  endpoint = "/api/monday/sync",
+  label = "Sync from Monday",
+}: {
+  endpoint?: string;
+  label?: string;
+} = {}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -23,7 +32,7 @@ export function SyncMondayButton() {
     setBusy(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/monday/sync", { method: "POST" });
+      const res = await fetch(endpoint, { method: "POST" });
       const data = (await res.json()) as SyncResult & { error?: string };
       if (!res.ok) {
         throw new Error(data.error ?? "Sync failed");
@@ -45,7 +54,7 @@ export function SyncMondayButton() {
     <div className="flex flex-col items-end gap-1">
       <Button onClick={sync} disabled={busy} variant="outline" size="sm">
         <RefreshCw className={"h-4 w-4" + (busy ? " animate-spin" : "")} />
-        {busy ? "Syncing…" : "Sync from Monday"}
+        {busy ? "Syncing…" : label}
       </Button>
       {message && (
         <span className="max-w-xs text-right text-xs text-muted-foreground">

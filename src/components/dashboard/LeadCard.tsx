@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,9 @@ export function LeadCard({
   from?: string;
 }) {
   const [assignment, setAssignment] = useState(initial);
+  // Re-seed from fresh server data (router.refresh / realtime) — the stable
+  // React key otherwise keeps the first snapshot forever.
+  useEffect(() => setAssignment(initial), [initial]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const lead = assignment.lead;
@@ -111,6 +114,15 @@ export function LeadCard({
           </p>
         </div>
         <div className="hidden shrink-0 items-center gap-3 sm:flex">
+          {lead.lead_type === "guaranteed_rent" ? (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+              Guaranteed Rent
+            </span>
+          ) : (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-[#EAF3DE] text-[#3B6D11]">
+              Management
+            </span>
+          )}
           {lead.bedrooms && (
             <span className="text-sm text-muted-foreground">
               {lead.bedrooms} bed

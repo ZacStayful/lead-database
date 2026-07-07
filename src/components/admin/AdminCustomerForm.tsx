@@ -13,12 +13,27 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
   const [allocation, setAllocation] = useState(customer.monthly_allocation);
   const [received, setReceived] = useState(customer.leads_received_this_month);
   const [active, setActive] = useState(customer.is_active);
+  // Guaranteed Rent controls.
+  const [grActive, setGrActive] = useState(
+    customer.gr_subscription_status === "active"
+  );
+  const [grAllocation, setGrAllocation] = useState(customer.gr_monthly_allocation);
+  const [grReceived, setGrReceived] = useState(
+    customer.gr_leads_received_this_month
+  );
+  const [grBalance, setGrBalance] = useState(customer.gr_lead_balance);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   async function save() {
-    if (!Number.isFinite(allocation) || !Number.isFinite(received)) {
-      setMessage("Allocation and leads received must be numbers.");
+    if (
+      !Number.isFinite(allocation) ||
+      !Number.isFinite(received) ||
+      !Number.isFinite(grAllocation) ||
+      !Number.isFinite(grReceived) ||
+      !Number.isFinite(grBalance)
+    ) {
+      setMessage("Allocation and lead counts must be numbers.");
       return;
     }
     setSaving(true);
@@ -33,6 +48,10 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             monthly_allocation: Number(allocation),
             leads_received_this_month: Number(received),
             is_active: active,
+            gr_subscription_status: grActive ? "active" : "inactive",
+            gr_monthly_allocation: Number(grAllocation),
+            gr_leads_received_this_month: Number(grReceived),
+            gr_lead_balance: Number(grBalance),
           }),
         }
       );
@@ -85,6 +104,55 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
           </p>
         </div>
         <Switch checked={active} onCheckedChange={setActive} />
+      </div>
+
+      {/* Guaranteed Rent subscription controls */}
+      <div className="space-y-4 rounded-md border-[0.5px] border-border p-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Guaranteed Rent subscription</p>
+            <p className="text-xs text-muted-foreground">
+              Active GR subscribers receive guaranteed-rent leads.
+            </p>
+          </div>
+          <Switch checked={grActive} onCheckedChange={setGrActive} />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="space-y-2">
+            <Label htmlFor="gr_allocation">GR monthly allocation</Label>
+            <Input
+              id="gr_allocation"
+              type="number"
+              min={0}
+              value={grAllocation}
+              onChange={(e) => setGrAllocation(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gr_received">GR leads this month</Label>
+            <Input
+              id="gr_received"
+              type="number"
+              min={0}
+              value={grReceived}
+              onChange={(e) => setGrReceived(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gr_balance">GR lead balance</Label>
+            <Input
+              id="gr_balance"
+              type="number"
+              min={0}
+              value={grBalance}
+              onChange={(e) => setGrBalance(Number(e.target.value))}
+            />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          GR lead balance is the credit gate — a customer only receives GR leads
+          while this is above zero.
+        </p>
       </div>
 
       <div className="flex items-center gap-3">

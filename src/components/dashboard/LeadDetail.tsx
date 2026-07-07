@@ -10,7 +10,8 @@ import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
   pipelineBadgeClass,
-  PIPELINE_STAGES,
+  pipelineLabel,
+  stagesForLeadType,
 } from "@/components/dashboard/pipelineStage";
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
@@ -47,6 +48,8 @@ export function LeadDetail({
 }) {
   const router = useRouter();
   const lead = assignment.lead;
+  const isGuaranteedRent = lead.lead_type === "guaranteed_rent";
+  const stageOptions = stagesForLeadType(lead.lead_type);
   const [status, setStatus] = useState(assignment.status);
   const [pipelineStage, setPipelineStage] = useState(assignment.pipeline_stage);
   const [dueDate, setDueDate] = useState(assignment.due_to_call_date ?? "");
@@ -116,7 +119,7 @@ export function LeadDetail({
       if (!res.ok) throw new Error();
       setStatus("rejected");
       setShowRejectConfirm(false);
-      setToast("Lead rejected — a replacement will arrive shortly");
+      setToast("Lead marked as rejected.");
       router.refresh();
     } catch {
       setToast("Could not reject this lead. Please try again.");
@@ -234,7 +237,13 @@ export function LeadDetail({
                 onBlur={() => setEditingPipeline(false)}
                 className="rounded-md border-[0.5px] border-input bg-background px-2 py-1 text-xs"
               >
-                {PIPELINE_STAGES.map((s) => (
+                {(stageOptions.some((s) => s.value === pipelineStage)
+                  ? stageOptions
+                  : [
+                      { value: pipelineStage, label: pipelineLabel(pipelineStage) },
+                      ...stageOptions,
+                    ]
+                ).map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
                   </option>
@@ -320,6 +329,17 @@ export function LeadDetail({
           </div>
         )}
 
+        {isGuaranteedRent && (
+          <a
+            href="https://intelligence.stayful.co.uk"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm text-[#5D8156] hover:underline mt-3"
+          >
+            Run figures on this property →
+          </a>
+        )}
+
         <div className="mt-4">
           <Button size="sm" asChild>
             <a
@@ -353,8 +373,9 @@ export function LeadDetail({
             ) : (
               <div className="rounded-xl border border-black/10 bg-white p-4">
                 <p className="mb-3 text-sm text-[#52514e]">
-                  Are you sure? This lead will be reassigned and you will receive
-                  another lead in its place.
+                  Mark this lead as rejected? It still counts toward your leads
+                  this month and won&apos;t be replaced — this just records that
+                  you&apos;re passing on it.
                 </p>
                 <div className="flex gap-2">
                   <button

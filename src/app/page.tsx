@@ -77,6 +77,7 @@ const FAQ: { q: string; a: string }[] = [
 
 export default function LandingPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const revealEls = Array.from(
@@ -179,7 +180,8 @@ export default function LandingPage() {
             Lead Database
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
+        {/* Desktop nav row (hidden on mobile via CSS) */}
+        <div className="sf-nav-desktop">
           <a href="#how" style={navLink}>
             How it works
           </a>
@@ -192,47 +194,99 @@ export default function LandingPage() {
           <a href="#pricing" style={navLink}>
             Pricing
           </a>
-          <a
-            href="https://calendly.com/zac-stayful/stayful-lead-database"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              color: "var(--sf-green)",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "9px 16px",
-              borderRadius: 8,
-              border: "1px solid var(--sf-green)",
-              textDecoration: "none",
-            }}
+          <Link href="/guaranteed-rent" style={navLink}>
+            Guaranteed Rent
+          </Link>
+          <Link href="/enquiry" style={navOutlineBtn}>
+            Book a call
+          </Link>
+          <Link href="/login" style={navGhostBtn}>
+            Log in
+          </Link>
+          <Link href="/enquiry" style={navSolidBtn}>
+            Claim your place
+          </Link>
+        </div>
+
+        {/* Hamburger (shown on mobile via CSS) */}
+        <button
+          type="button"
+          className="sf-nav-hamburger"
+          aria-label="Toggle menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((o) => !o)}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
           >
-            Book a demo
+            {menuOpen ? (
+              <>
+                <line x1="6" y1="6" x2="18" y2="18" />
+                <line x1="6" y1="18" x2="18" y2="6" />
+              </>
+            ) : (
+              <>
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="17" x2="20" y2="17" />
+              </>
+            )}
+          </svg>
+        </button>
+
+        {/* Mobile dropdown panel */}
+        <div className={"sf-nav-mobile" + (menuOpen ? " open" : "")}>
+          <a href="#how" style={navMobileLink} onClick={() => setMenuOpen(false)}>
+            How it works
+          </a>
+          <a
+            href="#pipeline"
+            style={navMobileLink}
+            onClick={() => setMenuOpen(false)}
+          >
+            Pipeline
+          </a>
+          <a href="#data" style={navMobileLink} onClick={() => setMenuOpen(false)}>
+            The data
+          </a>
+          <a
+            href="#pricing"
+            style={navMobileLink}
+            onClick={() => setMenuOpen(false)}
+          >
+            Pricing
           </a>
           <Link
+            href="/guaranteed-rent"
+            style={navMobileLink}
+            onClick={() => setMenuOpen(false)}
+          >
+            Guaranteed Rent
+          </Link>
+          <Link
+            href="/enquiry"
+            style={navMobileOutline}
+            onClick={() => setMenuOpen(false)}
+          >
+            Book a call
+          </Link>
+          <Link
             href="/login"
-            style={{
-              color: "var(--sf-dark)",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "9px 16px",
-              borderRadius: 8,
-              border: "1px solid var(--sf-border)",
-              textDecoration: "none",
-            }}
+            style={navMobileGhost}
+            onClick={() => setMenuOpen(false)}
           >
             Log in
           </Link>
           <Link
-            href="/signup"
-            style={{
-              background: "var(--sf-dark)",
-              color: "#fff",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "10px 18px",
-              borderRadius: 8,
-              textDecoration: "none",
-            }}
+            href="/enquiry"
+            style={navMobileSolid}
+            onClick={() => setMenuOpen(false)}
           >
             Claim your place
           </Link>
@@ -268,7 +322,7 @@ export default function LandingPage() {
                 animation: "sfpulse 1.8s infinite",
               }}
             />
-            Founding member access — limited places
+            For STR operators · founding places limited
           </div>
           <h1
             style={display({
@@ -280,7 +334,7 @@ export default function LandingPage() {
               marginBottom: 20,
             })}
           >
-            <Count n={20} /> leads in your inbox every month.
+            You manage the property. We bring you the landlords.
           </h1>
           <p
             style={{
@@ -288,14 +342,16 @@ export default function LandingPage() {
               fontWeight: 500,
               color: "var(--sf-green)",
               opacity: 0.85,
-              maxWidth: 580,
+              maxWidth: 600,
               margin: "0 auto 28px",
               lineHeight: 1.65,
             }}
           >
-            Financially modelled, Google-intent landlord enquiries delivered to
-            your dashboard at a fixed monthly cost. No campaigns. No marketing
-            expertise. Just people who searched for what you do.
+            You&apos;re brilliant at running properties — winning them is a
+            different job. Stayful generates the enquiries and hands you a
+            steady flow of <Count n={20} /> financially modelled, consented
+            landlord leads a month, for a fixed price. No campaigns, no
+            marketing team. We handle how the leads get found; you close them.
           </p>
           <div
             style={{
@@ -306,7 +362,7 @@ export default function LandingPage() {
               justifyContent: "center",
             }}
           >
-            <Link href="/signup" style={heroPrimary}>
+            <Link href="/enquiry" style={heroPrimary}>
               Claim your founding membership
             </Link>
             <a href="#how" style={heroSecondary}>
@@ -314,8 +370,8 @@ export default function LandingPage() {
             </a>
           </div>
           <p style={{ fontSize: 12.5, color: "var(--sf-green)", opacity: 0.7 }}>
-            £300/month · 20 leads included · cancel anytime · allocation carries
-            forward
+            From £150/month · 10 or 20 leads · cancel anytime · allocation
+            carries forward
           </p>
         </div>
       </section>
@@ -327,7 +383,7 @@ export default function LandingPage() {
             The problem this solves
           </Eyebrow>
           <h2 style={centerHeadline()}>
-            Growing a managed portfolio has one persistent problem.
+            Growing a portfolio is a different problem to running one.
           </h2>
           <div style={cardGrid(260)}>
             {[
@@ -375,9 +431,11 @@ export default function LandingPage() {
             Stayful generates the enquiry. You buy the conversation.
           </h2>
           <p style={centerLede()}>
-            Around 60% of the landlords who find Stayful don't fit our own
-            management service. Instead of discarding those conversations, we
-            hand them to STR operators at a fixed, predictable cost.
+            Getting found by landlords searching for STR management is a
+            specialism of its own — and it&apos;s the part most operators
+            don&apos;t have time to run. Stayful does that work and hands the
+            enquiries it generates to STR operators in a steady flow, at a
+            fixed and predictable cost.
           </p>
 
           <div style={cardGrid(280)}>
@@ -521,14 +579,13 @@ export default function LandingPage() {
                   marginBottom: 16,
                 }}
               >
-                Hi Sarah — thanks for your enquiry. We aren&apos;t able to take on
-                your Darlington property directly right now, but we&apos;ve
-                arranged for a{" "}
+                Hi Sarah — thanks for your enquiry. We&apos;ve matched you with a{" "}
                 <strong style={{ color: "var(--sf-green)" }}>
                   trusted local STR operator
                 </strong>{" "}
-                to contact you shortly about managing it. They already have the
-                details you shared. Expect a call in the next day or two.
+                who&apos;ll be in touch shortly about managing your Darlington
+                property. They already have the details you shared. Expect a
+                call in the next day or two.
               </p>
               <div
                 style={{
@@ -1499,7 +1556,7 @@ export default function LandingPage() {
 
           <div style={{ textAlign: "center" }}>
             <Link
-              href="/signup"
+              href="/enquiry"
               style={{
                 display: "inline-block",
                 background: "#fff",
@@ -1554,100 +1611,136 @@ export default function LandingPage() {
               marginBottom: 10,
             })}
           >
-            One subscription. Fixed cost. No hidden fees.
+            Two plans. Fixed cost. No hidden fees.
           </h2>
           <p style={{ fontSize: 15, color: "var(--sf-secondary)", marginBottom: 40 }}>
-            Everything included — full contact details, real-time delivery,
-            tracking dashboard.
+            A steady flow of landlord leads for a fixed monthly price — you
+            manage, we handle the lead generation. Everything included: full
+            contact details, real-time delivery, tracking dashboard. Pick the
+            volume that fits.
           </p>
           <div
             style={{
-              background: "#fff",
-              border: "1px solid var(--sf-border)",
-              borderRadius: 18,
-              padding: 40,
-              maxWidth: 480,
-              margin: "0 auto",
-              textAlign: "left",
-              boxShadow: "0 24px 60px -34px rgba(59,109,17,.4)",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 24,
+              justifyContent: "center",
+              alignItems: "stretch",
             }}
           >
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
-              <span
-                style={display({
-                  fontSize: 52,
-                  fontWeight: 700,
-                  color: "var(--sf-dark)",
-                  letterSpacing: "-.03em",
-                  lineHeight: 1,
-                })}
+            {[
+              {
+                plan: "lead_10",
+                price: "£150",
+                leads: 10,
+                highlight: false,
+              },
+              {
+                plan: "lead_20",
+                price: "£300",
+                leads: 20,
+                highlight: true,
+              },
+            ].map((tier) => (
+              <div
+                key={tier.plan}
+                style={{
+                  background: "#fff",
+                  border: tier.highlight
+                    ? "2px solid var(--sf-green)"
+                    : "1px solid var(--sf-border)",
+                  borderRadius: 18,
+                  padding: 36,
+                  width: 380,
+                  maxWidth: "100%",
+                  textAlign: "left",
+                  boxShadow: tier.highlight
+                    ? "0 24px 60px -34px rgba(59,109,17,.4)"
+                    : "0 16px 40px -34px rgba(59,109,17,.3)",
+                }}
               >
-                £300
-              </span>
-              <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
-                /month
-              </span>
-            </div>
-            <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
-              + VAT
-            </div>
-            <ul style={{ listStyle: "none", marginBottom: 28 }}>
-              {[
-                "20 financially modelled leads per month",
-                "Full contact details: name, address, phone, email, profile",
-                "Estimated monthly STR income per lead",
-                "Real-time in-portal and email notification",
-                "Leads carry forward if allocation isn't met",
-                "Cancel anytime — no lock-in, no penalty",
-              ].map((f, i, arr) => (
-                <li
-                  key={f}
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+                  <span
+                    style={display({
+                      fontSize: 48,
+                      fontWeight: 700,
+                      color: "var(--sf-dark)",
+                      letterSpacing: "-.03em",
+                      lineHeight: 1,
+                    })}
+                  >
+                    {tier.price}
+                  </span>
+                  <span style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}>
+                    /month
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: "var(--sf-muted)", marginBottom: 24 }}>
+                  {tier.leads} leads / month · + VAT
+                </div>
+                <ul style={{ listStyle: "none", marginBottom: 28 }}>
+                  {[
+                    `${tier.leads} financially modelled leads per month`,
+                    "Full contact details: name, address, phone, email, profile",
+                    "Estimated monthly STR income per lead",
+                    "Real-time in-portal and email notification",
+                    "Leads carry forward if allocation isn't met",
+                    "Cancel anytime — no lock-in, no penalty",
+                  ].map((f, i, arr) => (
+                    <li
+                      key={f}
+                      style={{
+                        fontSize: 14,
+                        padding: "10px 0",
+                        borderBottom:
+                          i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "flex-start",
+                      }}
+                    >
+                      <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
+                        ✓
+                      </span>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href={`/enquiry?plan=${tier.plan}`}
                   style={{
-                    fontSize: 14,
-                    padding: "10px 0",
-                    borderBottom:
-                      i === arr.length - 1 ? "none" : "1px solid var(--sf-border)",
-                    display: "flex",
-                    gap: 10,
-                    alignItems: "flex-start",
+                    display: "block",
+                    background: tier.highlight ? "var(--sf-dark)" : "#fff",
+                    color: tier.highlight ? "#fff" : "var(--sf-dark)",
+                    border: tier.highlight ? "none" : "1px solid var(--sf-dark)",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    padding: 16,
+                    borderRadius: 9,
+                    textAlign: "center",
+                    textDecoration: "none",
                   }}
                 >
-                  <span style={{ color: "var(--sf-green)", fontWeight: 700, flexShrink: 0 }}>
-                    ✓
-                  </span>
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <Link
-              href="/signup"
-              style={{
-                display: "block",
-                background: "var(--sf-dark)",
-                color: "#fff",
-                fontSize: 15,
-                fontWeight: 700,
-                padding: 16,
-                borderRadius: 9,
-                textAlign: "center",
-                textDecoration: "none",
-                marginBottom: 12,
-              }}
-            >
-              Start your subscription
-            </Link>
-            <p
-              style={{
-                fontSize: 12.5,
-                color: "var(--sf-muted)",
-                textAlign: "center",
-                lineHeight: 1.55,
-              }}
-            >
-              Exclusive leads (one operator only) available at £25/lead. Contact
-              the Stayful team to discuss exclusive allocation.
-            </p>
+                  Enquire about {tier.leads} leads
+                </Link>
+              </div>
+            ))}
           </div>
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "var(--sf-muted)",
+              textAlign: "center",
+              lineHeight: 1.55,
+              marginTop: 28,
+              maxWidth: 480,
+              marginLeft: "auto",
+              marginRight: "auto",
+            }}
+          >
+            Exclusive leads (one operator only) available at £25/lead. Contact
+            the Stayful team to discuss exclusive allocation.
+          </p>
         </div>
       </section>
 
@@ -1783,12 +1876,13 @@ export default function LandingPage() {
               lineHeight: 1.65,
             }}
           >
-            £300 per month for 20 financially modelled leads. No campaigns to run,
-            no algorithms to manage. Just a consistent pipeline of landlords who
-            searched for what you do.
+            From £150 per month for a steady flow of financially modelled leads.
+            No campaigns to run, no algorithms to manage — you focus on managing
+            and winning property, we handle finding the landlords. Just a
+            consistent pipeline of people who searched for what you do.
           </p>
           <Link
-            href="/signup"
+            href="/enquiry"
             style={{
               display: "inline-block",
               background: "var(--sf-dark)",
@@ -1875,6 +1969,77 @@ const navLink: CSSProperties = {
   fontSize: 13.5,
   fontWeight: 600,
   color: "var(--sf-secondary)",
+  textDecoration: "none",
+};
+
+// Desktop nav buttons (kept identical to the original inline styles).
+const navOutlineBtn: CSSProperties = {
+  color: "var(--sf-green)",
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "9px 16px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-green)",
+  textDecoration: "none",
+};
+const navGhostBtn: CSSProperties = {
+  color: "var(--sf-dark)",
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "9px 16px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-border)",
+  textDecoration: "none",
+};
+const navSolidBtn: CSSProperties = {
+  background: "var(--sf-dark)",
+  color: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  padding: "10px 18px",
+  borderRadius: 8,
+  textDecoration: "none",
+};
+
+// Mobile dropdown items (full-width variants of the same styling).
+const navMobileLink: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 600,
+  color: "var(--sf-body)",
+  textDecoration: "none",
+  padding: "10px 4px",
+};
+const navMobileOutline: CSSProperties = {
+  display: "block",
+  textAlign: "center",
+  color: "var(--sf-green)",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "12px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-green)",
+  textDecoration: "none",
+};
+const navMobileGhost: CSSProperties = {
+  display: "block",
+  textAlign: "center",
+  color: "var(--sf-dark)",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "12px",
+  borderRadius: 8,
+  border: "1px solid var(--sf-border)",
+  textDecoration: "none",
+};
+const navMobileSolid: CSSProperties = {
+  display: "block",
+  textAlign: "center",
+  background: "var(--sf-dark)",
+  color: "#fff",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "12px",
+  borderRadius: 8,
   textDecoration: "none",
 };
 
