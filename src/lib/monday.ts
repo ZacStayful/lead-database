@@ -62,10 +62,11 @@ const GR_COLUMN_MAP: Record<string, string> = {
   formula_mm29p0r0: "formula",
 };
 const GR_STATUS_COLUMN = "status";
-// Only GR items at this status are sent to operators. Override via env if the
-// board uses a different "ready to send" label.
-function grSellableStatus(): string {
-  return process.env.MONDAY_GR_SELLABLE_STATUS ?? "Qualified";
+// Every GR item is sent to operators by default (all leads are sellable). Set
+// MONDAY_GR_SELLABLE_STATUS to restrict to a single status label if that ever
+// changes; when unset, no status filter is applied.
+function grSellableStatus(): string | null {
+  return process.env.MONDAY_GR_SELLABLE_STATUS ?? null;
 }
 
 /**
@@ -212,7 +213,11 @@ export async function fetchGuaranteedRentLeads(): Promise<N8nLeadPayload[]> {
     cursor = page?.cursor ?? null;
 
     for (const item of items) {
-      if (textFor(item, GR_STATUS_COLUMN) !== sellable) continue;
+      // No status filter by default — all GR leads are sellable. Only skip when
+      // an explicit sellable status is configured and the item doesn't match.
+      if (sellable !== null && textFor(item, GR_STATUS_COLUMN) !== sellable) {
+        continue;
+      }
 
       // Key by Monday column id so ingest's GR column map applies directly.
       const payload: N8nLeadPayload = {
