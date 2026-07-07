@@ -83,6 +83,7 @@ const ENQUIRY_COLUMN_MAP = {
   mobile: "text_mm50hfvg", // "Mobile"
   website_url: "text_mm50y8an", // "Website URL"
   properties_managed: "text_mm50mt3h", // "Number of properties manage"
+  preferred_plan: "text_mm50w01q", // "Preffered plan"
   date_added: "date_mm50brxt", // "Date added"
 } as const;
 
@@ -96,6 +97,7 @@ export async function createEnquiryContact(input: {
   mobile: string;
   websiteUrl: string;
   propertiesManaged: string;
+  preferredPlan?: string;
 }): Promise<string> {
   const token = process.env.MONDAY_API_TOKEN;
   if (!token) {
@@ -110,6 +112,7 @@ export async function createEnquiryContact(input: {
     [ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
     [ENQUIRY_COLUMN_MAP.website_url]: input.websiteUrl,
     [ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
+    [ENQUIRY_COLUMN_MAP.preferred_plan]: input.preferredPlan ?? "",
     [ENQUIRY_COLUMN_MAP.date_added]: { date: today },
   };
 

@@ -36,7 +36,12 @@ export async function POST(request: NextRequest) {
   const name = body.name?.trim();
   const email = body.email?.trim().toLowerCase();
   const mobile = body.mobile?.trim() ?? "";
-  const websiteUrl = body.website_url?.trim() ?? "";
+  // Accept scheme-less input (e.g. "stayful.co.uk", "www.stayful.co.uk") and
+  // normalise to a proper URL so the stored/Monday value is a working link.
+  let websiteUrl = body.website_url?.trim() ?? "";
+  if (websiteUrl && !/^https?:\/\//i.test(websiteUrl)) {
+    websiteUrl = `https://${websiteUrl}`;
+  }
   const propertiesManaged = body.properties_managed?.trim() ?? "";
 
   if (!name || !email) {
@@ -47,7 +52,9 @@ export async function POST(request: NextRequest) {
   }
 
   const planKey = toPlanKey(body.plan);
-  const monthlyAllocation = PLANS[planKey].leads;
+  const plan = PLANS[planKey];
+  const monthlyAllocation = plan.leads;
+  const preferredPlan = `£${plan.priceGbp}/mo — ${plan.leads} leads`;
 
   // Fail fast with a clear message if the server isn't configured.
   const missing: string[] = [];
@@ -74,6 +81,7 @@ export async function POST(request: NextRequest) {
       mobile,
       websiteUrl,
       propertiesManaged,
+      preferredPlan,
     });
   } catch (err) {
     console.error("Monday enquiry push failed", err);

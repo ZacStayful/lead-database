@@ -183,8 +183,9 @@ function EnquiryForm() {
             <Label htmlFor="website_url">Website URL</Label>
             <Input
               id="website_url"
-              type="url"
-              placeholder="https://"
+              type="text"
+              inputMode="url"
+              placeholder="e.g. stayful.co.uk"
               value={form.website_url}
               onChange={update("website_url")}
             />
