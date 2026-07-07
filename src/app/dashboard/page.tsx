@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ExportButton } from "@/components/dashboard/ExportButton";
+import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
 import { computePacing, pacingMessage } from "@/lib/pacing";
 import type { AssignmentWithLead } from "@/lib/types";
@@ -47,6 +48,7 @@ export default async function DashboardPage() {
   const unreadLeads = assignments.filter((a) => !a.viewed_at).length;
 
   const isActive = customer.subscription_status === "active";
+  const hasGuaranteedRent = customer.gr_subscription_status === "active";
   const renewalDate = nextRenewalDate(customer.billing_cycle_anchor);
   const pacing = computePacing(customer);
   const exhausted = customer.lead_balance === 0;
@@ -139,6 +141,8 @@ export default async function DashboardPage() {
           {pacingMessage(pacing.deficit)}
         </p>
       )}
+
+      {hasGuaranteedRent && <CompanyLetAgreement />}
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>

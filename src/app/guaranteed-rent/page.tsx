@@ -69,6 +69,7 @@ const PRICING_FEATURES = [
   "Maximum 2 operators per lead",
   "Every lead financially modelled before assignment",
   "Every landlord emailed in advance — warm hand-off guaranteed",
+  "Free company let tenancy agreement to get landlords signed",
   "Cancel anytime, no lock-in",
   "No overflow tier",
 ];
@@ -121,6 +122,9 @@ export default function GuaranteedRentPage() {
           </span>
         </Link>
         <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
+          <Link href="/" style={navLink}>
+            Management Leads
+          </Link>
           <a href="#how" style={navLink}>
             How it works
           </a>
@@ -163,7 +167,7 @@ export default function GuaranteedRentPage() {
               marginBottom: 20,
             })}
           >
-            Find landlords open to a guaranteed rent arrangement.
+            Landlords who want their property on a guaranteed rent basis.
           </h1>
           <p
             style={{
@@ -171,14 +175,16 @@ export default function GuaranteedRentPage() {
               fontWeight: 500,
               color: "var(--sf-green)",
               opacity: 0.85,
-              maxWidth: 620,
+              maxWidth: 640,
               margin: "0 auto 30px",
               lineHeight: 1.65,
             }}
           >
-            Qualified leads from operators who searched for STR management and
-            passed our financial model. Every lead has been financially assessed
-            against live Airbnb data for their postcode.
+            Every lead is a landlord who has enquired about guaranteed rent and
+            has already consented to their property being listed on Airbnb in
+            return for a fixed monthly rent. Pre-qualified, financially assessed
+            against live Airbnb data for their postcode, and expecting a local
+            operator to be in touch.
           </p>
           <Link href="/signup?product=guaranteed-rent" style={heroPrimary}>
             Start receiving leads →
@@ -186,8 +192,136 @@ export default function GuaranteedRentPage() {
         </div>
       </section>
 
+      {/* ============ USP — THE HARD PART IS DONE ============ */}
+      <section style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow>Why this is different</Eyebrow>
+          <h2 style={centerHeadline({ marginBottom: 16 })}>
+            The hard part is already done.
+          </h2>
+          <p style={centerLede()}>
+            Building a rent-to-rent portfolio normally means cold-contacting
+            letting agents and landlords, getting rejected again and again, and
+            learning to sell before you can build a single relationship. Every
+            lead here is a landlord who has already said yes.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))",
+              gap: 18,
+              marginBottom: 28,
+            }}
+          >
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid var(--sf-border)",
+                borderRadius: 16,
+                padding: 26,
+              }}
+            >
+              <h3
+                style={display({
+                  fontSize: 17,
+                  fontWeight: 700,
+                  color: "var(--sf-green)",
+                  marginBottom: 14,
+                })}
+              >
+                The usual rent-to-rent grind
+              </h3>
+              {[
+                "Cold-contacting letting agents and landlords one by one",
+                "Constant rejection while you try to build a database",
+                "Needing to understand sales before anyone says yes",
+                "Explaining, and justifying, guaranteed rent and Airbnb from scratch every time",
+                "Weeks of outreach for a handful of maybes",
+              ].map((t) => (
+                <div
+                  key={t}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 10,
+                    fontSize: 14,
+                    color: "var(--sf-secondary)",
+                    lineHeight: 1.55,
+                    marginBottom: 10,
+                  }}
+                >
+                  <span style={{ color: "var(--sf-muted)", flexShrink: 0 }}>✕</span>
+                  {t}
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                background: "var(--sf-green)",
+                borderRadius: 16,
+                padding: 26,
+              }}
+            >
+              <h3
+                style={display({
+                  fontSize: 17,
+                  fontWeight: 700,
+                  color: "#fff",
+                  marginBottom: 14,
+                })}
+              >
+                What you get here
+              </h3>
+              {[
+                "Landlords who have already enquired about guaranteed rent",
+                "Already consenting to Airbnb / short-let use in return for a fixed rent",
+                "Already vetted and financially qualified before assignment",
+                "Already expecting a call from a trusted local operator",
+                "No database to build, no sales process to learn — just conversations that start at yes",
+              ].map((t) => (
+                <div
+                  key={t}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 10,
+                    fontSize: 14,
+                    color: "#fff",
+                    opacity: 0.95,
+                    lineHeight: 1.55,
+                    marginBottom: 10,
+                  }}
+                >
+                  <span style={{ color: "var(--sf-sage)", flexShrink: 0 }}>✓</span>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <p
+            style={{
+              textAlign: "center",
+              maxWidth: 720,
+              margin: "0 auto",
+              fontSize: 15.5,
+              fontWeight: 600,
+              color: "var(--sf-green)",
+              lineHeight: 1.65,
+            }}
+          >
+            These leads are already vetted, already qualified, and the landlord
+            has already approved Airbnb as a letting option for their property in
+            return for a guaranteed rent. All the cold outreach, database
+            building and selling is cut out — you just pick up the phone.
+          </p>
+        </div>
+      </section>
+
       {/* ============ 3. HOW IT WORKS ============ */}
-      <section id="how" style={{ padding: "88px 32px" }}>
+      <section id="how" style={{ background: "var(--sf-sage)", padding: "88px 32px" }}>
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
           <Eyebrow>How it works</Eyebrow>
           <h2 style={centerHeadline({ marginBottom: 44 })}>
@@ -399,6 +533,135 @@ export default function GuaranteedRentPage() {
           >
             Open the analyser →
           </a>
+        </div>
+      </section>
+
+      {/* ============ INCLUDED — COMPANY LET AGREEMENT ============ */}
+      <section style={{ background: "var(--sf-olive)", padding: "88px 32px" }}>
+        <div
+          style={{
+            maxWidth: 1040,
+            margin: "0 auto",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))",
+            gap: 44,
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <Eyebrow color="var(--sf-dark)">Included with your subscription</Eyebrow>
+            <h2
+              style={display({
+                fontSize: "clamp(24px,3.4vw,34px)",
+                fontWeight: 700,
+                letterSpacing: "-.02em",
+                lineHeight: 1.1,
+                color: "var(--sf-green)",
+                marginBottom: 16,
+              })}
+            >
+              A free company let tenancy agreement to get landlords signed.
+            </h2>
+            <p
+              style={{
+                fontSize: 15.5,
+                color: "var(--sf-green)",
+                opacity: 0.85,
+                lineHeight: 1.7,
+                marginBottom: 20,
+              }}
+            >
+              Every subscriber can download a ready-to-use company let tenancy
+              agreement — the contract landlords sign to let their property to
+              your company on a guaranteed rent basis, so you can place occupiers
+              and run it as short-let accommodation. It is waiting in your
+              dashboard the moment you subscribe, with a plain-English summary of
+              exactly what the landlord and your company are each responsible for.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {[
+                "Drafted as a company let — outside assured-tenancy rules",
+                "Landlord signs; your company holds the tenancy and places occupiers",
+                "Clear landlord and tenant liabilities, explained in the dashboard",
+              ].map((t) => (
+                <div
+                  key={t}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    fontSize: 14,
+                    color: "var(--sf-green)",
+                    fontWeight: 600,
+                  }}
+                >
+                  <span style={{ color: "var(--sf-dark)" }}>✓</span>
+                  {t}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              borderLeft: "3px solid var(--sf-green)",
+              padding: 28,
+              boxShadow: "0 20px 50px -30px rgba(59,109,17,.55)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: ".07em",
+                color: "var(--sf-muted)",
+                marginBottom: 8,
+              }}
+            >
+              Company Letting Agreement
+            </div>
+            <div
+              style={display({
+                fontSize: 20,
+                fontWeight: 700,
+                color: "var(--sf-green)",
+                marginBottom: 10,
+              })}
+            >
+              Ready to download, ready to sign
+            </div>
+            <p
+              style={{
+                fontSize: 13.5,
+                color: "var(--sf-secondary)",
+                lineHeight: 1.65,
+                marginBottom: 16,
+              }}
+            >
+              For letting a residential property to your company for a fixed
+              term. Covers rent, deposit, approved occupiers, repairs, and how
+              the tenancy ends — with the landlord&apos;s and your company&apos;s
+              obligations set out in full.
+            </p>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                background: "var(--sf-sage)",
+                color: "var(--sf-dark)",
+                fontSize: 12.5,
+                fontWeight: 700,
+                padding: "8px 14px",
+                borderRadius: 100,
+              }}
+            >
+              ✓ Free for every subscriber
+            </span>
+          </div>
         </div>
       </section>
 
