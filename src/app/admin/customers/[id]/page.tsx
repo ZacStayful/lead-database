@@ -55,6 +55,25 @@ export default async function AdminCustomerDetailPage({
           {customer.contact_name} · {customer.email}
           {customer.phone ? ` · ${customer.phone}` : ""}
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Plan: <span className="font-medium text-foreground">{customer.monthly_allocation} leads / month</span>
+          {customer.website_url ? (
+            <>
+              {" · "}
+              <a
+                href={customer.website_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand hover:underline"
+              >
+                {customer.website_url}
+              </a>
+            </>
+          ) : null}
+          {customer.properties_managed
+            ? ` · Manages ${customer.properties_managed} properties`
+            : ""}
+        </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

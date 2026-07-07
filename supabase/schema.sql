@@ -26,6 +26,8 @@ create table if not exists public.customers (
   is_active                 boolean default true,
   last_assignment_at        timestamptz,
   billing_cycle_anchor      date,
+  website_url               text,
+  properties_managed        text,
   created_at                timestamptz default now(),
   updated_at                timestamptz default now()
 );
@@ -37,6 +39,17 @@ alter table public.customers
   add column if not exists billing_cycle_anchor date;
 alter table public.customers
   add column if not exists account_status text not null default 'waitlisted';
+-- Ensure the account_status check exists on upgraded databases (the create
+-- table above is skipped when the table already exists).
+alter table public.customers
+  drop constraint if exists customers_account_status_check;
+alter table public.customers
+  add constraint customers_account_status_check
+  check (account_status in ('waitlisted', 'invited', 'active', 'cancelled'));
+alter table public.customers
+  add column if not exists website_url text;
+alter table public.customers
+  add column if not exists properties_managed text;
 alter table public.customers
   drop column if exists overflow_enabled;
 -- Existing customers predate capacity management — treat live rows as active.
@@ -297,18 +310,30 @@ begin
 end;
 $$;
 
--- Reset monthly lead counters. Wire to Supabase cron on the 1st of the month.
--- This only touches leads_received_this_month; lead_balance is independent and
--- never reset here.
+-- Reset monthly lead counters on each customer's billing-anchor day, so the
+-- counter window matches the pacing window (which counts days since the anchor).
+-- Wired to a DAILY cron; the function decides who resets today. Only touches
+-- leads_received_this_month; lead_balance is independent and never reset here.
 create or replace function public.reset_monthly_counts()
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_today     date := current_date;
+  v_dom       int  := extract(day from v_today);
+  v_last_dom  int  := extract(day from (date_trunc('month', v_today) + interval '1 month - 1 day'));
+begin
   update public.customers
     set leads_received_this_month = 0,
-        updated_at = now();
+        updated_at = now()
+    where
+      extract(day from coalesce(billing_cycle_anchor, created_at::date)) = v_dom
+      -- Anchor days past this month's length (29–31) roll onto the last day.
+      or (v_dom = v_last_dom
+          and extract(day from coalesce(billing_cycle_anchor, created_at::date)) > v_last_dom);
+end;
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -329,10 +354,22 @@ drop policy if exists "customers_select_own" on public.customers;
 create policy "customers_select_own" on public.customers
   for select using (auth.uid() = user_id);
 
--- Leads: readable by any authenticated user.
+-- Leads: readable only where the lead is assigned to the caller. The app reads
+-- leads via the service role (joined through lead_assignments), so this policy
+-- exists purely to prevent a customer using the anon client to scrape the whole
+-- lead inventory.
 drop policy if exists "leads_select_authenticated" on public.leads;
-create policy "leads_select_authenticated" on public.leads
-  for select using (auth.role() = 'authenticated');
+drop policy if exists "leads_select_assigned" on public.leads;
+create policy "leads_select_assigned" on public.leads
+  for select using (
+    exists (
+      select 1
+      from public.lead_assignments la
+      join public.customers c on c.id = la.customer_id
+      where la.lead_id = leads.id
+        and c.user_id = auth.uid()
+    )
+  );
 
 -- Lead assignments: readable only where the customer_id belongs to the user.
 drop policy if exists "lead_assignments_select_own" on public.lead_assignments;
@@ -415,7 +452,8 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- Monthly reset cron (requires pg_cron; run last).
--- Runs reset_monthly_counts() at 00:05 on the 1st of every month.
+-- Runs reset_monthly_counts() daily at 00:05; the function resets only the
+-- customers whose billing-anchor day is today.
 -- ---------------------------------------------------------------------------
 create extension if not exists pg_cron;
 
@@ -426,7 +464,7 @@ where exists (
 
 select cron.schedule(
   'reset-monthly-lead-counts',
-  '5 0 1 * *',
+  '5 0 * * *',
   $$ select public.reset_monthly_counts(); $$
 );
 

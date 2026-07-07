@@ -33,6 +33,9 @@ export interface Customer {
   gr_billing_cycle_anchor: string | null;
   gr_last_assignment_at: string | null;
   gr_lead_balance: number;
+  // Enquiry-form fields captured on the landing page.
+  website_url: string | null;
+  properties_managed: string | null;
   created_at: string;
   updated_at: string;
 }

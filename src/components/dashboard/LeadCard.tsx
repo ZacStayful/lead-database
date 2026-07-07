@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,9 @@ export function LeadCard({
   from?: string;
 }) {
   const [assignment, setAssignment] = useState(initial);
+  // Re-seed from fresh server data (router.refresh / realtime) — the stable
+  // React key otherwise keeps the first snapshot forever.
+  useEffect(() => setAssignment(initial), [initial]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const lead = assignment.lead;

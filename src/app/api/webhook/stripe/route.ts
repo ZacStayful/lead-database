@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { planForAllocation } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -101,6 +102,10 @@ export async function POST(request: NextRequest) {
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
+          // A cancelled management subscription must release its capacity slot —
+          // capacity is counted by account_status = 'active'. GR cancellations
+          // must NOT touch account_status.
+          if (status === "canceled") update.account_status = "cancelled";
           if (anchor) update.billing_cycle_anchor = anchor;
         }
 
@@ -118,7 +123,7 @@ export async function POST(request: NextRequest) {
         // Only subscription renewals grant lead credit. Every invoice this
         // integration receives is a subscription invoice.
         if (invoice.subscription) {
-          // Determine the product from the invoice line item price id.
+          // Detect the product from the invoice line item price id.
           const priceIds = (invoice.lines?.data ?? [])
             .map((line) => line.price?.id)
             .filter((id): id is string => Boolean(id));
@@ -151,12 +156,12 @@ export async function POST(request: NextRequest) {
                 updated_at: new Date().toISOString(),
               };
               // Re-anchor the GR billing cycle to this period's start on every
-              // renewal, mirroring the management invoice.paid handler so the
-              // two products pace consistently.
-              const anchor =
+              // renewal, mirroring the management handler so both products pace
+              // consistently.
+              const grAnchor =
                 toDateString(invoice.period_start) ??
                 toDateString(invoice.created);
-              if (anchor) grUpdate.gr_billing_cycle_anchor = anchor;
+              if (grAnchor) grUpdate.gr_billing_cycle_anchor = grAnchor;
 
               await admin
                 .from("customers")
@@ -177,10 +182,30 @@ export async function POST(request: NextRequest) {
             break;
           }
 
-          // Management subscription renewal — add 20 leads of credit.
+          // Management renewal. The credit granted each month is the customer's
+          // plan allocation (10 or 20). Read the customer first so we can both
+          // size the credit and detect a mismatched Stripe id.
+          const { data: customer } = await admin
+            .from("customers")
+            .select("id, monthly_allocation")
+            .eq("stripe_customer_id", customerId)
+            .maybeSingle();
+
+          if (!customer) {
+            console.error(
+              "invoice.paid for unknown stripe_customer_id — no credit granted",
+              customerId
+            );
+            break;
+          }
+
+          const credits = planForAllocation(
+            customer.monthly_allocation ?? 20
+          ).leads;
+
           const { error: balanceError } = await admin.rpc(
             "increment_lead_balance",
-            { p_stripe_customer_id: customerId, p_amount: 20 }
+            { p_stripe_customer_id: customerId, p_amount: credits }
           );
           if (balanceError) {
             console.error("increment_lead_balance failed", balanceError);
@@ -194,40 +219,31 @@ export async function POST(request: NextRequest) {
             .eq("stripe_customer_id", customerId)
             .eq("account_status", "invited");
 
-          const { data: customer } = await admin
+          // Record the payment.
+          await admin.from("payments").insert({
+            customer_id: customer.id,
+            stripe_invoice_id: invoice.id,
+            stripe_payment_intent_id:
+              (invoice.payment_intent as string | null) ?? null,
+            amount_pence: invoice.amount_paid ?? 0,
+            credits_added: credits,
+            payment_type: "subscription",
+            status: "paid",
+          });
+
+          // Keep the subscription marked active and re-anchor the billing cycle
+          // to the start of the period this invoice covers.
+          const renewalUpdate: Record<string, unknown> = {
+            subscription_status: "active",
+            updated_at: new Date().toISOString(),
+          };
+          const renewalAnchor = toDateString(invoice.period_start);
+          if (renewalAnchor) renewalUpdate.billing_cycle_anchor = renewalAnchor;
+
+          await admin
             .from("customers")
-            .select("id")
-            .eq("stripe_customer_id", customerId)
-            .maybeSingle();
-
-          if (customer) {
-            // Record the payment.
-            await admin.from("payments").insert({
-              customer_id: customer.id,
-              stripe_invoice_id: invoice.id,
-              stripe_payment_intent_id:
-                (invoice.payment_intent as string | null) ?? null,
-              amount_pence: invoice.amount_paid ?? 0,
-              credits_added: 20,
-              payment_type: "subscription",
-              status: "paid",
-            });
-
-            // Keep the subscription marked active and re-anchor the billing
-            // cycle to the start of the period this invoice covers.
-            const renewalUpdate: Record<string, unknown> = {
-              subscription_status: "active",
-              updated_at: new Date().toISOString(),
-            };
-            const renewalAnchor = toDateString(invoice.period_start);
-            if (renewalAnchor)
-              renewalUpdate.billing_cycle_anchor = renewalAnchor;
-
-            await admin
-              .from("customers")
-              .update(renewalUpdate)
-              .eq("id", customer.id);
-          }
+            .update(renewalUpdate)
+            .eq("id", customer.id);
         }
         break;
       }

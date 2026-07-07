@@ -9,7 +9,9 @@ import type { Customer, Lead, LeadType, N8nLeadPayload } from "@/lib/types";
 
 const LEAD_PRICE = 15.0;
 const GR_LEAD_PRICE = 10.0;
-const LOW_CREDITS_THRESHOLD = 18;
+// Warn when the customer has this many lead credits left (the real allocation
+// gate is lead_balance, not the monthly counter, and this is plan-agnostic).
+const LOW_CREDITS_REMAINING = 2;
 
 const LEAD_FIELDS: string[] = [
   "monday_item_id",
@@ -255,18 +257,18 @@ export async function completeAssignment(
       .eq("id", notification.id);
   }
 
-  // Threshold emails apply only to the management allocation (which uses
-  // leads_received_this_month / monthly_allocation). GR leads spend the GR
-  // balance and must not trigger management credit warnings.
+  // Threshold emails apply only to the management allocation, keyed on the real
+  // allocation gate (lead_balance, already decremented by the assignment RPC) so
+  // they work for any plan size. GR leads spend gr_lead_balance and must not
+  // trigger management credit warnings.
   if (lead.lead_type !== "guaranteed_rent") {
-    // Post-increment count; the RPC already incremented.
-    const newCount = typedCustomer.leads_received_this_month;
-    if (newCount === typedCustomer.monthly_allocation) {
+    const balance = typedCustomer.lead_balance;
+    if (balance === 0) {
       await sendCreditsExhaustedEmail({ to: typedCustomer.email });
-    } else if (newCount === LOW_CREDITS_THRESHOLD) {
+    } else if (balance === LOW_CREDITS_REMAINING) {
       await sendLowCreditsEmail({
         to: typedCustomer.email,
-        remaining: typedCustomer.monthly_allocation - newCount,
+        remaining: balance,
       });
     }
   }

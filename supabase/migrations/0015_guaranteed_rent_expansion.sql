@@ -280,19 +280,8 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- 2g — reset_monthly_counts: also reset the GR monthly counter for active GR
--- subscribers (management reset unchanged).
+-- 2g — reset_monthly_counts is NOT redefined here. Migration 0014_bugfixes owns
+-- the current (billing-anchor-day) reset logic; migration 0018 extends it to
+-- also reset the GR monthly counter on each customer's GR anchor day, so the
+-- two products stay symmetric. Redefining it here would revert 0014's fix.
 -- ---------------------------------------------------------------------------
-create or replace function public.reset_monthly_counts()
-returns void
-language sql
-security definer
-set search_path = public
-as $$
-  update public.customers
-    set leads_received_this_month = 0,
-        updated_at = now();
-  update public.customers
-    set gr_leads_received_this_month = 0
-    where gr_subscription_status = 'active';
-$$;

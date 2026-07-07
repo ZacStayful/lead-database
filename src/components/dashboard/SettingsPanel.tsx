@@ -4,9 +4,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Customer } from "@/lib/types";
+import { planForAllocation } from "@/lib/plans";
 
 export function SettingsPanel({ customer }: { customer: Customer }) {
   const [portalLoading, setPortalLoading] = useState(false);
+  const plan = planForAllocation(customer.monthly_allocation);
 
   async function openPortal() {
     setPortalLoading(true);
@@ -39,7 +41,9 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
               <span className="capitalize">{customer.subscription_status}</span>
             </span>
           </Row>
-          <Row label="Plan">£300 / month · 20 leads included</Row>
+          <Row label="Plan">
+            £{plan.priceGbp} / month · {plan.leads} leads included
+          </Row>
           <Row label="Leads this month">
             {customer.leads_received_this_month} of {customer.monthly_allocation}
           </Row>

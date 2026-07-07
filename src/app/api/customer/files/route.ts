@@ -40,8 +40,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // The upload must live in the caller's own folder.
-  if (!storage_path.startsWith(`${user.id}/`)) {
+  // The upload must live in the caller's own folder. Reject any path-traversal
+  // segment so a crafted "<user.id>/../<victim>/…" can't escape the folder.
+  if (!storage_path.startsWith(`${user.id}/`) || storage_path.includes("..")) {
     return NextResponse.json({ error: "Invalid storage path" }, { status: 400 });
   }
 
