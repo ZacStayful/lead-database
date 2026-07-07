@@ -10,6 +10,7 @@ import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
   pipelineBadgeClass,
+  pipelineLabel,
   stagesForLeadType,
 } from "@/components/dashboard/pipelineStage";
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
@@ -236,7 +237,13 @@ export function LeadDetail({
                 onBlur={() => setEditingPipeline(false)}
                 className="rounded-md border-[0.5px] border-input bg-background px-2 py-1 text-xs"
               >
-                {stageOptions.map((s) => (
+                {(stageOptions.some((s) => s.value === pipelineStage)
+                  ? stageOptions
+                  : [
+                      { value: pipelineStage, label: pipelineLabel(pipelineStage) },
+                      ...stageOptions,
+                    ]
+                ).map((s) => (
                   <option key={s.value} value={s.value}>
                     {s.label}
                   </option>

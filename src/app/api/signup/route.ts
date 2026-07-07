@@ -82,7 +82,11 @@ export async function POST(request: NextRequest) {
     // an active GR subscription, block a duplicate. New customers are created
     // (no capacity gate — GR has its own allocation); existing customers reuse
     // their row and Stripe customer.
-    if (isGuaranteedRent) {
+    //
+    // Owners are excluded here so an owner using the GR link still falls through
+    // to the owner override below (admin account, both products active, no
+    // Stripe), rather than being provisioned as a plain non-admin customer.
+    if (isGuaranteedRent && !owner) {
       const stripe = getStripe();
       const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID!;
 

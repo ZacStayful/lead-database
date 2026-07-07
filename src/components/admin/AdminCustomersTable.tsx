@@ -33,7 +33,10 @@ const PRODUCT_TABS: { key: ProductTab; label: string }[] = [
   { key: "both", label: "Both" },
 ];
 
-const hasManagement = (c: Customer) => c.subscription_status === "active";
+// Mirror the routing gate: management leads only reach customers who are both
+// account-active and subscription-active (see get_next_customers_for_lead).
+const hasManagement = (c: Customer) =>
+  c.subscription_status === "active" && c.account_status === "active";
 const hasGuaranteedRent = (c: Customer) => c.gr_subscription_status === "active";
 
 const ACCOUNT_BADGE: Record<string, string> = {
