@@ -40,7 +40,38 @@ const FINANCIALS: FinancialRow[] = [
   { size: "5-bed", gross: "£65,698", net: "£55,843", rent: "£1,913", monthlyNet: "£1,756", annualNet: "£21,067", margin: "32.1%" },
 ];
 
-const STEPS: { n: string; title: string; body: string }[] = [
+// Compounding model: at a 10% conversion rate, 10 leads/month is one new
+// guaranteed-rent property per month. Average net across 1–5 bed = £1,207/mo
+// (£523, £916, £1,259, £1,580, £1,756 — the Monthly net column above).
+const AVG_MONTHLY_NET = 1207;
+
+// Cumulative monthly recurring net (properties × avg net) by month.
+const COMPOUNDING_BARS: { month: string; value: number }[] = [
+  { month: "M3", value: 3 * AVG_MONTHLY_NET },
+  { month: "M6", value: 6 * AVG_MONTHLY_NET },
+  { month: "M9", value: 9 * AVG_MONTHLY_NET },
+  { month: "M12", value: 12 * AVG_MONTHLY_NET },
+  { month: "M18", value: 18 * AVG_MONTHLY_NET },
+  { month: "M24", value: 24 * AVG_MONTHLY_NET },
+];
+
+interface Milestone {
+  month: string;
+  properties: number;
+  monthlyNet: string;
+  spent: string;
+  earned: string;
+  roi: string;
+}
+
+// Cumulative net earned through month M = avg × (1+2+…+M); spend = £100 × M.
+const MILESTONES: Milestone[] = [
+  { month: "Month 6", properties: 6, monthlyNet: "£7,242", spent: "£600", earned: "£25,347", roi: "42×" },
+  { month: "Month 12", properties: 12, monthlyNet: "£14,484", spent: "£1,200", earned: "£94,146", roi: "78×" },
+  { month: "Month 24", properties: 24, monthlyNet: "£28,968", spent: "£2,400", earned: "£362,100", roi: "151×" },
+];
+
+const STEPS: { n: string; title: string; body: React.ReactNode }[] = [
   {
     n: "01",
     title: "Subscribe",
@@ -54,7 +85,13 @@ const STEPS: { n: string; title: string; body: string }[] = [
   {
     n: "03",
     title: "Run the numbers",
-    body: "Use intelligence.stayful.co.uk to model gross STR income, guaranteed rent, and operating costs against live Airbnb data for the property's postcode, before you pick up the phone.",
+    body: (
+      <>
+        Use <AnalyserLink /> to model gross STR income, guaranteed rent, and
+        operating costs against live Airbnb data for the property&apos;s
+        postcode, before you pick up the phone.
+      </>
+    ),
   },
   {
     n: "04",
@@ -482,8 +519,277 @@ export default function GuaranteedRentPage() {
             Operating costs cover cleaning, consumables, and laundry at 18% of
             gross. Market rents: 1-bed £1,123/mo (ONS); 2-bed, 3-bed, 4-bed,
             5-bed interpolated from ONS trajectory and Rightmove/Zoopla new-let
-            data. Use intelligence.stayful.co.uk to model your specific property.
+            data. Use <AnalyserLink /> to model your specific property.
           </p>
+        </div>
+      </section>
+
+      {/* ============ COMPOUNDING EFFECT ============ */}
+      <section style={{ background: "var(--sf-sage)", padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow color="var(--sf-dark)">The compounding effect</Eyebrow>
+          <h2 style={centerHeadline({ color: "var(--sf-green)", marginBottom: 16 })}>
+            One in ten leads compounds into a portfolio.
+          </h2>
+          <p style={centerLede({ marginBottom: 20 })}>
+            At a 10% conversion rate, 10 leads a month is one new guaranteed rent
+            property every month. Each property earns an average of £1,207/mo net
+            across 1&ndash;5 bed. Here is what that builds &mdash; and what it
+            returns on your £100/month &mdash; over two years.
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "center",
+              gap: 8,
+              marginBottom: 40,
+            }}
+          >
+            {[
+              "10 leads / month",
+              "10% convert",
+              "= 1 new property / month",
+              "£1,207 avg net / property / mo",
+            ].map((t) => (
+              <span
+                key={t}
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  background: "#fff",
+                  color: "var(--sf-dark)",
+                  padding: "6px 14px",
+                  borderRadius: 100,
+                }}
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+
+          {/* Recurring monthly net, month by month */}
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              padding: "26px 24px 18px",
+              marginBottom: 24,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: "var(--sf-dark)",
+                marginBottom: 18,
+              }}
+            >
+              Recurring monthly net, month by month
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: 14,
+                height: 200,
+              }}
+            >
+              {COMPOUNDING_BARS.map((b, i) => {
+                const max = COMPOUNDING_BARS[COMPOUNDING_BARS.length - 1].value;
+                const last = i === COMPOUNDING_BARS.length - 1;
+                return (
+                  <div
+                    key={b.month}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "flex-end",
+                      height: "100%",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: "var(--sf-dark)",
+                        marginBottom: 6,
+                      }}
+                    >
+                      £{b.value.toLocaleString()}
+                    </div>
+                    <div
+                      style={{
+                        width: "100%",
+                        maxWidth: 54,
+                        height: `${Math.round((b.value / max) * 100)}%`,
+                        background: last ? "var(--sf-dark)" : "var(--sf-green)",
+                        borderRadius: "6px 6px 0 0",
+                      }}
+                    />
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: "var(--sf-muted)",
+                        marginTop: 8,
+                      }}
+                    >
+                      {b.month}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Milestone cards: portfolio, spend, return */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
+              gap: 16,
+            }}
+          >
+            {MILESTONES.map((m, i) => {
+              const highlight = i === MILESTONES.length - 1;
+              return (
+                <div
+                  key={m.month}
+                  style={{
+                    background: highlight ? "var(--sf-green)" : "#fff",
+                    borderRadius: 16,
+                    padding: 24,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: ".07em",
+                      color: highlight ? "var(--sf-sage)" : "var(--sf-muted)",
+                      marginBottom: 8,
+                    }}
+                  >
+                    {m.month}
+                  </div>
+                  <div
+                    style={display({
+                      fontSize: 26,
+                      fontWeight: 700,
+                      color: highlight ? "#fff" : "var(--sf-dark)",
+                      lineHeight: 1,
+                      marginBottom: 12,
+                    })}
+                  >
+                    {m.properties} properties
+                  </div>
+                  <MilestoneRow k="Monthly net" v={m.monthlyNet} highlight={highlight} />
+                  <MilestoneRow k="Software spent" v={m.spent} highlight={highlight} />
+                  <MilestoneRow k="Net earned to date" v={m.earned} highlight={highlight} />
+                  <MilestoneRow
+                    k="Return on subscription"
+                    v={m.roi}
+                    highlight={highlight}
+                    bold
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "var(--sf-green)",
+              opacity: 0.75,
+              marginTop: 16,
+              lineHeight: 1.6,
+              maxWidth: 820,
+            }}
+          >
+            Straight-line model at 10% lead-to-signed conversion (1 property per
+            month) and £1,207 average monthly net per property &mdash; the mean of
+            the 1&ndash;5 bed figures in the table above, already net of the 15%
+            platform fee, guaranteed rent, and operating costs. Net earned to date
+            is the running total of monthly net across the portfolio; return on
+            subscription compares it to the cumulative £100/month spend. Real close
+            timelines vary; treat this as illustrative, not a forecast.
+          </p>
+        </div>
+      </section>
+
+      {/* ============ CHURN / REPLACEMENT ============ */}
+      <section style={{ padding: "88px 32px" }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+          <Eyebrow>Always growing</Eyebrow>
+          <h2 style={centerHeadline({ marginBottom: 16 })}>
+            You won&apos;t keep every landlord &mdash; so keep the pipeline full.
+          </h2>
+          <p style={centerLede()}>
+            Guaranteed rent arrangements end. Landlords sell, move back in, or
+            decide not to renew. Without new deals coming in, a rent-to-rent
+            portfolio quietly shrinks. A steady flow of pre-qualified guaranteed
+            rent leads means you can always replace the landlords who leave &mdash;
+            and keep growing rather than standing still.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))",
+              gap: 18,
+            }}
+          >
+            {[
+              {
+                title: "Landlords leave",
+                body: "Even a well-run book loses properties every year as owners sell, return, or change plans. It is a normal part of rent-to-rent.",
+              },
+              {
+                title: "Leads replace them",
+                body: "A consistent inflow of consented, financially modelled landlords means every departure can be backfilled without a cold-outreach scramble.",
+              },
+              {
+                title: "The portfolio keeps growing",
+                body: "Replace faster than you lose and the portfolio compounds instead of leaking. Your guaranteed rent income base only moves one way.",
+              },
+            ].map((c) => (
+              <div
+                key={c.title}
+                style={{
+                  background: "#fff",
+                  border: "1px solid var(--sf-border)",
+                  borderRadius: 16,
+                  padding: 26,
+                }}
+              >
+                <h3
+                  style={display({
+                    fontSize: 17,
+                    fontWeight: 700,
+                    color: "var(--sf-green)",
+                    marginBottom: 8,
+                  })}
+                >
+                  {c.title}
+                </h3>
+                <p
+                  style={{
+                    fontSize: 14,
+                    color: "var(--sf-secondary)",
+                    lineHeight: 1.65,
+                  }}
+                >
+                  {c.body}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -911,6 +1217,69 @@ function centerLede(extra?: CSSProperties): CSSProperties {
     marginRight: "auto",
     ...extra,
   };
+}
+
+/** Inline hyperlink to the STR Analyser, styled to sit within body copy. */
+function AnalyserLink() {
+  return (
+    <a
+      href="https://intelligence.stayful.co.uk"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        color: "var(--sf-dark)",
+        fontWeight: 600,
+        textDecoration: "underline",
+      }}
+    >
+      intelligence.stayful.co.uk
+    </a>
+  );
+}
+
+function MilestoneRow({
+  k,
+  v,
+  highlight,
+  bold,
+}: {
+  k: string;
+  v: string;
+  highlight?: boolean;
+  bold?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "baseline",
+        gap: 12,
+        padding: "7px 0",
+        borderTop: `1px solid ${
+          highlight ? "rgba(255,255,255,.18)" : "var(--sf-border)"
+        }`,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 13,
+          color: highlight ? "var(--sf-sage)" : "var(--sf-secondary)",
+        }}
+      >
+        {k}
+      </span>
+      <span
+        style={{
+          fontSize: bold ? 15 : 13.5,
+          fontWeight: 700,
+          color: highlight ? "#fff" : "var(--sf-dark)",
+        }}
+      >
+        {v}
+      </span>
+    </div>
+  );
 }
 
 function Th({ children, right }: { children: React.ReactNode; right?: boolean }) {

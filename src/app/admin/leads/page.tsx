@@ -48,7 +48,13 @@ export default async function AdminLeadsPage() {
             {leads.length} lead{leads.length === 1 ? "" : "s"} ingested
           </p>
         </div>
-        <SyncMondayButton />
+        <div className="flex flex-col items-end gap-2">
+          <SyncMondayButton />
+          <SyncMondayButton
+            endpoint="/api/monday/sync-gr"
+            label="Sync GR from Monday"
+          />
+        </div>
       </div>
       <Card>
         <Table>
