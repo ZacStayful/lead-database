@@ -22,12 +22,16 @@ export function AdminLeadControls({
   maxAssignments,
   assignmentCount,
   customers,
+  leadType,
 }: {
   leadId: string;
   maxAssignments: number;
   assignmentCount: number;
   customers: CustomerOption[];
+  leadType?: string;
 }) {
+  const productLabel =
+    leadType === "guaranteed_rent" ? "Guaranteed Rent" : "Management";
   const router = useRouter();
   const [max, setMax] = useState(String(maxAssignments));
   const [target, setTarget] = useState<string>("");
@@ -112,6 +116,11 @@ export function AdminLeadControls({
             ))}
           </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">
+          {customers.length === 0
+            ? `No active ${productLabel} subscribers available to assign.`
+            : `Only active ${productLabel} subscribers are listed.`}
+        </p>
         <Button
           onClick={forceAssign}
           disabled={busy || !target || atCapacity}

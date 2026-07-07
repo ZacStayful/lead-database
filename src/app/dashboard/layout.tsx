@@ -31,6 +31,7 @@ export default async function DashboardLayout({
     { href: "/dashboard/leads/priority", label: "Priority" },
     { href: "/dashboard/analytics", label: "Analytics" },
     { href: "/dashboard/notifications", label: "Notifications" },
+    { href: "/dashboard/documents", label: "Documents" },
     { href: "/dashboard/settings", label: "Settings" },
   ];
   if (isAdminUser(user)) {

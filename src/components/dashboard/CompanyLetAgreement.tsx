@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
@@ -45,7 +46,36 @@ const FAQ: { q: string; a: string }[] = [
   },
 ];
 
-export function CompanyLetAgreement() {
+export function CompanyLetAgreement({ compact = false }: { compact?: boolean }) {
+  if (compact) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Company let tenancy agreement</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            A ready-to-sign company letting agreement for getting landlords onto
+            a guaranteed rent arrangement. Free with your Guaranteed Rent
+            subscription.
+          </p>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <Button asChild>
+            <a href={AGREEMENT_URL} download>
+              <Download className="h-4 w-4" />
+              Download the agreement
+            </a>
+          </Button>
+          <Link
+            href="/dashboard/documents"
+            className="text-sm font-medium text-brand hover:underline"
+          >
+            View terms →
+          </Link>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>

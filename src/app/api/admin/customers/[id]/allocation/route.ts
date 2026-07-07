@@ -24,6 +24,10 @@ export async function POST(
     monthly_allocation?: number;
     is_active?: boolean;
     leads_received_this_month?: number;
+    gr_subscription_status?: string;
+    gr_monthly_allocation?: number;
+    gr_leads_received_this_month?: number;
+    gr_lead_balance?: number;
   };
   try {
     body = await request.json();
@@ -45,6 +49,29 @@ export async function POST(
       0,
       Math.floor(body.leads_received_this_month!)
     );
+  }
+
+  // Guaranteed Rent controls — mirror the management fields on the GR columns.
+  if (
+    body.gr_subscription_status === "active" ||
+    body.gr_subscription_status === "inactive"
+  ) {
+    update.gr_subscription_status = body.gr_subscription_status;
+  }
+  if (Number.isFinite(body.gr_monthly_allocation)) {
+    update.gr_monthly_allocation = Math.max(
+      0,
+      Math.floor(body.gr_monthly_allocation!)
+    );
+  }
+  if (Number.isFinite(body.gr_leads_received_this_month)) {
+    update.gr_leads_received_this_month = Math.max(
+      0,
+      Math.floor(body.gr_leads_received_this_month!)
+    );
+  }
+  if (Number.isFinite(body.gr_lead_balance)) {
+    update.gr_lead_balance = Math.max(0, Math.floor(body.gr_lead_balance!));
   }
 
   const admin = createAdminClient();

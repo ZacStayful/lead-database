@@ -13,6 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { formatDate } from "@/lib/utils";
+import { computeGrPacing } from "@/lib/pacing";
+import { Download } from "lucide-react";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -123,6 +125,19 @@ export default async function AdminCustomerDetailPage({
 
 function GrSubscriptionCard({ customer }: { customer: Customer }) {
   const active = customer.gr_subscription_status === "active";
+  const pacing = computeGrPacing(customer);
+  const pacingLabel =
+    pacing.status === "behind"
+      ? "Behind"
+      : pacing.status === "ahead"
+        ? "Ahead"
+        : "On track";
+  const pacingClass =
+    pacing.status === "behind"
+      ? "bg-amber-100 text-amber-800"
+      : pacing.status === "ahead"
+        ? "bg-muted text-muted-foreground"
+        : "bg-brand/10 text-brand";
 
   return (
     <Card className={active ? undefined : "opacity-60"}>
@@ -153,12 +168,44 @@ function GrSubscriptionCard({ customer }: { customer: Customer }) {
                 {customer.gr_lead_balance === 1 ? "" : "s"}
               </dd>
             </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Pacing</dt>
+              <dd className="mt-0.5">
+                <span
+                  className={
+                    "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium " +
+                    pacingClass
+                  }
+                >
+                  {pacingLabel}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Last GR lead</dt>
+              <dd className="mt-0.5 font-medium">
+                {customer.gr_last_assignment_at
+                  ? formatDate(customer.gr_last_assignment_at)
+                  : "—"}
+              </dd>
+            </div>
           </dl>
         ) : (
           <p className="text-sm text-muted-foreground">
             This customer has no active Guaranteed Rent subscription.
           </p>
         )}
+
+        <div className="mt-4 border-t border-border pt-4">
+          <a
+            href="/company-let-tenancy-agreement.docx"
+            download
+            className="inline-flex items-center gap-2 text-sm font-medium text-brand hover:underline"
+          >
+            <Download className="h-4 w-4" />
+            Download company let agreement
+          </a>
+        </div>
       </CardContent>
     </Card>
   );

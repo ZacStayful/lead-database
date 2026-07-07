@@ -142,7 +142,7 @@ export default async function DashboardPage() {
         </p>
       )}
 
-      {hasGuaranteedRent && <CompanyLetAgreement />}
+      {hasGuaranteedRent && <CompanyLetAgreement compact />}
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>

@@ -167,7 +167,7 @@ export default function GuaranteedRentPage() {
               marginBottom: 20,
             })}
           >
-            Landlords who want their property on a guaranteed rent basis.
+            10 guaranteed rent leads in your inbox every month.
           </h1>
           <p
             style={{
