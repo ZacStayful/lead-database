@@ -2,6 +2,14 @@ import type { Customer } from "@/lib/types";
 
 export const DAYS_IN_CYCLE = 30;
 
+/**
+ * Deficit at or beyond which an unfiltered customer is "critically behind" and
+ * reclaims a lead slot from a matching filtered candidate (the guarantee-floor
+ * override in routing). Matches the admin supply-problem alert threshold
+ * (deficit >= 5) — the strongest existing behind-pace signal.
+ */
+export const CRITICALLY_BEHIND_DEFICIT = 5;
+
 export type PacingStatus = "behind" | "on_track" | "ahead";
 
 export interface Pacing {

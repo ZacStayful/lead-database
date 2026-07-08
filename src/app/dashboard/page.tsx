@@ -8,8 +8,9 @@ import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
+import { cityForArea } from "@/lib/postcode";
 import { computePacing, pacingMessage } from "@/lib/pacing";
-import type { AssignmentWithLead } from "@/lib/types";
+import type { AssignmentWithLead, Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,9 @@ export default async function DashboardPage() {
   const pacing = computePacing(customer);
   const exhausted = customer.lead_balance === 0;
   const carriedForward = customer.lead_balance - customer.monthly_allocation;
+  const filterActive =
+    customer.filter_status === "active" ||
+    customer.filter_status === "pending_lift";
 
   // Split what the customer has received by product so management and
   // guaranteed rent are kept clearly separate. Every delivered lead counts
@@ -153,9 +157,15 @@ export default async function DashboardPage() {
       )}
 
       {/* Management pacing/credit message — only for customers who hold the
-          management product (GR uses the per-product card above). */}
+          management product (GR uses the per-product card above). A customer
+          with an active or pending-lift filter sees the filter message instead
+          of the standard pacing sentence. */}
       {hasManagement &&
-        (exhausted ? (
+        (filterActive ? (
+          <p className="text-sm font-medium text-brand">
+            {filterMessage(customer)}
+          </p>
+        ) : exhausted ? (
           <p className="text-sm font-medium text-amber-600">
             You have no remaining {showProductSplit ? "management " : ""}lead
             credit. Your balance will update when your next payment is processed
@@ -274,6 +284,39 @@ function LeadsByProduct({
 
 function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Dashboard sentence shown to a customer with an active/pending-lift filter. */
+function filterMessage(customer: Customer): string {
+  const areas =
+    customer.filter_areas && customer.filter_areas.length > 0
+      ? customer.filter_areas.map((a) => cityForArea(a) || a).join(", ")
+      : "any location";
+  const beds = bedroomPhrase(
+    customer.filter_min_bedrooms,
+    customer.filter_max_bedrooms
+  );
+  let msg = `Your filter is active — you'll receive leads matching ${areas} and ${beds} as they become available. Volume varies based on how many matching leads come through the marketplace each month.`;
+  if (
+    customer.filter_status === "pending_lift" &&
+    customer.filter_lift_effective_date
+  ) {
+    msg += ` Your filter is scheduled to lift on ${formatDate(
+      customer.filter_lift_effective_date
+    )}.`;
+  }
+  return msg;
+}
+
+function bedroomPhrase(min: number | null, max: number | null): string {
+  if (min == null && max == null) return "any bedroom size";
+  if (min != null && max != null) {
+    return min === max
+      ? `exactly ${min} bedroom${min === 1 ? "" : "s"}`
+      : `${min}–${max} bedrooms`;
+  }
+  if (min != null) return `${min}+ bedrooms`;
+  return `up to ${max} bedrooms`;
 }
 
 function nextRenewalDate(anchor: string | null): string {

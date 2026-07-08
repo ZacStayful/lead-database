@@ -30,6 +30,25 @@ export default async function AdminOverviewPage() {
     .maybeSingle();
   const capacityLimit = parseInt(capacitySetting?.value ?? "10", 10);
 
+  // Filter mix per product — reported separately, since a customer can filter
+  // one product and not the other. "Filtered" = an active or pending-lift filter.
+  const isFiltered = (s: string | null | undefined) =>
+    s === "active" || s === "pending_lift";
+  const mgmtHolders = customers.filter(
+    (c) => c.subscription_status === "active" && c.account_status === "active"
+  );
+  const grHolders = customers.filter(
+    (c) => c.gr_subscription_status === "active"
+  );
+  const mgmtFiltered = mgmtHolders.filter((c) => isFiltered(c.filter_status)).length;
+  const grFiltered = grHolders.filter((c) => isFiltered(c.gr_filter_status)).length;
+  const filterMix = {
+    activeAccounts,
+    capacityLimit,
+    management: { filtered: mgmtFiltered, unfiltered: mgmtHolders.length - mgmtFiltered },
+    gr: { filtered: grFiltered, unfiltered: grHolders.length - grFiltered },
+  };
+
   // MRR counts only customers on a real Stripe subscription — comped/owner
   // accounts are active but generate no revenue.
   const payingCustomers = activeCustomers.filter(
@@ -73,6 +92,7 @@ export default async function AdminOverviewPage() {
         initialLimit={capacityLimit}
         waitlistedCount={waitlistedAccounts}
       />
+      <FilterMixCard mix={filterMix} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label}>
@@ -84,5 +104,46 @@ export default async function AdminOverviewPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+function FilterMixCard({
+  mix,
+}: {
+  mix: {
+    activeAccounts: number;
+    capacityLimit: number;
+    management: { filtered: number; unfiltered: number };
+    gr: { filtered: number; unfiltered: number };
+  };
+}) {
+  const rows = [
+    {
+      label: "Active customers",
+      value: `${mix.activeAccounts} / ${mix.capacityLimit}`,
+    },
+    {
+      label: "Management (filtered / unfiltered)",
+      value: `${mix.management.filtered} / ${mix.management.unfiltered}`,
+    },
+    {
+      label: "Guaranteed Rent (filtered / unfiltered)",
+      value: `${mix.gr.filtered} / ${mix.gr.unfiltered}`,
+    },
+  ];
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <p className="text-sm font-medium">Capacity &amp; filter mix</p>
+        <dl className="mt-3 grid gap-4 sm:grid-cols-3">
+          {rows.map((r) => (
+            <div key={r.label}>
+              <dt className="text-xs text-muted-foreground">{r.label}</dt>
+              <dd className="mt-0.5 text-2xl font-semibold">{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
   );
 }
