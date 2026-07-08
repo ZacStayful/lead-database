@@ -20,6 +20,7 @@
     "@stripe/stripe-js": "^4.8.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
+    "@vercel/analytics": "^2.0.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.446.0",
