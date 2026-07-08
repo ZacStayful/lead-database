@@ -35,6 +35,7 @@ export default async function DashboardLayout({
     { href: "/dashboard/documents", label: "Documents" },
     { href: "/dashboard/guide", label: "Guide" },
     { href: "/dashboard/settings", label: "Settings" },
+    { href: "/dashboard/objection-assistant", label: "Objection Assistant" },
   ];
   if (isAdminUser(user)) {
     nav.push({ href: "/admin", label: "Admin" });

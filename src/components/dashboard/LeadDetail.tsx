@@ -25,6 +25,7 @@ import {
   ChevronRight,
   Mail,
   MapPin,
+  MessageSquareText,
   Phone,
   Trash2,
 } from "lucide-react";
@@ -340,7 +341,7 @@ export function LeadDetail({
           </a>
         )}
 
-        <div className="mt-4">
+        <div className="mt-4 flex flex-wrap gap-2">
           <Button size="sm" asChild>
             <a
               href="https://intelligence.stayful.co.uk"
@@ -349,6 +350,16 @@ export function LeadDetail({
             >
               <BarChart3 className="h-4 w-4" />
               Open STR Analyser
+            </a>
+          </Button>
+          <Button size="sm" asChild>
+            <a
+              href="/dashboard/objection-assistant"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <MessageSquareText className="h-4 w-4" />
+              Objection Assistant
             </a>
           </Button>
         </div>
