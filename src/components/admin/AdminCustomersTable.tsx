@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Filter } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { computePacing, type PacingStatus } from "@/lib/pacing";
 import type { Customer } from "@/lib/types";
@@ -38,6 +39,12 @@ const PRODUCT_TABS: { key: ProductTab; label: string }[] = [
 const hasManagement = (c: Customer) =>
   c.subscription_status === "active" && c.account_status === "active";
 const hasGuaranteedRent = (c: Customer) => c.gr_subscription_status === "active";
+
+// A customer with an active or pending-lift filter on either product.
+const isFiltered = (s: string | null | undefined) =>
+  s === "active" || s === "pending_lift";
+const hasFilter = (c: Customer) =>
+  isFiltered(c.filter_status) || isFiltered(c.gr_filter_status);
 
 const ACCOUNT_BADGE: Record<string, string> = {
   active: "border-transparent bg-green-100 text-green-700",
@@ -186,7 +193,20 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
               const pacing = computePacing(c);
               return (
                 <TableRow key={c.id}>
-                  <TableCell className="font-medium">{c.business_name}</TableCell>
+                  <TableCell className="font-medium">
+                    <span className="flex items-center gap-1.5">
+                      {c.business_name}
+                      {hasFilter(c) && (
+                        <span
+                          title="Lead filter active"
+                          className="inline-flex items-center gap-1 rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] font-medium text-brand"
+                        >
+                          <Filter className="h-3 w-3" />
+                          Filtered
+                        </span>
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{c.email}</TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">

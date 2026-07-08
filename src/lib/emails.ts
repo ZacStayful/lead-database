@@ -245,6 +245,61 @@ export async function sendLowCreditsEmail(params: {
   }
 }
 
+/**
+ * Filter-lift scheduled — sent when a customer requests that their lead filter
+ * be lifted at their next billing cycle.
+ */
+export async function sendFilterLiftScheduledEmail(params: {
+  to: string;
+  effectiveDate: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, effectiveDate } = params;
+  const subject = `Your lead filter will lift on ${effectiveDate}`;
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Filter lift scheduled</h1>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">Your filter will lift at the start of your next billing cycle on <strong>${esc(effectiveDate)}</strong>. Until then, you'll continue to receive only leads matching your current filter. You can cancel this request anytime before then.</p>
+    ${button(`${APP_URL}/dashboard/filtering`, "Manage lead filtering")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * Filter-lift completed — sent when a scheduled lift executes at renewal and the
+ * customer returns to the standard guaranteed lead allocation.
+ */
+export async function sendFilterLiftCompletedEmail(params: {
+  to: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to } = params;
+  const subject = `Your lead filter has been lifted`;
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Filter lifted</h1>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">Your filter has been lifted. You're now back on the standard guaranteed lead allocation.</p>
+    ${button(`${APP_URL}/dashboard`, "View your dashboard")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Credits exhausted — triggered when leads_received_this_month reaches allocation. */
 export async function sendCreditsExhaustedEmail(params: {
   to: string;

@@ -3,6 +3,8 @@ import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { planForAllocation } from "@/lib/plans";
+import { sendFilterLiftCompletedEmail } from "@/lib/emails";
+import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +29,44 @@ function mapStatus(status: Stripe.Subscription.Status): string {
       return "canceled";
     default:
       return "inactive";
+  }
+}
+
+/**
+ * If a customer has a lift scheduled for this product, execute it now (renewal
+ * is the genuine per-customer cutover) and send the completion notification +
+ * email. No-op when no lift is pending.
+ */
+async function maybeExecuteFilterLift(
+  admin: ReturnType<typeof createAdminClient>,
+  customerId: string,
+  leadType: LeadType
+): Promise<void> {
+  const { data: executed, error } = await admin.rpc("execute_filter_lift", {
+    p_customer_id: customerId,
+    p_lead_type: leadType,
+  });
+  if (error) {
+    console.error("execute_filter_lift failed", error);
+    return;
+  }
+  if (!executed) return;
+
+  const { data: customer } = await admin
+    .from("customers")
+    .select("email")
+    .eq("id", customerId)
+    .maybeSingle();
+
+  await admin.from("notifications").insert({
+    customer_id: customerId,
+    notification_type: "filter_lift_completed",
+    message:
+      "Your filter has been lifted. You're now back on the standard guaranteed lead allocation.",
+  });
+
+  if (customer?.email) {
+    await sendFilterLiftCompletedEmail({ to: customer.email });
   }
 }
 
@@ -178,6 +218,13 @@ export async function POST(request: NextRequest) {
                 payment_type: "gr_subscription",
                 status: "paid",
               });
+
+              // Execute a scheduled GR filter lift at this genuine renewal.
+              await maybeExecuteFilterLift(
+                admin,
+                customer.id,
+                "guaranteed_rent"
+              );
             }
             break;
           }
@@ -249,6 +296,9 @@ export async function POST(request: NextRequest) {
             .from("customers")
             .update(renewalUpdate)
             .eq("id", customer.id);
+
+          // Execute a scheduled management filter lift at this genuine renewal.
+          await maybeExecuteFilterLift(admin, customer.id, "management");
         }
         break;
       }

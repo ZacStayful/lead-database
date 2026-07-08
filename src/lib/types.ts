@@ -7,6 +7,8 @@ export type SubscriptionStatus =
 
 export type LeadType = "management" | "guaranteed_rent";
 
+export type FilterStatus = "off" | "active" | "pending_lift";
+
 export interface Customer {
   id: string;
   user_id: string | null;
@@ -33,6 +35,20 @@ export interface Customer {
   gr_billing_cycle_anchor: string | null;
   gr_last_assignment_at: string | null;
   gr_lead_balance: number;
+  // Lead filtering (management product).
+  filter_status: FilterStatus | string;
+  filter_areas: string[] | null;
+  filter_min_bedrooms: number | null;
+  filter_max_bedrooms: number | null;
+  filter_enabled_at: string | null;
+  filter_lift_effective_date: string | null;
+  // Lead filtering (guaranteed-rent product) — gr_ mirror of the above.
+  gr_filter_status: FilterStatus | string;
+  gr_filter_areas: string[] | null;
+  gr_filter_min_bedrooms: number | null;
+  gr_filter_max_bedrooms: number | null;
+  gr_filter_enabled_at: string | null;
+  gr_filter_lift_effective_date: string | null;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
@@ -50,6 +66,8 @@ export interface Lead {
   lead_profile: string | null;
   bedrooms: string | null;
   enquiry_date: string | null;
+  postcode: string | null;
+  postcode_area: string | null;
   lead_type: LeadType;
   assignment_count: number;
   max_assignments: number;
