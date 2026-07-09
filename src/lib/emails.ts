@@ -113,6 +113,38 @@ export async function sendFeedbackEmail(params: {
   }
 }
 
+/**
+ * Welcome / first-login confirmation email — sent exactly once, the first time
+ * a customer signs in to the portal after their account is activated. Triggered
+ * from the dashboard layout via the atomic first_login_at flip so it can never
+ * fire twice, even across concurrent tabs.
+ */
+export async function sendWelcomeEmail(params: {
+  to: string;
+  contactName: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const subject = "Welcome to the Stayful Lead Marketplace";
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">You're in, ${esc(firstName)}</h1>
+    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">Thanks for signing in for the first time — your Stayful portal is ready. Every pre-screened, financially modelled landlord lead assigned to you will appear here, and we'll email you the moment a new one lands.</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">From your dashboard you can review each lead, track it through your pipeline and export your data whenever you need it.</p>
+    ${button(`${APP_URL}/dashboard`, "Go to your dashboard")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** New lead notification email. */
 export async function sendNewLeadEmail(params: {
   to: string;
