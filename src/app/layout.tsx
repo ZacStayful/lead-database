@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { CompanyComplianceFooter } from "@/components/layout/CompanyComplianceFooter";
 
 export const metadata: Metadata = {
   title: "Stayful — warm landlord leads",
@@ -14,7 +15,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <CompanyComplianceFooter />
+      </body>
     </html>
   );
 }
