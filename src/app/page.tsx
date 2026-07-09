@@ -377,6 +377,9 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ============ LIVE ACTIVITY LEDGER ============ */}
+      <LiveActivity />
+
       {/* ============ PAIN ============ */}
       <section style={{ padding: "88px 32px" }}>
         <div style={{ maxWidth: 1040, margin: "0 auto" }}>
@@ -1401,9 +1404,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
-      {/* ============ LIVE ACTIVITY LEDGER ============ */}
-      <LiveActivity />
 
       {/* ============ LEAKING BUCKET CHART ============ */}
       <section style={{ background: "var(--sf-sage)", padding: "88px 32px" }}>
