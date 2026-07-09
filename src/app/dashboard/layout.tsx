@@ -4,6 +4,7 @@ import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
+import { MobileNav } from "@/components/dashboard/MobileNav";
 import { Logo } from "@/components/Logo";
 
 export default async function DashboardLayout({
@@ -34,6 +35,7 @@ export default async function DashboardLayout({
     { href: "/dashboard/documents", label: "Documents" },
     { href: "/dashboard/guide", label: "Guide" },
     { href: "/dashboard/settings", label: "Settings" },
+    { href: "/dashboard/objection-assistant", label: "Objection Assistant" },
   ];
   if (isAdminUser(user)) {
     nav.push({ href: "/admin", label: "Admin" });
@@ -41,16 +43,16 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-muted/20">
-      <header className="border-b-[0.5px] border-border bg-background">
-        <div className="container flex h-16 items-center justify-between">
-          <div className="flex items-center gap-6">
+      <header className="relative border-b-[0.5px] border-border bg-background">
+        <div className="container flex h-16 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-6">
             <Link
               href="/dashboard"
               aria-label="Stayful Lead Database"
-              className="flex items-center gap-2.5"
+              className="flex min-w-0 items-center gap-2.5"
             >
               <Logo height={32} priority />
-              <span className="border-l border-border pl-2.5 text-base font-semibold text-foreground">
+              <span className="truncate border-l border-border pl-2.5 text-base font-semibold text-foreground">
                 Lead Database
               </span>
             </Link>
@@ -66,7 +68,7 @@ export default async function DashboardLayout({
               ))}
             </nav>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-shrink-0 items-center gap-1">
             {customer && (
               <NotificationBell
                 customerId={customer.id}
@@ -74,6 +76,7 @@ export default async function DashboardLayout({
               />
             )}
             <SignOutButton />
+            <MobileNav items={nav} />
           </div>
         </div>
       </header>

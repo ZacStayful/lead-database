@@ -74,6 +74,11 @@ function enquiryBoardId(): string {
   return process.env.MONDAY_ENQUIRY_BOARD_ID ?? "18420649520";
 }
 
+/** Board 18420913271 "Stayful Guaranteed rent database enquiries". */
+function grEnquiryBoardId(): string {
+  return process.env.MONDAY_GR_ENQUIRY_BOARD_ID ?? "18420913271";
+}
+
 /**
  * Column-id → enquiry-field mapping for the enquiries board. If the board
  * schema changes, update these ids (from get_board_info).
@@ -83,35 +88,39 @@ const ENQUIRY_COLUMN_MAP = {
   mobile: "text_mm50hfvg", // "Mobile"
   website_url: "text_mm50y8an", // "Website URL"
   properties_managed: "text_mm50mt3h", // "Number of properties manage"
+  preferred_plan: "text_mm50w01q", // "Preffered plan"
+  current_lead_source: "text_mm51bgh6", // "How do you currently get management leads"
   date_added: "date_mm50brxt", // "Date added"
 } as const;
 
 /**
- * Create a contact item on the enquiries board from a landing-page form
- * submission. Returns the new Monday item id. Requires MONDAY_API_TOKEN.
+ * Column-id → field mapping for the Guaranteed Rent enquiries board
+ * (18420913271). That board only has name/email/mobile/properties/date — no
+ * website or plan columns.
  */
-export async function createEnquiryContact(input: {
-  name: string;
-  email: string;
-  mobile: string;
-  websiteUrl: string;
-  propertiesManaged: string;
-}): Promise<string> {
+const GR_ENQUIRY_COLUMN_MAP = {
+  email: "text_mm50e3d7", // "Email"
+  mobile: "text_mm50hfvg", // "Mobile"
+  properties_managed: "text_mm50mt3h", // "Number of properties"
+  current_lead_source: "text_mm515b3c", // "How do you currently get guaranteed rent leads"
+  date_added: "date_mm50brxt", // "Date added"
+} as const;
+
+/**
+ * Low-level: create a contact item on a given enquiries board. Returns the new
+ * Monday item id. Requires MONDAY_API_TOKEN.
+ */
+async function createBoardContact(
+  boardId: string,
+  itemName: string,
+  columnValues: Record<string, unknown>
+): Promise<string> {
   const token = process.env.MONDAY_API_TOKEN;
   if (!token) {
     throw new Error(
       "Missing MONDAY_API_TOKEN. Add it in Vercel → Settings → Environment Variables."
     );
   }
-
-  const today = new Date().toISOString().slice(0, 10);
-  const columnValues: Record<string, unknown> = {
-    [ENQUIRY_COLUMN_MAP.email]: input.email,
-    [ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
-    [ENQUIRY_COLUMN_MAP.website_url]: input.websiteUrl,
-    [ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
-    [ENQUIRY_COLUMN_MAP.date_added]: { date: today },
-  };
 
   // Monday's create_item takes column_values as a JSON string, and because it
   // is passed as a GraphQL variable we don't need to escape it by hand.
@@ -129,8 +138,8 @@ export async function createEnquiryContact(input: {
     body: JSON.stringify({
       query,
       variables: {
-        boardId: enquiryBoardId(),
-        itemName: input.name,
+        boardId,
+        itemName,
         columnValues: JSON.stringify(columnValues),
       },
     }),
@@ -155,6 +164,53 @@ export async function createEnquiryContact(input: {
   const id = json.data?.create_item?.id;
   if (!id) throw new Error("Monday create_item returned no item id");
   return id;
+}
+
+/**
+ * Create a contact item on the management enquiries board from a landing-page
+ * form submission. Returns the new Monday item id.
+ */
+export async function createEnquiryContact(input: {
+  name: string;
+  email: string;
+  mobile: string;
+  websiteUrl: string;
+  propertiesManaged: string;
+  preferredPlan?: string;
+  currentLeadSource?: string;
+}): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  return createBoardContact(enquiryBoardId(), input.name, {
+    [ENQUIRY_COLUMN_MAP.email]: input.email,
+    [ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
+    [ENQUIRY_COLUMN_MAP.website_url]: input.websiteUrl,
+    [ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
+    [ENQUIRY_COLUMN_MAP.preferred_plan]: input.preferredPlan ?? "",
+    [ENQUIRY_COLUMN_MAP.current_lead_source]: input.currentLeadSource ?? "",
+    [ENQUIRY_COLUMN_MAP.date_added]: { date: today },
+  });
+}
+
+/**
+ * Create a contact item on the Guaranteed Rent enquiries board (18420913271).
+ * That board has no website/plan columns, so only name/email/mobile/properties
+ * are sent.
+ */
+export async function createGuaranteedRentEnquiryContact(input: {
+  name: string;
+  email: string;
+  mobile: string;
+  propertiesManaged: string;
+  currentLeadSource?: string;
+}): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  return createBoardContact(grEnquiryBoardId(), input.name, {
+    [GR_ENQUIRY_COLUMN_MAP.email]: input.email,
+    [GR_ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
+    [GR_ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
+    [GR_ENQUIRY_COLUMN_MAP.current_lead_source]: input.currentLeadSource ?? "",
+    [GR_ENQUIRY_COLUMN_MAP.date_added]: { date: today },
+  });
 }
 
 /**

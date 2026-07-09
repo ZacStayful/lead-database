@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createEnquiryContact } from "@/lib/monday";
+import {
+  createEnquiryContact,
+  createGuaranteedRentEnquiryContact,
+} from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -25,7 +28,9 @@ export async function POST(request: NextRequest) {
     email?: string;
     website_url?: string;
     properties_managed?: string;
+    current_lead_source?: string;
     plan?: string;
+    product?: string;
   };
   try {
     body = await request.json();
@@ -33,11 +38,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  const isGuaranteedRent =
+    body.product === "guaranteed-rent" || body.product === "guaranteed_rent";
+
   const name = body.name?.trim();
   const email = body.email?.trim().toLowerCase();
   const mobile = body.mobile?.trim() ?? "";
-  const websiteUrl = body.website_url?.trim() ?? "";
+  // Accept scheme-less input (e.g. "stayful.co.uk", "www.stayful.co.uk") and
+  // normalise to a proper URL so the stored/Monday value is a working link.
+  let websiteUrl = body.website_url?.trim() ?? "";
+  if (websiteUrl && !/^https?:\/\//i.test(websiteUrl)) {
+    websiteUrl = `https://${websiteUrl}`;
+  }
   const propertiesManaged = body.properties_managed?.trim() ?? "";
+  const currentLeadSource = body.current_lead_source?.trim() ?? "";
 
   if (!name || !email) {
     return NextResponse.json(
@@ -47,7 +61,9 @@ export async function POST(request: NextRequest) {
   }
 
   const planKey = toPlanKey(body.plan);
-  const monthlyAllocation = PLANS[planKey].leads;
+  const plan = PLANS[planKey];
+  const monthlyAllocation = plan.leads;
+  const preferredPlan = `£${plan.priceGbp}/mo — ${plan.leads} leads`;
 
   // Fail fast with a clear message if the server isn't configured.
   const missing: string[] = [];
@@ -67,14 +83,28 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   // 1. Push to Monday. Non-fatal — we still create the account if this fails.
+  //    Guaranteed Rent enquiries go to their own board (no website/plan columns);
+  //    management enquiries go to the management enquiries board.
   try {
-    await createEnquiryContact({
-      name,
-      email,
-      mobile,
-      websiteUrl,
-      propertiesManaged,
-    });
+    if (isGuaranteedRent) {
+      await createGuaranteedRentEnquiryContact({
+        name,
+        email,
+        mobile,
+        propertiesManaged,
+        currentLeadSource,
+      });
+    } else {
+      await createEnquiryContact({
+        name,
+        email,
+        mobile,
+        websiteUrl,
+        propertiesManaged,
+        preferredPlan,
+        currentLeadSource,
+      });
+    }
   } catch (err) {
     console.error("Monday enquiry push failed", err);
   }

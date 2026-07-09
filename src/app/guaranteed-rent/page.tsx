@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { CSSProperties } from "react";
+import { GuaranteedRentNav } from "@/components/landing/GuaranteedRentNav";
 
 // Operator-facing landing page for the Guaranteed Rent (rent-to-rent) product.
 //
@@ -122,74 +123,7 @@ export default function GuaranteedRentPage() {
       }}
     >
       {/* ============ NAV ============ */}
-      <nav
-        style={{
-          background: "#fff",
-          borderBottom: "1px solid var(--sf-border)",
-          padding: "0 32px",
-          position: "sticky",
-          top: 0,
-          zIndex: 100,
-          height: 62,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <Link
-          href="/"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            textDecoration: "none",
-          }}
-        >
-          <img src={LOGO} alt="Stayful" style={{ height: 28 }} />
-          <span
-            style={{
-              borderLeft: "1px solid var(--sf-line, #d9dbd8)",
-              paddingLeft: 10,
-              fontSize: 16,
-              fontWeight: 600,
-              color: "var(--sf-green)",
-            }}
-          >
-            Guaranteed Rent
-          </span>
-        </Link>
-        <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
-          <Link href="/" style={navLink}>
-            Management Leads
-          </Link>
-          <a href="#how" style={navLink}>
-            How it works
-          </a>
-          <a href="#numbers" style={navLink}>
-            The numbers
-          </a>
-          <a href="#pricing" style={navLink}>
-            Pricing
-          </a>
-          <Link
-            href="/login"
-            style={{
-              color: "var(--sf-dark)",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "9px 16px",
-              borderRadius: 8,
-              border: "1px solid var(--sf-border)",
-              textDecoration: "none",
-            }}
-          >
-            Log in
-          </Link>
-          <Link href="/signup?product=guaranteed-rent" style={navCta}>
-            Start receiving leads →
-          </Link>
-        </div>
-      </nav>
+      <GuaranteedRentNav />
 
       {/* ============ 2. HERO ============ */}
       <section style={{ background: "var(--sf-sage)", padding: "72px 32px 80px" }}>
@@ -223,7 +157,7 @@ export default function GuaranteedRentPage() {
             against live Airbnb data for their postcode, and expecting a local
             operator to be in touch.
           </p>
-          <Link href="/signup?product=guaranteed-rent" style={heroPrimary}>
+          <Link href="/enquiry?product=guaranteed-rent" style={heroPrimary}>
             Start receiving leads →
           </Link>
         </div>
@@ -1051,7 +985,7 @@ export default function GuaranteedRentPage() {
               ))}
             </ul>
             <Link
-              href="/signup?product=guaranteed-rent"
+              href="/enquiry?product=guaranteed-rent"
               style={{
                 display: "block",
                 background: "var(--sf-dark)",
@@ -1115,23 +1049,6 @@ export default function GuaranteedRentPage() {
 }
 
 // ── Style helpers & sub-components (mirroring app/page.tsx) ──────────────────
-
-const navLink: CSSProperties = {
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: "var(--sf-secondary)",
-  textDecoration: "none",
-};
-
-const navCta: CSSProperties = {
-  background: "var(--sf-dark)",
-  color: "#fff",
-  fontSize: 13,
-  fontWeight: 600,
-  padding: "10px 18px",
-  borderRadius: 8,
-  textDecoration: "none",
-};
 
 const heroPrimary: CSSProperties = {
   display: "inline-block",

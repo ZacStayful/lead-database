@@ -7,6 +7,7 @@ import Link from "next/link";
 import { BucketChart } from "@/components/landing/BucketChart";
 import { RevenueChart } from "@/components/landing/RevenueChart";
 import LiveActivity from "@/components/landing/LiveActivity";
+import { QualificationProcess } from "@/components/landing/QualificationProcess";
 
 // Local copy of the dark-green wordmark (sourced from the Squarespace CDN).
 const LOGO = "/logo.png";
@@ -49,7 +50,7 @@ function Count({ n }: { n: number }) {
   );
 }
 
-const FAQ: { q: string; a: string }[] = [
+const FAQ: { q: string; a: React.ReactNode }[] = [
   {
     q: "Can you guarantee 20 leads a month?",
     a: "We only take on customers when we know we can fill the demand. Stayful assesses available lead volume before onboarding anyone new, so what's estimated is what's delivered. In the rare event we fall short in a billing period, the shortfall is credited and those leads are owed to you — you never pay for leads you don't receive.",
@@ -60,7 +61,21 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: "What happens if I receive a poor-quality lead?",
-    a: "Every lead is delivered with the full information received — name, address, phone, email, bedroom count, estimated income, and a written profile. If a lead's contact details are factually incorrect, contact the Stayful team and it will be reviewed. Leads that simply don't convert are not refundable — the 5% conversion rate is a long-run average across thousands of enquiries, not a per-lead guarantee.",
+    a: (
+      <>
+        {"Every lead is delivered with the full information received — name, address, phone, email, bedroom count, estimated income, and a written profile. If a lead's contact details are factually incorrect, contact the Stayful team and it will be reviewed. Leads that simply don't convert are not refundable — the 5% conversion rate is a long-run average across thousands of enquiries, not a per-lead guarantee."}{" "}
+        <Link
+          href="/policies/lead-quality-and-data"
+          style={{
+            color: "var(--sf-dark)",
+            fontWeight: 600,
+            textDecoration: "underline",
+          }}
+        >
+          For more on how this is handled, see if something&apos;s not right.
+        </Link>
+      </>
+    ),
   },
   {
     q: "Can I cancel? Is there a minimum commitment?",
@@ -610,6 +625,9 @@ export default function LandingPage() {
           </Reveal>
         </div>
       </section>
+
+      {/* ============ HOW LEADS ARE QUALIFIED ============ */}
+      <QualificationProcess />
 
       {/* ============ HOW IT WORKS ============ */}
       <section id="how" style={{ padding: "88px 32px" }}>
@@ -1957,6 +1975,9 @@ export default function LandingPage() {
           </Link>
           <Link href="/feedback?type=bug" style={footerLink}>
             Report a bug
+          </Link>
+          <Link href="/policies/lead-quality-and-data" style={footerLink}>
+            If something&apos;s not right
           </Link>
         </div>
         <p style={{ fontSize: 12.5, color: "var(--sf-muted)" }}>
