@@ -6,6 +6,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { BucketChart } from "@/components/landing/BucketChart";
 import { RevenueChart } from "@/components/landing/RevenueChart";
+import LiveActivity from "@/components/landing/LiveActivity";
 
 // Local copy of the dark-green wordmark (sourced from the Squarespace CDN).
 const LOGO = "/logo.png";
@@ -1400,6 +1401,9 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* ============ LIVE ACTIVITY LEDGER ============ */}
+      <LiveActivity />
 
       {/* ============ LEAKING BUCKET CHART ============ */}
       <section style={{ background: "var(--sf-sage)", padding: "88px 32px" }}>
