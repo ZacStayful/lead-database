@@ -6,6 +6,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { BucketChart } from "@/components/landing/BucketChart";
 import { RevenueChart } from "@/components/landing/RevenueChart";
+import LiveActivity from "@/components/landing/LiveActivity";
 import { QualificationProcess } from "@/components/landing/QualificationProcess";
 
 // Local copy of the dark-green wordmark (sourced from the Squarespace CDN).
@@ -390,6 +391,9 @@ export default function LandingPage() {
           </p>
         </div>
       </section>
+
+      {/* ============ LIVE ACTIVITY LEDGER ============ */}
+      <LiveActivity />
 
       {/* ============ PAIN ============ */}
       <section style={{ padding: "88px 32px" }}>
