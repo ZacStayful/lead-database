@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+export const dynamic = 'force-dynamic';
+
 const SINCE_DATE = '2026-07-01';
 
 // Derive the postcode DISTRICT (the outward code, e.g. "M14", "SW9") from the

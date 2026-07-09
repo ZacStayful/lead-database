@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+// Always read the live cache row. Without this, Next.js 14 statically caches
+// this GET handler's response at build time, so monthly cron refreshes (and
+// any re-seed) would never surface until the next deploy.
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
