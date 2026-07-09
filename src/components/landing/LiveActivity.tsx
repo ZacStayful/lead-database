@@ -14,10 +14,21 @@ import { useEffect, useState, type CSSProperties } from "react";
 // email, or lead profile is ever fetched or rendered here.
 
 type LedgerEntry = {
-  region: string;
+  location: string;
   bedrooms: string | number | null;
   assigned_at: string;
 };
+
+// The bedrooms value may already carry its own unit (e.g. "3 Bed"), so only
+// append "-bed" when it's a bare number ("3"). Falls back to "Property" when
+// bedroom count is unknown.
+function bedroomLabel(bedrooms: string | number | null): string {
+  if (bedrooms === null || bedrooms === undefined || bedrooms === "") {
+    return "Property";
+  }
+  const value = String(bedrooms).trim();
+  return /bed/i.test(value) ? value : `${value}-bed`;
+}
 
 type PublicStats = {
   totalDistributed: number;
@@ -92,8 +103,7 @@ export default function LiveActivity() {
                 }}
               >
                 <span style={{ color: "var(--sf-body)", fontWeight: 600 }}>
-                  {entry.bedrooms ? `${entry.bedrooms}-bed` : "Property"} ·{" "}
-                  {entry.region}
+                  {bedroomLabel(entry.bedrooms)} · {entry.location}
                 </span>
                 <span style={{ color: "var(--sf-muted)" }}>
                   {timeAgo(entry.assigned_at)}
