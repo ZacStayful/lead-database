@@ -6,6 +6,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { BucketChart } from "@/components/landing/BucketChart";
 import { RevenueChart } from "@/components/landing/RevenueChart";
+import { QualificationProcess } from "@/components/landing/QualificationProcess";
 
 // Local copy of the dark-green wordmark (sourced from the Squarespace CDN).
 const LOGO = "/logo.png";
@@ -606,6 +607,9 @@ export default function LandingPage() {
           </Reveal>
         </div>
       </section>
+
+      {/* ============ HOW LEADS ARE QUALIFIED ============ */}
+      <QualificationProcess />
 
       {/* ============ HOW IT WORKS ============ */}
       <section id="how" style={{ padding: "88px 32px" }}>
