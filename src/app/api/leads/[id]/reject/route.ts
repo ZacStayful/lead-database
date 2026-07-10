@@ -126,9 +126,14 @@ export async function POST(
     );
   }
 
-  if ((assignment as { rejection_reason: string | null }).rejection_reason) {
-    // Already processed — return the original outcome, re-running nothing.
-    return response(storedOutcome(assignment as StoredAssignment));
+  const stored = assignment as StoredAssignment & { status: string };
+  // A denied invalid_contact claim leaves the lead 'new' and chargeable with a
+  // reason on file; allow the customer to still reject it as not_a_fit. Every
+  // other already-processed case returns the original outcome, re-running nothing.
+  const canSupersedeDenied =
+    stored.claim_denied && stored.status === "new" && reason === "not_a_fit";
+  if (stored.rejection_reason && !canSupersedeDenied) {
+    return response(storedOutcome(stored));
   }
 
   // Resolve the lead so validation + refund act on the correct product.

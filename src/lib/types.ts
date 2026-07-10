@@ -88,6 +88,11 @@ export interface LeadAssignment {
   due_to_call_date: string | null;
   income_estimate: number | null;
   assigned_at: string;
+  // Rejection audit (0021). rejection_reason is set for both a completed
+  // rejection (status='rejected') and a denied invalid_contact claim
+  // (status stays 'new', claim_denied=true).
+  rejection_reason: "not_a_fit" | "invalid_contact" | null;
+  claim_denied: boolean;
 }
 
 export interface AssignmentWithLead extends LeadAssignment {

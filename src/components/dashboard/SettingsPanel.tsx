@@ -27,6 +27,10 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
   }
 
   const isActive = customer.subscription_status === "active";
+  const hasGr = customer.gr_subscription_status === "active";
+  // A customer subscribed to Guaranteed Rent only: the management columns are
+  // empty/zero for them, so read from the GR columns instead of showing "0 of 0".
+  const grOnly = hasGr && !isActive;
 
   return (
     <div className="space-y-6">
@@ -37,16 +41,30 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
         <CardContent className="space-y-4">
           <Row label="Status">
             <span className="flex items-center gap-2">
-              {isActive && <span className="h-2 w-2 rounded-full bg-brand" />}
-              <span className="capitalize">{customer.subscription_status}</span>
+              {(isActive || hasGr) && (
+                <span className="h-2 w-2 rounded-full bg-brand" />
+              )}
+              <span className="capitalize">
+                {isActive || hasGr ? "active" : customer.subscription_status}
+              </span>
             </span>
           </Row>
           <Row label="Plan">
-            £{plan.priceGbp} / month · {plan.leads} leads included
+            {grOnly
+              ? `Guaranteed Rent · ${customer.gr_monthly_allocation} leads included`
+              : `£${plan.priceGbp} / month · ${plan.leads} leads included`}
           </Row>
-          <Row label="Leads this month">
-            {customer.leads_received_this_month} of {customer.monthly_allocation}
-          </Row>
+          {!grOnly && (
+            <Row label="Leads this month">
+              {customer.leads_received_this_month} of {customer.monthly_allocation}
+            </Row>
+          )}
+          {hasGr && (
+            <Row label={isActive ? "GR leads this month" : "Leads this month"}>
+              {customer.gr_leads_received_this_month} of{" "}
+              {customer.gr_monthly_allocation}
+            </Row>
+          )}
           <div className="pt-2">
             <Button
               variant="outline"

@@ -49,7 +49,10 @@ export async function fetchOrderedAssignments(
       .from("lead_assignments")
       .select("*, lead:leads(*)")
       .eq("customer_id", customerId)
-      .not("status", "in", "(won,not_relevant)");
+      // Exclude closed/rejected work from the call list: won and not_relevant
+      // are done, and a rejected lead is one the customer explicitly declined —
+      // it must not resurface in their call-back order.
+      .not("status", "in", "(won,not_relevant,rejected)");
     return sortPriority((data ?? []) as AssignmentWithLead[]);
   }
 
