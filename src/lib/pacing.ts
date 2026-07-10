@@ -52,7 +52,13 @@ export function computePacing(customer: Customer, now: Date = new Date()): Pacin
  */
 export function computeGrPacing(customer: Customer, now: Date = new Date()): Pacing {
   const anchorStr = customer.gr_billing_cycle_anchor ?? customer.created_at;
+  // Match the SQL (coalesce(gr_billing_cycle_anchor, created_at::date)): count
+  // from midnight of the anchor date, not the exact created_at instant, so the
+  // dashboard deficit agrees with the value used for GR lead-ordering. This
+  // mirrors computePacing — omitting it made GR pacing drift by up to a day
+  // whenever gr_billing_cycle_anchor was still null.
   const anchor = new Date(anchorStr);
+  anchor.setHours(0, 0, 0, 0);
 
   const msPerDay = 1000 * 60 * 60 * 24;
   const rawElapsed = Math.floor((now.getTime() - anchor.getTime()) / msPerDay);

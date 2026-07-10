@@ -135,14 +135,6 @@ export async function POST(request: NextRequest) {
           if (isGuaranteedRent) {
             // Guaranteed Rent renewal — add 10 GR leads of credit and mark the
             // GR subscription active. Management fields are left untouched.
-            const { error: grBalanceError } = await admin.rpc(
-              "increment_gr_lead_balance",
-              { p_stripe_customer_id: customerId, p_amount: 10 }
-            );
-            if (grBalanceError) {
-              console.error("increment_gr_lead_balance failed", grBalanceError);
-            }
-
             const { data: customer } = await admin
               .from("customers")
               .select("id")
@@ -150,6 +142,27 @@ export async function POST(request: NextRequest) {
               .maybeSingle();
 
             if (customer) {
+              // Idempotent credit: records the paid invoice and moves the GR
+              // balance in one transaction. Returns false (no-op) on a replayed
+              // invoice, so a webhook retry can never double-credit.
+              const { data: credited, error: creditError } = await admin.rpc(
+                "credit_invoice",
+                {
+                  p_customer_id: customer.id,
+                  p_amount: 10,
+                  p_invoice_id: invoice.id,
+                  p_payment_intent_id:
+                    (invoice.payment_intent as string | null) ?? null,
+                  p_amount_pence: invoice.amount_paid ?? 0,
+                  p_payment_type: "gr_subscription",
+                }
+              );
+              if (creditError) {
+                console.error("credit_invoice (gr) failed", creditError);
+              } else if (credited === false) {
+                console.log("GR invoice already credited, skipping", invoice.id);
+              }
+
               const grUpdate: Record<string, unknown> = {
                 gr_subscription_status: "active",
                 gr_stripe_subscription_id: invoice.subscription as string,
@@ -167,17 +180,6 @@ export async function POST(request: NextRequest) {
                 .from("customers")
                 .update(grUpdate)
                 .eq("id", customer.id);
-
-              await admin.from("payments").insert({
-                customer_id: customer.id,
-                stripe_invoice_id: invoice.id,
-                stripe_payment_intent_id:
-                  (invoice.payment_intent as string | null) ?? null,
-                amount_pence: invoice.amount_paid ?? 0,
-                credits_added: 10,
-                payment_type: "gr_subscription",
-                status: "paid",
-              });
             }
             break;
           }
@@ -203,12 +205,25 @@ export async function POST(request: NextRequest) {
             customer.monthly_allocation ?? 20
           ).leads;
 
-          const { error: balanceError } = await admin.rpc(
-            "increment_lead_balance",
-            { p_stripe_customer_id: customerId, p_amount: credits }
+          // Idempotent credit: records the paid invoice and moves the balance in
+          // one transaction, so a replayed webhook can never credit twice. This
+          // replaces the old unconditional increment + separate payment insert.
+          const { data: credited, error: balanceError } = await admin.rpc(
+            "credit_invoice",
+            {
+              p_customer_id: customer.id,
+              p_amount: credits,
+              p_invoice_id: invoice.id,
+              p_payment_intent_id:
+                (invoice.payment_intent as string | null) ?? null,
+              p_amount_pence: invoice.amount_paid ?? 0,
+              p_payment_type: "subscription",
+            }
           );
           if (balanceError) {
-            console.error("increment_lead_balance failed", balanceError);
+            console.error("credit_invoice failed", balanceError);
+          } else if (credited === false) {
+            console.log("Invoice already credited, skipping", invoice.id);
           }
 
           // Promote invited → active on the first successful payment. The
@@ -218,18 +233,6 @@ export async function POST(request: NextRequest) {
             .update({ account_status: "active" })
             .eq("stripe_customer_id", customerId)
             .eq("account_status", "invited");
-
-          // Record the payment.
-          await admin.from("payments").insert({
-            customer_id: customer.id,
-            stripe_invoice_id: invoice.id,
-            stripe_payment_intent_id:
-              (invoice.payment_intent as string | null) ?? null,
-            amount_pence: invoice.amount_paid ?? 0,
-            credits_added: credits,
-            payment_type: "subscription",
-            status: "paid",
-          });
 
           // Keep the subscription marked active and re-anchor the billing cycle
           // to the start of the period this invoice covers.
