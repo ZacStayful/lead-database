@@ -39,7 +39,9 @@ export async function POST(
   // Verify ownership and re-check the discard preconditions server-side.
   const { data: assignment } = await admin
     .from("lead_assignments")
-    .select("id, lead_id, status, customer_id, customers!inner(user_id)")
+    .select(
+      "id, lead_id, status, rejection_reason, customer_id, customers!inner(user_id)"
+    )
     .eq("id", assignment_id)
     .eq("lead_id", params.id)
     .maybeSingle();
@@ -54,6 +56,16 @@ export async function POST(
   if ((assignment as { status?: string }).status !== "new") {
     return NextResponse.json(
       { error: "Only a new lead can be discarded" },
+      { status: 400 }
+    );
+  }
+
+  // A denied invalid_contact claim stays 'new' but carries a rejection_reason;
+  // it is adjudicated and chargeable, so it must not be offloaded via discard.
+  // Enforced again atomically inside discard_lead_assignment.
+  if ((assignment as { rejection_reason?: string | null }).rejection_reason) {
+    return NextResponse.json(
+      { error: "This lead has a recorded rejection and cannot be discarded" },
       { status: 400 }
     );
   }

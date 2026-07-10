@@ -45,7 +45,11 @@ export default async function DashboardPage() {
     .order("assigned_at", { ascending: false });
 
   const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
-  const unreadLeads = assignments.filter((a) => !a.viewed_at).length;
+  // Unread mirrors LeadCard's isUnread: a rejected assignment is never unread
+  // (it shows no unread dot in the list), so it must not inflate this KPI.
+  const unreadLeads = assignments.filter(
+    (a) => !a.viewed_at && a.status !== "rejected"
+  ).length;
 
   const isActive = customer.subscription_status === "active";
   const hasGuaranteedRent = customer.gr_subscription_status === "active";
@@ -55,12 +59,19 @@ export default async function DashboardPage() {
   const carriedForward = customer.lead_balance - customer.monthly_allocation;
 
   // Split what the customer has received by product so management and
-  // guaranteed rent are kept clearly separate. Every delivered lead counts
-  // (including rejected ones — rejection no longer refunds or replaces).
-  const grReceived = assignments.filter(
+  // guaranteed rent are kept clearly separate. Every delivered lead counts,
+  // including not_a_fit rejections (still chargeable, per 0019) — EXCEPT an
+  // invalid_contact rejection, which 0021 refunds and rolls back the monthly
+  // counter, so it must not be counted as received (that would double-count it
+  // against both "received" and the restored "remaining" balance). A denied
+  // invalid_contact claim keeps status 'new', so it is not excluded here.
+  const isRefunded = (a: AssignmentWithLead) =>
+    a.status === "rejected" && a.rejection_reason === "invalid_contact";
+  const received = assignments.filter((a) => !isRefunded(a));
+  const grReceived = received.filter(
     (a) => a.lead?.lead_type === "guaranteed_rent"
   ).length;
-  const managementReceived = assignments.length - grReceived;
+  const managementReceived = received.length - grReceived;
   // Which products this customer actually holds (active sub or leads received).
   const hasManagement = isActive || managementReceived > 0;
   const hasGr = hasGuaranteedRent || grReceived > 0;
@@ -284,7 +295,11 @@ function nextRenewalDate(anchor: string | null): string {
     const a = new Date(anchor);
     if (!isNaN(a.getTime())) {
       const next = new Date(a);
+      const day = next.getDate();
       next.setMonth(next.getMonth() + 1);
+      // setMonth overflows a month-end anchor (e.g. Jan 31 -> Mar 3), which
+      // would skip a month. Clamp back to the last day of the intended month.
+      if (next.getDate() !== day) next.setDate(0);
       return formatDate(next.toISOString());
     }
   }

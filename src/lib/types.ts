@@ -22,6 +22,7 @@ export interface Customer {
   lead_balance: number;
   account_status: "waitlisted" | "invited" | "active" | "cancelled" | string;
   is_active: boolean;
+  first_login_at: string | null;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;
   // Guaranteed Rent subscription (independent of the management subscription).
@@ -87,6 +88,11 @@ export interface LeadAssignment {
   due_to_call_date: string | null;
   income_estimate: number | null;
   assigned_at: string;
+  // Rejection audit (0021). rejection_reason is set for both a completed
+  // rejection (status='rejected') and a denied invalid_contact claim
+  // (status stays 'new', claim_denied=true).
+  rejection_reason: "not_a_fit" | "invalid_contact" | null;
+  claim_denied: boolean;
 }
 
 export interface AssignmentWithLead extends LeadAssignment {
