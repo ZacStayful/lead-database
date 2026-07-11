@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     .select('assigned_at, leads(address, bedrooms)')
     .gte('assigned_at', SINCE_DATE)
     .order('assigned_at', { ascending: false })
-    .limit(5);
+    .limit(20);
 
   if (latestError) {
     return NextResponse.json({ error: latestError.message }, { status: 500 });

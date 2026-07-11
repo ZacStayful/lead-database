@@ -5,7 +5,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 // Public, anonymised marketplace-activity ledger + counter.
 //
 // This reads ONLY the cached singleton served by /api/stats/public — it never
-// touches lead_assignments directly. The cache is refreshed monthly by the
+// touches lead_assignments directly. The cache is refreshed daily by the
 // cron route; the "assigned X days ago" captions below are computed against
 // real time on the client, so they stay accurate between refreshes.
 //
@@ -87,12 +87,22 @@ export default function LiveActivity() {
   return (
     <section style={{ background: "var(--sf-olive)", padding: "88px 32px" }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        {/* WebKit/Blink ignore scrollbar-width; style the ledger scrollbar to
+            match the brand rather than showing the chunky OS default. */}
+        <style>{`
+          .sf-ledger-scroll::-webkit-scrollbar { width: 6px; }
+          .sf-ledger-scroll::-webkit-scrollbar-track { background: transparent; }
+          .sf-ledger-scroll::-webkit-scrollbar-thumb {
+            background: var(--sf-border);
+            border-radius: 999px;
+          }
+        `}</style>
         <p style={eyebrow}>Live marketplace activity</p>
         <h2 style={headline}>
           {stats.totalDistributed.toLocaleString("en-GB")} leads distributed
           since {sinceDate} — and counting
         </h2>
-        <p style={updatedCaption}>Updated monthly — last updated {generatedDate}</p>
+        <p style={updatedCaption}>Updated daily — last updated {generatedDate}</p>
 
         {/* Qualification pillars — the real qualifiers every lead passes,
             already stated elsewhere on the page. */}
@@ -108,7 +118,7 @@ export default function LiveActivity() {
         </div>
 
         {stats.ledger.length > 0 && (
-          <ul style={ledgerCard}>
+          <ul className="sf-ledger-scroll" style={ledgerCard}>
             {stats.ledger.map((entry, i) => (
               <li
                 key={i}
@@ -226,6 +236,17 @@ const privacyNote: CSSProperties = {
   textAlign: "left",
 };
 
+// The ledger now holds up to 20 entries. We keep the card compact by showing
+// five rows at a time and scrolling the rest. LEDGER_ROW_PX is one row's
+// height (14px top + 14px bottom padding + ~20px line); LEDGER_CARD_CHROME_PX
+// covers the card's own 8px top + 8px bottom padding and 1px top + 1px bottom
+// border (Tailwind's preflight makes every element border-box, so max-height
+// must include them). The trailing third-of-a-row lets the sixth entry peek
+// below the fold as a scroll affordance.
+const LEDGER_ROW_PX = 48;
+const LEDGER_VISIBLE_ROWS = 5;
+const LEDGER_CARD_CHROME_PX = 18;
+
 const ledgerCard: CSSProperties = {
   background: "#fff",
   border: "1px solid var(--sf-border)",
@@ -233,6 +254,13 @@ const ledgerCard: CSSProperties = {
   padding: "8px 24px",
   listStyle: "none",
   margin: 0,
+  maxHeight:
+    LEDGER_ROW_PX * LEDGER_VISIBLE_ROWS +
+    LEDGER_CARD_CHROME_PX +
+    Math.round(LEDGER_ROW_PX / 3),
+  overflowY: "auto",
+  scrollbarWidth: "thin",
+  scrollbarColor: "var(--sf-border) transparent",
 };
 
 const ledgerRow: CSSProperties = {
