@@ -26,9 +26,32 @@ export function deriveLocation(address: string | null | undefined): string {
   return match[1].toUpperCase().replace(/\s+/g, '');
 }
 
+// Normalise the free-text bedroom count (from Monday/the enquiry form) into a
+// tidy public label. The raw field is messy — "3 Bed", "2 bedrooms",
+// "1 bedrooms", "4+ bed", "12 bedrooms", even "5-77 bedrooms" — so we take the
+// first integer and render "N Bed", bucketing anything 5+ as "5+ Bed" (large or
+// nonsensical counts should never appear verbatim on the marketing page).
+// Returns null when there's no usable number, so the caller can drop the row.
+export function normalizeBedrooms(raw: string | number | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const text = String(raw);
+  const match = text.match(/\d+/);
+  if (!match) return null;
+  const n = parseInt(match[0], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 5) return '5+ Bed';
+  const hasPlus = new RegExp(`${n}\\s*\\+`).test(text);
+  return `${n}${hasPlus ? '+' : ''} Bed`;
+}
+
+// A ledger entry is in the current clean format iff its label looks like
+// "3 Bed" / "4+ Bed" / "5+ Bed". Used by the public endpoint to force a rebuild
+// when a cached snapshot predates this normalisation.
+export const CLEAN_BEDROOM_LABEL = /^\d+\+? Bed$/;
+
 export type LedgerEntry = {
   location: string;
-  bedrooms: string | number | null;
+  bedrooms: string;
   assigned_at: string;
 };
 
@@ -56,30 +79,34 @@ export async function generatePublicStats(
     .gte('created_at', SINCE_DATE);
   if (countError) throw new Error(countError.message);
 
-  // Ledger: the most recent distributions, de-duplicated to one row per lead so
-  // the same property never appears twice (it would otherwise show once per
-  // operator it was sent to). Over-fetch, then keep only the newest row per
-  // lead until we have 20 unique properties.
+  // Ledger: the most recent distributions, rendered as up to 20 rows that are
+  // each visibly distinct. Over-fetch, then skip a row when (a) we've already
+  // shown that lead, (b) its bedroom count doesn't parse, or (c) another row
+  // already shows the same "<beds> · <district>" — so the same property never
+  // repeats and no two rows look identical.
   const { data: recent, error: recentError } = await supabase
     .from('lead_assignments')
     .select('lead_id, assigned_at, leads(address, bedrooms)')
     .gte('assigned_at', SINCE_DATE)
     .order('assigned_at', { ascending: false })
-    .limit(60);
+    .limit(150);
   if (recentError) throw new Error(recentError.message);
 
   const seenLeadIds = new Set<string>();
+  const seenDisplay = new Set<string>();
   const ledger: LedgerEntry[] = [];
   for (const row of (recent ?? []) as any[]) {
     if (row.lead_id) {
       if (seenLeadIds.has(row.lead_id)) continue;
       seenLeadIds.add(row.lead_id);
     }
-    ledger.push({
-      location: deriveLocation(row.leads?.address),
-      bedrooms: row.leads?.bedrooms ?? null,
-      assigned_at: row.assigned_at,
-    });
+    const bedrooms = normalizeBedrooms(row.leads?.bedrooms);
+    if (!bedrooms) continue;
+    const location = deriveLocation(row.leads?.address);
+    const display = `${bedrooms}|${location}`;
+    if (seenDisplay.has(display)) continue;
+    seenDisplay.add(display);
+    ledger.push({ location, bedrooms, assigned_at: row.assigned_at });
     if (ledger.length >= 20) break;
   }
 

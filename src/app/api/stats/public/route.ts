@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { generatePublicStats, STALE_AFTER_MS } from '@/lib/publicStats';
+import {
+  generatePublicStats,
+  STALE_AFTER_MS,
+  CLEAN_BEDROOM_LABEL,
+} from '@/lib/publicStats';
 
 // Always read the live cache row. Without this, Next.js 14 statically caches
 // this GET handler's response at build time, so refreshes would never surface
@@ -41,12 +45,20 @@ export async function GET() {
   const isStale =
     !data || !data.generated_at || Date.now() - generatedAtMs > STALE_AFTER_MS;
 
-  // Self-heal: if the snapshot is missing or older than STALE_AFTER_MS,
-  // regenerate it here rather than depending on the scheduled cron (which needs
-  // a CRON_SECRET and Vercel's scheduler to fire). Best-effort — if
-  // regeneration fails, fall back to whatever is cached so the section never
+  // Also rebuild if the cached ledger predates the current bedroom-label
+  // normalisation (any row not in the clean "N Bed" / "N+ Bed" form), so a
+  // format change surfaces on the next request instead of after STALE_AFTER_MS.
+  const ledger = Array.isArray(data?.ledger) ? (data!.ledger as any[]) : [];
+  const isLegacyFormat = ledger.some(
+    (e) => !CLEAN_BEDROOM_LABEL.test(String(e?.bedrooms ?? ''))
+  );
+
+  // Self-heal: if the snapshot is missing, older than STALE_AFTER_MS, or in an
+  // old format, regenerate it here rather than depending on the scheduled cron
+  // (which needs a CRON_SECRET and Vercel's scheduler to fire). Best-effort —
+  // if regeneration fails, fall back to whatever is cached so the section never
   // hard-fails on a transient DB hiccup.
-  if (isStale) {
+  if (isStale || isLegacyFormat) {
     try {
       const fresh = await generatePublicStats(supabase);
       return NextResponse.json(serialize(fresh));
