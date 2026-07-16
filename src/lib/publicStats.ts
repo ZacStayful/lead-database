@@ -6,9 +6,12 @@ export const SINCE_DATE = '2026-07-01';
 
 // How long a cached snapshot is considered fresh. Past this, the public
 // endpoint regenerates it on the next request (see /api/stats/public), so the
-// section refreshes roughly daily WITHOUT depending on the scheduled cron or
-// the CRON_SECRET. The cron remains as a belt-and-braces scheduled refresh.
-export const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+// section refreshes on its own WITHOUT depending on the scheduled cron or the
+// CRON_SECRET. Kept short (a few hours) so new leads — and any change to how
+// the snapshot is built — surface within hours rather than after a full day.
+// Regeneration is gated on staleness, so this bounds DB work to a few rebuilds
+// per day regardless of traffic. The cron remains a belt-and-braces refresh.
+export const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 // Derive the postcode DISTRICT (the outward code, e.g. "M14", "SW9") from the
 // lead's address. This is more specific than a broad region but still covers
