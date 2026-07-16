@@ -79,34 +79,32 @@ export async function generatePublicStats(
     .gte('created_at', SINCE_DATE);
   if (countError) throw new Error(countError.message);
 
-  // Ledger: the most recent distributions, rendered as up to 20 rows that are
-  // each visibly distinct. Over-fetch, then skip a row when (a) we've already
-  // shown that lead, (b) its bedroom count doesn't parse, or (c) another row
-  // already shows the same "<beds> · <district>" — so the same property never
-  // repeats and no two rows look identical.
+  // Ledger: the most recent leads received into the marketplace, rendered as up
+  // to 20 rows that are each visibly distinct. We show recent *arrivals* (by
+  // created_at) rather than distribution events, so the list refreshes daily as
+  // new enquiries come in — distributions can stall (few active operators) while
+  // leads keep arriving. Over-fetch, then skip a row when its bedroom count
+  // doesn't parse or another row already shows the same "<beds> · <district>".
   const { data: recent, error: recentError } = await supabase
-    .from('lead_assignments')
-    .select('lead_id, assigned_at, leads(address, bedrooms)')
-    .gte('assigned_at', SINCE_DATE)
-    .order('assigned_at', { ascending: false })
+    .from('leads')
+    .select('created_at, address, bedrooms')
+    .gte('created_at', SINCE_DATE)
+    .order('created_at', { ascending: false })
     .limit(150);
   if (recentError) throw new Error(recentError.message);
 
-  const seenLeadIds = new Set<string>();
   const seenDisplay = new Set<string>();
   const ledger: LedgerEntry[] = [];
   for (const row of (recent ?? []) as any[]) {
-    if (row.lead_id) {
-      if (seenLeadIds.has(row.lead_id)) continue;
-      seenLeadIds.add(row.lead_id);
-    }
-    const bedrooms = normalizeBedrooms(row.leads?.bedrooms);
+    const bedrooms = normalizeBedrooms(row.bedrooms);
     if (!bedrooms) continue;
-    const location = deriveLocation(row.leads?.address);
+    const location = deriveLocation(row.address);
     const display = `${bedrooms}|${location}`;
     if (seenDisplay.has(display)) continue;
     seenDisplay.add(display);
-    ledger.push({ location, bedrooms, assigned_at: row.assigned_at });
+    // `assigned_at` is the public timestamp the frontend renders as "… ago";
+    // for a leads-sourced ledger it carries the lead's arrival time.
+    ledger.push({ location, bedrooms, assigned_at: row.created_at });
     if (ledger.length >= 20) break;
   }
 
