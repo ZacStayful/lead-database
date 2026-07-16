@@ -11,6 +11,11 @@ import {
 // until the next deploy.
 export const dynamic = 'force-dynamic';
 
+// Never let Vercel's CDN (or the browser) serve a cached copy of this response.
+// It self-heals on request, so a cached response would hide fresh regenerations
+// for hours — every request must reach the origin.
+const NO_STORE = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
+
 function serialize(s: {
   total_distributed: number | null;
   since_date: string | null;
@@ -38,7 +43,7 @@ export async function GET() {
     .maybeSingle();
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: 500, headers: NO_STORE });
   }
 
   const generatedAtMs = data?.generated_at ? new Date(data.generated_at).getTime() : 0;
@@ -61,7 +66,7 @@ export async function GET() {
   if (isStale || isLegacyFormat) {
     try {
       const fresh = await generatePublicStats(supabase);
-      return NextResponse.json(serialize(fresh));
+      return NextResponse.json(serialize(fresh), { headers: NO_STORE });
     } catch {
       // fall through to the cached data (or the null-state below)
     }
@@ -70,8 +75,8 @@ export async function GET() {
   if (!data || !data.generated_at) {
     // Nothing cached and regeneration didn't succeed — tell the frontend to
     // hide the section rather than render zeroed or broken stats.
-    return NextResponse.json({ generatedAt: null });
+    return NextResponse.json({ generatedAt: null }, { headers: NO_STORE });
   }
 
-  return NextResponse.json(serialize(data));
+  return NextResponse.json(serialize(data), { headers: NO_STORE });
 }
