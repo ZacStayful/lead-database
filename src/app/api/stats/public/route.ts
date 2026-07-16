@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import {
-  generatePublicStats,
-  STALE_AFTER_MS,
-  CLEAN_BEDROOM_LABEL,
-} from '@/lib/publicStats';
+import { generatePublicStats, STALE_AFTER_MS } from '@/lib/publicStats';
 
 // Always read the live cache row. Without this, Next.js 14 statically caches
 // this GET handler's response at build time, so refreshes would never surface
@@ -15,15 +11,6 @@ export const dynamic = 'force-dynamic';
 // It self-heals on request, so a cached response would hide fresh regenerations
 // for hours — every request must reach the origin.
 const NO_STORE = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
-
-// Warm-instance memo. Production's Supabase read endpoint lags its own writes,
-// so the DB-based staleness gate below can't tell that a just-written snapshot
-// is fresh and would rebuild on every request. This short in-process memo
-// bounds regeneration to ~once per TTL per warm instance regardless of that
-// lag; a new deployment (or cold start) starts with an empty memo, so changes
-// still surface promptly.
-const MEMO_TTL_MS = 5 * 60 * 1000;
-let memo: { at: number; payload: ReturnType<typeof serialize> } | null = null;
 
 function serialize(s: {
   total_distributed: number | null;
@@ -40,16 +27,38 @@ function serialize(s: {
 }
 
 export async function GET() {
-  // Serve a very recent result straight from memory, without touching the DB.
-  if (memo && Date.now() - memo.at < MEMO_TTL_MS) {
-    return NextResponse.json(memo.payload, { headers: NO_STORE });
-  }
-
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
+  // Atomically claim the right to rebuild. This UPDATE flips generated_at
+  // forward only when the row is already older than the staleness window, and
+  // it runs on the PRIMARY — so exactly one request per window rebuilds, and it
+  // is immune to the read-replica lag that otherwise made a read-then-decide
+  // approach rebuild on every request (the row's own value gates it, not a
+  // possibly-stale SELECT). Concurrent callers: Postgres row-locks the UPDATE,
+  // so only the first sees it as stale and wins.
+  const staleBefore = new Date(Date.now() - STALE_AFTER_MS).toISOString();
+  const { data: claimed, error: claimError } = await supabase
+    .from('public_activity_stats')
+    .update({ generated_at: new Date().toISOString() })
+    .eq('id', 1)
+    .lt('generated_at', staleBefore)
+    .select('id');
+
+  if (!claimError && claimed && claimed.length > 0) {
+    // We won the claim — rebuild from live data and return it directly.
+    try {
+      const fresh = await generatePublicStats(supabase);
+      return NextResponse.json(serialize(fresh), { headers: NO_STORE });
+    } catch {
+      // Rebuild failed — fall through and serve whatever is currently stored.
+    }
+  }
+
+  // Not stale (someone rebuilt recently), or the claim/rebuild failed: return
+  // the current snapshot as-is.
   const { data, error } = await supabase
     .from('public_activity_stats')
     .select('total_distributed, since_date, ledger, generated_at')
@@ -60,41 +69,11 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500, headers: NO_STORE });
   }
 
-  const generatedAtMs = data?.generated_at ? new Date(data.generated_at).getTime() : 0;
-  const isStale =
-    !data || !data.generated_at || Date.now() - generatedAtMs > STALE_AFTER_MS;
-
-  // Also rebuild if the cached ledger predates the current bedroom-label
-  // normalisation (any row not in the clean "N Bed" / "N+ Bed" form), so a
-  // format change surfaces on the next request instead of after STALE_AFTER_MS.
-  const ledger = Array.isArray(data?.ledger) ? (data!.ledger as any[]) : [];
-  const isLegacyFormat = ledger.some(
-    (e) => !CLEAN_BEDROOM_LABEL.test(String(e?.bedrooms ?? ''))
-  );
-
-  // Self-heal: if the snapshot is missing, older than STALE_AFTER_MS, or in an
-  // old format, regenerate it here rather than depending on the scheduled cron
-  // (which needs a CRON_SECRET and Vercel's scheduler to fire). Best-effort —
-  // if regeneration fails, fall back to whatever is cached so the section never
-  // hard-fails on a transient DB hiccup.
-  if (isStale || isLegacyFormat) {
-    try {
-      const fresh = await generatePublicStats(supabase);
-      const payload = serialize(fresh);
-      memo = { at: Date.now(), payload };
-      return NextResponse.json(payload, { headers: NO_STORE });
-    } catch {
-      // fall through to the cached data (or the null-state below)
-    }
-  }
-
   if (!data || !data.generated_at) {
-    // Nothing cached and regeneration didn't succeed — tell the frontend to
-    // hide the section rather than render zeroed or broken stats. Not memoised.
+    // Nothing cached — tell the frontend to hide the section rather than render
+    // zeroed or broken stats.
     return NextResponse.json({ generatedAt: null }, { headers: NO_STORE });
   }
 
-  const payload = serialize(data);
-  memo = { at: Date.now(), payload };
-  return NextResponse.json(payload, { headers: NO_STORE });
+  return NextResponse.json(serialize(data), { headers: NO_STORE });
 }
