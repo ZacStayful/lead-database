@@ -16,6 +16,15 @@ export const dynamic = 'force-dynamic';
 // for hours — every request must reach the origin.
 const NO_STORE = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
 
+// Warm-instance memo. Production's Supabase read endpoint lags its own writes,
+// so the DB-based staleness gate below can't tell that a just-written snapshot
+// is fresh and would rebuild on every request. This short in-process memo
+// bounds regeneration to ~once per TTL per warm instance regardless of that
+// lag; a new deployment (or cold start) starts with an empty memo, so changes
+// still surface promptly.
+const MEMO_TTL_MS = 5 * 60 * 1000;
+let memo: { at: number; payload: ReturnType<typeof serialize> } | null = null;
+
 function serialize(s: {
   total_distributed: number | null;
   since_date: string | null;
@@ -31,6 +40,11 @@ function serialize(s: {
 }
 
 export async function GET() {
+  // Serve a very recent result straight from memory, without touching the DB.
+  if (memo && Date.now() - memo.at < MEMO_TTL_MS) {
+    return NextResponse.json(memo.payload, { headers: NO_STORE });
+  }
+
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -66,7 +80,9 @@ export async function GET() {
   if (isStale || isLegacyFormat) {
     try {
       const fresh = await generatePublicStats(supabase);
-      return NextResponse.json(serialize(fresh), { headers: NO_STORE });
+      const payload = serialize(fresh);
+      memo = { at: Date.now(), payload };
+      return NextResponse.json(payload, { headers: NO_STORE });
     } catch {
       // fall through to the cached data (or the null-state below)
     }
@@ -74,9 +90,11 @@ export async function GET() {
 
   if (!data || !data.generated_at) {
     // Nothing cached and regeneration didn't succeed — tell the frontend to
-    // hide the section rather than render zeroed or broken stats.
+    // hide the section rather than render zeroed or broken stats. Not memoised.
     return NextResponse.json({ generatedAt: null }, { headers: NO_STORE });
   }
 
-  return NextResponse.json(serialize(data), { headers: NO_STORE });
+  const payload = serialize(data);
+  memo = { at: Date.now(), payload };
+  return NextResponse.json(payload, { headers: NO_STORE });
 }
