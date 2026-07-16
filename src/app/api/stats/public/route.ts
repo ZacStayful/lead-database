@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { generatePublicStats, STALE_AFTER_MS } from '@/lib/publicStats';
+import { generatePublicStats, STALE_AFTER_MS, SINCE_DATE } from '@/lib/publicStats';
 
 // Always read the live cache row. Without this, Next.js 14 statically caches
 // this GET handler's response at build time, so refreshes would never surface
@@ -8,8 +8,6 @@ import { generatePublicStats, STALE_AFTER_MS } from '@/lib/publicStats';
 export const dynamic = 'force-dynamic';
 
 // Never let Vercel's CDN (or the browser) serve a cached copy of this response.
-// It self-heals on request, so a cached response would hide fresh regenerations
-// for hours — every request must reach the origin.
 const NO_STORE = { 'Cache-Control': 'no-store, max-age=0, must-revalidate' };
 
 function serialize(s: {
@@ -32,13 +30,9 @@ export async function GET() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Atomically claim the right to rebuild. This UPDATE flips generated_at
-  // forward only when the row is already older than the staleness window, and
-  // it runs on the PRIMARY — so exactly one request per window rebuilds, and it
-  // is immune to the read-replica lag that otherwise made a read-then-decide
-  // approach rebuild on every request (the row's own value gates it, not a
-  // possibly-stale SELECT). Concurrent callers: Postgres row-locks the UPDATE,
-  // so only the first sees it as stale and wins.
+  // Atomically claim the right to rebuild: flip generated_at forward only when
+  // the row is already older than the staleness window. Runs on the primary, so
+  // exactly one request per window rebuilds regardless of read-replica lag.
   const staleBefore = new Date(Date.now() - STALE_AFTER_MS).toISOString();
   const { data: claimed, error: claimError } = await supabase
     .from('public_activity_stats')
@@ -48,21 +42,25 @@ export async function GET() {
     .select('id');
 
   if (!claimError && claimed && claimed.length > 0) {
-    // We won the claim — rebuild from live data and return it directly.
     try {
       const fresh = await generatePublicStats(supabase);
       return NextResponse.json(serialize(fresh), { headers: NO_STORE });
     } catch {
-      // Rebuild failed — fall through and serve whatever is currently stored.
+      // fall through and serve whatever is currently stored
     }
   }
 
-  // Not stale (someone rebuilt recently), or the claim/rebuild failed: return
-  // the current snapshot as-is.
+  // Read the current snapshot. IMPORTANT: this project serves plain SELECTs from
+  // a read replica that lags the primary badly (~hours), which would show a
+  // stale snapshot. An UPDATE always executes on the primary, so we read via a
+  // no-op write (set since_date to the constant it already holds) with
+  // RETURNING — guaranteeing the row we return is the authoritative primary
+  // copy, not a stale replica read.
   const { data, error } = await supabase
     .from('public_activity_stats')
-    .select('total_distributed, since_date, ledger, generated_at')
+    .update({ since_date: SINCE_DATE })
     .eq('id', 1)
+    .select('total_distributed, since_date, ledger, generated_at')
     .maybeSingle();
 
   if (error) {
