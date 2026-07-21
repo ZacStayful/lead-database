@@ -173,59 +173,63 @@ export async function POST(request: NextRequest) {
           );
 
           if (isGuaranteedRent) {
-            // Guaranteed Rent renewal — add 10 GR leads of credit and mark the
-            // GR subscription active. Management fields are left untouched.
-            const { error: grBalanceError } = await admin.rpc(
-              "increment_gr_lead_balance",
-              { p_stripe_customer_id: customerId, p_amount: 10 }
-            );
-            if (grBalanceError) {
-              console.error("increment_gr_lead_balance failed", grBalanceError);
-            }
-
+            // Guaranteed Rent renewal — credit 10 GR leads and mark the GR
+            // subscription active. Management fields are left untouched.
             const { data: customer } = await admin
               .from("customers")
               .select("id")
               .eq("stripe_customer_id", customerId)
               .maybeSingle();
 
-            if (customer) {
-              const grUpdate: Record<string, unknown> = {
-                gr_subscription_status: "active",
-                gr_stripe_subscription_id: invoice.subscription as string,
-                updated_at: new Date().toISOString(),
-              };
-              // Re-anchor the GR billing cycle to this period's start on every
-              // renewal, mirroring the management handler so both products pace
-              // consistently.
-              const grAnchor =
-                toDateString(invoice.period_start) ??
-                toDateString(invoice.created);
-              if (grAnchor) grUpdate.gr_billing_cycle_anchor = grAnchor;
+            if (!customer) {
+              console.error(
+                "invoice.paid (GR) for unknown stripe_customer_id — no credit granted",
+                customerId
+              );
+              break;
+            }
 
-              await admin
-                .from("customers")
-                .update(grUpdate)
-                .eq("id", customer.id);
-
-              await admin.from("payments").insert({
-                customer_id: customer.id,
-                stripe_invoice_id: invoice.id,
-                stripe_payment_intent_id:
-                  (invoice.payment_intent as string | null) ?? null,
-                amount_pence: invoice.amount_paid ?? 0,
-                credits_added: 10,
-                payment_type: "gr_subscription",
-                status: "paid",
-              });
-
-              // Execute a scheduled GR filter lift at this genuine renewal.
-              await maybeExecuteFilterLift(
-                admin,
-                customer.id,
-                "guaranteed_rent"
+            // Idempotent, invoice-keyed credit: records the paid invoice and
+            // moves gr_lead_balance in a single transaction. A replayed delivery
+            // of an already-credited invoice is a no-op, so a failure anywhere
+            // after this line can be safely retried without double-crediting.
+            const { error: creditError } = await admin.rpc("credit_invoice", {
+              p_customer_id: customer.id,
+              p_amount: 10,
+              p_invoice_id: invoice.id,
+              p_payment_intent_id:
+                (invoice.payment_intent as string | null) ?? null,
+              p_amount_pence: invoice.amount_paid ?? 0,
+              p_payment_type: "gr_subscription",
+            });
+            if (creditError) {
+              // Throw so the outer handler releases the idempotency claim and
+              // Stripe retries; credit_invoice is idempotent, so this is safe.
+              throw new Error(
+                `credit_invoice (GR) failed: ${creditError.message}`
               );
             }
+
+            const grUpdate: Record<string, unknown> = {
+              gr_subscription_status: "active",
+              gr_stripe_subscription_id: invoice.subscription as string,
+              updated_at: new Date().toISOString(),
+            };
+            // Re-anchor the GR billing cycle to this period's start on every
+            // renewal, mirroring the management handler so both products pace
+            // consistently.
+            const grAnchor =
+              toDateString(invoice.period_start) ??
+              toDateString(invoice.created);
+            if (grAnchor) grUpdate.gr_billing_cycle_anchor = grAnchor;
+
+            await admin
+              .from("customers")
+              .update(grUpdate)
+              .eq("id", customer.id);
+
+            // Execute a scheduled GR filter lift at this genuine renewal.
+            await maybeExecuteFilterLift(admin, customer.id, "guaranteed_rent");
             break;
           }
 
@@ -250,12 +254,23 @@ export async function POST(request: NextRequest) {
             customer.monthly_allocation ?? 20
           ).leads;
 
-          const { error: balanceError } = await admin.rpc(
-            "increment_lead_balance",
-            { p_stripe_customer_id: customerId, p_amount: credits }
-          );
-          if (balanceError) {
-            console.error("increment_lead_balance failed", balanceError);
+          // Idempotent, invoice-keyed credit: records the paid invoice and moves
+          // lead_balance in a single transaction. A replayed delivery of an
+          // already-credited invoice is a no-op, so a failure anywhere after this
+          // line can be safely retried without double-crediting.
+          const { error: creditError } = await admin.rpc("credit_invoice", {
+            p_customer_id: customer.id,
+            p_amount: credits,
+            p_invoice_id: invoice.id,
+            p_payment_intent_id:
+              (invoice.payment_intent as string | null) ?? null,
+            p_amount_pence: invoice.amount_paid ?? 0,
+            p_payment_type: "subscription",
+          });
+          if (creditError) {
+            // Throw so the outer handler releases the idempotency claim and
+            // Stripe retries; credit_invoice is idempotent, so this is safe.
+            throw new Error(`credit_invoice failed: ${creditError.message}`);
           }
 
           // Promote to active on a successful payment. Anyone who has paid
@@ -270,18 +285,6 @@ export async function POST(request: NextRequest) {
             .update({ account_status: "active" })
             .eq("stripe_customer_id", customerId)
             .in("account_status", ["invited", "waitlisted"]);
-
-          // Record the payment.
-          await admin.from("payments").insert({
-            customer_id: customer.id,
-            stripe_invoice_id: invoice.id,
-            stripe_payment_intent_id:
-              (invoice.payment_intent as string | null) ?? null,
-            amount_pence: invoice.amount_paid ?? 0,
-            credits_added: credits,
-            payment_type: "subscription",
-            status: "paid",
-          });
 
           // Keep the subscription marked active and re-anchor the billing cycle
           // to the start of the period this invoice covers.
