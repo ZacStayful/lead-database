@@ -53,7 +53,14 @@ const ACCOUNT_BADGE: Record<string, string> = {
   cancelled: "border-transparent bg-red-100 text-red-700",
 };
 
-export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
+export function AdminCustomersTable({
+  customers,
+  lastActive = {},
+}: {
+  customers: Customer[];
+  /** customer.id → last sign-in timestamp (null = has login, never signed in). */
+  lastActive?: Record<string, string | null>;
+}) {
   const [tab, setTab] = useState<Tab>("all");
   const [product, setProduct] = useState<ProductTab>("all");
   // Local overrides so a row's badge updates after invite without a reload.
@@ -184,6 +191,7 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
               <TableHead>Leads</TableHead>
               <TableHead>Pacing</TableHead>
               <TableHead>Last lead</TableHead>
+              <TableHead>Last active</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -260,6 +268,12 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
                   <TableCell className="text-muted-foreground">
                     {c.last_assignment_at ? formatDate(c.last_assignment_at) : "—"}
                   </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <LastActive
+                      hasLogin={c.user_id != null}
+                      lastSignInAt={lastActive[c.id] ?? null}
+                    />
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-3">
                       {status === "waitlisted" && (
@@ -294,7 +308,7 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
             {rows.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={9}
+                  colSpan={10}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No customers in this view.
@@ -306,6 +320,32 @@ export function AdminCustomersTable({ customers }: { customers: Customer[] }) {
       </div>
     </div>
   );
+}
+
+/** Last time the customer signed in to the portal (their "last active"). */
+function LastActive({
+  hasLogin,
+  lastSignInAt,
+}: {
+  hasLogin: boolean;
+  lastSignInAt: string | null;
+}) {
+  if (!hasLogin) {
+    return (
+      <span title="No portal login has been created yet">No account</span>
+    );
+  }
+  if (!lastSignInAt) {
+    return (
+      <span
+        title="Login exists but the customer has never signed in"
+        className="text-amber-700"
+      >
+        Never
+      </span>
+    );
+  }
+  return <span title={lastSignInAt}>{formatDate(lastSignInAt)}</span>;
 }
 
 function PacingBadge({ status }: { status: PacingStatus }) {
