@@ -87,7 +87,7 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
   },
   {
     q: "What if I get a lead I want to pass on immediately?",
-    a: "If you haven't updated the lead's status or added any notes, you can discard it and it will be reassigned to another operator. Once you've made any update — a status change or a note — the lead is yours to see through, win or lose. This keeps the system fair: a landlord who has been contacted by one operator won't also hear from a second. Discarded leads still count toward your monthly allocation, since the lead itself was still delivered and qualified — discard reflects lead fit, not lead delivery.",
+    a: "Each lead is assigned to a maximum of two operators simultaneously. If you are the only subscriber covering a particular area, you receive those leads exclusively. By default, leads are not filtered by geography — you decide which leads to pursue, and you are charged per lead received, not per lead pursued. If you'd rather only receive leads from specific cities, you can set that in Lead filtering. Leads outside your selected areas are then routed to other subscribers instead and do not count against your monthly allocation.",
   },
 ];
 

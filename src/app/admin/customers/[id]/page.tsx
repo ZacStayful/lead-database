@@ -13,7 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { formatDate } from "@/lib/utils";
-import { computeGrPacing } from "@/lib/pacing";
+import { cityForArea } from "@/lib/postcode";
+import { computePacing, computeGrPacing } from "@/lib/pacing";
 import { Download } from "lucide-react";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
 
@@ -88,6 +89,8 @@ export default async function AdminCustomerDetailPage({
           </Card>
 
           <GrSubscriptionCard customer={customer} />
+
+          <FilterCard customer={customer} />
         </div>
 
         <div className="lg:col-span-2">
@@ -149,6 +152,110 @@ export default async function AdminCustomerDetailPage({
         </div>
       </div>
     </div>
+  );
+}
+
+function bedroomPhrase(min: number | null, max: number | null): string {
+  if (min == null && max == null) return "Any";
+  if (min != null && max != null) {
+    return min === max ? `Exactly ${min}` : `${min}–${max}`;
+  }
+  if (min != null) return `${min}+`;
+  return `Up to ${max}`;
+}
+
+/**
+ * Admin-only view of a customer's lead filter(s), including the internal
+ * priority_score (the deficit-formula value used to rank filtered candidates).
+ * Never shown to the customer.
+ */
+function FilterCard({ customer }: { customer: Customer }) {
+  const filtered = (s: string | null | undefined) =>
+    s === "active" || s === "pending_lift";
+
+  const products: {
+    label: string;
+    status: string;
+    areas: string[] | null;
+    min: number | null;
+    max: number | null;
+    liftDate: string | null;
+    priority: number;
+  }[] = [];
+
+  if (filtered(customer.filter_status)) {
+    products.push({
+      label: "Management",
+      status: customer.filter_status,
+      areas: customer.filter_areas,
+      min: customer.filter_min_bedrooms,
+      max: customer.filter_max_bedrooms,
+      liftDate: customer.filter_lift_effective_date,
+      priority: computePacing(customer).deficit,
+    });
+  }
+  if (filtered(customer.gr_filter_status)) {
+    products.push({
+      label: "Guaranteed Rent",
+      status: customer.gr_filter_status,
+      areas: customer.gr_filter_areas,
+      min: customer.gr_filter_min_bedrooms,
+      max: customer.gr_filter_max_bedrooms,
+      liftDate: customer.gr_filter_lift_effective_date,
+      priority: computeGrPacing(customer).deficit,
+    });
+  }
+
+  if (products.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Lead filter</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {products.map((p) => (
+          <div key={p.label} className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{p.label}</span>
+              <Badge variant={p.status === "active" ? "brand" : "muted"}>
+                {p.status === "pending_lift" ? "Lift scheduled" : "Active"}
+              </Badge>
+            </div>
+            <dl className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <dt className="text-xs text-muted-foreground">Areas</dt>
+                <dd className="mt-0.5 font-medium">
+                  {p.areas && p.areas.length > 0
+                    ? p.areas.map((a) => cityForArea(a) || a).join(", ")
+                    : "Any"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Bedrooms</dt>
+                <dd className="mt-0.5 font-medium">
+                  {bedroomPhrase(p.min, p.max)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">
+                  Priority score
+                </dt>
+                <dd className="mt-0.5 font-medium">{p.priority}</dd>
+              </div>
+              {p.status === "pending_lift" && p.liftDate && (
+                <div>
+                  <dt className="text-xs text-muted-foreground">Lifts on</dt>
+                  <dd className="mt-0.5 font-medium">
+                    {formatDate(p.liftDate)}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
