@@ -14,6 +14,26 @@ export default async function AdminCustomersPage() {
     .order("created_at", { ascending: false });
   const customers = (data ?? []) as Customer[];
 
+  // "Last active on the platform" = the customer's last sign-in to the portal.
+  // That lives in auth.users, not the customers table, so pull it via the Auth
+  // admin API and key it back to each customer by their linked user_id.
+  const lastSignInByUser = new Map<string, string | null>();
+  for (let page = 1; page <= 20; page++) {
+    const { data: usersPage, error } = await admin.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
+    if (error || !usersPage) break;
+    for (const u of usersPage.users) {
+      lastSignInByUser.set(u.id, u.last_sign_in_at ?? null);
+    }
+    if (usersPage.users.length < 200) break;
+  }
+  const lastActive: Record<string, string | null> = {};
+  for (const c of customers) {
+    if (c.user_id) lastActive[c.id] = lastSignInByUser.get(c.user_id) ?? null;
+  }
+
   // Supply-problem alerts: behind by 5+, fewer than 10 days left, still active.
   const alerts = customers
     .map((customer) => ({ customer, pacing: computePacing(customer) }))
@@ -53,7 +73,7 @@ export default async function AdminCustomersPage() {
         </div>
       )}
 
-      <AdminCustomersTable customers={customers} />
+      <AdminCustomersTable customers={customers} lastActive={lastActive} />
     </div>
   );
 }
