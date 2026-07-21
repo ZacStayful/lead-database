@@ -102,6 +102,7 @@ export default async function AdminCustomerDetailPage({
                     <TableHead className="pl-6">Lead</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Received</TableHead>
+                    <TableHead>Email</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -120,12 +121,21 @@ export default async function AdminCustomerDetailPage({
                       <TableCell className="text-muted-foreground">
                         {formatDate(a.assigned_at)}
                       </TableCell>
+                      <TableCell>
+                        {a.email_sent ? (
+                          <Badge variant="brand">Sent</Badge>
+                        ) : (
+                          <Badge className="border-transparent bg-red-100 text-red-700">
+                            Not sent
+                          </Badge>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {assignments.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={3}
+                        colSpan={4}
                         className="py-10 text-center text-muted-foreground"
                       >
                         No leads assigned yet.
