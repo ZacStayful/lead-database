@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
+import { markFirstLoginAndNotify } from "@/lib/firstLogin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
@@ -17,6 +18,10 @@ export default async function DashboardLayout({
 
   let unread = 0;
   if (customer) {
+    // First authenticated render after login — send the one-time welcome email
+    // if this is the customer's first-ever sign-in (idempotent, best-effort).
+    await markFirstLoginAndNotify(customer);
+
     const admin = createAdminClient();
     const { count } = await admin
       .from("notifications")
