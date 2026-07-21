@@ -211,13 +211,18 @@ export async function POST(request: NextRequest) {
             console.error("increment_lead_balance failed", balanceError);
           }
 
-          // Promote invited → active on the first successful payment. The
-          // account_status guard makes this a no-op on later renewals.
+          // Promote to active on a successful payment. Anyone who has paid
+          // should be active regardless of how they got here — the previous
+          // 'invited'-only guard left customers who paid while still
+          // 'waitlisted' stuck as inactive (and therefore ineligible for
+          // auto-assignment). Restrict to the pre-active states so this is a
+          // no-op on renewals (already 'active') and never resurrects a
+          // deliberately 'cancelled' account.
           await admin
             .from("customers")
             .update({ account_status: "active" })
             .eq("stripe_customer_id", customerId)
-            .eq("account_status", "invited");
+            .in("account_status", ["invited", "waitlisted"]);
 
           // Record the payment.
           await admin.from("payments").insert({
