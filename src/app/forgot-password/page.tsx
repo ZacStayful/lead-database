@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,21 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recognised, setRecognised] = useState(false);
+
+  // When a paid customer is redirected here from signup, prefill their email
+  // and reassure them they're in the right place (no payment needed).
+  useEffect(() => {
+    try {
+      const prefill = new URLSearchParams(window.location.search).get("email");
+      if (prefill) {
+        setEmail(prefill);
+        setRecognised(true);
+      }
+    } catch {
+      /* window unavailable — ignore */
+    }
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -75,6 +90,12 @@ export default function ForgotPasswordPage() {
             </div>
           ) : (
             <>
+              {recognised && (
+                <p className="mb-4 rounded-md bg-brand/10 px-3 py-2 text-sm text-brand">
+                  You already have an account — no payment needed. Confirm your
+                  email below and we&apos;ll send a link to set your password.
+                </p>
+              )}
               <p className="mb-4 text-sm text-muted-foreground">
                 Enter your email and we&apos;ll send you a link to set a new
                 password.

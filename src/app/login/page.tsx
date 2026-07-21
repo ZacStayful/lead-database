@@ -166,6 +166,13 @@ function LoginForm() {
               Forgot your password?
             </Link>
           </p>
+          <p className="mt-3 rounded-md bg-muted/60 px-3 py-2 text-center text-sm text-muted-foreground">
+            First time signing in, or already paid but never set a password?{" "}
+            <Link href="/forgot-password" className="text-brand hover:underline">
+              Set your password
+            </Link>{" "}
+            — no payment needed.
+          </p>
           <p className="mt-4 text-center text-sm text-muted-foreground">
             No account?{" "}
             <Link href="/signup" className="text-brand hover:underline">

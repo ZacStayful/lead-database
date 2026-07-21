@@ -52,6 +52,40 @@ export async function POST(request: NextRequest) {
   // form (/enquiry → /api/enquiry) and are activated by an admin. This route is
   // kept only to bootstrap owner/admin accounts.
   if (!owner) {
+    // Never send an already-paying customer back through payment. If this email
+    // already belongs to an ACTIVE (paid) account, route them to set their
+    // password instead of into signup/checkout — a customer who never set a
+    // password otherwise ends up here and gets asked to pay a second time.
+    try {
+      if (
+        process.env.SUPABASE_SERVICE_ROLE_KEY &&
+        process.env.NEXT_PUBLIC_SUPABASE_URL
+      ) {
+        const admin = createAdminClient();
+        const { data: rows } = await admin
+          .from("customers")
+          .select("account_status")
+          .ilike("email", email);
+        const alreadyPaid = (rows ?? []).some(
+          (r) => r.account_status === "active"
+        );
+        if (alreadyPaid) {
+          return NextResponse.json(
+            {
+              error:
+                "You already have an active account — there's no need to pay again. We'll take you to set your password so you can log in.",
+              redirect: "/forgot-password",
+              existingAccount: true,
+            },
+            { status: 409 }
+          );
+        }
+      }
+    } catch (err) {
+      // Never let this guard block the normal path — fall through on any error.
+      console.error("signup existing-account check failed", err);
+    }
+
     return NextResponse.json(
       {
         error:
