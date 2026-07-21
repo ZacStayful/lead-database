@@ -22,10 +22,22 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // On arrival from the email link, the Supabase client auto-exchanges the
-  // recovery code in the URL for a session (detectSessionInUrl). Wait for that
-  // session before allowing a new password to be set.
+  // Arrival paths:
+  //  - Server callback (/auth/callback or /auth/confirm) has already set the
+  //    recovery session cookie and forwarded here — getSession() finds it.
+  //  - An implicit-flow link lands here with the tokens in the URL fragment,
+  //    which the Supabase client exchanges automatically (detectSessionInUrl).
+  //  - The link was bad: the callback forwards here with ?error=..., or no
+  //    session ever materialises.
   useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const linkError = q.get("error_description") || q.get("error");
+    if (linkError) {
+      setError(linkError);
+      setStatus("invalid");
+      return;
+    }
+
     const supabase = createClient();
     let done = false;
     const ready = () => {
@@ -43,13 +55,10 @@ export default function ResetPasswordPage() {
     });
 
     // If no recovery session materialises, the link was invalid or expired.
-    const q = new URLSearchParams(window.location.search);
-    const linkError = q.get("error_description") || q.get("error");
     const timer = setTimeout(() => {
       if (!done) {
         setError(
-          linkError ||
-            "This reset link is invalid or has expired. Please request a new one."
+          "This reset link is invalid or has expired. Please request a new one."
         );
         setStatus("invalid");
       }

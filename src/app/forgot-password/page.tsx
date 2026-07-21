@@ -22,7 +22,10 @@ export default function ForgotPasswordPage() {
 
     const supabase = createClient();
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: `${window.location.origin}/reset-password`,
+      // Land on the server callback, which exchanges the code for a session
+      // and sets the auth cookies before forwarding to the reset form. This is
+      // far more reliable than exchanging the code purely client-side.
+      redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
     });
 
     // Don't reveal whether an account exists — always show the same confirmation
