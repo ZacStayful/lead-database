@@ -46,6 +46,13 @@ function SignupForm() {
       });
       const data = await res.json();
       if (!res.ok) {
+        // Already-paid customer: send them to set their password, not payment.
+        if (data.existingAccount && data.redirect) {
+          window.location.href = `${data.redirect}?email=${encodeURIComponent(
+            form.email
+          )}`;
+          return;
+        }
         setError(data.error ?? "Signup failed");
         setLoading(false);
         return;
