@@ -53,6 +53,8 @@ export interface Customer {
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
+  // Opt-out for the instant new-lead SMS alert (default true).
+  sms_alerts_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -101,6 +103,7 @@ export interface LeadAssignment {
   notification_sent: boolean;
   email_sent: boolean;
   viewed_at: string | null;
+  first_contacted_at: string | null;
   status: string;
   pipeline_stage: PipelineStage | string;
   due_to_call_date: string | null;
@@ -110,6 +113,16 @@ export interface LeadAssignment {
 
 export interface AssignmentWithLead extends LeadAssignment {
   lead: Lead;
+}
+
+export interface Testimonial {
+  id: string;
+  customer_id: string;
+  lead_assignment_id: string | null;
+  body: string;
+  rating: number | null;
+  consent_to_publish: boolean;
+  created_at: string;
 }
 
 export interface LeadNote {

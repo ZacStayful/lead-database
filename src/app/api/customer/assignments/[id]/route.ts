@@ -29,6 +29,7 @@ export async function PATCH(
   let body: {
     viewed?: boolean;
     contacted?: boolean;
+    signed?: boolean;
     pipeline_stage?: string;
     due_to_call_date?: string | null;
     income_estimate?: number | null;
@@ -65,7 +66,9 @@ export async function PATCH(
   // Confirm ownership before mutating.
   const { data: assignment } = await admin
     .from("lead_assignments")
-    .select("id, customer_id, viewed_at, customers!inner(user_id)")
+    .select(
+      "id, customer_id, viewed_at, first_contacted_at, status, customers!inner(user_id)"
+    )
     .eq("id", params.id)
     .maybeSingle();
 
@@ -82,6 +85,27 @@ export async function PATCH(
   }
   if (body.contacted) {
     update.status = "contacted";
+  }
+  // Stamp the first-contact time once, on the first contacted/signed action, so
+  // speed-to-lead analytics measure the true first touch. Never overwritten.
+  if (
+    (body.contacted || body.signed) &&
+    !(assignment as { first_contacted_at?: string }).first_contacted_at
+  ) {
+    update.first_contacted_at = new Date().toISOString();
+  }
+  // Terminal positive outcome: the operator has signed / onboarded the landlord.
+  // Independent of pipeline_stage — this is the conversion signal the ROI funnel
+  // counts. A rejected assignment can never be marked as signed.
+  if (body.signed) {
+    const current = (assignment as { status?: string }).status;
+    if (current === "rejected") {
+      return NextResponse.json(
+        { error: "A rejected lead cannot be marked as signed" },
+        { status: 400 }
+      );
+    }
+    update.status = "won";
   }
   if (body.pipeline_stage !== undefined) {
     update.pipeline_stage = body.pipeline_stage;

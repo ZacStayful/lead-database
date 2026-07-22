@@ -15,6 +15,7 @@ import {
 } from "@/components/dashboard/pipelineStage";
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
+import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
 import type { AssignmentWithLead, LeadNote, LeadFile } from "@/lib/types";
 import type { LeadSource } from "@/lib/leadOrder";
 import {
@@ -26,6 +27,7 @@ import {
   Mail,
   MapPin,
   MessageSquareText,
+  PartyPopper,
   Phone,
   Trash2,
 } from "lucide-react";
@@ -38,6 +40,7 @@ export function LeadDetail({
   from,
   prevLeadId,
   nextLeadId,
+  signedCountBefore,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -46,6 +49,7 @@ export function LeadDetail({
   from: LeadSource;
   prevLeadId: string | null;
   nextLeadId: string | null;
+  signedCountBefore: number;
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -63,6 +67,7 @@ export function LeadDetail({
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [celebrateOpen, setCelebrateOpen] = useState(false);
 
   const prevHref = prevLeadId ? `/dashboard/leads/${prevLeadId}?from=${from}` : null;
   const nextHref = nextLeadId ? `/dashboard/leads/${nextLeadId}?from=${from}` : null;
@@ -104,6 +109,24 @@ export function LeadDetail({
       router.refresh();
     } catch {
       setStatus(assignment.status);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSigned() {
+    const previous = status;
+    setBusy(true);
+    setStatus("won");
+    try {
+      const res = await patch({ signed: true });
+      if (!res.ok) throw new Error();
+      // Celebrate + invite a testimonial; the server refresh runs on close so
+      // the modal isn't torn down mid-interaction.
+      setCelebrateOpen(true);
+    } catch {
+      setStatus(previous);
+      setToast("Could not mark this lead as signed. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -445,7 +468,42 @@ export function LeadDetail({
               ))}
           </div>
         )}
+        {/* Terminal positive outcome. Available once the lead has been worked
+            (contacted / in discussion) — signing is the conversion signal the
+            ROI funnel counts. */}
+        {(status === "contacted" || status === "in_discussion") && (
+          <div className="mt-6">
+            <button
+              onClick={() => handleSigned()}
+              disabled={busy}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#5D8156] px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-[#4c6b47] disabled:opacity-60"
+            >
+              <PartyPopper className="h-4 w-4" />
+              Mark as signed
+            </button>
+            <p className="mt-2 text-center text-xs text-muted-foreground">
+              Signed the landlord? Marking it here tracks your conversion rate.
+            </p>
+          </div>
+        )}
+
+        {status === "won" && (
+          <div className="mt-6 flex items-center gap-2 rounded-lg border border-[#5D8156]/30 bg-[#EAF3DE] px-4 py-3 text-sm font-medium text-[#3B6D11]">
+            <PartyPopper className="h-4 w-4 shrink-0" />
+            Signed — landlord onboarded. Nice one.
+          </div>
+        )}
       </div>
+
+      <SignedCelebration
+        open={celebrateOpen}
+        onClose={() => {
+          setCelebrateOpen(false);
+          router.refresh();
+        }}
+        signedNumber={signedCountBefore + 1}
+        assignmentId={assignment.id}
+      />
 
       <LeadFiles
         assignmentId={assignment.id}

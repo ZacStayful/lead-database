@@ -32,6 +32,14 @@ export default async function LeadDetailPage({
 
   const assignment = data as AssignmentWithLead;
 
+  // How many landlords this customer has already signed — powers the "your Nth
+  // sign-up" celebration when they mark this lead as signed.
+  const { count: signedCountBefore } = await admin
+    .from("lead_assignments")
+    .select("id", { count: "exact", head: true })
+    .eq("customer_id", customer.id)
+    .eq("status", "won");
+
   const { data: notesData } = await admin
     .from("lead_notes")
     .select("id, lead_assignment_id, customer_id, body, created_at")
@@ -61,6 +69,7 @@ export default async function LeadDetailPage({
       from={from}
       prevLeadId={prevLeadId}
       nextLeadId={nextLeadId}
+      signedCountBefore={signedCountBefore ?? 0}
     />
   );
 }

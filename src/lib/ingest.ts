@@ -7,6 +7,7 @@ import {
 import { extractCity } from "@/lib/utils";
 import { extractPostcode, postcodeArea } from "@/lib/postcode";
 import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
+import { sendNewLeadSms } from "@/lib/sms";
 import type { Customer, Lead, LeadType, N8nLeadPayload } from "@/lib/types";
 
 const LEAD_PRICE = 15.0;
@@ -333,6 +334,13 @@ export async function completeAssignment(
     to: typedCustomer.email,
     lead,
   });
+
+  // Instant SMS alert — wins the speed race to the landlord. Inert unless a
+  // Twilio sender is configured; never allowed to break the assignment.
+  const sms = await sendNewLeadSms({ customer: typedCustomer, lead });
+  if (sms.error) {
+    console.error("sendNewLeadSms failed", { assignmentId, error: sms.error });
+  }
 
   await supabase
     .from("lead_assignments")
