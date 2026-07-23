@@ -3,7 +3,8 @@ import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { planForAllocation } from "@/lib/plans";
-import { sendFilterLiftCompletedEmail } from "@/lib/emails";
+import { sendFilterLiftCompletedEmail, sendAccountReadyEmail } from "@/lib/emails";
+import { provisionPaidSubscriber } from "@/lib/provisioning";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -104,14 +105,22 @@ function promotionCodeIdFromInvoice(invoice: Stripe.Invoice): string | null {
  * labelled correctly. `subtotal` (not `amount_paid`) is used because it excludes
  * the promo discount.
  */
-function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
+function allocationFromPrices(
+  priceIds: string[],
+  subtotalPence: number | null
+): number {
   const tenId = process.env.STRIPE_PRICE_ID_10;
-  if (tenId && priceIds.includes(tenId)) return "10";
+  if (tenId && priceIds.includes(tenId)) return 10;
   const twentyId =
     process.env.STRIPE_PRICE_ID_20 ?? process.env.STRIPE_MONTHLY_PRICE_ID;
-  if (twentyId && priceIds.includes(twentyId)) return "20";
-  const subtotal = invoice.subtotal ?? 0;
-  return subtotal > 0 && subtotal < 22500 ? "10" : "20";
+  if (twentyId && priceIds.includes(twentyId)) return 20;
+  return subtotalPence != null && subtotalPence > 0 && subtotalPence < 22500
+    ? 10
+    : 20;
+}
+
+function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
+  return allocationFromPrices(priceIds, invoice.subtotal) === 10 ? "10" : "20";
 }
 
 export async function POST(request: NextRequest) {
@@ -280,7 +289,7 @@ export async function POST(request: NextRequest) {
           // Management renewal. The credit granted each month is the customer's
           // plan allocation (10 or 20). Read the customer first so we can both
           // size the credit and detect a mismatched Stripe id.
-          const { data: customer } = await admin
+          let { data: customer } = await admin
             .from("customers")
             .select("id, monthly_allocation")
             .eq("stripe_customer_id", customerId)
@@ -311,8 +320,44 @@ export async function POST(request: NextRequest) {
           }
 
           if (!customer) {
+            // No linked portal account — a Payment Link signup that never went
+            // through the admin invite flow. Provision one now (create/link the
+            // customers row + a login), then credit it as a normal first
+            // payment. This is what makes the reusable discount Payment Link
+            // work end-to-end instead of stranding the payer.
+            const sc = await stripe.customers.retrieve(customerId);
+            const email = "deleted" in sc && sc.deleted ? null : sc.email;
+            const name = "deleted" in sc && sc.deleted ? null : sc.name;
+            if (email) {
+              const result = await provisionPaidSubscriber(admin, {
+                stripeCustomerId: customerId,
+                email,
+                name: name ?? null,
+                subscriptionId: (invoice.subscription as string) ?? null,
+                allocation: allocationFromPrices(priceIds, invoice.subtotal),
+                billingAnchor: toDateString(invoice.period_start),
+              });
+              if (result) {
+                if (result.createdUser && result.setPasswordUrl) {
+                  await sendAccountReadyEmail({
+                    to: email,
+                    contactName: name ?? email,
+                    setPasswordUrl: result.setPasswordUrl,
+                  });
+                }
+                const { data: linked } = await admin
+                  .from("customers")
+                  .select("id, monthly_allocation")
+                  .eq("id", result.customerId)
+                  .maybeSingle();
+                customer = linked ?? null;
+              }
+            }
+          }
+
+          if (!customer) {
             console.error(
-              "invoice.paid for unknown stripe_customer_id — no credit granted",
+              "invoice.paid: could not resolve or provision customer for stripe id",
               customerId
             );
             break;
