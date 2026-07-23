@@ -1,7 +1,7 @@
 /**
  * Post-call discount offers — shared types and helpers.
  *
- * A post_call_offer is a single-use, 24-hour, 15%-off (first month only) Stripe
+ * A post_call_offer is a single-use, 24-hour, 10%-off (first month only) Stripe
  * Promotion Code generated per prospect after a web meeting. The same code works
  * on BOTH Management Payment Links (10-lead / 20-lead) because the underlying
  * coupon is percentage-based and not price-restricted — the plan is chosen by

@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Post-call discount offers.
 --
--- A single-use, 24-hour, 15%-off (first month only) Stripe Promotion Code
+-- A single-use, 24-hour, 10%-off (first month only) Stripe Promotion Code
 -- generated per prospect after a web meeting — either manually (admin button)
 -- or automatically (Monday.com "Web meeting sat" group → n8n → bearer-token
 -- door). The same code works on BOTH Management Payment Links (10-lead and

@@ -134,7 +134,7 @@ async function handle(request: NextRequest) {
 
     // SMS (best-effort; a missing/bad phone is skipped, not a failure of the run).
     const smsBody =
-      `Stayful: your 15% first-month discount expires in ${remaining}. ` +
+      `Stayful: your 10% first-month discount expires in ${remaining}. ` +
       `Code ${offer.promo_code_string}. ` +
       `10-lead plan: ${urls.checkout_url_10} | 20-lead plan: ${urls.checkout_url_20}`;
     const smsRes = await sendSms(offer.prospect_phone, smsBody);

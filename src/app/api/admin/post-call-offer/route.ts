@@ -23,7 +23,7 @@ function randomCode(): string {
   for (let i = 0; i < 4; i += 1) {
     suffix += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
   }
-  return `FOUNDING15-${suffix}`;
+  return `FOUNDING10-${suffix}`;
 }
 
 /**

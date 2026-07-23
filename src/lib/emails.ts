@@ -147,7 +147,7 @@ export async function sendWelcomeEmail(params: {
 
 /**
  * Post-call discount reminder — sent at the 12h / 4h / 1h thresholds while a
- * prospect's single-use 15%-off code remains unredeemed. Shows the time
+ * prospect's single-use 10%-off code remains unredeemed. Shows the time
  * remaining as a relative duration (never an absolute time — we don't know the
  * prospect's timezone), the code, and both plan checkout links so they can use
  * whichever tier was agreed on the call.
@@ -164,10 +164,10 @@ export async function sendPostCallReminderEmail(params: {
     params;
   const firstName = prospectName?.trim().split(/\s+/)[0];
   const greeting = firstName ? `, ${esc(firstName)}` : "";
-  const subject = `Your 15% Stayful discount expires in ${remaining}`;
+  const subject = `Your 10% Stayful discount expires in ${remaining}`;
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Your discount is still waiting${greeting}</h1>
-    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">Following our web meeting, we set aside a one-time <strong>15% off your first month</strong>. It's single-use and expires in <strong>${esc(remaining)}</strong>.</p>
+    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">Following our web meeting, we set aside a one-time <strong>10% off your first month</strong>. It's single-use and expires in <strong>${esc(remaining)}</strong>.</p>
     <p style="margin:0 0 6px;color:#6b706a;font-size:14px">Your discount code:</p>
     <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:20px;font-weight:700;letter-spacing:1px;background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:8px;padding:12px 16px;text-align:center;margin:0 0 18px">${esc(promoCode)}</div>
     <p style="margin:0 0 10px;color:#6b706a;font-size:14px">The code is already applied when you use the link for the plan we discussed:</p>

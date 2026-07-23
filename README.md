@@ -60,13 +60,15 @@ Add a webhook endpoint → `{APP_URL}/api/webhook/stripe` listening for
 
 #### Post-call discount (one-time manual setup)
 
-The post-call offer feature (single-use 15%-off first month, 24h expiry) needs a
+The post-call offer feature (single-use 10%-off first month, 24h expiry) needs a
 one-time Stripe configuration — the app never creates these itself:
 
-1. **Create one Coupon** — `percent_off: 15`, `duration: once`, `currency: gbp`,
-   name `Post-call 15%`. Copy its id into `STRIPE_POST_CALL_COUPON_ID`. Do **not**
-   restrict the coupon (or its promotion codes) to any price/product — it must
-   work on either Management Payment Link unmodified.
+1. **Create one Coupon** — `percent_off: 10`, `duration: once`, `currency: gbp`,
+   name `Post-call 10%`. Copy its id into `STRIPE_POST_CALL_COUPON_ID`. The coupon
+   may apply to both Management products, but must **not** be single-redemption at
+   the coupon level (`max_redemptions` is enforced per promotion **code**, so one
+   coupon backs many prospects) and must work on either Management Payment Link —
+   one code, either link.
 2. **Enable "Allow promotion codes"** on **both** existing Management Payment
    Links (Stripe dashboard, or
    `payment_links.update(id, { allow_promotion_codes: true })`):

@@ -17,7 +17,7 @@ export default async function AdminOffersPage() {
       <div>
         <h1 className="text-2xl font-bold">Post-call offers</h1>
         <p className="text-sm text-muted-foreground">
-          Single-use 15%-off discount links generated after web meetings —
+          Single-use 10%-off discount links generated after web meetings —
           manually here, or automatically when a prospect enters the “Web meeting
           sat” group in Monday.
         </p>

@@ -753,7 +753,7 @@ alter default privileges in schema public
   grant execute on functions to service_role;
 
 -- ---------------------------------------------------------------------------
--- Post-call discount offers (0026). Single-use 24h 15%-off Stripe Promotion
+-- Post-call discount offers (0026). Single-use 24h 10%-off Stripe Promotion
 -- Code per prospect, generated after a web meeting (manual admin button or
 -- automatic Monday.com → n8n door). Independent of lead allocation / pacing /
 -- GR logic. A prospect may have no customers row yet, so prospect_email is the

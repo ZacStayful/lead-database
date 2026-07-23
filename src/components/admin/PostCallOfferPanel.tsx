@@ -128,7 +128,7 @@ export function PostCallOfferPanel({ offers }: { offers: PostCallOffer[] }) {
         </CardHeader>
         <CardContent>
           <p className="mb-4 text-sm text-muted-foreground">
-            Creates a single-use <strong>15% off first month</strong> code, valid 24
+            Creates a single-use <strong>10% off first month</strong> code, valid 24
             hours, that works on either plan. No customer record needed — send the
             prospect whichever plan link you agreed on the call.
           </p>
