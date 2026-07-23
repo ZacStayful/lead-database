@@ -332,6 +332,56 @@ export async function sendFilterLiftCompletedEmail(params: {
   }
 }
 
+/**
+ * Inactivity nudge — a (Monday) reminder that the customer has leads still
+ * awaiting a first follow-up. Grouped: one email covering all N waiting leads,
+ * listing up to a handful by name/address and summarising the rest.
+ */
+export async function sendInactivityNudgeEmail(params: {
+  to: string;
+  contactName: string;
+  count: number;
+  leads: { name: string; address: string | null }[];
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, count, leads } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const noun = count === 1 ? "lead" : "leads";
+  const subject = `You have ${count} ${noun} waiting for follow-up`;
+
+  const more = count - leads.length;
+  const items = leads
+    .map(
+      (l) =>
+        `<li>${esc(l.name)}${l.address ? ` — <span style="color:#6b706a">${esc(l.address)}</span>` : ""}</li>`
+    )
+    .join("");
+  const moreItem =
+    more > 0
+      ? `<li style="color:#6b706a">…and ${more} more in your dashboard</li>`
+      : "";
+  const list = leads.length
+    ? `<ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7">${items}${moreItem}</ul>`
+    : "";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">A quick nudge, ${esc(firstName)}</h1>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${count}</strong> ${noun} that landed more than 48 hours ago and haven't been actioned yet. A quick first call is often what turns an enquiry into a signed landlord.</p>
+    ${list}
+    ${button(`${APP_URL}/dashboard/leads`, "Follow up now")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Credits exhausted — triggered when leads_received_this_month reaches allocation. */
 export async function sendCreditsExhaustedEmail(params: {
   to: string;
