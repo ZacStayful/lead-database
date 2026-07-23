@@ -58,6 +58,35 @@ Add a webhook endpoint → `{APP_URL}/api/webhook/stripe` listening for
 `customer.subscription.{created,updated,deleted}`, `invoice.paid`,
 `invoice.payment_failed`.
 
+#### Post-call discount (one-time manual setup)
+
+The post-call offer feature (single-use 15%-off first month, 24h expiry) needs a
+one-time Stripe configuration — the app never creates these itself:
+
+1. **Create one Coupon** — `percent_off: 15`, `duration: once`, `currency: gbp`,
+   name `Post-call 15%`. Copy its id into `STRIPE_POST_CALL_COUPON_ID`. Do **not**
+   restrict the coupon (or its promotion codes) to any price/product — it must
+   work on either Management Payment Link unmodified.
+2. **Enable "Allow promotion codes"** on **both** existing Management Payment
+   Links (Stripe dashboard, or
+   `payment_links.update(id, { allow_promotion_codes: true })`):
+   - 10 leads / £150 — `https://buy.stripe.com/5kQdR8bzM6Ha5fh48P4Ja01`
+   - 20 leads / £300 — `https://buy.stripe.com/eVq14m8nA4z29vx20H4Ja00`
+3. **Store both link base URLs** in `STRIPE_MANAGEMENT_10_PAYMENT_LINK_URL` and
+   `STRIPE_MANAGEMENT_20_PAYMENT_LINK_URL`. The offer route appends
+   `?prefilled_promo_code=<code>` to whichever link the caller sends.
+
+The app generates one Promotion Code per prospect (wrapping the coupon,
+`max_redemptions: 1`, `expires_at` = +24h) via `POST /api/admin/post-call-offer`,
+triggered either from the admin **Offers** page or by an n8n workflow (bearer
+`N8N_WEBHOOK_SECRET`) when a Monday item enters the "Web meeting sat" group.
+Reminder email + SMS fire at 12h / 4h / 1h remaining via the
+`/api/cron/post-call-offer-reminders` cron (every 15 min), stopping once the code
+is redeemed. Redemption is detected on the Stripe `invoice.paid` webhook and
+surfaced in admin as a **"Discount applied — N-lead plan"** badge. SMS reminders
+also require `TWILIO_MESSAGING_FROM` (a Twilio number or Messaging Service SID);
+if unset, email still sends.
+
 ### 4. n8n
 
 Point the Monday.com "item created" automation at
@@ -96,8 +125,8 @@ reassigns the lead to the next eligible customer.
 | --- | --- | --- |
 | Public | `/`, `/login`, `/signup` | Landing, auth, Stripe checkout |
 | Customer | `/dashboard`, `/dashboard/leads`, `/dashboard/notifications`, `/dashboard/settings` | Realtime lead feed |
-| Admin | `/admin`, `/admin/customers`, `/admin/customers/[id]`, `/admin/leads`, `/admin/leads/[id]` | Requires `role: admin` |
-| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation` | Plus customer assignment / lead reject / billing-portal helpers |
+| Admin | `/admin`, `/admin/customers`, `/admin/customers/[id]`, `/admin/leads`, `/admin/leads/[id]`, `/admin/offers` | Requires `role: admin` |
+| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation`, `/api/admin/post-call-offer`, `/api/cron/post-call-offer-reminders` | Plus customer assignment / lead reject / billing-portal helpers |
 
 ## Design
 

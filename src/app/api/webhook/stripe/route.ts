@@ -30,6 +30,38 @@ function mapStatus(status: Stripe.Subscription.Status): string {
   }
 }
 
+/**
+ * Extract the Stripe Promotion Code id applied to an invoice, if any. Handles
+ * both the single `discount` field and the `discounts` array, whether the
+ * promotion_code is an id string or an expanded object. Returns null when the
+ * invoice carries no promotion code.
+ */
+function promotionCodeIdFromInvoice(invoice: Stripe.Invoice): string | null {
+  const fromDiscount = (
+    d: Stripe.Discount | Stripe.DeletedDiscount | string | null | undefined
+  ): string | null => {
+    if (!d || typeof d === "string") return null;
+    const promo = (d as Stripe.Discount).promotion_code;
+    if (!promo) return null;
+    return typeof promo === "string" ? promo : promo.id;
+  };
+
+  const single = fromDiscount(invoice.discount);
+  if (single) return single;
+
+  for (const d of invoice.discounts ?? []) {
+    const id = fromDiscount(d);
+    if (id) return id;
+  }
+  return null;
+}
+
+/** Map an invoice's line price ids to the management plan tier ('10' | '20'). */
+function planFromInvoicePriceIds(priceIds: string[]): "10" | "20" {
+  const tenId = process.env.STRIPE_PRICE_ID_10;
+  return tenId && priceIds.includes(tenId) ? "10" : "20";
+}
+
 export async function POST(request: NextRequest) {
   const stripe = getStripe();
   const signature = request.headers.get("stripe-signature");
@@ -247,6 +279,29 @@ export async function POST(request: NextRequest) {
             .from("customers")
             .update(renewalUpdate)
             .eq("id", customer.id);
+
+          // Post-call discount redemption. If a promotion code was applied to
+          // this invoice and it matches an unredeemed post_call_offers row, mark
+          // it redeemed and tie it to this customer + plan. Kept separate from —
+          // and additive to — the crediting logic above; it does not touch lead
+          // allocation. Guarded on redeemed_at IS NULL so a webhook retry is a
+          // no-op.
+          const promoCodeId = promotionCodeIdFromInvoice(invoice);
+          if (promoCodeId) {
+            const redeemedPlan = planFromInvoicePriceIds(priceIds);
+            const { error: redeemError } = await admin
+              .from("post_call_offers")
+              .update({
+                redeemed_at: new Date().toISOString(),
+                matched_customer_id: customer.id,
+                redeemed_plan: redeemedPlan,
+              })
+              .eq("stripe_promo_code_id", promoCodeId)
+              .is("redeemed_at", null);
+            if (redeemError) {
+              console.error("post_call_offers redemption update failed", redeemError);
+            }
+          }
         }
         break;
       }

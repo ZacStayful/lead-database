@@ -96,6 +96,70 @@ export async function checkEmail(email: string | null): Promise<EmailResult> {
   }
 }
 
+// ============================================================================
+// Twilio SEND capability.
+//
+// The Lookup client above only verifies numbers. This adds outbound SMS using
+// the same Twilio account credentials and Basic-auth pattern (no new SDK). Used
+// by the post-call offer reminder cron. Requires a TWILIO_MESSAGING_FROM number
+// (or Messaging Service SID). Fails SAFE: any missing credential, bad number or
+// network/API error resolves to { ok: false } with a reason string — callers
+// log it and continue rather than aborting a batch.
+//
+// PII rule (as above): never log the raw phone or message body — only outcome
+// strings are safe to log.
+// ============================================================================
+
+export type SmsResult = { ok: true; sid: string } | { ok: false; reason: string };
+
+/** Basic UK-friendly sanity check: has enough digits to be a real number. */
+function looksLikePhone(rawPhone: string): boolean {
+  const digits = rawPhone.replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+export async function sendSms(
+  rawPhone: string | null,
+  message: string
+): Promise<SmsResult> {
+  if (!rawPhone || !rawPhone.trim() || !looksLikePhone(rawPhone)) {
+    return { ok: false, reason: "missing_or_malformed_phone" };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_MESSAGING_FROM;
+  if (!sid || !token || !from) {
+    return { ok: false, reason: "missing_twilio_credentials" };
+  }
+
+  try {
+    const e164 = toE164UK(rawPhone);
+    const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+    const params = new URLSearchParams({ To: e164, From: from, Body: message });
+
+    const res = await fetchWithTimeout(
+      `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(
+        sid
+      )}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.toString(),
+      }
+    );
+    if (!res.ok) {
+      return { ok: false, reason: `twilio_http_${res.status}` };
+    }
+    const data = await res.json();
+    return { ok: true, sid: data.sid };
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
+}
+
 export type ClaimOutcome = "claim_confirmed" | "claim_denied" | "favoured_customer";
 
 export type ContactValidationResult = {

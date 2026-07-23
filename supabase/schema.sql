@@ -4,7 +4,7 @@
 -- Idempotent: safe to re-run.
 --
 -- This is a consolidated snapshot of the ordered migrations in
--- supabase/migrations (0001 → 0025) and reflects the current build. The
+-- supabase/migrations (0001 → 0026) and reflects the current build. The
 -- migrations remain the source of truth: when you change the schema, add a new
 -- migration and regenerate this file. Function bodies here are copied verbatim
 -- from the migration that last defines each one.
@@ -751,6 +751,49 @@ alter default privileges in schema public
   revoke execute on functions from public, anon, authenticated;
 alter default privileges in schema public
   grant execute on functions to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Post-call discount offers (0026). Single-use 24h 15%-off Stripe Promotion
+-- Code per prospect, generated after a web meeting (manual admin button or
+-- automatic Monday.com → n8n door). Independent of lead allocation / pacing /
+-- GR logic. A prospect may have no customers row yet, so prospect_email is the
+-- handle; matched_customer_id is backfilled at redemption.
+-- ---------------------------------------------------------------------------
+create table if not exists public.post_call_offers (
+  id                    uuid primary key default gen_random_uuid(),
+  prospect_email        text not null,
+  prospect_phone        text,
+  prospect_name         text,
+  stripe_promo_code_id  text not null,
+  promo_code_string     text not null,
+  offer_created_at      timestamptz not null default now(),
+  expires_at            timestamptz not null,
+  redeemed_at           timestamptz,
+  redeemed_plan         text check (redeemed_plan in ('10', '20')),
+  source                text not null check (source in ('manual', 'auto_monday')),
+  reminder_12h_sent_at  timestamptz,
+  reminder_4h_sent_at   timestamptz,
+  reminder_1h_sent_at   timestamptz,
+  created_by            uuid references auth.users(id),
+  matched_customer_id   uuid references public.customers(id),
+  created_at            timestamptz not null default now()
+);
+
+create unique index if not exists uq_post_call_offers_unredeemed_email
+  on public.post_call_offers (lower(prospect_email))
+  where redeemed_at is null;
+
+create index if not exists idx_post_call_offers_active
+  on public.post_call_offers (expires_at)
+  where redeemed_at is null;
+
+create index if not exists idx_post_call_offers_promo_code_id
+  on public.post_call_offers (stripe_promo_code_id);
+
+create index if not exists idx_post_call_offers_matched_customer
+  on public.post_call_offers (matched_customer_id);
+
+alter table public.post_call_offers enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Scheduled jobs (requires pg_cron). Runs daily; reset_monthly_counts decides
