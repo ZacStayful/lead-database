@@ -9,6 +9,18 @@ export type LeadType = "management" | "guaranteed_rent";
 
 export type FilterStatus = "off" | "active" | "pending_lift";
 
+/**
+ * Per-customer notification opt-in flags (customers.notification_preferences).
+ * Stored as jsonb; the column is NOT NULL with every key defaulting to true.
+ * Application code should still treat a missing key as `true` defensively.
+ */
+export interface NotificationPreferences {
+  new_lead: boolean;
+  credit_warnings: boolean;
+  inactivity_nudge: boolean;
+  progress_report: boolean;
+}
+
 export interface Customer {
   id: string;
   user_id: string | null;
@@ -55,6 +67,12 @@ export interface Customer {
   properties_managed: string | null;
   // Opt-out for the instant new-lead SMS alert (default true).
   sms_alerts_enabled: boolean;
+  // Per-stream notification opt-in flags (jsonb, NOT NULL, all default true).
+  notification_preferences: NotificationPreferences;
+  // Last inactivity-nudge send, for same-day dedup (null = never nudged).
+  last_nudge_sent_at: string | null;
+  // Last Friday progress-report send, for same-week dedup (null = never sent).
+  last_report_sent_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -109,6 +127,10 @@ export interface LeadAssignment {
   due_to_call_date: string | null;
   income_estimate: number | null;
   assigned_at: string;
+  // When `status` last changed (NOT NULL, defaults to now() at insert so a
+  // brand-new 'new' assignment is stamped at assignment time). Powers the
+  // inactivity nudge's "days since last activity" measure.
+  last_status_change_at: string;
 }
 
 export interface AssignmentWithLead extends LeadAssignment {

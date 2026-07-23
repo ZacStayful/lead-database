@@ -29,6 +29,10 @@ create table if not exists public.customers (
   website_url               text,
   properties_managed        text,
   sms_alerts_enabled        boolean not null default true,
+  notification_preferences  jsonb not null default
+    '{"new_lead": true, "credit_warnings": true, "inactivity_nudge": true, "progress_report": true}'::jsonb,
+  last_nudge_sent_at        timestamptz,
+  last_report_sent_at       timestamptz,
   created_at                timestamptz default now(),
   updated_at                timestamptz default now()
 );
@@ -53,6 +57,13 @@ alter table public.customers
   add column if not exists properties_managed text;
 alter table public.customers
   add column if not exists sms_alerts_enabled boolean not null default true;
+alter table public.customers
+  add column if not exists notification_preferences jsonb not null default
+    '{"new_lead": true, "credit_warnings": true, "inactivity_nudge": true, "progress_report": true}'::jsonb;
+alter table public.customers
+  add column if not exists last_nudge_sent_at timestamptz;
+alter table public.customers
+  add column if not exists last_report_sent_at timestamptz;
 alter table public.customers
   drop column if exists overflow_enabled;
 -- Existing customers predate capacity management — treat live rows as active.
@@ -97,12 +108,19 @@ create table if not exists public.lead_assignments (
   first_contacted_at timestamptz,
   status            text default 'new',
   assigned_at       timestamptz default now(),
+  last_status_change_at timestamptz not null default now(),
   unique (lead_id, customer_id)
 );
 
 -- Older databases: speed-to-lead first-contact timestamp.
 alter table public.lead_assignments
   add column if not exists first_contacted_at timestamptz;
+
+-- Older databases: last status-change timestamp for the inactivity nudge.
+alter table public.lead_assignments
+  add column if not exists last_status_change_at timestamptz not null default now();
+update public.lead_assignments
+  set last_status_change_at = coalesce(first_contacted_at, assigned_at);
 
 -- Canonical assignment status set (adds 'rejected'). Normalise legacy 'active'
 -- rows to 'new' before applying the constraint.

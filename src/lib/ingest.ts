@@ -8,7 +8,13 @@ import { extractCity } from "@/lib/utils";
 import { extractPostcode, postcodeArea } from "@/lib/postcode";
 import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
 import { sendNewLeadSms } from "@/lib/sms";
-import type { Customer, Lead, LeadType, N8nLeadPayload } from "@/lib/types";
+import type {
+  Customer,
+  Lead,
+  LeadType,
+  N8nLeadPayload,
+  NotificationPreferences,
+} from "@/lib/types";
 
 const LEAD_PRICE = 15.0;
 const GR_LEAD_PRICE = 10.0;
@@ -56,6 +62,22 @@ export const GR_BANNED_COLUMNS = ["text_mkzxkfns", "text_mkztftwn"] as const;
 
 function leadTypeOf(payload: N8nLeadPayload): LeadType {
   return payload.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
+}
+
+/**
+ * Whether a customer wants a given notification stream.
+ *
+ * Missing / unset keys default to TRUE — an opt-out is only an explicit
+ * `false`. The 0034 migration backfills notification_preferences NOT NULL with
+ * every key true, so in practice the object is always fully populated; this
+ * `!== false` check is the defensive fallback for a row that somehow lacks a
+ * key (or the whole column), so an existing customer never silently goes dark.
+ */
+function wantsNotification(
+  customer: Customer,
+  key: keyof NotificationPreferences
+): boolean {
+  return customer.notification_preferences?.[key] !== false;
 }
 
 /**
@@ -317,48 +339,76 @@ export async function completeAssignment(
   const typedCustomer = customer as Customer | null;
   if (!typedCustomer) return;
 
-  // In-portal notification (feeds the realtime subscription).
-  const city = extractCity(lead.address);
-  const { data: notification } = await supabase
-    .from("notifications")
-    .insert({
-      customer_id: customerId,
-      lead_assignment_id: assignmentId,
-      notification_type: "new_lead",
-      message: `New lead: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
-    })
-    .select("id")
-    .single();
+  // New-lead alerts (in-portal notification + Resend email) are gated together
+  // on the `new_lead` preference. The instant SMS below is a SEPARATE stream
+  // with its own toggle (sms_alerts_enabled) and is intentionally independent.
+  const wantsNewLead = wantsNotification(typedCustomer, "new_lead");
 
-  const { error: emailError } = await sendNewLeadEmail({
-    to: typedCustomer.email,
-    lead,
-  });
+  let notificationId: string | null = null;
+  let emailError: unknown = null;
+
+  if (wantsNewLead) {
+    // In-portal notification (feeds the realtime subscription).
+    const city = extractCity(lead.address);
+    const { data: notification } = await supabase
+      .from("notifications")
+      .insert({
+        customer_id: customerId,
+        lead_assignment_id: assignmentId,
+        notification_type: "new_lead",
+        message: `New lead: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
+      })
+      .select("id")
+      .single();
+    notificationId = notification?.id ?? null;
+
+    const emailRes = await sendNewLeadEmail({
+      to: typedCustomer.email,
+      lead,
+    });
+    emailError = emailRes.error;
+  }
 
   // Instant SMS alert — wins the speed race to the landlord. Inert unless a
-  // Twilio sender is configured; never allowed to break the assignment.
+  // Twilio sender is configured; never allowed to break the assignment. Its own
+  // opt-out (sms_alerts_enabled) is enforced inside sendNewLeadSms.
   const sms = await sendNewLeadSms({ customer: typedCustomer, lead });
   if (sms.error) {
     console.error("sendNewLeadSms failed", { assignmentId, error: sms.error });
   }
 
+  // Reflect what actually happened: if the customer opted out of new_lead,
+  // nothing was sent, so both flags stay false.
   await supabase
     .from("lead_assignments")
-    .update({ notification_sent: true, email_sent: !emailError })
+    .update({
+      notification_sent: wantsNewLead,
+      email_sent: wantsNewLead && !emailError,
+    })
     .eq("id", assignmentId);
 
-  if (notification) {
+  if (notificationId) {
     await supabase
       .from("notifications")
       .update({ email_sent: !emailError })
-      .eq("id", notification.id);
+      .eq("id", notificationId);
   }
 
   // Threshold emails apply only to the management allocation, keyed on the real
   // allocation gate (lead_balance, already decremented by the assignment RPC) so
   // they work for any plan size. GR leads spend gr_lead_balance and must not
   // trigger management credit warnings.
-  if (lead.lead_type !== "guaranteed_rent") {
+  //
+  // These are email-only (no in-portal notification stream exists for credit
+  // warnings), so the `credit_warnings` preference gates the email dispatch and
+  // that is the whole gate. The exact-equality on balance (=== 0 / === LOW) is
+  // the existing once-per-threshold-crossing dedup — the preference is an added
+  // AND condition and does not disturb it (both are pure reads, no side effect,
+  // so their order is immaterial).
+  if (
+    lead.lead_type !== "guaranteed_rent" &&
+    wantsNotification(typedCustomer, "credit_warnings")
+  ) {
     const balance = typedCustomer.lead_balance;
     if (balance === 0) {
       await sendCreditsExhaustedEmail({ to: typedCustomer.email });

@@ -8,7 +8,15 @@ import { cn, initials, formatDate, formatGBP } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import type { AssignmentWithLead } from "@/lib/types";
-import { BarChart3, Check, Mail, Phone, MapPin, Calendar } from "lucide-react";
+import {
+  BarChart3,
+  Check,
+  Mail,
+  Phone,
+  MapPin,
+  Calendar,
+  Presentation,
+} from "lucide-react";
 
 export function LeadCard({
   assignment: initial,
@@ -165,6 +173,16 @@ export function LeadCard({
               >
                 <BarChart3 className="h-4 w-4" />
                 Open STR Analyser
+              </a>
+            </Button>
+            <Button size="sm" asChild>
+              <a
+                href="/income-presentation/index.html"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Presentation className="h-4 w-4" />
+                Income presentation
               </a>
             </Button>
             <Button size="sm" variant="outline" asChild>

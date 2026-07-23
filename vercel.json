@@ -14,6 +14,14 @@
     {
       "path": "/api/cron/generate-public-stats",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/inactivity-nudge",
+      "schedule": "0 10 * * 1"
+    },
+    {
+      "path": "/api/cron/progress-report",
+      "schedule": "0 16 * * 5"
     }
   ]
 }
