@@ -10,10 +10,6 @@
     {
       "path": "/api/monday/sync-gr",
       "schedule": "0 9 * * *"
-    },
-    {
-      "path": "/api/cron/post-call-offer-reminders",
-      "schedule": "*/15 * * * *"
     }
   ]
 }

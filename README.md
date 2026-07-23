@@ -82,9 +82,12 @@ The app generates one Promotion Code per prospect (wrapping the coupon,
 `max_redemptions: 1`, `expires_at` = +24h) via `POST /api/admin/post-call-offer`,
 triggered either from the admin **Offers** page or by an n8n workflow (bearer
 `N8N_WEBHOOK_SECRET`) when a Monday item enters the "Web meeting sat" group.
-Reminder email + SMS fire at 12h / 4h / 1h remaining via the
-`/api/cron/post-call-offer-reminders` cron (every 15 min), stopping once the code
-is redeemed. Redemption is detected on the Stripe `invoice.paid` webhook and
+Reminder email + SMS fire at 12h / 4h / 1h remaining via
+`/api/cron/post-call-offer-reminders`, stopping once the code is redeemed. That
+endpoint must be hit **every ~15 minutes** with an `Authorization: Bearer
+$CRON_SECRET` header. On a Vercel **Pro** plan add it to `vercel.json` crons;
+on **Hobby** (daily-cron limit) drive it from an external scheduler instead
+(e.g. an n8n Schedule trigger — the same n8n instance already used here). Redemption is detected on the Stripe `invoice.paid` webhook and
 surfaced in admin as a **"Discount applied — N-lead plan"** badge. SMS reminders
 also require `TWILIO_MESSAGING_FROM` (a Twilio number or Messaging Service SID);
 if unset, email still sends.
