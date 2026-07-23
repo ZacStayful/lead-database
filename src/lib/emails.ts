@@ -382,6 +382,70 @@ export async function sendInactivityNudgeEmail(params: {
   }
 }
 
+/** Join phrases as "a", "a and b", or "a, b and c". */
+function joinWithAnd(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * Friday weekly progress report — a positive summary of the leads a customer
+ * moved forward this week. Deliberately upbeat and celebratory, distinct in
+ * tone from the inactivity nudge (which is a prompt to act). Only sent to
+ * customers with activity in the window.
+ */
+export async function sendProgressReportEmail(params: {
+  to: string;
+  contactName: string;
+  contacted: number;
+  inDiscussion: number;
+  won: number;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, contacted, inDiscussion, won } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+
+  const parts: string[] = [];
+  if (contacted)
+    parts.push(`${contacted} lead${contacted === 1 ? "" : "s"} contacted`);
+  if (inDiscussion) parts.push(`${inDiscussion} moved into discussion`);
+  if (won) parts.push(`${won} won`);
+  const summaryLine = joinWithAnd(parts);
+  const subject = `Your week with Stayful — ${summaryLine}`;
+
+  const tile = (n: number, label: string) =>
+    `<td style="padding:0 6px;width:33%;text-align:center">
+       <div style="background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:10px;padding:16px 8px">
+         <div style="font-size:26px;font-weight:700;color:${BRAND}">${n}</div>
+         <div style="font-size:12px;color:#6b706a;margin-top:2px">${label}</div>
+       </div>
+     </td>`;
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Nice work this week, ${esc(firstName)}</h1>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">Here's how your leads moved forward over the last 7 days.</p>
+    <table style="width:100%;border-collapse:separate;border-spacing:0;margin-bottom:20px">
+      <tr>
+        ${tile(contacted, "Contacted")}
+        ${tile(inDiscussion, "In discussion")}
+        ${tile(won, "Won")}
+      </tr>
+    </table>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">Every conversation you start is momentum toward a signed landlord. Keep it going.</p>
+    ${button(`${APP_URL}/dashboard/analytics`, "See your analytics")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Credits exhausted — triggered when leads_received_this_month reaches allocation. */
 export async function sendCreditsExhaustedEmail(params: {
   to: string;
