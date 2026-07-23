@@ -43,11 +43,15 @@ export default async function AdminCustomerDetailPage({
   const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
 
   // Post-call offer for this customer — matched at redemption, or by email for a
-  // still-pending offer created before signup. Most recent wins.
+  // still-pending offer created before signup. Most recent wins. Email is stored
+  // lowercased by the offer route, so match it exactly (an .ilike here would treat
+  // any `_`/`%` in the address as a wildcard).
   const { data: offerRaw } = await admin
     .from("post_call_offers")
     .select("*")
-    .or(`matched_customer_id.eq.${customer.id},prospect_email.ilike.${customer.email}`)
+    .or(
+      `matched_customer_id.eq.${customer.id},prospect_email.eq.${customer.email.toLowerCase()}`
+    )
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

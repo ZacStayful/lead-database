@@ -100,8 +100,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  // Lowercased so lookups are a plain case-insensitive exact match. (Matching
+  // with .ilike would treat any `_` or `%` in the address as a SQL wildcard.)
   const prospectEmail =
-    typeof body.prospect_email === "string" ? body.prospect_email.trim() : "";
+    typeof body.prospect_email === "string"
+      ? body.prospect_email.trim().toLowerCase()
+      : "";
   const prospectName =
     typeof body.prospect_name === "string" && body.prospect_name.trim()
       ? body.prospect_name.trim()
@@ -134,7 +138,7 @@ export async function POST(request: NextRequest) {
   const { data: existing } = await admin
     .from("post_call_offers")
     .select("*")
-    .ilike("prospect_email", prospectEmail)
+    .eq("prospect_email", prospectEmail)
     .is("redeemed_at", null)
     .maybeSingle<PostCallOffer>();
 
@@ -180,7 +184,7 @@ export async function POST(request: NextRequest) {
     created_by: adminUserId,
   };
 
-  let dbError: { message?: string } | null = null;
+  let dbError: { code?: string; message?: string } | null = null;
   if (existing) {
     // Expired-unused row → reuse it in place so we never hold two unredeemed
     // rows for one email (and the unique index never conflicts).
@@ -192,6 +196,30 @@ export async function POST(request: NextRequest) {
   } else {
     const { error } = await admin.from("post_call_offers").insert(rowValues);
     dbError = error;
+  }
+
+  if (dbError && !existing && dbError.code === "23505") {
+    // Lost a concurrent generation race (e.g. an n8n retry firing twice): another
+    // request created the active offer between our duplicate check and this
+    // insert. Return the winning offer instead of a 500. Our just-created promo
+    // code is a harmless 24h orphan (logged, not auto-deleted).
+    console.error(
+      "post-call-offer: concurrent insert lost; orphaned promo",
+      promo.id
+    );
+    const { data: winner } = await admin
+      .from("post_call_offers")
+      .select("*")
+      .eq("prospect_email", prospectEmail)
+      .is("redeemed_at", null)
+      .maybeSingle<PostCallOffer>();
+    if (winner) {
+      return NextResponse.json({
+        status: "existing",
+        promo_code_string: winner.promo_code_string,
+        ...computeCheckoutUrls(winner.promo_code_string),
+      });
+    }
   }
 
   if (dbError) {

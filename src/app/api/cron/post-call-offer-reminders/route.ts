@@ -25,8 +25,6 @@ const THRESHOLDS = [
   { hours: 12, ms: 12 * HOUR_MS, flag: "reminder_12h_sent_at" as const },
 ];
 
-type ThresholdFlag = (typeof THRESHOLDS)[number]["flag"];
-
 /**
  * GET/POST /api/cron/post-call-offer-reminders
  *
@@ -145,13 +143,21 @@ async function handle(request: NextRequest) {
       console.error("reminder cron: sms failed", offer.id, smsRes.reason);
     }
 
-    // Mark the threshold as sent immediately after a successful send (either
-    // channel), before moving to the next prospect, so a re-run never double-sends.
+    // Mark the sent threshold immediately after a successful send (either
+    // channel), before moving to the next prospect, so a re-run never
+    // double-sends. Also stamp any COARSER threshold already crossed but never
+    // sent (e.g. the cron was down through the 12h window): we send only the
+    // single most-urgent reminder this run, and record the skipped ones as
+    // handled so they don't fire late out of order on a subsequent run.
     if (anyChannelSent) {
-      const flag: ThresholdFlag = target.flag;
+      const stamp = new Date().toISOString();
+      const flagUpdate: Record<string, string> = {};
+      for (const t of THRESHOLDS) {
+        if (remainingMs <= t.ms && offer[t.flag] == null) flagUpdate[t.flag] = stamp;
+      }
       const { error: markErr } = await admin
         .from("post_call_offers")
-        .update({ [flag]: new Date().toISOString() })
+        .update(flagUpdate)
         .eq("id", offer.id);
       if (markErr) {
         failures.push(`${offer.id}: mark_failed`);

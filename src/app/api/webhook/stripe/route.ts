@@ -56,10 +56,22 @@ function promotionCodeIdFromInvoice(invoice: Stripe.Invoice): string | null {
   return null;
 }
 
-/** Map an invoice's line price ids to the management plan tier ('10' | '20'). */
-function planFromInvoicePriceIds(priceIds: string[]): "10" | "20" {
+/**
+ * Resolve the management plan tier ('10' | '20') an invoice is for. Prefers an
+ * exact price-id match against the configured env prices; falls back to the
+ * pre-discount subtotal (£150 → 10, £300 → 20) so redemption via a Payment Link
+ * that references a different price object than the checkout env vars is still
+ * labelled correctly. `subtotal` (not `amount_paid`) is used because it excludes
+ * the promo discount.
+ */
+function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
   const tenId = process.env.STRIPE_PRICE_ID_10;
-  return tenId && priceIds.includes(tenId) ? "10" : "20";
+  if (tenId && priceIds.includes(tenId)) return "10";
+  const twentyId =
+    process.env.STRIPE_PRICE_ID_20 ?? process.env.STRIPE_MONTHLY_PRICE_ID;
+  if (twentyId && priceIds.includes(twentyId)) return "20";
+  const subtotal = invoice.subtotal ?? 0;
+  return subtotal > 0 && subtotal < 22500 ? "10" : "20";
 }
 
 export async function POST(request: NextRequest) {
@@ -225,6 +237,30 @@ export async function POST(request: NextRequest) {
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
 
+          // Post-call discount redemption. Runs BEFORE the customer-existence
+          // guard on purpose: a prospect who pays via a Payment Link may have no
+          // customers row yet (the links use customer_creation: "if_required"),
+          // and the offer must still be marked redeemed so the "Discount applied"
+          // state is reliably visible. matched_customer_id links a real customer
+          // when one exists, otherwise stays null. Idempotent via redeemed_at IS
+          // NULL; independent of and additive to the crediting logic below — it
+          // never touches lead allocation.
+          const promoCodeId = promotionCodeIdFromInvoice(invoice);
+          if (promoCodeId) {
+            const { error: redeemError } = await admin
+              .from("post_call_offers")
+              .update({
+                redeemed_at: new Date().toISOString(),
+                matched_customer_id: customer?.id ?? null,
+                redeemed_plan: planFromInvoice(invoice, priceIds),
+              })
+              .eq("stripe_promo_code_id", promoCodeId)
+              .is("redeemed_at", null);
+            if (redeemError) {
+              console.error("post_call_offers redemption update failed", redeemError);
+            }
+          }
+
           if (!customer) {
             console.error(
               "invoice.paid for unknown stripe_customer_id — no credit granted",
@@ -279,29 +315,6 @@ export async function POST(request: NextRequest) {
             .from("customers")
             .update(renewalUpdate)
             .eq("id", customer.id);
-
-          // Post-call discount redemption. If a promotion code was applied to
-          // this invoice and it matches an unredeemed post_call_offers row, mark
-          // it redeemed and tie it to this customer + plan. Kept separate from —
-          // and additive to — the crediting logic above; it does not touch lead
-          // allocation. Guarded on redeemed_at IS NULL so a webhook retry is a
-          // no-op.
-          const promoCodeId = promotionCodeIdFromInvoice(invoice);
-          if (promoCodeId) {
-            const redeemedPlan = planFromInvoicePriceIds(priceIds);
-            const { error: redeemError } = await admin
-              .from("post_call_offers")
-              .update({
-                redeemed_at: new Date().toISOString(),
-                matched_customer_id: customer.id,
-                redeemed_plan: redeemedPlan,
-              })
-              .eq("stripe_promo_code_id", promoCodeId)
-              .is("redeemed_at", null);
-            if (redeemError) {
-              console.error("post_call_offers redemption update failed", redeemError);
-            }
-          }
         }
         break;
       }
