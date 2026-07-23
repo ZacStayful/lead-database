@@ -457,6 +457,87 @@ export async function sendInactivityNudgeEmail(params: {
   }
 }
 
+/** Format a date as e.g. "23 October 2026" (UK long form). */
+function ukLongDate(iso: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/London",
+  }).format(new Date(iso));
+}
+
+/**
+ * Confirmation that a management subscription has been paused. States the exact
+ * resume date and reassures the customer that their lead balance is preserved.
+ * Tone matches the brand: professional, direct, no exclamation marks.
+ */
+export async function sendSubscriptionPausedEmail(params: {
+  to: string;
+  contactName: string;
+  resumeDateIso: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, resumeDateIso } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const resumeDate = ukLongDate(resumeDateIso);
+  const subject = "Your Stayful subscription is paused";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Your subscription is paused, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your Stayful subscription is now paused for three months. Here is what that means:</p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      <li>You will not be billed during the pause.</li>
+      <li>You will not receive new leads during the pause.</li>
+      <li>Your current lead balance is preserved and will be waiting for you.</li>
+      <li>Your subscription resumes automatically on <strong style="color:#1a1a1a">${esc(resumeDate)}</strong>, when billing and leads restart.</li>
+    </ul>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">There is nothing you need to do. We will email you again when your subscription resumes.</p>
+    ${button(`${APP_URL}/dashboard/settings`, "View settings")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * Notification that a paused management subscription has resumed — billing has
+ * restarted and the customer is eligible to receive leads again.
+ */
+export async function sendSubscriptionResumedEmail(params: {
+  to: string;
+  contactName: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const subject = "Your Stayful subscription has resumed";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">You're back, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your three-month pause has ended and your Stayful subscription is active again. Billing has restarted and you are back in line to receive leads, with your preserved balance ready to spend.</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">New leads will start arriving as they are matched to you. A quick call is often what turns an enquiry into a signed landlord, so it is worth being ready to follow up.</p>
+    ${button(`${APP_URL}/dashboard/leads`, "View your leads")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Join phrases as "a", "a and b", or "a, b and c". */
 function joinWithAnd(parts: string[]): string {
   if (parts.length <= 1) return parts[0] ?? "";

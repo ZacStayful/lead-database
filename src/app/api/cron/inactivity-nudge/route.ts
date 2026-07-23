@@ -14,11 +14,23 @@ const BANK_HOLIDAY_URL =
   "https://www.gov.uk/bank-holidays/england-and-wales.json";
 const BANK_HOLIDAY_TIMEOUT_MS = 8000;
 
-// A lead whose status last changed this many hours ago (and has no note) is
-// "waiting for follow-up".
-const INACTIVITY_HOURS = 48;
+// A lead whose status last changed longer ago than this (and has no note) is
+// "waiting for follow-up". Tunable via STALE_LEAD_THRESHOLD_DAYS (in days);
+// defaults to 2 days (48h) — the historical value — when unset or invalid.
+const DEFAULT_THRESHOLD_HOURS = 48;
 // How many leads to name in the email before summarising the remainder.
 const MAX_LEADS_LISTED = 8;
+
+/**
+ * Resolve the "waiting for follow-up" threshold in hours. STALE_LEAD_THRESHOLD_DAYS
+ * lets ops tune how many days a lead may sit untouched before it triggers a
+ * nudge; a missing / non-positive / non-numeric value keeps the 48h default.
+ */
+function thresholdHours(): number {
+  const raw = process.env.STALE_LEAD_THRESHOLD_DAYS;
+  const days = raw != null ? Number(raw) : NaN;
+  return Number.isFinite(days) && days > 0 ? days * 24 : DEFAULT_THRESHOLD_HOURS;
+}
 
 /** Today's date (YYYY-MM-DD) in UK local time — en-CA formats as ISO date. */
 function ukDate(d: Date): string {
@@ -124,6 +136,9 @@ async function handle(request: NextRequest) {
   // Target only customers who are actually live on the platform — the same
   // population that receives leads (is_active + account_status + subscription).
   // A churned/cancelled customer should never be nudged about old leads.
+  // Paused customers are skipped too: a paused customer keeps account_status
+  // 'active' (their slot is reserved) but is disengaged by choice and receives
+  // no leads, so nudging them to work leads would be wrong.
   const { data: customerRows, error: custErr } = await admin
     .from("customers")
     .select(
@@ -131,14 +146,15 @@ async function handle(request: NextRequest) {
     )
     .eq("is_active", true)
     .eq("account_status", "active")
-    .eq("subscription_status", "active");
+    .eq("subscription_status", "active")
+    .is("paused_at", null);
 
   if (custErr) {
     return NextResponse.json({ error: custErr.message }, { status: 500 });
   }
 
   const cutoffIso = new Date(
-    now.getTime() - INACTIVITY_HOURS * 60 * 60 * 1000
+    now.getTime() - thresholdHours() * 60 * 60 * 1000
   ).toISOString();
 
   let nudged = 0;
