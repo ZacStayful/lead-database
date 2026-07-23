@@ -125,6 +125,10 @@ export interface LeadAssignment {
   due_to_call_date: string | null;
   income_estimate: number | null;
   assigned_at: string;
+  // When `status` last changed (NOT NULL, defaults to now() at insert so a
+  // brand-new 'new' assignment is stamped at assignment time). Powers the
+  // inactivity nudge's "days since last activity" measure.
+  last_status_change_at: string;
 }
 
 export interface AssignmentWithLead extends LeadAssignment {

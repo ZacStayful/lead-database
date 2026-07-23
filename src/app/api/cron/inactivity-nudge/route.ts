@@ -14,7 +14,8 @@ const BANK_HOLIDAY_URL =
   "https://www.gov.uk/bank-holidays/england-and-wales.json";
 const BANK_HOLIDAY_TIMEOUT_MS = 8000;
 
-// A lead assigned this many hours ago with no activity is "waiting".
+// A lead whose status last changed this many hours ago (and has no note) is
+// "waiting for follow-up".
 const INACTIVITY_HOURS = 48;
 // How many leads to name in the email before summarising the remainder.
 const MAX_LEADS_LISTED = 8;
@@ -73,7 +74,7 @@ function wantsInactivityNudge(customer: NudgeCustomer): boolean {
 type RawLead = { lead_name: string | null; address: string | null };
 type RawAssignment = {
   id: string;
-  assigned_at: string;
+  last_status_change_at: string;
   // supabase-js infers an embedded to-one as an array; PostgREST returns a
   // single object at runtime. Accept both and normalise with oneLead().
   leads: RawLead | RawLead[] | null;
@@ -92,13 +93,11 @@ function oneLead(leads: RawLead | RawLead[] | null): RawLead | null {
  * first follow-up and, if any, send ONE grouped in-portal notification + ONE
  * grouped email, then stamp last_nudge_sent_at for same-day dedup.
  *
- * "Awaiting follow-up" fallback: this schema has no status-change timestamp, so
- * we cannot detect a lead that moved to 'contacted' and then went quiet. We use
- * the buildable, unambiguous definition — status still 'new' (untouched since
- * assignment), assigned >= 48h ago, and no note — which matches the existing
- * "discardable" definition. Covers Management and GR both (shared status
- * vocabulary). A true "days since last activity" nudge would need a new column
- * (e.g. last_status_change_at) as a follow-up.
+ * "Awaiting follow-up" definition: an assignment still in an early-funnel state
+ * (status 'new' or 'contacted') whose status last changed >= 48h ago
+ * (last_status_change_at, 0035) and which carries no note. This catches both a
+ * lead untouched since assignment AND a lead that was contacted and then went
+ * quiet. Covers Management and GR both (shared status vocabulary).
  */
 async function handle(request: NextRequest) {
   const auth = request.headers.get("authorization");
@@ -160,10 +159,10 @@ async function handle(request: NextRequest) {
 
     const { data: assignmentRows, error: aErr } = await admin
       .from("lead_assignments")
-      .select("id, assigned_at, leads(lead_name, address)")
+      .select("id, last_status_change_at, leads(lead_name, address)")
       .eq("customer_id", customer.id)
-      .eq("status", "new")
-      .lte("assigned_at", cutoffIso);
+      .in("status", ["new", "contacted"])
+      .lte("last_status_change_at", cutoffIso);
 
     if (aErr) {
       console.error("[inactivity-nudge] assignment query failed", {

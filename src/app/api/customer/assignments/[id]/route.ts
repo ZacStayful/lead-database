@@ -119,6 +119,13 @@ export async function PATCH(
       body.income_estimate === null ? null : Number(body.income_estimate);
   }
 
+  // Stamp the status-change time whenever this PATCH changes `status`, so the
+  // inactivity nudge can measure days since last activity. pipeline_stage is a
+  // separate column and is deliberately not treated as a status change.
+  if (update.status !== undefined) {
+    update.last_status_change_at = new Date().toISOString();
+  }
+
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ status: "noop" });
   }
