@@ -87,9 +87,17 @@ export async function POST(
       const { data: link } = await admin.auth.admin.generateLink({
         type: "recovery",
         email: customer.email,
-        options: { redirectTo: `${APP_URL}/login` },
+        options: { redirectTo: `${APP_URL}/reset-password` },
       });
-      setPasswordUrl = link?.properties?.action_link ?? null;
+      // Route through /auth/confirm using the token hash (verifyOtp), not the
+      // raw action_link — the PKCE ?code exchange needs a code-verifier cookie
+      // that an admin-generated link never has, and /login has no set-password
+      // step. The token-hash path needs no verifier, works cross-device, and
+      // lands the user on /reset-password with a live recovery session.
+      const hashedToken = link?.properties?.hashed_token;
+      setPasswordUrl = hashedToken
+        ? `${APP_URL}/auth/confirm?token_hash=${hashedToken}&type=recovery&next=/reset-password`
+        : (link?.properties?.action_link ?? null);
     } catch (err) {
       console.error("generateLink (set password) failed", err);
     }
