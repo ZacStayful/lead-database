@@ -253,6 +253,39 @@ export async function sendPostCallReminderEmail(params: {
   }
 }
 
+/**
+ * Account-ready email — sent once when someone who paid via a Payment Link is
+ * auto-provisioned a portal account. Unlike the invite/activation email, there's
+ * no "subscribe" step (they've already paid); it just gives them a working
+ * set-password link so they can log in.
+ */
+export async function sendAccountReadyEmail(params: {
+  to: string;
+  contactName: string;
+  setPasswordUrl: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, setPasswordUrl } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const subject = "Your Stayful Lead Marketplace account is ready";
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">You're all set, ${esc(firstName)}</h1>
+    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">Thanks for subscribing — your payment is confirmed and your Stayful portal is ready. Set your password to log in and start receiving your pre-screened landlord leads.</p>
+    ${button(setPasswordUrl, "Set your password")}
+    <p style="margin:18px 0 0;color:#8a8f88;font-size:12px">If the button doesn't work, copy this link into your browser:<br>${esc(setPasswordUrl)}</p>
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** New lead notification email. */
 export async function sendNewLeadEmail(params: {
   to: string;
