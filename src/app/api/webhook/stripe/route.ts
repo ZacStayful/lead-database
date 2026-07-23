@@ -70,6 +70,50 @@ async function maybeExecuteFilterLift(
   }
 }
 
+/**
+ * Extract the Stripe Promotion Code id applied to an invoice, if any. Handles
+ * both the single `discount` field and the `discounts` array, whether the
+ * promotion_code is an id string or an expanded object. Returns null when the
+ * invoice carries no promotion code.
+ */
+function promotionCodeIdFromInvoice(invoice: Stripe.Invoice): string | null {
+  const fromDiscount = (
+    d: Stripe.Discount | Stripe.DeletedDiscount | string | null | undefined
+  ): string | null => {
+    if (!d || typeof d === "string") return null;
+    const promo = (d as Stripe.Discount).promotion_code;
+    if (!promo) return null;
+    return typeof promo === "string" ? promo : promo.id;
+  };
+
+  const single = fromDiscount(invoice.discount);
+  if (single) return single;
+
+  for (const d of invoice.discounts ?? []) {
+    const id = fromDiscount(d);
+    if (id) return id;
+  }
+  return null;
+}
+
+/**
+ * Resolve the management plan tier ('10' | '20') an invoice is for. Prefers an
+ * exact price-id match against the configured env prices; falls back to the
+ * pre-discount subtotal (£150 → 10, £300 → 20) so redemption via a Payment Link
+ * that references a different price object than the checkout env vars is still
+ * labelled correctly. `subtotal` (not `amount_paid`) is used because it excludes
+ * the promo discount.
+ */
+function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
+  const tenId = process.env.STRIPE_PRICE_ID_10;
+  if (tenId && priceIds.includes(tenId)) return "10";
+  const twentyId =
+    process.env.STRIPE_PRICE_ID_20 ?? process.env.STRIPE_MONTHLY_PRICE_ID;
+  if (twentyId && priceIds.includes(twentyId)) return "20";
+  const subtotal = invoice.subtotal ?? 0;
+  return subtotal > 0 && subtotal < 22500 ? "10" : "20";
+}
+
 export async function POST(request: NextRequest) {
   const stripe = getStripe();
   const signature = request.headers.get("stripe-signature");
@@ -241,6 +285,30 @@ export async function POST(request: NextRequest) {
             .select("id, monthly_allocation")
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
+
+          // Post-call discount redemption. Runs BEFORE the customer-existence
+          // guard on purpose: a prospect who pays via a Payment Link may have no
+          // customers row yet (the links use customer_creation: "if_required"),
+          // and the offer must still be marked redeemed so the "Discount applied"
+          // state is reliably visible. matched_customer_id links a real customer
+          // when one exists, otherwise stays null. Idempotent via redeemed_at IS
+          // NULL; independent of and additive to the crediting logic below — it
+          // never touches lead allocation.
+          const promoCodeId = promotionCodeIdFromInvoice(invoice);
+          if (promoCodeId) {
+            const { error: redeemError } = await admin
+              .from("post_call_offers")
+              .update({
+                redeemed_at: new Date().toISOString(),
+                matched_customer_id: customer?.id ?? null,
+                redeemed_plan: planFromInvoice(invoice, priceIds),
+              })
+              .eq("stripe_promo_code_id", promoCodeId)
+              .is("redeemed_at", null);
+            if (redeemError) {
+              console.error("post_call_offers redemption update failed", redeemError);
+            }
+          }
 
           if (!customer) {
             console.error(

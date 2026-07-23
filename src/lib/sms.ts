@@ -105,3 +105,66 @@ export async function sendNewLeadSms(params: {
     return { sent: false, error: e instanceof Error ? e.message : "unknown" };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Generic outbound SMS — used by the post-call offer reminder cron. Reuses the
+// same Twilio account + sender config as sendNewLeadSms above (no new vendor,
+// no new env var). Fails SAFE: any missing credential, bad number or API error
+// resolves to { ok: false } with a reason string, so a batch never aborts.
+// PII rule: never log the raw phone or message body — only reason strings.
+// ---------------------------------------------------------------------------
+export type GenericSmsResult =
+  | { ok: true; sid: string }
+  | { ok: false; reason: string };
+
+/** Basic sanity check: enough digits to be a real number. */
+function looksLikePhone(rawPhone: string): boolean {
+  const digits = rawPhone.replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+export async function sendSms(
+  rawPhone: string | null,
+  message: string
+): Promise<GenericSmsResult> {
+  if (!rawPhone || !rawPhone.trim() || !looksLikePhone(rawPhone)) {
+    return { ok: false, reason: "missing_or_malformed_phone" };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const sender = senderParam();
+  if (!sid || !token || !sender) {
+    return { ok: false, reason: "missing_twilio_credentials" };
+  }
+
+  try {
+    const to = toE164UK(rawPhone);
+    const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+    const form = new URLSearchParams({ ...sender, To: to, Body: message });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SMS_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: form.toString(),
+          signal: controller.signal,
+        }
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return { ok: false, reason: `twilio_http_${res.status}` };
+    const data = await res.json();
+    return { ok: true, sid: data.sid };
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
+}
