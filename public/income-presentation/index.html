@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- React vendored locally (18.3.1 UMD) so the dc-runtime uses window.React and
+     never fetches it from a CDN at runtime — the tool works fully offline / on
+     restricted networks during a live meeting. -->
+<script src="./react.production.min.js"></script>
+<script src="./react-dom.production.min.js"></script>
 <script src="./support.js"></script>
 </head>
 <body>
