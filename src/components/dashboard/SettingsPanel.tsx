@@ -61,7 +61,6 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
   const [pauseResumesAt, setPauseResumesAt] = useState<string | null>(
     customer.pause_resumes_at
   );
-  const [pauseCount, setPauseCount] = useState<number>(customer.pause_count ?? 0);
   const [smsEnabled, setSmsEnabled] = useState(customer.sms_alerts_enabled);
   const [smsSaving, setSmsSaving] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPreferences>({
@@ -133,7 +132,8 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     const confirmed = window.confirm(
       "Pause your subscription for 3 months? You won't be billed and won't " +
         "receive leads during the pause, but your current lead balance is kept. " +
-        "This is a one-time option and can't be undone early."
+        "It resumes automatically after 3 months, or sooner if you choose to " +
+        "start paying again."
     );
     if (!confirmed) return;
     setPauseLoading(true);
@@ -145,7 +145,6 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
       if (!res.ok) throw new Error(data?.error || "Could not pause.");
       setPausedAt(data.paused_at);
       setPauseResumesAt(data.pause_resumes_at);
-      setPauseCount((c) => c + 1);
     } catch (err) {
       alert(
         err instanceof Error
@@ -164,7 +163,6 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     customer.account_status === "active" &&
     customer.subscription_status === "active";
   const isPaused = Boolean(pausedAt);
-  const pauseUsedUp = pauseCount >= 1;
 
   return (
     <div className="space-y-6">
@@ -226,27 +224,21 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
                   instead of cancelling. During the pause you are not billed and
                   you do not receive new leads, but your current lead balance is
                   kept and will be waiting when you return. Your subscription
-                  resumes automatically after 3 months.
+                  resumes automatically after 3 months — or sooner if you decide
+                  to start paying again.
                 </p>
-                {pauseUsedUp ? (
-                  <p className="text-sm text-amber-600">
-                    You have already used your one-time subscription pause, so
-                    it is no longer available.
+                <div className="pt-2">
+                  <Button
+                    variant="outline"
+                    onClick={pauseSubscription}
+                    disabled={pauseLoading}
+                  >
+                    {pauseLoading ? "Pausing…" : "Pause for 3 months"}
+                  </Button>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    To cancel entirely, use Manage billing above.
                   </p>
-                ) : (
-                  <div className="pt-2">
-                    <Button
-                      variant="outline"
-                      onClick={pauseSubscription}
-                      disabled={pauseLoading}
-                    >
-                      {pauseLoading ? "Pausing…" : "Pause for 3 months"}
-                    </Button>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      One-time only. To cancel entirely, use Manage billing above.
-                    </p>
-                  </div>
-                )}
+                </div>
               </>
             )}
           </CardContent>

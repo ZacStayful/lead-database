@@ -3,7 +3,11 @@ import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { planForAllocation } from "@/lib/plans";
-import { sendFilterLiftCompletedEmail, sendAccountReadyEmail } from "@/lib/emails";
+import {
+  sendFilterLiftCompletedEmail,
+  sendAccountReadyEmail,
+  sendSubscriptionResumedEmail,
+} from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
 import type { LeadType } from "@/lib/types";
 
@@ -206,6 +210,36 @@ export async function POST(request: NextRequest) {
           .from("customers")
           .update(update)
           .eq("stripe_customer_id", customerId);
+
+        // Resume detection (management only). If the management subscription is
+        // NOT paused in Stripe but our record still marks it paused, the customer
+        // has resumed collection out-of-band (e.g. they chose to continue paying
+        // rather than wait out the 3 months). Clear the pause so lead routing
+        // restarts. The guarded update (`paused_at is not null`) means only the
+        // ONE writer that actually flips paused_at → null sends the "you're
+        // back" email, so this never double-emails with the resume cron.
+        if (!isGuaranteedRent && !sub.pause_collection) {
+          const { data: resumedRow } = await admin
+            .from("customers")
+            .update({
+              paused_at: null,
+              pause_resumes_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("stripe_customer_id", customerId)
+            .not("paused_at", "is", null)
+            .select("email, contact_name")
+            .maybeSingle();
+
+          // Only notify on a genuine resume — never when the subscription is
+          // being cancelled/deleted (that path also has a null pause_collection).
+          if (resumedRow?.email && status === "active") {
+            await sendSubscriptionResumedEmail({
+              to: resumedRow.email,
+              contactName: resumedRow.contact_name ?? resumedRow.email,
+            });
+          }
+        }
         break;
       }
 

@@ -9,8 +9,6 @@ export const dynamic = "force-dynamic";
 
 /** How many months a pause lasts before the resume cron reactivates it. */
 const PAUSE_MONTHS = 3;
-/** One-time allowance: a customer who has already paused once cannot re-pause. */
-const MAX_PAUSES = 1;
 
 /**
  * Pause the authenticated customer's MANAGEMENT subscription for three months.
@@ -19,8 +17,12 @@ const MAX_PAUSES = 1;
  *   - management subscription must be active (account_status='active' AND
  *     subscription_status='active' AND a stripe_subscription_id on file). This
  *     also rejects GR-only customers, who have no active management subscription.
- *   - one-time only (pause_count must be < MAX_PAUSES).
  *   - not already paused.
+ *
+ * Pausing is repeatable: a customer may pause again after a previous pause has
+ * ended (pause_count tracks how many times they have used it, for reporting).
+ * A customer who wants to come back early does so by resuming payment on the
+ * Stripe side — the webhook detects that and clears the pause automatically.
  *
  * On success: stamp paused_at/pause_resumes_at and increment pause_count, pause
  * Stripe collection with invoices voided (customer owes nothing during the
@@ -78,23 +80,13 @@ export async function POST() {
     );
   }
 
-  if ((customer.pause_count ?? 0) >= MAX_PAUSES) {
-    return NextResponse.json(
-      {
-        error:
-          "You have already used your one-time subscription pause and cannot pause again.",
-      },
-      { status: 409 }
-    );
-  }
-
   const now = new Date();
   const resumesAt = new Date(now);
   resumesAt.setMonth(resumesAt.getMonth() + PAUSE_MONTHS);
 
   // Guarded, race-safe write: only stamps the pause if the row is still an
-  // active, unpaused management subscription under its pause allowance. A
-  // double-submit therefore updates at most one row.
+  // active, unpaused management subscription. A double-submit therefore updates
+  // at most one row.
   const { data: updated, error: updateError } = await admin
     .from("customers")
     .update({
@@ -107,7 +99,6 @@ export async function POST() {
     .eq("account_status", "active")
     .eq("subscription_status", "active")
     .is("paused_at", null)
-    .lt("pause_count", MAX_PAUSES)
     .select("id")
     .maybeSingle();
 

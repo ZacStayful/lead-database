@@ -49,6 +49,7 @@ async function handle(request: NextRequest) {
   }
 
   let resumed = 0;
+  let alreadyResumed = 0;
   let stripeErrors = 0;
   const errors: string[] = [];
 
@@ -74,14 +75,21 @@ async function handle(request: NextRequest) {
       }
     }
 
-    const { error: clearError } = await admin
+    // Guarded clear: only the writer that actually flips paused_at → null sends
+    // the email. If the Stripe resume above already triggered the webhook and it
+    // cleared the pause first, this returns no row and we skip the email — so a
+    // customer never gets two "you're back" emails.
+    const { data: cleared, error: clearError } = await admin
       .from("customers")
       .update({
         paused_at: null,
         pause_resumes_at: null,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", customer.id);
+      .eq("id", customer.id)
+      .not("paused_at", "is", null)
+      .select("id")
+      .maybeSingle();
 
     if (clearError) {
       errors.push(`${customer.id}: ${clearError.message}`);
@@ -89,6 +97,13 @@ async function handle(request: NextRequest) {
         customer: customer.id,
         error: clearError.message,
       });
+      continue;
+    }
+
+    if (!cleared) {
+      // Already resumed elsewhere (webhook) — Stripe is unpaused, DB is clear,
+      // and the email was sent there. Nothing more to do.
+      alreadyResumed += 1;
       continue;
     }
 
@@ -109,6 +124,7 @@ async function handle(request: NextRequest) {
   return NextResponse.json({
     status: "ok",
     resumed,
+    already_resumed: alreadyResumed,
     stripe_errors: stripeErrors,
     errors,
   });

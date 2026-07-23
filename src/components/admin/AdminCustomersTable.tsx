@@ -11,18 +11,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Filter } from "lucide-react";
+import { Filter, Pause } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { computePacing, type PacingStatus } from "@/lib/pacing";
 import type { Customer } from "@/lib/types";
 
-type Tab = "all" | "active" | "waitlisted" | "invited";
+type Tab = "all" | "active" | "waitlisted" | "invited" | "cancelled";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "all", label: "All" },
   { key: "active", label: "Active" },
   { key: "waitlisted", label: "Waitlisted" },
   { key: "invited", label: "Invited" },
+  { key: "cancelled", label: "Cancelled" },
 ];
 
 type ProductTab = "all" | "management" | "guaranteed_rent" | "both";
@@ -39,6 +40,10 @@ const PRODUCT_TABS: { key: ProductTab; label: string }[] = [
 const hasManagement = (c: Customer) =>
   c.subscription_status === "active" && c.account_status === "active";
 const hasGuaranteedRent = (c: Customer) => c.gr_subscription_status === "active";
+
+// A management subscriber whose subscription is currently paused (account_status
+// stays 'active', so they still appear under the Active tab).
+const isPaused = (c: Customer) => Boolean(c.paused_at);
 
 // A customer with an active or pending-lift filter on either product.
 const isFiltered = (s: string | null | undefined) =>
@@ -211,6 +216,19 @@ export function AdminCustomersTable({
                         >
                           <Filter className="h-3 w-3" />
                           Filtered
+                        </span>
+                      )}
+                      {isPaused(c) && (
+                        <span
+                          title={
+                            c.pause_resumes_at
+                              ? `Subscription paused · resumes ${formatDate(c.pause_resumes_at)}`
+                              : "Subscription paused"
+                          }
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                        >
+                          <Pause className="h-3 w-3" />
+                          Paused
                         </span>
                       )}
                     </span>
