@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
+import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export interface AreaOption {
@@ -23,6 +24,9 @@ export interface FilterPanelProps {
   maxBedrooms: number | null;
   liftEffectiveDate: string | null;
   availableAreas: AreaOption[];
+  // Lead volume per postcode area (national), for the map + list hints.
+  areaCounts?: Record<string, number>;
+  maxAreaCount?: number;
 }
 
 const CONSENT =
@@ -34,6 +38,12 @@ const MINI_GUIDE =
 export function LeadFilteringPanel(props: FilterPanelProps) {
   const router = useRouter();
   const { product, productLabel, availableAreas } = props;
+  const areaCounts = props.areaCounts ?? {};
+  const maxAreaCount = props.maxAreaCount ?? 0;
+  const selectableAreas = useMemo(
+    () => availableAreas.map((a) => a.area),
+    [availableAreas]
+  );
 
   const [editing, setEditing] = useState(props.status === "off");
   const [selectedAreas, setSelectedAreas] = useState<string[]>(props.areas);
@@ -208,6 +218,17 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 </p>
               ) : (
                 <>
+                  {maxAreaCount > 0 && (
+                    <div className="mt-2">
+                      <LeadSourceMap
+                        counts={areaCounts}
+                        maxCount={maxAreaCount}
+                        selectable={selectableAreas}
+                        selected={selectedAreas}
+                        onToggle={toggleArea}
+                      />
+                    </div>
+                  )}
                   <Input
                     className="mt-2"
                     placeholder="Search areas…"
@@ -232,6 +253,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                             className="h-4 w-4 shrink-0"
                           />
                           <span className="truncate">{a.label}</span>
+                          {areaCounts[a.area] != null && (
+                            <span className="ml-auto shrink-0 tabular-nums text-xs text-muted-foreground">
+                              {areaCounts[a.area]}
+                            </span>
+                          )}
                         </label>
                       );
                     })}

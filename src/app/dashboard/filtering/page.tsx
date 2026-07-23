@@ -18,24 +18,35 @@ export default async function LeadFilteringPage() {
 
   const admin = createAdminClient();
 
-  // Distinct postcode areas actually present in the lead inventory.
-  const { data: areaRows } = await admin
-    .from("leads")
-    .select("postcode_area")
-    .not("postcode_area", "is", null);
+  // Per-area lead counts across the whole inventory, so the map can shade each
+  // area by volume and the customer can see where leads actually come from.
+  // Paginated: a single select is capped (Supabase default 1000 rows), which
+  // would undercount the map once the lead table grows past 1000.
+  const areaCounts: Record<string, number> = {};
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await admin
+      .from("leads")
+      .select("postcode_area")
+      .not("postcode_area", "is", null)
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    for (const r of data as { postcode_area: string | null }[]) {
+      const a = r.postcode_area?.toUpperCase();
+      if (a) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
+    }
+    if (data.length < PAGE) break;
+  }
 
-  const availableAreas: AreaOption[] = Array.from(
-    new Set(
-      (areaRows ?? [])
-        .map((r: { postcode_area: string | null }) => r.postcode_area)
-        .filter((a): a is string => Boolean(a))
-        .map((a) => a.toUpperCase())
-    )
-  )
+  const availableAreas: AreaOption[] = Object.keys(areaCounts)
     .sort((a, b) => a.localeCompare(b))
     .map((area) => ({ area, label: areaLabel(area) }));
+  const maxAreaCount = availableAreas.reduce(
+    (m, a) => Math.max(m, areaCounts[a.area] ?? 0),
+    0
+  );
 
-  const panels = panelPropsFor(customer, availableAreas);
+  const panels = panelPropsFor(customer, availableAreas, areaCounts, maxAreaCount);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -61,7 +72,9 @@ export default async function LeadFilteringPage() {
 /** Build a filter panel for each product the customer can filter. */
 function panelPropsFor(
   customer: Customer,
-  availableAreas: AreaOption[]
+  availableAreas: AreaOption[],
+  areaCounts: Record<string, number>,
+  maxAreaCount: number
 ): FilterPanelProps[] {
   const panels: FilterPanelProps[] = [];
 
@@ -78,6 +91,8 @@ function panelPropsFor(
       maxBedrooms: customer.filter_max_bedrooms,
       liftEffectiveDate: customer.filter_lift_effective_date,
       availableAreas,
+      areaCounts,
+      maxAreaCount,
     });
   }
 
@@ -94,6 +109,8 @@ function panelPropsFor(
       maxBedrooms: customer.gr_filter_max_bedrooms,
       liftEffectiveDate: customer.gr_filter_lift_effective_date,
       availableAreas,
+      areaCounts,
+      maxAreaCount,
     });
   }
 
