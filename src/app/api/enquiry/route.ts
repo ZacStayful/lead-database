@@ -16,10 +16,10 @@ export const dynamic = "force-dynamic";
  * an INACTIVE ("waitlisted") account in the lead database. The account stays
  * inactive until an admin activates (invites) it from the admin panel.
  *
- * The response tells the client whether we currently have capacity for another
- * customer — the form shows the Calendly booking link when we do, or an
- * "at capacity" message when we don't. Either way the account is created; the
- * capacity flag only changes the message shown to the prospect.
+ * The response always reports `hasCapacity: true` — capacity no longer gates the
+ * public form. Every prospect is shown the Calendly booking link; committed lead
+ * volume is managed on the admin side (weighted slots) and at invite time, not
+ * by turning enquirers away here.
  */
 export async function POST(request: NextRequest) {
   let body: {
@@ -160,19 +160,7 @@ export async function POST(request: NextRequest) {
     console.error("Enquiry account creation error", err);
   }
 
-  // 3. Capacity check — decides which message the form shows.
-  const { data: setting } = await admin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "max_active_customers")
-    .single();
-  const maxActive = parseInt(setting?.value ?? "10", 10);
-  const { count: activeCount } = await admin
-    .from("customers")
-    .select("*", { count: "exact", head: true })
-    .eq("account_status", "active");
-
-  const hasCapacity = (activeCount ?? 0) < maxActive;
-
-  return NextResponse.json({ ok: true, hasCapacity });
+  // 3. Capacity no longer gates the public form — every prospect books a call.
+  //    The field is kept `true` for a stable response shape.
+  return NextResponse.json({ ok: true, hasCapacity: true });
 }
