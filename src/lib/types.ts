@@ -36,6 +36,12 @@ export interface Customer {
   lead_balance: number;
   account_status: "waitlisted" | "invited" | "active" | "cancelled" | string;
   is_active: boolean;
+  // Pause subscription (management-only, 3-month, one-time). When paused_at is
+  // set the customer is not billed and receives no new management leads, but
+  // account_status stays 'active' so their capacity slot is reserved.
+  paused_at: string | null;
+  pause_resumes_at: string | null;
+  pause_count: number;
   first_login_at: string | null;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;

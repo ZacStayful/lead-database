@@ -45,8 +45,23 @@ const PREFERENCE_ROWS: {
   },
 ];
 
+/** Format an ISO timestamp as e.g. "23 October 2026". */
+function formatLongDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
 export function SettingsPanel({ customer }: { customer: Customer }) {
   const [portalLoading, setPortalLoading] = useState(false);
+  const [pauseLoading, setPauseLoading] = useState(false);
+  const [pausedAt, setPausedAt] = useState<string | null>(customer.paused_at);
+  const [pauseResumesAt, setPauseResumesAt] = useState<string | null>(
+    customer.pause_resumes_at
+  );
+  const [pauseCount, setPauseCount] = useState<number>(customer.pause_count ?? 0);
   const [smsEnabled, setSmsEnabled] = useState(customer.sms_alerts_enabled);
   const [smsSaving, setSmsSaving] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPreferences>({
@@ -114,7 +129,42 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     }
   }
 
+  async function pauseSubscription() {
+    const confirmed = window.confirm(
+      "Pause your subscription for 3 months? You won't be billed and won't " +
+        "receive leads during the pause, but your current lead balance is kept. " +
+        "This is a one-time option and can't be undone early."
+    );
+    if (!confirmed) return;
+    setPauseLoading(true);
+    try {
+      const res = await fetch("/api/customer/subscription/pause", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Could not pause.");
+      setPausedAt(data.paused_at);
+      setPauseResumesAt(data.pause_resumes_at);
+      setPauseCount((c) => c + 1);
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Could not pause your subscription. Please try again."
+      );
+    } finally {
+      setPauseLoading(false);
+    }
+  }
+
   const isActive = customer.subscription_status === "active";
+  // Pausing is a management-only action, offered only to an active management
+  // subscriber (account + subscription both active).
+  const managementActive =
+    customer.account_status === "active" &&
+    customer.subscription_status === "active";
+  const isPaused = Boolean(pausedAt);
+  const pauseUsedUp = pauseCount >= 1;
 
   return (
     <div className="space-y-6">
@@ -146,6 +196,62 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
           </div>
         </CardContent>
       </Card>
+
+      {managementActive && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Pause subscription</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {isPaused ? (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Your subscription is paused. You are not being billed and are
+                  not receiving new leads. Your current lead balance is preserved.
+                </p>
+                {pauseResumesAt && (
+                  <p className="text-sm">
+                    Resumes automatically on{" "}
+                    <span className="font-medium">
+                      {formatLongDate(pauseResumesAt)}
+                    </span>
+                    .
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Need a break? You can pause your subscription for 3 months
+                  instead of cancelling. During the pause you are not billed and
+                  you do not receive new leads, but your current lead balance is
+                  kept and will be waiting when you return. Your subscription
+                  resumes automatically after 3 months.
+                </p>
+                {pauseUsedUp ? (
+                  <p className="text-sm text-amber-600">
+                    You have already used your one-time subscription pause, so
+                    it is no longer available.
+                  </p>
+                ) : (
+                  <div className="pt-2">
+                    <Button
+                      variant="outline"
+                      onClick={pauseSubscription}
+                      disabled={pauseLoading}
+                    >
+                      {pauseLoading ? "Pausing…" : "Pause for 3 months"}
+                    </Button>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      One-time only. To cancel entirely, use Manage billing above.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
