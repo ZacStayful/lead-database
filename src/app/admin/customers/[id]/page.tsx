@@ -15,6 +15,7 @@ import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
+import { offerState, formatRemaining, type PostCallOffer } from "@/lib/postCallOffers";
 import { Download } from "lucide-react";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
 
@@ -41,6 +42,21 @@ export default async function AdminCustomerDetailPage({
     .eq("customer_id", customer.id)
     .order("assigned_at", { ascending: false });
   const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
+
+  // Post-call offer for this customer — matched at redemption, or by email for a
+  // still-pending offer created before signup. Most recent wins. Email is stored
+  // lowercased by the offer route, so match it exactly (an .ilike here would treat
+  // any `_`/`%` in the address as a wildcard).
+  const { data: offerRaw } = await admin
+    .from("post_call_offers")
+    .select("*")
+    .or(
+      `matched_customer_id.eq.${customer.id},prospect_email.eq.${customer.email.toLowerCase()}`
+    )
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const offer = (offerRaw as PostCallOffer | null) ?? null;
 
   return (
     <div className="space-y-6">
@@ -75,6 +91,9 @@ export default async function AdminCustomerDetailPage({
             ? ` · Manages ${customer.properties_managed} properties`
             : ""}
         </p>
+        <div className="mt-2">
+          <PostCallOfferBadge offer={offer} />
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -256,6 +275,37 @@ function FilterCard({ customer }: { customer: Customer }) {
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+/** Post-call discount offer state — the redeemed state is deliberately distinct. */
+function PostCallOfferBadge({ offer }: { offer: PostCallOffer | null }) {
+  const state = offerState(offer);
+  if (state.kind === "none") {
+    return (
+      <Badge variant="outline" className="border-transparent bg-gray-100 text-gray-500">
+        No offer generated
+      </Badge>
+    );
+  }
+  if (state.kind === "redeemed") {
+    return (
+      <Badge className="border-transparent bg-emerald-600 text-white">
+        Discount applied — {state.plan ?? "?"}-lead plan
+      </Badge>
+    );
+  }
+  if (state.kind === "active") {
+    return (
+      <Badge variant="outline" className="border-transparent bg-amber-100 text-amber-800">
+        Offer active — expires in {formatRemaining(state.expiresAt)}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="border-transparent bg-gray-100 text-gray-600">
+      Offer expired — unused
+    </Badge>
   );
 }
 
