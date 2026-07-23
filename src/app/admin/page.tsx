@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
 import { planForAllocation } from "@/lib/plans";
+import { getCapacityStatus } from "@/lib/capacity";
 import type { Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -16,19 +17,12 @@ export default async function AdminOverviewPage() {
   );
 
   // Capacity management uses account_status (admin approval), independent of
-  // Stripe billing state.
-  const activeAccounts = customers.filter(
-    (c) => c.account_status === "active"
-  ).length;
+  // Stripe billing state. The "used" side is weighted by monthly allocation via
+  // the shared helper — a 20-lead customer is one slot, a 10-lead customer half.
+  const capacity = await getCapacityStatus();
   const waitlistedAccounts = customers.filter(
     (c) => c.account_status === "waitlisted"
   ).length;
-  const { data: capacitySetting } = await admin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "max_active_customers")
-    .maybeSingle();
-  const capacityLimit = parseInt(capacitySetting?.value ?? "10", 10);
 
   // Filter mix per product — reported separately, since a customer can filter
   // one product and not the other. "Filtered" = an active or pending-lift filter.
@@ -43,8 +37,9 @@ export default async function AdminOverviewPage() {
   const mgmtFiltered = mgmtHolders.filter((c) => isFiltered(c.filter_status)).length;
   const grFiltered = grHolders.filter((c) => isFiltered(c.gr_filter_status)).length;
   const filterMix = {
-    activeAccounts,
-    capacityLimit,
+    weightedUsed: capacity.weightedUsed,
+    rawActiveCount: capacity.rawActiveCount,
+    capacityLimit: capacity.limit,
     management: { filtered: mgmtFiltered, unfiltered: mgmtHolders.length - mgmtFiltered },
     gr: { filtered: grFiltered, unfiltered: grHolders.length - grFiltered },
   };
@@ -88,8 +83,9 @@ export default async function AdminOverviewPage() {
         </p>
       </div>
       <CapacityPanel
-        activeCount={activeAccounts}
-        initialLimit={capacityLimit}
+        weightedUsed={capacity.weightedUsed}
+        rawActiveCount={capacity.rawActiveCount}
+        initialLimit={capacity.limit}
         waitlistedCount={waitlistedAccounts}
       />
       <FilterMixCard mix={filterMix} />
@@ -111,7 +107,8 @@ function FilterMixCard({
   mix,
 }: {
   mix: {
-    activeAccounts: number;
+    weightedUsed: number;
+    rawActiveCount: number;
     capacityLimit: number;
     management: { filtered: number; unfiltered: number };
     gr: { filtered: number; unfiltered: number };
@@ -119,8 +116,8 @@ function FilterMixCard({
 }) {
   const rows = [
     {
-      label: "Active customers",
-      value: `${mix.activeAccounts} / ${mix.capacityLimit}`,
+      label: "Weighted slots used",
+      value: `${mix.weightedUsed} / ${mix.capacityLimit}`,
     },
     {
       label: "Management (filtered / unfiltered)",

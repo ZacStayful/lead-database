@@ -98,15 +98,17 @@ export function AdminCustomersTable({
       });
       const data = await res.json();
       if (!res.ok) {
-        if (res.status === 409) {
-          setToast("Increase the capacity limit before inviting this customer.");
-        } else {
-          setToast(data.error ?? "Could not send invitation.");
-        }
+        setToast(data.error ?? "Could not send invitation.");
         return;
       }
       setStatusOverride((s) => ({ ...s, [id]: "invited" }));
-      setToast(`Invitation sent to ${email}`);
+      // Capacity is non-blocking: the invite always succeeds, but flag it when
+      // this customer would push weighted usage over the limit.
+      setToast(
+        data.capacityWarning && data.warningMessage
+          ? `Invitation sent to ${email}. ${data.warningMessage}`
+          : `Invitation sent to ${email}`
+      );
     } catch {
       setToast("Could not send invitation.");
     } finally {

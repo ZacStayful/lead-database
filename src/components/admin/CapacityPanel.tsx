@@ -6,11 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export function CapacityPanel({
-  activeCount,
+  weightedUsed,
+  rawActiveCount,
   initialLimit,
   waitlistedCount,
 }: {
-  activeCount: number;
+  /** Weighted slots consumed by active customers (20-lead = 1, 10-lead = 0.5). */
+  weightedUsed: number;
+  /** Unweighted count of active customers, shown for context. */
+  rawActiveCount: number;
   initialLimit: number;
   waitlistedCount: number;
 }) {
@@ -19,8 +23,8 @@ export function CapacityPanel({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const pct = limit > 0 ? Math.min(100, Math.round((activeCount / limit) * 100)) : 0;
-  const full = activeCount >= limit;
+  const pct = limit > 0 ? Math.min(100, Math.round((weightedUsed / limit) * 100)) : 0;
+  const full = weightedUsed >= limit;
 
   async function save() {
     const capacity = parseInt(input, 10);
@@ -53,10 +57,13 @@ export function CapacityPanel({
         <div>
           <p className="text-sm text-muted-foreground">Subscriber capacity</p>
           <p className="mt-1 text-2xl font-semibold">
-            {activeCount} active{" "}
+            {weightedUsed} / {limit}{" "}
             <span className="text-lg font-normal text-muted-foreground">
-              / {limit} limit
+              slots used
             </span>
+          </p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {rawActiveCount} active customer{rawActiveCount === 1 ? "" : "s"}
           </p>
         </div>
 

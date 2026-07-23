@@ -7,6 +7,7 @@ import { isAdminUser } from "@/lib/auth";
 import { APP_URL } from "@/lib/env";
 import { sendActivationEmail } from "@/lib/emails/activation";
 import { planForAllocation, stripePriceIdFor } from "@/lib/plans";
+import { getCapacityStatus, capacityWeight } from "@/lib/capacity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,24 +49,21 @@ export async function POST(
     return NextResponse.json({ error: "Customer is not waitlisted" }, { status: 400 });
   }
 
-  // Confirm capacity still has room before inviting.
-  const { data: setting } = await admin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "max_active_customers")
-    .single();
-  const maxActive = parseInt(setting?.value ?? "10", 10);
-  const { count: activeCount } = await admin
-    .from("customers")
-    .select("*", { count: "exact", head: true })
-    .eq("account_status", "active");
-
-  if ((activeCount ?? 0) >= maxActive) {
-    return NextResponse.json(
-      { error: "No capacity available — increase the limit before inviting" },
-      { status: 409 }
-    );
-  }
+  // Capacity is a non-blocking warning, never a hard block: the invite always
+  // proceeds. We surface a warning when this customer becoming active would push
+  // weighted usage over the limit, so the admin UI can flag it without stopping
+  // the action. (Inviting flips the account to 'invited', which doesn't yet
+  // consume a slot — only 'active' does — so we project the post-activation
+  // weight on top of current usage.)
+  const capacity = await getCapacityStatus();
+  const projectedWeighted =
+    Math.round(
+      (capacity.weightedUsed + capacityWeight(customer.monthly_allocation)) * 100
+    ) / 100;
+  const capacityWarning = projectedWeighted > capacity.limit;
+  const warningMessage = capacityWarning
+    ? `Inviting this customer projects weighted usage to ${projectedWeighted} of ${capacity.limit} slots, over the capacity limit.`
+    : null;
 
   try {
     // Enquiry-form accounts have no auth login yet (user_id is null). Create one
@@ -164,7 +162,7 @@ export async function POST(
       .update({ account_status: "invited" })
       .eq("id", customer.id);
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, capacityWarning, warningMessage });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invite failed";
     console.error("invite route error", err);
