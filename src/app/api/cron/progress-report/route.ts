@@ -9,6 +9,9 @@ export const maxDuration = 60;
 
 // Rolling window for "this week".
 const WINDOW_DAYS = 7;
+// Weekly idempotency: don't re-send within this many days of the last send, so a
+// manual re-run mid-week is a no-op while the next Friday (7 days on) still fires.
+const REPORT_DEDUP_DAYS = 6;
 // Early-funnel-forward statuses we celebrate. Only 'contacted' and 'won' are
 // ever set by customer action today (the assignments PATCH, which stamps
 // last_status_change_at); 'in_discussion' is a legal status with no in-app
@@ -17,7 +20,11 @@ const PROGRESS_STATUSES = ["contacted", "in_discussion", "won"];
 
 type ReportCustomer = Pick<
   Customer,
-  "id" | "email" | "contact_name" | "notification_preferences"
+  | "id"
+  | "email"
+  | "contact_name"
+  | "notification_preferences"
+  | "last_report_sent_at"
 >;
 
 /** Missing / unset key defaults to true — opt-out is only an explicit false. */
@@ -50,26 +57,46 @@ async function handle(request: NextRequest) {
 
   const admin = createAdminClient();
 
+  // Target only customers who are actually live on the platform — the same
+  // population that receives leads (is_active + account_status + subscription).
   const { data: customerRows, error: custErr } = await admin
     .from("customers")
-    .select("id, email, contact_name, notification_preferences")
-    .eq("is_active", true);
+    .select(
+      "id, email, contact_name, notification_preferences, last_report_sent_at"
+    )
+    .eq("is_active", true)
+    .eq("account_status", "active")
+    .eq("subscription_status", "active");
 
   if (custErr) {
     return NextResponse.json({ error: custErr.message }, { status: 500 });
   }
 
+  const nowMs = Date.now();
   const sinceIso = new Date(
-    Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000
+    nowMs - WINDOW_DAYS * 24 * 60 * 60 * 1000
   ).toISOString();
+  const dedupMs = REPORT_DEDUP_DAYS * 24 * 60 * 60 * 1000;
 
   let sent = 0;
   let noActivity = 0;
   let optedOut = 0;
+  let alreadySent = 0;
 
   for (const customer of (customerRows ?? []) as ReportCustomer[]) {
     if (!wantsProgressReport(customer)) {
       optedOut += 1;
+      continue;
+    }
+
+    // Weekly idempotency: skip anyone already sent a report within the dedup
+    // window, so a manual re-run mid-week does not double-send. Parsed via Date
+    // (numeric compare) to avoid ISO string-format mismatches.
+    if (
+      customer.last_report_sent_at &&
+      nowMs - new Date(customer.last_report_sent_at).getTime() < dedupMs
+    ) {
+      alreadySent += 1;
       continue;
     }
 
@@ -116,13 +143,23 @@ async function handle(request: NextRequest) {
       });
     }
 
+    // Stamp the send so a same-week re-run skips this customer.
+    await admin
+      .from("customers")
+      .update({ last_report_sent_at: new Date(nowMs).toISOString() })
+      .eq("id", customer.id);
+
     sent += 1;
   }
 
   return NextResponse.json({
     status: "ok",
     sent,
-    skipped: { no_activity: noActivity, opted_out: optedOut },
+    skipped: {
+      no_activity: noActivity,
+      opted_out: optedOut,
+      already_sent: alreadySent,
+    },
   });
 }
 

@@ -121,12 +121,17 @@ async function handle(request: NextRequest) {
 
   const admin = createAdminClient();
 
+  // Target only customers who are actually live on the platform — the same
+  // population that receives leads (is_active + account_status + subscription).
+  // A churned/cancelled customer should never be nudged about old leads.
   const { data: customerRows, error: custErr } = await admin
     .from("customers")
     .select(
       "id, email, contact_name, notification_preferences, last_nudge_sent_at"
     )
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .eq("account_status", "active")
+    .eq("subscription_status", "active");
 
   if (custErr) {
     return NextResponse.json({ error: custErr.message }, { status: 500 });

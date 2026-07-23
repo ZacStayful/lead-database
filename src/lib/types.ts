@@ -71,6 +71,8 @@ export interface Customer {
   notification_preferences: NotificationPreferences;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
+  // Last Friday progress-report send, for same-week dedup (null = never sent).
+  last_report_sent_at: string | null;
   created_at: string;
   updated_at: string;
 }
