@@ -28,6 +28,7 @@ create table if not exists public.customers (
   billing_cycle_anchor      date,
   website_url               text,
   properties_managed        text,
+  sms_alerts_enabled        boolean not null default true,
   created_at                timestamptz default now(),
   updated_at                timestamptz default now()
 );
@@ -50,6 +51,8 @@ alter table public.customers
   add column if not exists website_url text;
 alter table public.customers
   add column if not exists properties_managed text;
+alter table public.customers
+  add column if not exists sms_alerts_enabled boolean not null default true;
 alter table public.customers
   drop column if exists overflow_enabled;
 -- Existing customers predate capacity management — treat live rows as active.
@@ -91,10 +94,15 @@ create table if not exists public.lead_assignments (
   notification_sent boolean default false,
   email_sent        boolean default false,
   viewed_at         timestamptz,
+  first_contacted_at timestamptz,
   status            text default 'new',
   assigned_at       timestamptz default now(),
   unique (lead_id, customer_id)
 );
+
+-- Older databases: speed-to-lead first-contact timestamp.
+alter table public.lead_assignments
+  add column if not exists first_contacted_at timestamptz;
 
 -- Canonical assignment status set (adds 'rejected'). Normalise legacy 'active'
 -- rows to 'new' before applying the constraint.
@@ -631,6 +639,37 @@ create policy "lead_files_select_own" on public.lead_files
     exists (
       select 1 from public.customers c
       where c.id = lead_files.customer_id
+        and c.user_id = auth.uid()
+    )
+  );
+
+-- ============================================================================
+-- Testimonials — a one-line quote a customer can leave at the moment they mark
+-- a lead as signed. With consent_to_publish they become landing-page proof.
+-- ============================================================================
+create table if not exists public.testimonials (
+  id                 uuid primary key default gen_random_uuid(),
+  customer_id        uuid not null references public.customers(id) on delete cascade,
+  lead_assignment_id uuid references public.lead_assignments(id) on delete set null,
+  body               text not null,
+  rating             smallint check (rating between 1 and 5),
+  consent_to_publish boolean not null default false,
+  created_at         timestamptz not null default now()
+);
+
+create index if not exists idx_testimonials_customer
+  on public.testimonials(customer_id);
+
+alter table public.testimonials enable row level security;
+
+-- Customers may read their own testimonials. Inserts go through a server route
+-- using the service role, so no insert policy is exposed to the browser client.
+drop policy if exists "testimonials_select_own" on public.testimonials;
+create policy "testimonials_select_own" on public.testimonials
+  for select using (
+    exists (
+      select 1 from public.customers c
+      where c.id = testimonials.customer_id
         and c.user_id = auth.uid()
     )
   );

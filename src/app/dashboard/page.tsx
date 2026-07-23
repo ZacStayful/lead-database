@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
+import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
@@ -65,6 +66,36 @@ export default async function DashboardPage() {
     (a) => a.lead?.lead_type === "guaranteed_rent"
   ).length;
   const managementReceived = assignments.length - grReceived;
+
+  // Conversion funnel: of the leads delivered, how many were worked and how many
+  // were signed. 'won' is the terminal conversion signal set from the lead
+  // detail page; 'contacted' counts any lead advanced past 'new'.
+  const contactedCount = assignments.filter((a) =>
+    ["contacted", "in_discussion", "won"].includes(a.status)
+  ).length;
+  const signedCount = assignments.filter((a) => a.status === "won").length;
+
+  // Median speed-to-lead (delivery → first contact), in minutes. Null until at
+  // least one lead has a first_contacted_at stamp.
+  const responseMins = assignments
+    .filter((a) => a.first_contacted_at)
+    .map(
+      (a) =>
+        (new Date(a.first_contacted_at as string).getTime() -
+          new Date(a.assigned_at).getTime()) /
+        60000
+    )
+    .filter((m) => m >= 0)
+    .sort((x, y) => x - y);
+  const medianResponseMinutes =
+    responseMins.length === 0
+      ? null
+      : responseMins.length % 2 === 1
+        ? responseMins[(responseMins.length - 1) / 2]
+        : (responseMins[responseMins.length / 2 - 1] +
+            responseMins[responseMins.length / 2]) /
+          2;
+
   // Which products this customer actually holds (active sub or leads received).
   const hasManagement = isActive || managementReceived > 0;
   const hasGr = hasGuaranteedRent || grReceived > 0;
@@ -187,6 +218,13 @@ export default async function DashboardPage() {
         ))}
 
       {hasGuaranteedRent && <CompanyLetAgreement compact />}
+
+      <ConversionFunnel
+        received={assignments.length}
+        contacted={contactedCount}
+        signed={signedCount}
+        medianResponseMinutes={medianResponseMinutes}
+      />
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>
