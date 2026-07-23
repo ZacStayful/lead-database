@@ -79,11 +79,20 @@ async function handle(request: NextRequest) {
     // the email. If the Stripe resume above already triggered the webhook and it
     // cleared the pause first, this returns no row and we skip the email — so a
     // customer never gets two "you're back" emails.
+    //
+    // Re-baseline pacing on resume (anchor = today, monthly counter = 0), the
+    // same reset execute_filter_lift does when a customer re-enters the
+    // guarantee system. Without it, the stale (3-month-old) billing_cycle_anchor
+    // plus a zeroed monthly counter would read as a maximal deficit and dump a
+    // flood of leads on the customer the instant they resume. lead_balance is
+    // deliberately NOT touched — credits carry forward.
     const { data: cleared, error: clearError } = await admin
       .from("customers")
       .update({
         paused_at: null,
         pause_resumes_at: null,
+        billing_cycle_anchor: new Date().toISOString().slice(0, 10),
+        leads_received_this_month: 0,
         updated_at: new Date().toISOString(),
       })
       .eq("id", customer.id)

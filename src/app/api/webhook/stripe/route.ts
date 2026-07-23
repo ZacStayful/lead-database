@@ -219,11 +219,18 @@ export async function POST(request: NextRequest) {
         // ONE writer that actually flips paused_at → null sends the "you're
         // back" email, so this never double-emails with the resume cron.
         if (!isGuaranteedRent && !sub.pause_collection) {
+          // Re-baseline pacing on resume (anchor = today, monthly counter = 0),
+          // mirroring execute_filter_lift and the resume cron. Without it the
+          // stale billing_cycle_anchor from before the pause would read as a
+          // maximal deficit and flood the customer with leads on resume.
+          // lead_balance is untouched — credits carry forward.
           const { data: resumedRow } = await admin
             .from("customers")
             .update({
               paused_at: null,
               pause_resumes_at: null,
+              billing_cycle_anchor: new Date().toISOString().slice(0, 10),
+              leads_received_this_month: 0,
               updated_at: new Date().toISOString(),
             })
             .eq("stripe_customer_id", customerId)
