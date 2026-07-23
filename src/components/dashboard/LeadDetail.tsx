@@ -29,6 +29,7 @@ import {
   MessageSquareText,
   PartyPopper,
   Phone,
+  Presentation,
   Trash2,
 } from "lucide-react";
 
@@ -383,6 +384,16 @@ export function LeadDetail({
             >
               <MessageSquareText className="h-4 w-4" />
               Objection Assistant
+            </a>
+          </Button>
+          <Button size="sm" asChild>
+            <a
+              href="/income-presentation/index.html"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Presentation className="h-4 w-4" />
+              Income presentation
             </a>
           </Button>
         </div>

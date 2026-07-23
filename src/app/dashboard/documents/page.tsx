@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 
@@ -11,6 +12,7 @@ export default async function DocumentsPage() {
   if (!customer) redirect("/dashboard");
 
   const hasGuaranteedRent = customer.gr_subscription_status === "active";
+  const isManagement = customer.subscription_status === "active";
 
   return (
     <div className="space-y-6">
@@ -20,6 +22,32 @@ export default async function DocumentsPage() {
           Templates and agreements available with your subscription.
         </p>
       </div>
+
+      {isManagement && (
+        <Card>
+          <CardContent className="space-y-4 pt-6">
+            <div>
+              <h2 className="text-lg font-semibold">Income presentation tool</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Build a tailored income presentation to walk a landlord through
+                the figures on a web meeting — the income analysis, the 12-month
+                picture, the best, likely and worst cases, and how you work.
+                Enter your own numbers (or bring them across from the STR
+                Analyser); they&apos;re saved in your browser as you go.
+              </p>
+            </div>
+            <Button asChild>
+              <a
+                href="/income-presentation/index.html"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open presentation tool
+              </a>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {hasGuaranteedRent ? (
         <CompanyLetAgreement />
