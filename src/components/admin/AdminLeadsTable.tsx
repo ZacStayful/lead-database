@@ -118,7 +118,25 @@ export function AdminLeadsTable({
           override,
         }),
       });
-      const data = await res.json();
+      // The endpoint can return a non-JSON gateway error (e.g. a timeout page),
+      // which would otherwise blow up as "Unexpected token ... is not valid
+      // JSON". Read the body defensively and surface a clear message instead.
+      const raw = await res.text();
+      let data: {
+        error?: string;
+        assignments?: number;
+        leads_affected?: number;
+        failures?: { error: string }[];
+      };
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(
+          res.ok
+            ? "The server returned an unexpected response. Some leads may have been assigned — refresh to check."
+            : "The request timed out or errored before finishing. Try assigning fewer leads at once, then refresh to see what went through."
+        );
+      }
       if (!res.ok) throw new Error(data.error ?? "Assignment failed");
 
       const failed = (data.failures ?? []) as { error: string }[];

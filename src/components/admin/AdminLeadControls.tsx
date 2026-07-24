@@ -106,7 +106,15 @@ export function AdminLeadControls({
           override,
         }),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: { error?: string; assigned_count?: number; failures?: { error: string }[] };
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(
+          "The request timed out or errored before finishing. Refresh to see what went through."
+        );
+      }
       if (!res.ok) throw new Error(data.error ?? "Assignment failed");
 
       const failed = (data.failures ?? []) as { error: string }[];
