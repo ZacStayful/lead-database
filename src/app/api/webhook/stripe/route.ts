@@ -123,6 +123,53 @@ function allocationFromPrices(
     : 20;
 }
 
+/**
+ * The subscription id an invoice belongs to, tolerant of Stripe API versions.
+ * Older versions (<= acacia) expose `invoice.subscription`; newer versions
+ * (basil+, which this account is on — it emits `invoice_payment.paid` events)
+ * removed that field and nest it under
+ * `invoice.parent.subscription_details.subscription`. Reading only the old field
+ * silently skipped ALL subscription crediting/activation once the account
+ * upgraded, so we check both.
+ */
+function subscriptionIdFromInvoice(invoice: Stripe.Invoice): string | null {
+  const inv = invoice as unknown as {
+    subscription?: string | { id?: string } | null;
+    parent?: {
+      subscription_details?: {
+        subscription?: string | { id?: string } | null;
+      } | null;
+    } | null;
+  };
+  const legacy = inv.subscription;
+  if (legacy) return typeof legacy === "string" ? legacy : (legacy.id ?? null);
+  const nested = inv.parent?.subscription_details?.subscription;
+  if (nested) return typeof nested === "string" ? nested : (nested.id ?? null);
+  return null;
+}
+
+/**
+ * Price ids on an invoice's line items, tolerant of API versions. Older versions
+ * expose `line.price.id`; newer versions moved it to
+ * `line.pricing.price_details.price`.
+ */
+function priceIdsFromInvoice(invoice: Stripe.Invoice): string[] {
+  const ids: string[] = [];
+  for (const line of invoice.lines?.data ?? []) {
+    const l = line as unknown as {
+      price?: { id?: string } | null;
+      pricing?: { price_details?: { price?: string | { id?: string } } | null } | null;
+    };
+    if (l.price?.id) {
+      ids.push(l.price.id);
+      continue;
+    }
+    const p = l.pricing?.price_details?.price;
+    if (p) ids.push(typeof p === "string" ? p : (p.id ?? ""));
+  }
+  return ids.filter(Boolean);
+}
+
 function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
   return allocationFromPrices(priceIds, invoice.subtotal) === 10 ? "10" : "20";
 }
@@ -189,7 +236,15 @@ export async function POST(request: NextRequest) {
         const update: Record<string, unknown> = {
           updated_at: new Date().toISOString(),
         };
-        const anchor = toDateString(sub.current_period_start);
+        // current_period_start moved from the subscription to its items in the
+        // newer API version — read both. (invoice.paid also re-anchors, so this
+        // is belt-and-braces.)
+        const periodStart =
+          sub.current_period_start ??
+          (sub.items?.data?.[0] as unknown as { current_period_start?: number })
+            ?.current_period_start ??
+          null;
+        const anchor = toDateString(periodStart);
 
         if (isGuaranteedRent) {
           update.gr_subscription_status = status;
@@ -254,13 +309,13 @@ export async function POST(request: NextRequest) {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
 
-        // Only subscription renewals grant lead credit. Every invoice this
-        // integration receives is a subscription invoice.
-        if (invoice.subscription) {
-          // Detect the product from the invoice line item price id.
-          const priceIds = (invoice.lines?.data ?? [])
-            .map((line) => line.price?.id)
-            .filter((id): id is string => Boolean(id));
+        // Only subscription invoices grant lead credit. Read the subscription
+        // id in a version-tolerant way (see subscriptionIdFromInvoice) — the
+        // old invoice.subscription field is gone on this account's API version.
+        const subscriptionId = subscriptionIdFromInvoice(invoice);
+        if (subscriptionId) {
+          // Detect the product from the invoice line item price ids.
+          const priceIds = priceIdsFromInvoice(invoice);
           const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
           const isGuaranteedRent = Boolean(
             grPriceId && priceIds.includes(grPriceId)
@@ -306,7 +361,7 @@ export async function POST(request: NextRequest) {
 
             const grUpdate: Record<string, unknown> = {
               gr_subscription_status: "active",
-              gr_stripe_subscription_id: invoice.subscription as string,
+              gr_stripe_subscription_id: subscriptionId,
               updated_at: new Date().toISOString(),
             };
             // Re-anchor the GR billing cycle to this period's start on every
@@ -374,7 +429,7 @@ export async function POST(request: NextRequest) {
                 stripeCustomerId: customerId,
                 email,
                 name: name ?? null,
-                subscriptionId: (invoice.subscription as string) ?? null,
+                subscriptionId,
                 allocation: allocationFromPrices(priceIds, invoice.subtotal),
                 billingAnchor: toDateString(invoice.period_start),
               });
