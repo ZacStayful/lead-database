@@ -76,13 +76,19 @@ export async function provisionPaidSubscriber(
   if (byEmail) {
     customerId = byEmail.id;
     userId = (byEmail.user_id as string | null) ?? null;
-    // Only claim the Stripe id while it's still null, so a concurrent event
-    // can't clobber an already-linked row.
+    // Link (or RE-link) this row to the paying Stripe customer. We only reach
+    // here when NO row is linked to params.stripeCustomerId (the byStripe lookup
+    // above was empty), so any existing non-null stripe_customer_id on this row
+    // is a STALE id from an earlier signup whose subscription now lives on a
+    // different (Payment-Link) Stripe customer. Relinking — rather than the old
+    // "only claim while null" guard — is what heals that duplicate: from here on
+    // credits, activation, and subscription lifecycle events all match this row
+    // directly instead of silently missing it. Same email = same person for this
+    // product, so there is no legitimate row to protect from being clobbered.
     await admin
       .from("customers")
       .update(activation)
-      .eq("id", customerId)
-      .is("stripe_customer_id", null);
+      .eq("id", customerId);
   } else {
     const { data: inserted, error: insErr } = await admin
       .from("customers")
