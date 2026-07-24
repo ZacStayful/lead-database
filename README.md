@@ -124,6 +124,31 @@ allocation. On each subscription `invoice.paid`, `lead_balance` is topped up by
 20. Customers may reject a `new` assignment, which refunds one credit and
 reassigns the lead to the next eligible customer.
 
+### Topping up & assigning by hand
+
+Assignment is attempted at ingest, but a lead can land short of its
+`max_assignments` (no eligible buyer with credits at that moment). Those leads
+are not stranded: `ingestLead` is idempotent **and tops up** on every re-run, so
+re-syncing a Monday item fills any slots that have since opened. `autoAssignLead`
+is the shared "assign as many as we can right now" path (fresh ingest, duplicate
+top-up, and the admin sweep all use it).
+
+- `POST /api/admin/leads/assign-pending` — credit-gated sweep that tops up every
+  under-assigned lead. Admin session **or** `CRON_SECRET` bearer, so a scheduler
+  (e.g. n8n) can drive it through the day. Optional body `{ lead_type }`.
+- `/admin/leads` — tick any set of leads and choose which approved customers
+  receive them, assigned together via `POST /api/admin/assign/bulk`
+  (`{ lead_ids[], customer_ids[], override? }`). Old leads only go out if picked.
+- `POST /api/admin/assign` (`{ lead_id, customer_ids[], override? }`) does the
+  same for a single lead.
+
+Both admin paths expose an **Override credit limit** toggle. Off → the paid
+credit / subscription gate (`assign_lead_to_customer`). On → `admin_assign_lead`,
+which skips that gate (spending a credit only if one exists) but still enforces
+capacity **and the management pause block** — so a paused customer is never
+assigned a lead by any path. Admins can also set a customer's management
+`lead_balance` directly from the customer editor.
+
 ## Routes
 
 | Area | Route | Notes |

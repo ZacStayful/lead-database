@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { APP_URL } from "@/lib/env";
+import { APP_URL, LOGIN_URL } from "@/lib/env";
 import { extractCity } from "@/lib/utils";
 import type { Lead } from "@/lib/types";
 
@@ -311,7 +311,7 @@ export async function sendNewLeadEmail(params: {
     <h1 style="margin:0 0 4px;font-size:18px">A new lead is ready</h1>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">A pre-screened landlord enquiry has just been assigned to you.</p>
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px">${rows}</table>
-    ${button(`${APP_URL}/dashboard`, "View lead in portal")}
+    ${button(LOGIN_URL, "Log in to view this lead")}
   `;
 
   try {
@@ -337,7 +337,7 @@ export async function sendLowCreditsEmail(params: {
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Your allocation is almost full</h1>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${remaining}</strong> lead${remaining === 1 ? "" : "s"} left in your monthly allocation. Any leads you do not receive this cycle carry forward automatically.</p>
-    ${button(`${APP_URL}/dashboard`, "View your leads")}
+    ${button(LOGIN_URL, "Log in to view your leads")}
   `;
   try {
     const { data, error } = await getResend().emails.send({
@@ -611,7 +611,7 @@ export async function sendCreditsExhaustedEmail(params: {
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Allocation reached</h1>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have received all the leads included in your plan this month. Your balance will top up automatically when your subscription renews, and any shortfall carries forward.</p>
-    ${button(`${APP_URL}/dashboard`, "View your leads")}
+    ${button(LOGIN_URL, "Log in to view your leads")}
   `;
   try {
     const { data, error } = await getResend().emails.send({

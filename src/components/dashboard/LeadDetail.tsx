@@ -604,7 +604,7 @@ function Detail({
             {value}
           </a>
         ) : (
-          <p className="truncate text-sm">{display}</p>
+          <p className="text-sm break-words">{display}</p>
         )}
       </div>
     </div>

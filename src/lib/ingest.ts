@@ -203,15 +203,25 @@ export async function ingestLead(
 ): Promise<IngestResult> {
   const supabase = createAdminClient();
 
-  // Idempotency: skip if this Monday item is already ingested.
+  // Idempotency: skip re-inserting an already-ingested Monday item, but still
+  // TOP UP its assignments. A lead that ingested when no customer had capacity
+  // (or filled only some of its slots) would otherwise stay stranded at e.g.
+  // 0/2 or 1/2 forever, because every later sync treats it as a plain
+  // duplicate. Re-running assignment here lets each sync clear that backlog.
   const { data: existing } = await supabase
     .from("leads")
-    .select("id")
+    .select("*")
     .eq("monday_item_id", String(payload.monday_item_id))
     .maybeSingle();
 
   if (existing) {
-    return { status: "duplicate", lead_id: existing.id, assignments_made: 0 };
+    const existingLead = existing as Lead;
+    const assignmentsMade = await autoAssignLead(supabase, existingLead);
+    return {
+      status: "duplicate",
+      lead_id: existingLead.id,
+      assignments_made: assignmentsMade,
+    };
   }
 
   // Insert the lead, mapping fields per product type.
@@ -241,24 +251,45 @@ export async function ingestLead(
   }
 
   const typedLead = lead as Lead;
-  const maxAssignments = typedLead.max_assignments ?? 2;
 
-  // Select up to max_assignments customers by combining two pools per lead type:
-  //   * filtered  — customers whose active/pending filter matches this lead,
-  //                 ranked by internal priority_score (never shown to anyone)
-  //   * unfiltered— the existing deficit-first pool (filter off)
-  // Per open slot: hand the slot to a critically-behind unfiltered customer
-  // (guarantee-floor override) if one exists, otherwise to the top filtered
-  // candidate, otherwise fall back to the unfiltered deficit-first order.
+  const assignmentsMade = await autoAssignLead(supabase, typedLead);
+
+  return {
+    status: "created",
+    lead_id: typedLead.id,
+    assignments_made: assignmentsMade,
+  };
+}
+
+/**
+ * Fill a lead's remaining assignment slots with the next eligible customers,
+ * using the same two-pool selection as fresh ingest (filtered by lead match +
+ * unfiltered deficit-first, with the guarantee-floor override). Requests only
+ * the shortfall (max_assignments − assignment_count); the candidate queries
+ * already exclude customers already on the lead and the assignment RPC caps at
+ * capacity, so this is safe to call repeatedly and on partly-assigned leads.
+ *
+ * Returns the number of NEW assignments made. This is the single "assign as
+ * many as we can right now" path shared by fresh ingest, the duplicate top-up,
+ * and the admin assign-pending sweep.
+ */
+export async function autoAssignLead(
+  supabase: ReturnType<typeof createAdminClient>,
+  lead: Lead
+): Promise<number> {
+  const remaining = (lead.max_assignments ?? 2) - (lead.assignment_count ?? 0);
+  if (remaining <= 0) return 0;
+
+  const leadType = lead.lead_type;
   const [filteredRes, unfilteredRes] = await Promise.all([
     supabase.rpc("get_filtered_candidates_for_lead", {
-      p_lead_id: typedLead.id,
-      p_max: maxAssignments,
+      p_lead_id: lead.id,
+      p_max: remaining,
       p_lead_type: leadType,
     }),
     supabase.rpc("get_unfiltered_candidates_for_lead", {
-      p_lead_id: typedLead.id,
-      p_max: maxAssignments,
+      p_lead_id: lead.id,
+      p_max: remaining,
       p_lead_type: leadType,
     }),
   ]);
@@ -268,12 +299,7 @@ export async function ingestLead(
       "candidate selection failed",
       filteredRes.error ?? unfilteredRes.error
     );
-    return {
-      status: "created",
-      lead_id: typedLead.id,
-      assignments_made: 0,
-      error: (filteredRes.error ?? unfilteredRes.error)?.message,
-    };
+    return 0;
   }
 
   const filtered = (filteredRes.data ?? []) as {
@@ -285,21 +311,16 @@ export async function ingestLead(
     deficit: number;
   }[];
 
-  const customerIds = selectCombinedCandidates(
-    filtered,
-    unfiltered,
-    maxAssignments
-  );
-
-  let assignmentsMade = 0;
+  const customerIds = selectCombinedCandidates(filtered, unfiltered, remaining);
 
   const price = leadType === "guaranteed_rent" ? GR_LEAD_PRICE : LEAD_PRICE;
 
+  let assignmentsMade = 0;
   for (const customerId of customerIds) {
     const { data: assignmentId, error: assignError } = await supabase.rpc(
       "assign_lead_to_customer",
       {
-        p_lead_id: typedLead.id,
+        p_lead_id: lead.id,
         p_customer_id: customerId,
         p_price: price,
         p_lead_type: leadType,
@@ -309,14 +330,10 @@ export async function ingestLead(
     if (assignError || !assignmentId) continue;
     assignmentsMade += 1;
 
-    await completeAssignment(supabase, typedLead, customerId, assignmentId);
+    await completeAssignment(supabase, lead, customerId, assignmentId);
   }
 
-  return {
-    status: "created",
-    lead_id: typedLead.id,
-    assignments_made: assignmentsMade,
-  };
+  return assignmentsMade;
 }
 
 /**
@@ -328,7 +345,10 @@ export async function completeAssignment(
   supabase: ReturnType<typeof createAdminClient>,
   lead: Lead,
   customerId: string,
-  assignmentId: string
+  assignmentId: string,
+  // Admin overrides don't spend a credit when the customer is already at zero,
+  // so the low/exhausted-credit warnings would misfire (and spam) — skip them.
+  sendThresholdWarnings = true
 ): Promise<void> {
   const { data: customer } = await supabase
     .from("customers")
@@ -406,6 +426,7 @@ export async function completeAssignment(
   // AND condition and does not disturb it (both are pure reads, no side effect,
   // so their order is immaterial).
   if (
+    sendThresholdWarnings &&
     lead.lead_type !== "guaranteed_rent" &&
     wantsNotification(typedCustomer, "credit_warnings")
   ) {

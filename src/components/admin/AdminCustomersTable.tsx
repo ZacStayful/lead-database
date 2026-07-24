@@ -195,7 +195,7 @@ export function AdminCustomersTable({
               <TableHead>Products</TableHead>
               <TableHead>Account</TableHead>
               <TableHead>Billing</TableHead>
-              <TableHead>Leads</TableHead>
+              <TableHead>Credits / received</TableHead>
               <TableHead>Pacing</TableHead>
               <TableHead>Last lead</TableHead>
               <TableHead>Last active</TableHead>
@@ -280,7 +280,21 @@ export function AdminCustomersTable({
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {c.leads_received_this_month} / {c.monthly_allocation}
+                    <div className="whitespace-nowrap">
+                      <span
+                        className={
+                          c.lead_balance <= 0
+                            ? "font-medium text-amber-700"
+                            : "font-medium text-foreground"
+                        }
+                      >
+                        {c.lead_balance} credit{c.lead_balance === 1 ? "" : "s"}
+                      </span>
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        · {c.leads_received_this_month}/{c.monthly_allocation}{" "}
+                        this cycle
+                      </span>
+                    </div>
                   </TableCell>
                   <TableCell>
                     <PacingBadge status={pacing.status} />
