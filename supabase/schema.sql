@@ -250,6 +250,81 @@ begin
 end;
 $$;
 
+-- Admin override: place a lead with a customer IGNORING the credit/subscription
+-- gate that assign_lead_to_customer enforces. Capacity (max_assignments), the
+-- MANAGEMENT pause block, and the (lead_id, customer_id) unique constraint still
+-- apply. Spends a credit only when one exists so an override never drives a
+-- balance negative. Service-role only. (See migration 0040.)
+create or replace function public.admin_assign_lead(
+  p_lead_id uuid,
+  p_customer_id uuid,
+  p_price numeric,
+  p_lead_type public.lead_type default 'management'
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_lead     public.leads%rowtype;
+  v_customer public.customers%rowtype;
+  v_assignment_id uuid;
+begin
+  select * into v_lead from public.leads
+    where id = p_lead_id for update;
+  if not found then
+    raise exception 'Lead % not found', p_lead_id;
+  end if;
+
+  select * into v_customer from public.customers
+    where id = p_customer_id for update;
+  if not found then
+    raise exception 'Customer % not found', p_customer_id;
+  end if;
+
+  if v_lead.assignment_count >= v_lead.max_assignments then
+    raise exception 'Lead % is at max assignments (%/%)',
+      p_lead_id, v_lead.assignment_count, v_lead.max_assignments;
+  end if;
+
+  if p_lead_type <> 'guaranteed_rent' and v_customer.paused_at is not null then
+    raise exception 'Customer % is paused and cannot receive management leads', p_customer_id;
+  end if;
+
+  insert into public.lead_assignments (lead_id, customer_id, price_paid)
+    values (p_lead_id, p_customer_id, p_price)
+    returning id into v_assignment_id;
+
+  update public.leads
+    set assignment_count = assignment_count + 1
+    where id = p_lead_id;
+
+  if p_lead_type = 'guaranteed_rent' then
+    update public.customers
+      set gr_lead_balance = greatest(gr_lead_balance - 1, 0),
+          gr_leads_received_this_month = gr_leads_received_this_month + 1,
+          gr_last_assignment_at = now(),
+          updated_at = now()
+      where id = p_customer_id;
+  else
+    update public.customers
+      set lead_balance = greatest(lead_balance - 1, 0),
+          leads_received_this_month = leads_received_this_month + 1,
+          last_assignment_at = now(),
+          updated_at = now()
+      where id = p_customer_id;
+  end if;
+
+  return v_assignment_id;
+end;
+$$;
+
+revoke execute on function public.admin_assign_lead(uuid, uuid, numeric, public.lead_type)
+  from public, anon, authenticated;
+grant execute on function public.admin_assign_lead(uuid, uuid, numeric, public.lead_type)
+  to service_role;
+
 -- Return up to p_max eligible customers for a lead, ordered deficit-first
 -- (customers behind pace served first). Eligibility requires an active
 -- subscription and a positive lead_balance, and excludes customers already

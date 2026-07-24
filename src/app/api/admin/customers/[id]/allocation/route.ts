@@ -22,6 +22,7 @@ export async function POST(
 
   let body: {
     monthly_allocation?: number;
+    lead_balance?: number;
     is_active?: boolean;
     leads_received_this_month?: number;
     gr_subscription_status?: string;
@@ -49,6 +50,12 @@ export async function POST(
       0,
       Math.floor(body.leads_received_this_month!)
     );
+  }
+  // lead_balance is the real management credit gate (assign_lead_to_customer
+  // only assigns while it is > 0). Editable so an admin can top up a comped
+  // customer or one whose subscription won't auto-credit.
+  if (Number.isFinite(body.lead_balance)) {
+    update.lead_balance = Math.max(0, Math.floor(body.lead_balance!));
   }
 
   // Guaranteed Rent controls — mirror the management fields on the GR columns.

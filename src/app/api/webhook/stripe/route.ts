@@ -489,10 +489,17 @@ export async function POST(request: NextRequest) {
           // auto-assignment). Restrict to the pre-active states so this is a
           // no-op on renewals (already 'active') and never resurrects a
           // deliberately 'cancelled' account.
+          // Key on the RESOLVED customer.id, not the event's stripe_customer_id:
+          // a payer who signed up (Stripe customer A) then paid via a Payment
+          // Link (Stripe customer B) is credited by email-match, but their row
+          // still carries the stale id A. Matching by stripe_customer_id here
+          // would miss them and leave a paid customer stuck 'waitlisted' (and so
+          // ineligible for assignment). customer.id always matches the row we
+          // just credited.
           await admin
             .from("customers")
             .update({ account_status: "active" })
-            .eq("stripe_customer_id", customerId)
+            .eq("id", customer.id)
             .in("account_status", ["invited", "waitlisted"]);
 
           // Keep the subscription marked active and re-anchor the billing cycle

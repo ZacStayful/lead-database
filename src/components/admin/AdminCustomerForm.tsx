@@ -12,6 +12,7 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
   const router = useRouter();
   const [allocation, setAllocation] = useState(customer.monthly_allocation);
   const [received, setReceived] = useState(customer.leads_received_this_month);
+  const [balance, setBalance] = useState(customer.lead_balance);
   const [active, setActive] = useState(customer.is_active);
   // Guaranteed Rent controls.
   const [grActive, setGrActive] = useState(
@@ -29,6 +30,7 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
     if (
       !Number.isFinite(allocation) ||
       !Number.isFinite(received) ||
+      !Number.isFinite(balance) ||
       !Number.isFinite(grAllocation) ||
       !Number.isFinite(grReceived) ||
       !Number.isFinite(grBalance)
@@ -47,6 +49,7 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
           body: JSON.stringify({
             monthly_allocation: Number(allocation),
             leads_received_this_month: Number(received),
+            lead_balance: Number(balance),
             is_active: active,
             gr_subscription_status: grActive ? "active" : "inactive",
             gr_monthly_allocation: Number(grAllocation),
@@ -70,7 +73,21 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="space-y-2">
+          <Label htmlFor="balance">Lead balance (credits)</Label>
+          <Input
+            id="balance"
+            type="number"
+            min={0}
+            value={balance}
+            onChange={(e) => setBalance(Number(e.target.value))}
+          />
+          <p className="text-xs text-muted-foreground">
+            The real gate — a customer only receives Management leads while this
+            is above zero. Raise it to grant more leads.
+          </p>
+        </div>
         <div className="space-y-2">
           <Label htmlFor="allocation">Monthly allocation</Label>
           <Input
@@ -80,6 +97,9 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             value={allocation}
             onChange={(e) => setAllocation(Number(e.target.value))}
           />
+          <p className="text-xs text-muted-foreground">
+            Plan size (10 or 20). Drives pacing, not the gate.
+          </p>
         </div>
         <div className="space-y-2">
           <Label htmlFor="received">Leads received this month</Label>
@@ -91,7 +111,8 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             onChange={(e) => setReceived(Number(e.target.value))}
           />
           <p className="text-xs text-muted-foreground">
-            Manual credit adjustment — lower this to grant more leads this month.
+            Pacing counter only — affects priority order, not whether leads can
+            be received.
           </p>
         </div>
       </div>

@@ -21,20 +21,41 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  let body: { lead_id?: string; customer_id?: string; price?: number };
+  let body: {
+    lead_id?: string;
+    customer_id?: string;
+    customer_ids?: string[];
+    price?: number;
+    override?: boolean;
+  };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { lead_id, customer_id } = body;
-  if (!lead_id || !customer_id) {
+  const { lead_id } = body;
+  // Accept a single customer_id (back-compat) or a customer_ids[] array so the
+  // admin can force-assign both recipients in one action.
+  const customerIds = (
+    body.customer_ids && body.customer_ids.length > 0
+      ? body.customer_ids
+      : body.customer_id
+        ? [body.customer_id]
+        : []
+  ).filter((id, i, arr) => id && arr.indexOf(id) === i);
+
+  if (!lead_id || customerIds.length === 0) {
     return NextResponse.json(
-      { error: "lead_id and customer_id are required" },
+      { error: "lead_id and at least one customer_id are required" },
       { status: 400 }
     );
   }
+
+  // override bypasses the paid-credit / subscription gate via admin_assign_lead
+  // (which still honours capacity and the paused-customer block). Automatic
+  // ingest never sets this, so paid leads are never given away by accident.
+  const override = body.override === true;
 
   const admin = createAdminClient();
 
@@ -51,27 +72,53 @@ export async function POST(request: NextRequest) {
 
   const typedLead = lead as Lead;
   const defaultPrice = typedLead.lead_type === "guaranteed_rent" ? 10.0 : LEAD_PRICE;
+  const price = body.price ?? defaultPrice;
 
-  const { data: assignmentId, error: assignError } = await admin.rpc(
-    "assign_lead_to_customer",
-    {
-      p_lead_id: lead_id,
-      p_customer_id: customer_id,
-      p_price: body.price ?? defaultPrice,
-      p_lead_type: typedLead.lead_type,
+  const assigned: string[] = [];
+  const failures: { customer_id: string; error: string }[] = [];
+
+  for (const customerId of customerIds) {
+    const { data: assignmentId, error: assignError } = await admin.rpc(
+      override ? "admin_assign_lead" : "assign_lead_to_customer",
+      {
+        p_lead_id: lead_id,
+        p_customer_id: customerId,
+        p_price: price,
+        p_lead_type: typedLead.lead_type,
+      }
+    );
+
+    if (assignError || !assignmentId) {
+      failures.push({
+        customer_id: customerId,
+        error: assignError?.message ?? "Assignment failed",
+      });
+      continue;
     }
-  );
 
-  if (assignError || !assignmentId) {
+    // Same follow-through as the automated path: notification + new-lead email.
+    // Skip the credit-threshold warnings on an override (no credit spent).
+    await completeAssignment(
+      admin,
+      typedLead,
+      customerId,
+      assignmentId,
+      !override
+    );
+    assigned.push(customerId);
+  }
+
+  if (assigned.length === 0) {
     return NextResponse.json(
-      { error: assignError?.message ?? "Assignment failed" },
+      { error: failures[0]?.error ?? "Assignment failed", failures },
       { status: 400 }
     );
   }
 
-  // Same follow-through as the automated path: notification, email, and
-  // threshold warnings (management only).
-  await completeAssignment(admin, typedLead, customer_id, assignmentId);
-
-  return NextResponse.json({ status: "ok", assignment_id: assignmentId });
+  return NextResponse.json({
+    status: "ok",
+    assigned_count: assigned.length,
+    assigned,
+    failures,
+  });
 }

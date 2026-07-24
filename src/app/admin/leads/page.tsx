@@ -1,21 +1,14 @@
-import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { SyncMondayButton } from "@/components/admin/SyncMondayButton";
-import { formatDate } from "@/lib/utils";
+import {
+  AdminLeadsTable,
+  type LeadRow,
+  type CustomerRow,
+} from "@/components/admin/AdminLeadsTable";
 
 export const dynamic = "force-dynamic";
 
-interface LeadRow {
+interface LeadQueryRow {
   id: string;
   lead_name: string;
   lead_type: string;
@@ -37,7 +30,78 @@ export default async function AdminLeadsPage() {
     )
     .order("created_at", { ascending: false });
 
-  const leads = (data ?? []) as unknown as LeadRow[];
+  const rawLeads = (data ?? []) as unknown as LeadQueryRow[];
+  const leads: LeadRow[] = rawLeads.map((l) => ({
+    id: l.id,
+    lead_name: l.lead_name,
+    lead_type: l.lead_type,
+    address: l.address,
+    assignment_count: l.assignment_count,
+    max_assignments: l.max_assignments,
+    created_at: l.created_at,
+    recipients: l.lead_assignments
+      .map((a) => a.customers?.business_name)
+      .filter((n): n is string => Boolean(n)),
+  }));
+
+  const pendingCount = leads.filter(
+    (l) => l.assignment_count < l.max_assignments
+  ).length;
+  const unassignedCount = leads.filter((l) => l.assignment_count === 0).length;
+
+  // Approved (real) customers — the pool the bulk assigner offers, with their
+  // per-product credit counts for context.
+  const { data: custRaw } = await admin
+    .from("customers")
+    .select(
+      "id, business_name, is_active, account_status, subscription_status, lead_balance, gr_subscription_status, gr_lead_balance"
+    )
+    .eq("account_status", "active")
+    .order("business_name");
+  const custs = (custRaw ?? []) as (CustomerRow & {
+    is_active: boolean;
+    account_status: string;
+  })[];
+  const customers: CustomerRow[] = custs.map((c) => ({
+    id: c.id,
+    business_name: c.business_name,
+    lead_balance: c.lead_balance,
+    gr_lead_balance: c.gr_lead_balance,
+    subscription_status: c.subscription_status,
+    gr_subscription_status: c.gr_subscription_status,
+  }));
+
+  // Why leads aren't assigning: assignment is gated on paid credits, so surface
+  // how many eligible buyers / credits exist per pool. When a pool has none, its
+  // leads simply can't auto-assign — that's the answer, not a bug.
+  const mgmt = custs.filter(
+    (c) => c.subscription_status === "active" && c.lead_balance > 0
+  );
+  const gr = custs.filter(
+    (c) => c.gr_subscription_status === "active" && c.gr_lead_balance > 0
+  );
+  const pools = [
+    {
+      label: "Management",
+      buyers: mgmt.length,
+      credits: mgmt.reduce((s, c) => s + c.lead_balance, 0),
+      waiting: leads.filter(
+        (l) =>
+          l.lead_type !== "guaranteed_rent" &&
+          l.assignment_count < l.max_assignments
+      ).length,
+    },
+    {
+      label: "Guaranteed Rent",
+      buyers: gr.length,
+      credits: gr.reduce((s, c) => s + c.gr_lead_balance, 0),
+      waiting: leads.filter(
+        (l) =>
+          l.lead_type === "guaranteed_rent" &&
+          l.assignment_count < l.max_assignments
+      ).length,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -46,6 +110,19 @@ export default async function AdminLeadsPage() {
           <h1 className="text-2xl font-bold">Leads</h1>
           <p className="text-sm text-muted-foreground">
             {leads.length} lead{leads.length === 1 ? "" : "s"} ingested
+            {pendingCount > 0 && (
+              <>
+                {" · "}
+                <span className="font-medium text-foreground">
+                  {pendingCount} awaiting assignment
+                </span>
+                {unassignedCount > 0 && ` (${unassignedCount} with none yet)`}
+              </>
+            )}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Tick leads below, then choose who receives them — old leads stay put
+            unless you pick them.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -56,71 +133,47 @@ export default async function AdminLeadsPage() {
           />
         </div>
       </div>
-      <Card>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Lead</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Address</TableHead>
-              <TableHead>Assigned</TableHead>
-              <TableHead>Recipients</TableHead>
-              <TableHead>Received</TableHead>
-              <TableHead className="text-right">View</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {leads.map((l) => {
-              const recipients = l.lead_assignments
-                .map((a) => a.customers?.business_name)
-                .filter(Boolean);
-              const full = l.assignment_count >= l.max_assignments;
-              return (
-                <TableRow key={l.id}>
-                  <TableCell className="font-medium">{l.lead_name}</TableCell>
-                  <TableCell>
-                    {l.lead_type === "guaranteed_rent"
-                      ? "Guaranteed Rent"
-                      : "Management"}
-                  </TableCell>
-                  <TableCell className="max-w-[220px] truncate text-muted-foreground">
-                    {l.address ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={full ? "muted" : "brand"}>
-                      {l.assignment_count} / {l.max_assignments}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                    {recipients.length ? recipients.join(", ") : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(l.created_at)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Link
-                      href={`/admin/leads/${l.id}`}
-                      className="text-brand hover:underline"
-                    >
-                      View
-                    </Link>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-            {leads.length === 0 && (
-              <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className="py-10 text-center text-muted-foreground"
-                >
-                  No leads yet.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </Card>
+
+      {/* Why leads aren't assigning: assignment needs a buyer with paid credits. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        {pools.map((p) => {
+          const blocked = p.waiting > 0 && p.credits === 0;
+          return (
+            <div
+              key={p.label}
+              className={
+                "rounded-lg border-[0.5px] p-4 " +
+                (blocked
+                  ? "border-amber-300 bg-amber-50"
+                  : "border-border bg-card")
+              }
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">{p.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {p.waiting} awaiting
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {p.buyers} buyer{p.buyers === 1 ? "" : "s"}
+                </span>{" "}
+                with credits · {p.credits} credit
+                {p.credits === 1 ? "" : "s"} available
+              </p>
+              {blocked && (
+                <p className="mt-1 text-xs text-amber-700">
+                  No one can receive these automatically — select them below and
+                  assign with “Override credit limit”, or add a paying {p.label}{" "}
+                  buyer.
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <AdminLeadsTable leads={leads} customers={customers} />
     </div>
   );
 }

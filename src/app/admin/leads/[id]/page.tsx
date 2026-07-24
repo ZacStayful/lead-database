@@ -43,17 +43,37 @@ export default async function AdminLeadDetailPage({
     .select("*")
     .eq("is_active", true)
     .order("business_name");
-  // Only offer customers subscribed to this lead's product, so a GR lead is
-  // never force-assigned to a management-only customer (and vice-versa).
   const isGuaranteedRent = lead.lead_type === "guaranteed_rent";
-  const availableCustomers = ((customersRaw ?? []) as Customer[])
-    .filter((c) => !assignedIds.has(c.id))
+  const creditsOf = (c: Customer) =>
+    isGuaranteedRent ? c.gr_lead_balance : c.lead_balance;
+
+  const notAssigned = ((customersRaw ?? []) as Customer[]).filter(
+    (c) => !assignedIds.has(c.id)
+  );
+
+  // Normal pool: customers subscribed to this lead's product, so a GR lead is
+  // never force-assigned to a management-only customer (and vice-versa).
+  const availableCustomers = notAssigned
     .filter((c) =>
       isGuaranteedRent
         ? c.gr_subscription_status === "active"
         : c.subscription_status === "active"
     )
-    .map((c) => ({ id: c.id, business_name: c.business_name }));
+    .map((c) => ({
+      id: c.id,
+      business_name: c.business_name,
+      credits: creditsOf(c),
+    }));
+
+  // Override pool: any approved customer, regardless of subscription/credits,
+  // for the admin override path (how GR leads get placed with no GR subscribers).
+  const overrideCustomers = notAssigned
+    .filter((c) => c.account_status === "active")
+    .map((c) => ({
+      id: c.id,
+      business_name: c.business_name,
+      credits: creditsOf(c),
+    }));
 
   const fields: [string, string | null][] = [
     ["Lead name", lead.lead_name],
@@ -146,6 +166,7 @@ export default async function AdminLeadDetailPage({
                 maxAssignments={lead.max_assignments}
                 assignmentCount={lead.assignment_count}
                 customers={availableCustomers}
+                overrideCustomers={overrideCustomers}
                 leadType={lead.lead_type}
               />
             </CardContent>
