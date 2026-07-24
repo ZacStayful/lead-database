@@ -128,29 +128,48 @@ export async function provisionPaidSubscriber(
     if (created?.user) {
       userId = created.user.id;
       createdUser = true;
-      await admin.from("customers").update({ user_id: userId }).eq("id", customerId);
     } else {
-      // Auth user already exists (or transient error). Backfill the id via the
-      // recovery link below; don't email in this case.
+      // Auth user already exists (or transient error) — its id is recovered via
+      // generateLink below so the row still gets linked. Don't email in this case.
       console.error("provision: createUser (may already exist)", createErr);
     }
   }
 
+  // Recovery link: for a freshly-created user this is the set-password link we
+  // email; for an ALREADY-EXISTING user it's how we recover the auth id. The
+  // dashboard resolves the customer row by user_id, so an unlinked row shows
+  // "couldn't find your customer record" even after the customer has set a
+  // password — we must link it whether the auth user is new or pre-existing.
+  // Skip the call only when the row is already linked and no email is due.
   let setPasswordUrl: string | null = null;
-  if (createdUser) {
+  if (createdUser || !userId) {
     try {
       const { data: link } = await admin.auth.admin.generateLink({
         type: "recovery",
         email,
         options: { redirectTo: `${APP_URL}/reset-password` },
       });
-      const hashedToken = link?.properties?.hashed_token;
-      setPasswordUrl = hashedToken
-        ? `${APP_URL}/auth/confirm?token_hash=${hashedToken}&type=recovery&next=/reset-password`
-        : (link?.properties?.action_link ?? null);
+      if (!userId && link?.user?.id) userId = link.user.id;
+      if (createdUser) {
+        const hashedToken = link?.properties?.hashed_token;
+        setPasswordUrl = hashedToken
+          ? `${APP_URL}/auth/confirm?token_hash=${hashedToken}&type=recovery&next=/reset-password`
+          : (link?.properties?.action_link ?? null);
+      }
     } catch (err) {
       console.error("provision: generateLink failed", err);
     }
+  }
+
+  // Link the auth user to the customer row — the one fix that prevents the
+  // "couldn't find your customer record" dead end. Only claim while unlinked so
+  // a concurrent event can't repoint an already-linked row.
+  if (userId) {
+    await admin
+      .from("customers")
+      .update({ user_id: userId })
+      .eq("id", customerId)
+      .is("user_id", null);
   }
 
   return { customerId, createdUser, setPasswordUrl };
