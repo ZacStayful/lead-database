@@ -551,6 +551,41 @@ export async function POST(request: NextRequest) {
         break;
       }
 
+      case "checkout.session.completed": {
+        // Only the lead top-up fallback path uses hosted Checkout (payment mode);
+        // subscriptions are created via subscription-mode Checkout/Payment Links
+        // and credited through invoice.paid, not here. Gate strictly on our own
+        // metadata so no other checkout completion is ever mistaken for a top-up.
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.metadata?.kind !== "lead_topup") break;
+        if (session.payment_status !== "paid") break;
+
+        const tokenId = session.metadata.token_id;
+        if (!tokenId) {
+          console.error("lead_topup checkout.session.completed missing token_id");
+          break;
+        }
+
+        const paymentIntentId =
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : (session.payment_intent?.id ?? null);
+
+        // Idempotent, token-keyed credit: +5 to the matching balance and a
+        // 'topup' payment row, in one transaction. A replayed delivery is a
+        // no-op, so a failure after this line can be retried safely.
+        const { error: creditError } = await admin.rpc(
+          "record_lead_topup_success",
+          { p_token_id: tokenId, p_payment_intent_id: paymentIntentId }
+        );
+        if (creditError) {
+          throw new Error(
+            `record_lead_topup_success failed: ${creditError.message}`
+          );
+        }
+        break;
+      }
+
       default:
         // Unhandled event types are acknowledged so Stripe stops retrying.
         break;
