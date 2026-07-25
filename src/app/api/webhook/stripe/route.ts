@@ -574,13 +574,51 @@ export async function POST(request: NextRequest) {
         // Idempotent, token-keyed credit: +5 to the matching balance and a
         // 'topup' payment row, in one transaction. A replayed delivery is a
         // no-op, so a failure after this line can be retried safely.
-        const { error: creditError } = await admin.rpc(
+        const { data: credited, error: creditError } = await admin.rpc(
           "record_lead_topup_success",
           { p_token_id: tokenId, p_payment_intent_id: paymentIntentId }
         );
         if (creditError) {
           throw new Error(
             `record_lead_topup_success failed: ${creditError.message}`
+          );
+        }
+        // false = we declined to credit (unknown token, or already paid). On a
+        // session we know was paid, that is a money-moved-but-no-credit event —
+        // log it loudly as the reconciliation tripwire rather than silently
+        // acknowledging.
+        if (credited === false) {
+          console.error(
+            "lead_topup checkout paid but credit skipped (already paid or unknown token)",
+            { tokenId, paymentIntentId }
+          );
+        }
+        break;
+      }
+
+      case "payment_intent.succeeded": {
+        // Safety net for the off-session path. If the charge was captured but
+        // our request died before we could credit (connection reset, timeout,
+        // an intent that settled asynchronously), this is what still credits
+        // the customer. record_lead_topup_success promotes a token previously
+        // marked 'failed' and is a no-op once 'paid', so this is safe to run on
+        // every delivery and can never double-credit.
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.kind !== "lead_topup") break;
+
+        const tokenId = intent.metadata.token_id;
+        if (!tokenId) {
+          console.error("lead_topup payment_intent.succeeded missing token_id");
+          break;
+        }
+
+        const { error: creditError } = await admin.rpc(
+          "record_lead_topup_success",
+          { p_token_id: tokenId, p_payment_intent_id: intent.id }
+        );
+        if (creditError) {
+          throw new Error(
+            `record_lead_topup_success (recovery) failed: ${creditError.message}`
           );
         }
         break;

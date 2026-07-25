@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
-type Status = "idle" | "loading" | "success" | "error";
+type Status = "idle" | "loading" | "success" | "error" | "pending";
 
 /**
  * Confirm button for the top-up page. POSTs to the token-gated confirm route,
@@ -41,6 +41,13 @@ export function TopupConfirm({
         setStatus("success");
         return;
       }
+      if (data.status === "pending") {
+        // Outcome not yet determined — the token was released, so retrying is
+        // safe and cannot double-charge.
+        setStatus("pending");
+        setMessage(data.message ?? "Your payment is still going through.");
+        return;
+      }
       setStatus("error");
       setMessage(data.message ?? "Something went wrong. Please try again.");
     } catch {
@@ -59,6 +66,14 @@ export function TopupConfirm({
           <Link href="/dashboard">Go to your dashboard</Link>
         </Button>
       </div>
+    );
+  }
+
+  if (status === "pending") {
+    return (
+      <p className="text-center text-sm leading-relaxed text-[#52514e]">
+        {message}
+      </p>
     );
   }
 

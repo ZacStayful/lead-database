@@ -159,7 +159,11 @@ async function issueOrReuseToken(
   if (new Date(existing.expires_at).getTime() > Date.now()) return null;
 
   // Expired-but-unused → reuse the row in place with a fresh token + expiry.
-  const { error: updateError } = await supabase
+  // Guarded on used_at so a token claimed since the read above isn't reopened.
+  // The affected row MUST be checked: a zero-row update means someone else
+  // claimed or rewrote it, and returning the raw token anyway would send a link
+  // whose hash was never stored — the recipient would see "isn't valid".
+  const { data: reused, error: updateError } = await supabase
     .from("lead_topup_tokens")
     .update({
       token_hash: hash,
@@ -168,9 +172,11 @@ async function issueOrReuseToken(
       charge_status: null,
     })
     .eq("id", existing.id)
-    .is("used_at", null);
+    .is("used_at", null)
+    .select("id")
+    .maybeSingle();
 
-  if (updateError) {
+  if (updateError || !reused) {
     console.error("lead_topup_tokens reuse failed", { customerId, leadType, updateError });
     return null;
   }
