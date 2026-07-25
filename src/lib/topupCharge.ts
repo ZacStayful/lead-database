@@ -115,32 +115,78 @@ async function finaliseSuccess(
   }
 }
 
+/** The customer fields the product/eligibility helpers read. */
+export type TopupCustomerFields = Pick<
+  Customer,
+  "account_status" | "paused_at" | "subscription_status" | "gr_subscription_status"
+>;
+
 /**
- * Eligibility for a top-up, checked BEFORE any money moves.
+ * Whether the customer HOLDS a given product at all — i.e. whether a top-up
+ * card for it should be shown.
  *
- * A customer who is paused or cancelled cannot be assigned leads
- * (assign_lead_to_customer refuses them), so selling them credit would take £75
- * for something they cannot receive. Branches per product: the pause is
- * management-only, GR has its own subscription status.
+ * The two products are fully independent: a customer may hold either, both, or
+ * (having cancelled one) only the other. Each answer reads ONLY its own
+ * product's columns — management from account_status / subscription_status, GR
+ * from gr_subscription_status — so neither can hide or reveal the other.
+ *
+ * 'past_due' / paused count as held: the customer genuinely has the product and
+ * should see it, in a blocked state with the reason, rather than have the card
+ * silently vanish. A customer who never had the product sees nothing for it.
+ */
+export function holdsTopupProduct(
+  customer: TopupCustomerFields,
+  leadType: LeadType
+): boolean {
+  if (leadType === "guaranteed_rent") {
+    return (
+      customer.gr_subscription_status === "active" ||
+      customer.gr_subscription_status === "past_due"
+    );
+  }
+  // Management: account_status is the assignment/capacity gate, and a paused
+  // customer keeps account_status 'active', so this covers paused too.
+  return (
+    customer.account_status === "active" ||
+    customer.subscription_status === "active"
+  );
+}
+
+/**
+ * Why this customer may not buy a top-up for this product right now, or null if
+ * they may. Checked BEFORE any money moves.
+ *
+ * The rule being enforced: never sell credit the customer cannot spend. A
+ * paused, cancelled or not-yet-active customer is refused assignment by
+ * assign_lead_to_customer / candidate selection, so charging them £75 would be
+ * taking money for leads that can never arrive.
+ *
+ * Strictly per-product — this function must never read the other product's
+ * columns. In particular account_status and paused_at are MANAGEMENT fields
+ * (the Stripe webhook deliberately leaves account_status untouched on a GR
+ * cancellation), so consulting them for GR would let a cancelled or paused
+ * management subscription wrongly block a perfectly healthy GR one.
  */
 export function topupIneligibilityReason(
-  customer: Pick<
-    Customer,
-    "account_status" | "paused_at" | "subscription_status" | "gr_subscription_status"
-  >,
+  customer: TopupCustomerFields,
   leadType: LeadType
 ): string | null {
-  if (customer.account_status === "cancelled") {
-    return "Your account is cancelled, so leads can't be assigned. Please contact support.";
-  }
   if (leadType === "guaranteed_rent") {
     if (customer.gr_subscription_status !== "active") {
       return "Your Guaranteed Rent subscription isn't active, so we can't add GR leads yet.";
     }
     return null;
   }
+
+  // Management only from here — GR state is deliberately not consulted.
+  if (customer.account_status === "cancelled") {
+    return "Your Management subscription is cancelled, so leads can't be assigned. Please contact support.";
+  }
   if (customer.paused_at) {
-    return "Your subscription is paused, so new leads can't be assigned. Resume it first and your balance will be waiting.";
+    return "Your Management subscription is paused, so new leads can't be assigned. Resume it first and your balance will be waiting.";
+  }
+  if (customer.account_status !== "active") {
+    return "Your Management subscription isn't active yet, so leads can't be assigned. Please contact support.";
   }
   return null;
 }

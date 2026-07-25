@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { TOPUP_CREDITS, TOPUP_AMOUNT_PENCE, productLabel } from "@/lib/topup";
-import { topupIneligibilityReason } from "@/lib/topupCharge";
+import { holdsTopupProduct, topupIneligibilityReason } from "@/lib/topupCharge";
 import { TopupPurchasePanel } from "@/components/dashboard/TopupPurchasePanel";
 import type { LeadType } from "@/lib/types";
 
@@ -37,12 +37,14 @@ export default async function TopupTabPage() {
 
   const price = formatGbp(TOPUP_AMOUNT_PENCE);
 
-  // Which products does this customer hold? GR is independent of management.
-  const products: LeadType[] = [];
-  if (customer.account_status !== "cancelled") products.push("management");
-  if (customer.gr_subscription_status === "active") {
-    products.push("guaranteed_rent");
-  }
+  // Which products does this customer hold? The two subscriptions are fully
+  // independent, so a customer with BOTH sees both cards and can top either up;
+  // each card's visibility and buyability is decided only from that product's
+  // own columns.
+  const allProducts: LeadType[] = ["management", "guaranteed_rent"];
+  const products = allProducts.filter((leadType) =>
+    holdsTopupProduct(customer, leadType)
+  );
 
   const cards = products.map((leadType) => ({
     leadType,
@@ -72,7 +74,13 @@ export default async function TopupTabPage() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div
+          className={
+            cards.length > 1
+              ? "grid gap-4 sm:grid-cols-2"
+              : "grid max-w-sm gap-4"
+          }
+        >
           {cards.map((card) => (
             <TopupPurchasePanel
               key={card.leadType}
