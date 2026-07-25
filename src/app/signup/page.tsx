@@ -99,7 +99,7 @@ function SignupForm() {
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             {isGuaranteedRent
-              ? "£100 / month · 10 leads · no contracts"
+              ? "£150 / month · 10 leads · no contracts"
               : "£300 / month · 20 leads · no contracts"}
           </p>
         </CardHeader>

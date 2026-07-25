@@ -65,18 +65,18 @@ interface Milestone {
   roi: string;
 }
 
-// Cumulative net earned through month M = avg × (1+2+…+M); spend = £100 × M.
+// Cumulative net earned through month M = avg × (1+2+…+M); spend = £150 × M.
 const MILESTONES: Milestone[] = [
-  { month: "Month 6", properties: 6, monthlyNet: "£7,242", spent: "£600", earned: "£25,347", roi: "42×" },
-  { month: "Month 12", properties: 12, monthlyNet: "£14,484", spent: "£1,200", earned: "£94,146", roi: "78×" },
-  { month: "Month 24", properties: 24, monthlyNet: "£28,968", spent: "£2,400", earned: "£362,100", roi: "151×" },
+  { month: "Month 6", properties: 6, monthlyNet: "£7,242", spent: "£900", earned: "£25,347", roi: "28×" },
+  { month: "Month 12", properties: 12, monthlyNet: "£14,484", spent: "£1,800", earned: "£94,146", roi: "52×" },
+  { month: "Month 24", properties: 24, monthlyNet: "£28,968", spent: "£3,600", earned: "£362,100", roi: "101×" },
 ];
 
 const STEPS: { n: string; title: string; body: React.ReactNode }[] = [
   {
     n: "01",
     title: "Subscribe",
-    body: "£100/month for 10 leads per month. No lock-in, cancel anytime.",
+    body: "£150/month for 10 leads per month. No lock-in, cancel anytime.",
   },
   {
     n: "02",
@@ -103,7 +103,7 @@ const STEPS: { n: string; title: string; body: React.ReactNode }[] = [
 
 const PRICING_FEATURES = [
   "10 leads per month included",
-  "£10 per lead",
+  "£15 per lead",
   "Maximum 2 operators per lead",
   "Every lead financially modelled before assignment",
   "Every landlord emailed in advance — warm hand-off guaranteed",
@@ -469,7 +469,7 @@ export default function GuaranteedRentPage() {
             At a 10% conversion rate, 10 leads a month is one new guaranteed rent
             property every month. Each property earns an average of £1,207/mo net
             across 1&ndash;5 bed. Here is what that builds &mdash; and what it
-            returns on your £100/month &mdash; over two years.
+            returns on your £150/month &mdash; over two years.
           </p>
 
           <div
@@ -651,7 +651,7 @@ export default function GuaranteedRentPage() {
             the 1&ndash;5 bed figures in the table above, already net of the 15%
             platform fee, guaranteed rent, and operating costs. Net earned to date
             is the running total of monthly net across the portfolio; return on
-            subscription compares it to the cumulative £100/month spend. Real close
+            subscription compares it to the cumulative £150/month spend. Real close
             timelines vary; treat this as illustrative, not a forecast.
           </p>
         </div>
@@ -949,7 +949,7 @@ export default function GuaranteedRentPage() {
                   lineHeight: 1,
                 })}
               >
-                £100
+                £150
               </span>
               <span
                 style={{ fontSize: 18, color: "var(--sf-muted)", fontWeight: 500 }}
