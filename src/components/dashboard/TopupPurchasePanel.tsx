@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { LeadType } from "@/lib/types";
 
@@ -21,6 +22,8 @@ export function TopupPurchasePanel({
   credits,
   priceLabel,
   blockedReason,
+  deliveryNote,
+  filterInForce,
 }: {
   leadType: LeadType;
   productLabel: string;
@@ -28,6 +31,9 @@ export function TopupPurchasePanel({
   credits: number;
   priceLabel: string;
   blockedReason: string | null;
+  /** Delivery expectation shown before and after purchase (see topupDeliveryNote). */
+  deliveryNote: string;
+  filterInForce: boolean;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>("idle");
@@ -93,15 +99,37 @@ export function TopupPurchasePanel({
       {blockedReason ? (
         <p className="text-sm text-muted-foreground">{blockedReason}</p>
       ) : status === "success" ? (
-        <p className="text-sm font-medium text-foreground">
-          Done — {credits} leads added to your balance.
-        </p>
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            Done — {credits} leads added to your balance.
+          </p>
+          {/* What they bought is a claim on future leads, not faster delivery.
+              Stated plainly right after payment so expectations are set at the
+              moment it matters. */}
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {deliveryNote}
+          </p>
+          {filterInForce && (
+            <Link
+              href="/dashboard/filtering"
+              className="mt-2 inline-block text-xs font-medium underline underline-offset-2"
+            >
+              Review your lead filter
+            </Link>
+          )}
+        </div>
       ) : status === "pending" ? (
         <p className="text-sm text-muted-foreground">{message}</p>
       ) : status === "confirming" ? (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
             Charge {priceLabel} to your card on file?
+          </p>
+          {/* Say it BEFORE the money moves too — telling someone only after
+              they've paid that no timeframe is guaranteed is too late to be
+              fair, and it matters most for filtered customers. */}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {deliveryNote}
           </p>
           <div className="flex gap-2">
             <Button onClick={buy} className="flex-1">

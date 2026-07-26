@@ -1,6 +1,12 @@
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
-import { TOPUP_CREDITS, TOPUP_AMOUNT_PENCE, productLabel } from "@/lib/topup";
+import {
+  TOPUP_CREDITS,
+  TOPUP_AMOUNT_PENCE,
+  productLabel,
+  leadFilterInForce,
+  topupDeliveryNote,
+} from "@/lib/topup";
 import { holdsTopupProduct, topupIneligibilityReason } from "@/lib/topupCharge";
 import { TopupPurchasePanel } from "@/components/dashboard/TopupPurchasePanel";
 import type { LeadType } from "@/lib/types";
@@ -46,15 +52,20 @@ export default async function TopupTabPage() {
     holdsTopupProduct(customer, leadType)
   );
 
-  const cards = products.map((leadType) => ({
-    leadType,
-    label: productLabel(leadType),
-    balance:
-      leadType === "guaranteed_rent"
-        ? customer.gr_lead_balance
-        : customer.lead_balance,
-    blockedReason: topupIneligibilityReason(customer, leadType),
-  }));
+  const cards = products.map((leadType) => {
+    const filterInForce = leadFilterInForce(customer, leadType);
+    return {
+      leadType,
+      label: productLabel(leadType),
+      balance:
+        leadType === "guaranteed_rent"
+          ? customer.gr_lead_balance
+          : customer.lead_balance,
+      blockedReason: topupIneligibilityReason(customer, leadType),
+      filterInForce,
+      deliveryNote: topupDeliveryNote(filterInForce),
+    };
+  });
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -90,6 +101,8 @@ export default async function TopupTabPage() {
               credits={TOPUP_CREDITS}
               priceLabel={price}
               blockedReason={card.blockedReason}
+              deliveryNote={card.deliveryNote}
+              filterInForce={card.filterInForce}
             />
           ))}
         </div>

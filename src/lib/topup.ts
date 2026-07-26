@@ -45,6 +45,46 @@ export function topupUrl(raw: string): string {
   return `${APP_URL}/topup/${raw}`;
 }
 
+/**
+ * Whether a lead filter is in force for a product.
+ *
+ * 'pending_lift' still filters — the lift only executes at the next renewal
+ * (see execute_filter_lift) — so it counts as in force for the purposes of
+ * setting delivery expectations. Reads only the given product's column.
+ */
+export function leadFilterInForce(
+  customer: Pick<Customer, "filter_status" | "gr_filter_status">,
+  leadType: LeadType
+): boolean {
+  const status =
+    leadType === "guaranteed_rent"
+      ? customer.gr_filter_status
+      : customer.filter_status;
+  return status === "active" || status === "pending_lift";
+}
+
+/**
+ * What a customer is told after buying a top-up.
+ *
+ * The point being made: a top-up increases the number of leads we OWE them, not
+ * the speed at which leads arrive. Balance is a claim on future matching
+ * enquiries, and the delivery rate depends on what comes in — so no timeframe
+ * can be promised. A customer with a filter active is told this more firmly,
+ * because restricting to their criteria genuinely reduces how many enquiries
+ * can be matched to them, which is exactly when a paid top-up is most likely to
+ * feel slow.
+ *
+ * Single source of truth for this wording — the in-portal panel, the emailed
+ * link's confirmation page and the receipt email all render this, so the promise
+ * we make can never drift between surfaces.
+ */
+export function topupDeliveryNote(filterInForce: boolean): string {
+  const base =
+    "This adds to the leads we owe you. Your balance never expires and carries forward until every lead has been delivered — but leads are assigned as matching enquiries come in, so we can't guarantee a timeframe.";
+  if (!filterInForce) return base;
+  return `${base} You currently have a lead filter applied, so only enquiries matching your criteria can be assigned to you. That usually means fewer matches and a longer wait — widening or lifting your filter is the quickest way to receive them sooner.`;
+}
+
 /** View state of a top-up token for the read-only confirmation page. */
 export type TopupTokenView =
   | { status: "invalid" }
@@ -56,6 +96,8 @@ export type TopupTokenView =
       leadType: LeadType;
       credits: number;
       amountPence: number;
+      /** Whether a filter is in force for this product (drives the delivery note). */
+      filterInForce: boolean;
     };
 
 /**
@@ -69,7 +111,9 @@ export async function describeTopupToken(
 ): Promise<TopupTokenView> {
   const { data } = await supabase
     .from("lead_topup_tokens")
-    .select("lead_type, credits, amount_pence, expires_at, used_at, charge_status")
+    .select(
+      "customer_id, lead_type, credits, amount_pence, expires_at, used_at, charge_status"
+    )
     .eq("token_hash", hashTopupToken(rawToken))
     .maybeSingle();
 
@@ -79,11 +123,28 @@ export async function describeTopupToken(
   if (new Date(data.expires_at).getTime() <= Date.now()) {
     return { status: "expired" };
   }
+
+  const leadType = data.lead_type as LeadType;
+
+  // Filter state drives the delivery expectation shown on the page. A failed
+  // read must not block the purchase — default to the unfiltered wording.
+  const { data: customer } = await supabase
+    .from("customers")
+    .select("filter_status, gr_filter_status")
+    .eq("id", data.customer_id)
+    .maybeSingle();
+
   return {
     status: "valid",
-    leadType: data.lead_type as LeadType,
+    leadType,
     credits: data.credits as number,
     amountPence: data.amount_pence as number,
+    filterInForce: customer
+      ? leadFilterInForce(
+          customer as Pick<Customer, "filter_status" | "gr_filter_status">,
+          leadType
+        )
+      : false,
   };
 }
 

@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { describeTopupToken, productLabel } from "@/lib/topup";
+import {
+  describeTopupToken,
+  productLabel,
+  topupDeliveryNote,
+} from "@/lib/topup";
 import { TopupConfirm } from "./TopupConfirm";
 
 export const dynamic = "force-dynamic";
@@ -114,6 +118,7 @@ export default async function TopupPage({
         token={params.token}
         credits={view.credits}
         priceLabel={price}
+        deliveryNote={topupDeliveryNote(view.filterInForce)}
       />
       <p className="mt-4 text-center text-xs text-[#8a8f88]">
         Single-use link · expires 48 hours after it was sent

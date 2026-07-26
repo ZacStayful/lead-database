@@ -16,10 +16,13 @@ export function TopupConfirm({
   token,
   credits,
   priceLabel,
+  deliveryNote,
 }: {
   token: string;
   credits: number;
   priceLabel: string;
+  /** Delivery expectation — shown before purchase and repeated after. */
+  deliveryNote: string;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
@@ -59,8 +62,13 @@ export function TopupConfirm({
   if (status === "success") {
     return (
       <div className="text-center">
-        <p className="mb-4 text-sm font-medium text-[#1a1a19]">
+        <p className="mb-3 text-sm font-medium text-[#1a1a19]">
           Payment confirmed — {credits} leads have been added to your balance.
+        </p>
+        {/* A top-up increases what we owe, not the delivery rate — say so at the
+            moment of purchase rather than leaving it to be discovered. */}
+        <p className="mb-4 text-xs leading-relaxed text-[#8a8f88]">
+          {deliveryNote}
         </p>
         <Button asChild className="w-full">
           <Link href="/dashboard">Go to your dashboard</Link>
@@ -82,6 +90,9 @@ export function TopupConfirm({
       {status === "error" && (
         <p className="mb-3 text-center text-sm text-destructive">{message}</p>
       )}
+      <p className="mb-3 text-xs leading-relaxed text-[#8a8f88]">
+        {deliveryNote}
+      </p>
       <Button
         onClick={confirm}
         disabled={status === "loading"}
