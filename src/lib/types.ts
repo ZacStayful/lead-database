@@ -117,7 +117,10 @@ export type PipelineStage =
   | "abandoned"
   | "viewing_booked"
   | "contract_sent"
-  | "contract_signed";
+  | "contract_signed"
+  // Terminal win for Management. GR uses contract_signed for the same thing;
+  // both set status = 'won' via the 0050 trigger.
+  | "won";
 
 export interface LeadAssignment {
   id: string;
