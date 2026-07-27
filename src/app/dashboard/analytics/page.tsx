@@ -33,10 +33,16 @@ const PRODUCT_LABEL: Record<LeadType, string> = {
 };
 
 /**
- * The two products run different pipelines: management ends at a web meeting,
- * guaranteed rent at a signed contract. Counting them together produced a
- * funnel that was wrong for both — and a "Won" figure that disagreed with the
- * one on the Goals page, which has always been management-only.
+ * The two products run different pipelines: management ends at a web meeting
+ * or the terminal `won` stage (0050), guaranteed rent at a signed contract.
+ * Counting them together produced a funnel that was wrong for both — and a
+ * "Won" figure that disagreed with the Goals page, which has always been
+ * management-only.
+ *
+ * Main's 0050 branch fixed the GR half of this by concatenating both stage
+ * lists into a single funnel. That is superseded here: one funnel still mixes
+ * the two products' totals, win rates and income, which is the part that made
+ * the numbers disagree. A block per product fixes both halves.
  */
 const PRODUCTS: LeadType[] = ["management", "guaranteed_rent"];
 

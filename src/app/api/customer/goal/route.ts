@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  *
  * Unlike every other customer write route in this codebase, this one uses NO
  * admin client and never touches the service role. It does not need to: the
- * write goes through set_management_customer_goal (0050), a SECURITY DEFINER
+ * write goes through set_management_customer_goal (0051), a SECURITY DEFINER
  * function that takes no customer id, resolves the caller from auth.uid()
  * internally and writes exactly two named columns. Calling it through the
  * session client keeps the whole trust boundary inside the database, where it

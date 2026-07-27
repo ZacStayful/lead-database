@@ -79,7 +79,7 @@ export interface Customer {
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).
   last_report_sent_at: string | null;
-  // Goals (management only, 0050). The target is customer-settable — but only
+  // Goals (management only, 0051). The target is customer-settable — but only
   // through set_management_customer_goal(), never a direct write.
   // null = no goal set, which is a distinct state from a goal of zero (the
   // column's CHECK forbids zero).
@@ -127,7 +127,10 @@ export type PipelineStage =
   | "abandoned"
   | "viewing_booked"
   | "contract_sent"
-  | "contract_signed";
+  | "contract_signed"
+  // Terminal win for Management. GR uses contract_signed for the same thing;
+  // both set status = 'won' via the 0050 trigger.
+  | "won";
 
 export interface LeadAssignment {
   id: string;

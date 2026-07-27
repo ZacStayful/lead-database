@@ -3,9 +3,20 @@
 import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { LeadCard } from "./LeadCard";
+import {
+  StageFilterBar,
+  productOf,
+  type StageFilter,
+} from "@/components/dashboard/StageFilterBar";
 import type { AssignmentWithLead } from "@/lib/types";
 
-type Filter = "all" | "new" | "viewed" | "contacted";
+/**
+ * Activity filters — the state of the customer's own working relationship with
+ * a lead, as distinct from where it sits in their sales pipeline. Kept separate
+ * from the stage filter below because they answer different questions: "what
+ * haven't I looked at" versus "what's at the meeting-booked step".
+ */
+type Filter = "all" | "new" | "viewed" | "contacted" | "won";
 type TypeFilter = "all" | "management" | "guaranteed_rent";
 
 export function LeadsList({
@@ -16,6 +27,7 @@ export function LeadsList({
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [stageFilter, setStageFilter] = useState<StageFilter>("all");
 
   // Only offer the product filter when the customer actually holds both types.
   const hasBothTypes = useMemo(() => {
@@ -29,17 +41,30 @@ export function LeadsList({
     return false;
   }, [assignments]);
 
-  const filtered = useMemo(() => {
+  // Which chips exist follows the product filter only — not the search box, so
+  // the row doesn't reflow while the customer is typing in it.
+  const typeScoped = useMemo(
+    () =>
+      typeFilter === "all"
+        ? assignments
+        : assignments.filter((a) => productOf(a) === typeFilter),
+    [assignments, typeFilter]
+  );
+
+  // Everything except the stage filter, so stage counts reflect the other
+  // filters in force.
+  const beforeStage = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return assignments.filter((a) => {
+    return typeScoped.filter((a) => {
       const lead = a.lead;
       if (filter === "new" && a.viewed_at) return false;
       if (filter === "viewed" && !a.viewed_at) return false;
       if (filter === "contacted" && a.status !== "contacted") return false;
-      if (typeFilter !== "all") {
-        const t = lead?.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
-        if (t !== typeFilter) return false;
-      }
+      // Won filters on STATUS, not stage: both the Management 'won' stage and
+      // the GR 'contract_signed' stage set status = 'won' (migration 0050), so
+      // one status check covers both products and also catches leads won via
+      // the "Mark as signed" button without the stage being moved.
+      if (filter === "won" && a.status !== "won") return false;
       if (!q) return true;
       return [
         lead?.lead_name,
@@ -51,13 +76,22 @@ export function LeadsList({
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q));
     });
-  }, [assignments, query, filter, typeFilter]);
+  }, [typeScoped, query, filter]);
+
+  const filtered = useMemo(
+    () =>
+      stageFilter === "all"
+        ? beforeStage
+        : beforeStage.filter((a) => a.pipeline_stage === stageFilter),
+    [beforeStage, stageFilter]
+  );
 
   const filters: { key: Filter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "new", label: "New" },
     { key: "viewed", label: "Viewed" },
     { key: "contacted", label: "Contacted" },
+    { key: "won", label: "Won" },
   ];
 
   const typeFilters: { key: TypeFilter; label: string }[] = [
@@ -98,7 +132,13 @@ export function LeadsList({
           {typeFilters.map((f) => (
             <button
               key={f.key}
-              onClick={() => setTypeFilter(f.key)}
+              onClick={() => {
+                setTypeFilter(f.key);
+                // A stage that belongs to the other product would now match
+                // nothing, leaving an empty list with a filter the customer
+                // can no longer see selected. Reset rather than strand them.
+                setStageFilter("all");
+              }}
               className={
                 "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
                 (typeFilter === f.key
@@ -111,6 +151,13 @@ export function LeadsList({
           ))}
         </div>
       )}
+
+      <StageFilterBar
+        optionSource={typeScoped}
+        counted={beforeStage}
+        value={stageFilter}
+        onChange={setStageFilter}
+      />
 
       {filtered.length === 0 ? (
         <div className="rounded-lg border-[0.5px] border-dashed border-border p-12 text-center text-muted-foreground">

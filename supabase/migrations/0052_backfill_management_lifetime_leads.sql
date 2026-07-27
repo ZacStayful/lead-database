@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Backfill management_lifetime_leads_received from assignment history.
 --
--- 0050 added the odometer with DEFAULT 0, which is correct for a column that
+-- 0051 added the odometer with DEFAULT 0, which is correct for a column that
 -- only counts forward — but it leaves every existing subscriber starting from
 -- zero, and the goals page reads the won count live from lead_assignments over
 -- all history. An eight-month customer who has signed three landlords would
@@ -20,7 +20,7 @@
 -- ---------------------------------------------------------------------------
 -- One row per (lead, customer) in lead_assignments, restricted to leads whose
 -- lead_type is 'management'. That includes admin-placed and reclaimed leads,
--- both of which 0050 also counts going forward, so the backfill and the live
+-- both of which 0051 also counts going forward, so the backfill and the live
 -- increments agree about what "received" means.
 --
 -- It CANNOT see discarded leads: discard_lead_assignment (0010) deletes the
@@ -44,7 +44,7 @@
 -- it once, twice, or a year later can only ever hold the value steady or raise
 -- it.
 --
--- It also removes any ordering hazard between this migration and 0050. If a
+-- It also removes any ordering hazard between this migration and 0051. If a
 -- lead happens to be assigned between the two running, the live increment is
 -- preserved rather than overwritten.
 -- ============================================================================

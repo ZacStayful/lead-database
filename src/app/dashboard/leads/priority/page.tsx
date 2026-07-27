@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { fetchOrderedAssignments } from "@/lib/leadOrder";
-import { LeadCard } from "@/components/dashboard/LeadCard";
+import { PriorityLeadsList } from "@/components/dashboard/PriorityLeadsList";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
  * Excludes won and not_relevant; every pipeline stage (including abandoned) is
  * included. Ordered by due_to_call_date ascending (overdue first, nulls last),
  * then enquiry_date ascending. Cards deep-link back with ?from=priority so
- * prev/next navigation follows this same order.
+ * prev/next navigation follows this same order — the stage chips narrow the
+ * list without disturbing it.
  */
 export default async function PriorityLeadsPage() {
   const { user, customer } = await getCurrentCustomer();
@@ -28,17 +29,7 @@ export default async function PriorityLeadsPage() {
         </p>
       </div>
 
-      {assignments.length === 0 ? (
-        <div className="rounded-lg border-[0.5px] border-dashed border-border p-12 text-center text-muted-foreground">
-          No active leads to call right now.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {assignments.map((a) => (
-            <LeadCard key={a.id} assignment={a} from="priority" />
-          ))}
-        </div>
-      )}
+      <PriorityLeadsList assignments={assignments} />
     </div>
   );
 }
