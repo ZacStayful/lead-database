@@ -1,9 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  sendNewLeadEmail,
-  sendLowCreditsEmail,
-  sendCreditsExhaustedEmail,
-} from "@/lib/emails";
+import { sendNewLeadEmail, sendLowCreditsEmail } from "@/lib/emails";
+import { maybeSendTopupOffer } from "@/lib/topup";
 import { extractCity } from "@/lib/utils";
 import { extractPostcode, postcodeArea } from "@/lib/postcode";
 import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
@@ -414,30 +411,34 @@ export async function completeAssignment(
       .eq("id", notificationId);
   }
 
-  // Threshold emails apply only to the management allocation, keyed on the real
-  // allocation gate (lead_balance, already decremented by the assignment RPC) so
-  // they work for any plan size. GR leads spend gr_lead_balance and must not
-  // trigger management credit warnings.
+  // Credit-threshold follow-through. Balances are read post-decrement (the
+  // assignment RPC already spent the credit), keyed on the real allocation gate
+  // (lead_balance / gr_lead_balance) so it works for any plan size. Branch
+  // strictly on lead_type — a product's logic must never read or write the
+  // other product's columns.
   //
-  // These are email-only (no in-portal notification stream exists for credit
-  // warnings), so the `credit_warnings` preference gates the email dispatch and
-  // that is the whole gate. The exact-equality on balance (=== 0 / === LOW) is
-  // the existing once-per-threshold-crossing dedup — the preference is an added
-  // AND condition and does not disturb it (both are pure reads, no side effect,
-  // so their order is immaterial).
-  if (
-    sendThresholdWarnings &&
-    lead.lead_type !== "guaranteed_rent" &&
-    wantsNotification(typedCustomer, "credit_warnings")
-  ) {
-    const balance = typedCustomer.lead_balance;
-    if (balance === 0) {
-      await sendCreditsExhaustedEmail({ to: typedCustomer.email });
-    } else if (balance === LOW_CREDITS_REMAINING) {
-      await sendLowCreditsEmail({
-        to: typedCustomer.email,
-        remaining: balance,
-      });
+  // At zero balance BOTH products now offer a one-off paid top-up (email + SMS +
+  // single-use link); the offer is deduplicated by the live token, so the
+  // exact-equality on balance (=== 0) simply gates when it fires. The low-credits
+  // warning stays Management-only (GR has no low-credits stream). Email opt-in
+  // (credit_warnings) and SMS opt-in (sms_alerts_enabled) are enforced inside
+  // maybeSendTopupOffer / sendLowCreditsEmail.
+  if (sendThresholdWarnings) {
+    if (lead.lead_type === "guaranteed_rent") {
+      await maybeSendTopupOffer(supabase, typedCustomer, "guaranteed_rent");
+    } else {
+      const balance = typedCustomer.lead_balance;
+      if (balance === 0) {
+        await maybeSendTopupOffer(supabase, typedCustomer, "management");
+      } else if (
+        balance === LOW_CREDITS_REMAINING &&
+        wantsNotification(typedCustomer, "credit_warnings")
+      ) {
+        await sendLowCreditsEmail({
+          to: typedCustomer.email,
+          remaining: balance,
+        });
+      }
     }
   }
 }

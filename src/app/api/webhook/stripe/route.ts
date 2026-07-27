@@ -533,20 +533,115 @@ export async function POST(request: NextRequest) {
           .maybeSingle();
 
         if (customer) {
+          // Detect the product from the invoice's line-item price ids, exactly
+          // as invoice.paid does. Without this the handler was product-blind:
+          // every failure was recorded as a management 'subscription' payment
+          // AND marked the MANAGEMENT subscription past_due — so a failed GR
+          // invoice silently degraded the customer's management subscription,
+          // breaking the parallel-column invariant. Branch on the product and
+          // touch only that product's columns.
+          const priceIds = priceIdsFromInvoice(invoice);
+          const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
+          const isGuaranteedRent = Boolean(
+            grPriceId && priceIds.includes(grPriceId)
+          );
+
           await admin.from("payments").insert({
             customer_id: customer.id,
             stripe_invoice_id: invoice.id,
             amount_pence: invoice.amount_due ?? 0,
-            payment_type: "subscription",
+            payment_type: isGuaranteedRent ? "gr_subscription" : "subscription",
             status: "failed",
+            lead_type: isGuaranteedRent ? "guaranteed_rent" : "management",
           });
+
           await admin
             .from("customers")
-            .update({
-              subscription_status: "past_due",
-              updated_at: new Date().toISOString(),
-            })
+            .update(
+              isGuaranteedRent
+                ? {
+                    gr_subscription_status: "past_due",
+                    updated_at: new Date().toISOString(),
+                  }
+                : {
+                    subscription_status: "past_due",
+                    updated_at: new Date().toISOString(),
+                  }
+            )
             .eq("id", customer.id);
+        }
+        break;
+      }
+
+      case "checkout.session.completed": {
+        // Only the lead top-up fallback path uses hosted Checkout (payment mode);
+        // subscriptions are created via subscription-mode Checkout/Payment Links
+        // and credited through invoice.paid, not here. Gate strictly on our own
+        // metadata so no other checkout completion is ever mistaken for a top-up.
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.metadata?.kind !== "lead_topup") break;
+        if (session.payment_status !== "paid") break;
+
+        const tokenId = session.metadata.token_id;
+        if (!tokenId) {
+          console.error("lead_topup checkout.session.completed missing token_id");
+          break;
+        }
+
+        const paymentIntentId =
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : (session.payment_intent?.id ?? null);
+
+        // Idempotent, token-keyed credit: +5 to the matching balance and a
+        // 'topup' payment row, in one transaction. A replayed delivery is a
+        // no-op, so a failure after this line can be retried safely.
+        const { data: credited, error: creditError } = await admin.rpc(
+          "record_lead_topup_success",
+          { p_token_id: tokenId, p_payment_intent_id: paymentIntentId }
+        );
+        if (creditError) {
+          throw new Error(
+            `record_lead_topup_success failed: ${creditError.message}`
+          );
+        }
+        // false = we declined to credit (unknown token, or already paid). On a
+        // session we know was paid, that is a money-moved-but-no-credit event —
+        // log it loudly as the reconciliation tripwire rather than silently
+        // acknowledging.
+        if (credited === false) {
+          console.error(
+            "lead_topup checkout paid but credit skipped (already paid or unknown token)",
+            { tokenId, paymentIntentId }
+          );
+        }
+        break;
+      }
+
+      case "payment_intent.succeeded": {
+        // Safety net for the off-session path. If the charge was captured but
+        // our request died before we could credit (connection reset, timeout,
+        // an intent that settled asynchronously), this is what still credits
+        // the customer. record_lead_topup_success promotes a token previously
+        // marked 'failed' and is a no-op once 'paid', so this is safe to run on
+        // every delivery and can never double-credit.
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.kind !== "lead_topup") break;
+
+        const tokenId = intent.metadata.token_id;
+        if (!tokenId) {
+          console.error("lead_topup payment_intent.succeeded missing token_id");
+          break;
+        }
+
+        const { error: creditError } = await admin.rpc(
+          "record_lead_topup_success",
+          { p_token_id: tokenId, p_payment_intent_id: intent.id }
+        );
+        if (creditError) {
+          throw new Error(
+            `record_lead_topup_success (recovery) failed: ${creditError.message}`
+          );
         }
         break;
       }

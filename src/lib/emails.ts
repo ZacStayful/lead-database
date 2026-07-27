@@ -602,11 +602,61 @@ export async function sendProgressReportEmail(params: {
   }
 }
 
-/** Credits exhausted — triggered when leads_received_this_month reaches allocation. */
+/** Format an integer pence amount as GBP, dropping ".00" for whole pounds. */
+function formatGbp(pence: number): string {
+  const pounds = pence / 100;
+  return Number.isInteger(pounds) ? `£${pounds}` : `£${pounds.toFixed(2)}`;
+}
+
+/**
+ * Credits exhausted — the customer's balance for a product has hit zero.
+ *
+ * When `topup` is supplied (both products, once the one-off top-up is offered)
+ * the email leads with a "buy N more leads" call-to-action pointing at the
+ * single-use, time-limited confirmation link; the card on file is charged with
+ * no checkout redirect. Without `topup` it falls back to the original
+ * renewal-only message. The product name keeps Management and GR wording
+ * distinct, per the parallel-column invariant.
+ */
 export async function sendCreditsExhaustedEmail(params: {
   to: string;
+  topup?: {
+    url: string;
+    product: "management" | "guaranteed_rent";
+    credits: number;
+    pricePence: number;
+  };
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to } = params;
+  const { to, topup } = params;
+
+  if (topup) {
+    const productLabel =
+      topup.product === "guaranteed_rent" ? "Guaranteed Rent" : "Management";
+    const price = formatGbp(topup.pricePence);
+    const subject = `You're out of ${productLabel} leads — top up in one tap`;
+    const inner = `
+      <h1 style="margin:0 0 4px;font-size:18px">You're out of leads</h1>
+      <p style="margin:0 0 16px;color:#6b706a;font-size:14px">Your <strong>${esc(productLabel)}</strong> lead balance has reached zero. To keep the leads flowing before your next renewal, buy a one-off top-up now — it's charged to the card already on file, with no checkout to fill in.</p>
+      <div style="background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:10px;padding:18px;text-align:center;margin:0 0 18px">
+        <div style="font-size:22px;font-weight:700;color:${BRAND}">${topup.credits} more leads</div>
+        <div style="font-size:14px;color:#6b706a;margin-top:2px">${price} — a one-off charge</div>
+      </div>
+      ${button(topup.url, `Buy ${topup.credits} leads for ${price}`)}
+      <p style="margin:18px 0 0;color:#8a8f88;font-size:12px">This link is single-use and expires in 48 hours. If the button doesn't work, copy this into your browser:<br>${esc(topup.url)}</p>
+    `;
+    try {
+      const { data, error } = await getResend().emails.send({
+        from: fromAddress(),
+        to,
+        subject,
+        html: shell(inner),
+      });
+      return { id: data?.id ?? null, error };
+    } catch (error) {
+      return { id: null, error };
+    }
+  }
+
   const subject = `Your lead allocation is full for this month`;
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Allocation reached</h1>
