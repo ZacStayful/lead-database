@@ -162,7 +162,22 @@ export type LeadEventType =
   | "mailto_click"
   | "note_added"
   | "file_added"
-  | "stage_changed";
+  | "stage_changed"
+  // System-generated (0042) — recorded here because it is the only
+  // per-assignment record of a nudge. NOT an engagement signal: it is something
+  // we did to the operator, not something they did.
+  | "nudge_sent";
+
+/**
+ * The operator-generated subset. Engagement aggregates must filter to these
+ * explicitly — counting every lead_events row would let our own nudges inflate
+ * the score of the least engaged customers, inverting the measure.
+ */
+export const ENGAGEMENT_EVENT_TYPES = [
+  "detail_opened",
+  "tel_click",
+  "mailto_click",
+] as const satisfies readonly LeadEventType[];
 
 /** Events a browser client is permitted to report via POST /api/customer/events. */
 export const CLIENT_LEAD_EVENT_TYPES = [
