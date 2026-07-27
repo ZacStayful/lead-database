@@ -186,11 +186,18 @@ win — the "Mark as signed" button and the dropdown — end in the same place.
 `status = 'rejected'` is skipped. Reject is a settled, chargeable outcome (0019)
 and must not be silently converted into a win.
 
-**Stage edits are blocked entirely on a lead the customer has rejected** —
-`PATCH /api/customer/assignments/[id]` returns 400, and `LeadDetail` renders the
-badge read-only. Scoped to that one assignment: the same lead may sit with
-another operator as a separate row with its own status, and one customer's
-rejection must not freeze anybody else's pipeline.
+**A rejected lead is settled and cannot be moved back into a working state.**
+`PATCH /api/customer/assignments/[id]` refuses `contacted`, `signed` and
+`pipeline_stage` with a 400, in **one guard** rather than field by field —
+`contacted` was originally missed, and it is the laundering step: flipping
+status off `rejected` unlocks the other two, which each refuse a rejected lead
+directly. `viewed_at` / `due_to_call_date` / `income_estimate` stay allowed;
+they are private record-keeping that changes no outcome. `LeadDetail` renders
+the stage badge read-only to match.
+
+Scoped to that one assignment: the same lead may sit with another operator as a
+separate row with its own status, and one customer's rejection must not freeze
+anybody else's pipeline.
 
 Product stage lists are enforced in the application (`stagesForLeadType`), not in
 the CHECK constraint — the column has always accepted the union of both products'
