@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
+import { reclaimPriceFor } from "@/lib/plans";
 import { sendNewLeadEmail } from "@/lib/emails";
 import { extractCity } from "@/lib/utils";
 import {
@@ -24,36 +25,13 @@ export const maxDuration = 60;
 const RECLAIM_AFTER_BUSINESS_DAYS = 3;
 
 /**
- * Price charged for a reclaimed lead, in POUNDS.
+ * Price charged for a reclaimed lead comes from lib/plans.ts, which owns both
+ * the full and reclaimed per-lead prices so the pair cannot drift apart.
  *
- * Note the unit. The brief specified RECLAIM_PRICE_PENCE, but price_paid on
- * lead_assignments is a numeric in pounds throughout this schema (15.00 for
- * management, 10.00 for GR) — writing 1000 for "£10" would inflate every
- * revenue figure that sums the column by a factor of a hundred. Pounds it is.
- *
- * The discount reflects what is actually being sold: a lead somebody else has
- * had for three days and may still be working, not a fresh exclusive enquiry.
+ * Note the unit: price_paid is a numeric in POUNDS throughout this schema. The
+ * original brief specified RECLAIM_PRICE_PENCE; writing 1000 for "£10" would
+ * inflate every revenue figure summing that column by a factor of a hundred.
  */
-const RECLAIM_PRICE: Record<LeadType, number> = {
-  management: 10.0,
-  guaranteed_rent: 7.0,
-};
-
-// ⚠️ REVISIT ALONGSIDE GR_LEAD_PRICE.
-//
-// These are set against what ingest.ts ACTUALLY records: LEAD_PRICE = 15.00 and
-// GR_LEAD_PRICE = 10.00, giving a ~⅓ discount on each.
-//
-// But GR full price is inconsistent in the codebase as it stands: the landing
-// page says "£15 per lead" and .env.example says £150/mo for 10 leads, while
-// ingest.ts still writes 10.00 to price_paid. That predates this work — commit
-// 66cee44 repriced the marketing pages without touching ingest.ts — so GR
-// revenue is being under-recorded by £5 a lead today.
-//
-// If GR_LEAD_PRICE is corrected to 15.00, this constant should move to 10.00 so
-// the discount stays proportionate. Left at 7.00 deliberately: it is consistent
-// with the figures actually being written, and silently changing a price is not
-// a call to make inside a telemetry change.
 
 /** How many routing candidates to pull before filtering to eligible recipients. */
 const CANDIDATE_POOL = 10;
@@ -225,7 +203,7 @@ async function handle(request: NextRequest) {
       continue;
     }
 
-    const price = RECLAIM_PRICE[c.lead_type];
+    const price = reclaimPriceFor(c.lead_type);
 
     if (dryRun) {
       wouldReclaim.push({
