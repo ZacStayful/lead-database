@@ -17,7 +17,7 @@
 -- nudges inflate the engagement score of the least engaged customers — exactly
 -- inverting the measure.
 --
--- The CHECK constraint is replaced rather than edited in place; 0041 is left
+-- The CHECK constraint is replaced rather than edited in place; 0043 is left
 -- untouched.
 -- ============================================================================
 

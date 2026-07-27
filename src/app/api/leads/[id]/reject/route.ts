@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  *
  * Eligibility is decided entirely inside reject_lead_assignment — this route
  * runs no pre-flight status check of its own, so the two cannot disagree. Since
- * 0041 the rule is pipeline_stage = 'cold' (nothing built on the lead yet)
+ * 0043 the rule is pipeline_stage = 'cold' (nothing built on the lead yet)
  * rather than status = 'new', because status now moves by itself on the first
  * sign of activity and would otherwise lock an operator out of passing on a
  * lead they had merely rung. Terminal statuses ('won', 'rejected') stay barred.

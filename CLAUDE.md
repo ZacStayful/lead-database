@@ -4,7 +4,7 @@ Working notes for anyone (human or agent) changing this codebase. It describes
 what the system **actually does**, not what it was once intended to do.
 
 This file was authored during the engagement/telemetry/benchmarking programme
-(migrations 0041–0046). Earlier phases of the project referred to a CLAUDE.md
+(migrations 0043–0048). Earlier phases of the project referred to a CLAUDE.md
 that did not exist in the repository; sections are numbered to match those
 references where they were used.
 
@@ -36,7 +36,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/monday/sync-gr` | `0 9 * * *` | Same, guaranteed rent |
 | `/api/cron/generate-public-stats` | `0 3 * * *` | Landing-page activity figures |
 | `/api/cron/inactivity-nudge` | `0 10 * * 1` | Mondays: leads awaiting follow-up |
-| `/api/cron/reclaim-stale-leads` | `0 11 * * *` | Soft reclaim (0044) |
+| `/api/cron/reclaim-stale-leads` | `0 11 * * *` | Soft reclaim (0046) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
 
@@ -79,12 +79,12 @@ pause columns (0038).
 ### `lead_assignments`
 One row per (lead, customer). Carries `price_paid`, `status`, `pipeline_stage`,
 `viewed_at`, `first_contacted_at` (0033), `last_status_change_at` (0035),
-`reclaimed_at` + `is_reclaimed` (0041).
+`reclaimed_at` + `is_reclaimed` (0043).
 
 `status` ∈ `new, contacted, in_discussion, won, not_relevant, rejected`.
 `pipeline_stage` ∈ 9 values, **independent of status** (0010/0015).
 
-### `lead_events` *(0041, 0042)*
+### `lead_events` *(0043, 0044)*
 Append-only passive telemetry. **The engagement basis for everything.**
 
 ```
@@ -136,7 +136,7 @@ the monthly counter — atomically.
 | Refund | **None** — still chargeable (0019) | None |
 | Replacement | None | Lead returns to the pool |
 
-### §5E — Reject eligibility changed in 0041
+### §5E — Reject eligibility changed in 0043
 
 It used to gate on `status = 'new'`. Once status started flipping automatically
 (§6), that rule locked an operator out of passing on a lead they had merely
@@ -153,7 +153,7 @@ The API route runs **no pre-flight check** — eligibility lives entirely in
 
 ---
 
-## 6. Automatic contacted flip *(0041)*
+## 6. Automatic contacted flip *(0043)*
 
 `mark_assignment_contacted()` sets `status = 'contacted'` when there is real
 evidence of work. Four triggers call it: a note added, a file added,
@@ -172,7 +172,7 @@ itself. The `WHEN` clause and status predicate are a second stop.
 
 ---
 
-## 7. Soft reclaim *(0044)*
+## 7. Soft reclaim *(0046)*
 
 After **three UK working days** with no `detail_opened` / `tel_click` /
 `mailto_click` / note / file, a lead is offered to one further operator at a
@@ -240,7 +240,7 @@ its single reclaim on a day when nobody had credit.
 
 ---
 
-## 10. Engagement scoring and benchmarks *(0045, 0046)*
+## 10. Engagement scoring and benchmarks *(0047, 0048)*
 
 **`get_customer_engagement_scores(lead_type, customer_ids?)`** — service-role
 only. Rolling 30 days. Open rate and contact-attempt rate, weighted 0.35/0.65.

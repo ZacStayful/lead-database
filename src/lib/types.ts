@@ -137,7 +137,7 @@ export interface LeadAssignment {
   // brand-new 'new' assignment is stamped at assignment time). Powers the
   // inactivity nudge's "days since last activity" measure.
   last_status_change_at: string;
-  // Soft reclaim (0041). Set on the ORIGINAL assignment when its lead is
+  // Soft reclaim (0043). Set on the ORIGINAL assignment when its lead is
   // released to a second operator; null otherwise.
   reclaimed_at: string | null;
   // True only on the SECOND (discounted) assignment of a reclaimed lead, never
@@ -146,7 +146,7 @@ export interface LeadAssignment {
 }
 
 /**
- * Passive engagement signals (lead_events, 0041).
+ * Passive engagement signals (lead_events, 0043).
  *
  * These record what the operator DID, as distinct from `status`, which records
  * what they said they did. Only the browser-driven three are emitted today;
@@ -163,7 +163,7 @@ export type LeadEventType =
   | "note_added"
   | "file_added"
   | "stage_changed"
-  // System-generated (0042) — recorded here because it is the only
+  // System-generated (0044) — recorded here because it is the only
   // per-assignment record of a nudge. NOT an engagement signal: it is something
   // we did to the operator, not something they did.
   | "nudge_sent";

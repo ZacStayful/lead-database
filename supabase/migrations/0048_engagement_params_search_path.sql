@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Pin search_path on engagement_score_params.
 --
--- 0045 created it without `set search_path`, which the Supabase linter flags
+-- 0047 created it without `set search_path`, which the Supabase linter flags
 -- (0011_function_search_path_mutable). The function is IMMUTABLE and returns
 -- four literals, so there is nothing for a hostile search_path to redirect —
 -- this is convention, not a vulnerability.

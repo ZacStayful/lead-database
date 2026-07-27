@@ -155,7 +155,7 @@ grant execute on function public.get_customer_engagement_scores(public.lead_type
 -- ---------------------------------------------------------------------------
 -- 3 — Telemetry start date.
 --
--- lead_events began collecting when 0041 was applied; there is no passive
+-- lead_events began collecting when 0043 was applied; there is no passive
 -- signal before it. Recorded so the dashboard can say "from <date>" honestly
 -- instead of implying the figures cover a customer's whole history.
 -- ---------------------------------------------------------------------------

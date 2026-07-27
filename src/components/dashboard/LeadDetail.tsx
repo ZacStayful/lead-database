@@ -247,7 +247,7 @@ export function LeadDetail({
   const badge = statusBadge(status);
   const canDiscard = status === "new" && !hasNotes;
 
-  // Reject is gated on the pipeline stage, not the status (0041). A lead still
+  // Reject is gated on the pipeline stage, not the status (0043). A lead still
   // at 'cold' has had nothing built on it — no meeting, no viewing, no contract
   // — so passing on it costs nothing downstream, even if the status has already
   // moved to 'contacted' (which now also happens automatically, e.g. on a phone

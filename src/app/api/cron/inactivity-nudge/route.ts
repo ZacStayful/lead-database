@@ -266,7 +266,16 @@ async function handle(request: NextRequest) {
     }
 
     const count = waiting.length;
-    const leadsForEmail = waiting.slice(0, MAX_LEADS_LISTED).map((a) => {
+    // Only the leads actually NAMED in the email are marked as nudged.
+    //
+    // The digest lists at most MAX_LEADS_LISTED and summarises the rest as
+    // "…and N more". Marking all of them would, combined with the
+    // once-per-assignment rule, mean a customer sitting on 30 stale leads gets
+    // one email naming 8 and never hears about the other 22 again. Marking only
+    // the named ones lets the digest work through the backlog a slice at a
+    // time, and every lead gets named exactly once.
+    const listed = waiting.slice(0, MAX_LEADS_LISTED);
+    const leadsForEmail = listed.map((a) => {
       const lead = oneLead(a.leads);
       return {
         name: lead?.lead_name ?? "Lead",
@@ -316,12 +325,13 @@ async function handle(request: NextRequest) {
       });
     }
 
-    // Record the nudge against each assignment it covered, so no lead is ever
-    // chased twice. Written even if the email failed: a failed send is retried
-    // by nothing, and re-listing the same lead next week is the behaviour this
-    // is here to stop. The grouped notification above already landed in-portal.
+    // Record the nudge against each assignment the email actually NAMED, so no
+    // lead is ever chased twice and none is silently written off. Written even
+    // if the email failed: a failed send is retried by nothing, and re-listing
+    // the same lead next week is the behaviour this is here to stop. The
+    // grouped notification above already landed in-portal.
     const { error: eventErr } = await admin.from("lead_events").insert(
-      waiting.map((a) => ({
+      listed.map((a) => ({
         assignment_id: a.id,
         event_type: "nudge_sent" as const,
       }))

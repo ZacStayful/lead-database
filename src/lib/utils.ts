@@ -72,7 +72,11 @@ export function formatDate(value?: string | null): string {
  */
 export function formatLeadAge(value?: string | null): string {
   if (!value) return "";
-  const d = new Date(value);
+  // leads.enquiry_date arrives from Monday as "2026-07-27 09:29" — a space, not
+  // a T. V8 tolerates that; Safari returns Invalid Date. This runs in the
+  // browser (LeadCard/LeadDetail are client components), so the separator is
+  // normalised rather than trusted.
+  const d = new Date(value.trim().replace(" ", "T"));
   if (isNaN(d.getTime())) return "";
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
   if (days <= 0) return "Enquired today";

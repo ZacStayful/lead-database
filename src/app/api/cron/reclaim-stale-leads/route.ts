@@ -39,6 +39,22 @@ const RECLAIM_PRICE: Record<LeadType, number> = {
   guaranteed_rent: 7.0,
 };
 
+// ⚠️ REVISIT ALONGSIDE GR_LEAD_PRICE.
+//
+// These are set against what ingest.ts ACTUALLY records: LEAD_PRICE = 15.00 and
+// GR_LEAD_PRICE = 10.00, giving a ~⅓ discount on each.
+//
+// But GR full price is inconsistent in the codebase as it stands: the landing
+// page says "£15 per lead" and .env.example says £150/mo for 10 leads, while
+// ingest.ts still writes 10.00 to price_paid. That predates this work — commit
+// 66cee44 repriced the marketing pages without touching ingest.ts — so GR
+// revenue is being under-recorded by £5 a lead today.
+//
+// If GR_LEAD_PRICE is corrected to 15.00, this constant should move to 10.00 so
+// the discount stays proportionate. Left at 7.00 deliberately: it is consistent
+// with the figures actually being written, and silently changing a price is not
+// a call to make inside a telemetry change.
+
 /** How many routing candidates to pull before filtering to eligible recipients. */
 const CANDIDATE_POOL = 10;
 
@@ -81,7 +97,7 @@ async function handle(request: NextRequest) {
   const admin = createAdminClient();
   const now = new Date();
 
-  // Retroactivity guard. Stamped into system_settings when 0044 was applied, so
+  // Retroactivity guard. Stamped into system_settings when 0046 was applied, so
   // leads delivered before soft reclaim existed are never eligible — an operator
   // cannot lose exclusivity under a rule that did not exist when they bought.
   const { data: settingRow } = await admin
@@ -92,10 +108,10 @@ async function handle(request: NextRequest) {
 
   const cutoff = (settingRow as { value?: string } | null)?.value;
   if (!cutoff) {
-    // Absent setting means 0044 has not been applied. Refuse rather than guess:
+    // Absent setting means 0046 has not been applied. Refuse rather than guess:
     // defaulting to epoch would make every historical lead reclaimable at once.
     return NextResponse.json(
-      { error: "reclaim_enabled_from not set; migration 0044 not applied" },
+      { error: "reclaim_enabled_from not set; migration 0046 not applied" },
       { status: 500 }
     );
   }
@@ -262,24 +278,28 @@ async function handle(request: NextRequest) {
 
     let emailError: unknown = null;
     if (lead && customer) {
-      const city = extractCity(lead.address);
-      await admin.from("notifications").insert({
-        customer_id: recipientId,
-        lead_assignment_id: newAssignmentId,
-        notification_type: "new_lead",
-        message: `New lead: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
-      });
-
-      // Honours the same new_lead preference as any other lead alert.
+      // The in-portal notification and the email are gated TOGETHER on
+      // new_lead, matching completeAssignment() in lib/ingest.ts. Gating only
+      // the email would leave a customer who switched new-lead alerts off still
+      // receiving in-portal alerts — a reclaimed lead is still a new lead to
+      // them, and the preference means the same thing on both surfaces.
       if (customer.notification_preferences?.new_lead !== false) {
+        const city = extractCity(lead.address);
+        await admin.from("notifications").insert({
+          customer_id: recipientId,
+          lead_assignment_id: newAssignmentId,
+          notification_type: "new_lead",
+          message: `New lead: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
+        });
+
         const res = await sendNewLeadEmail({ to: customer.email, lead });
         emailError = res.error;
-      }
 
-      await admin
-        .from("lead_assignments")
-        .update({ notification_sent: true, email_sent: !emailError })
-        .eq("id", newAssignmentId);
+        await admin
+          .from("lead_assignments")
+          .update({ notification_sent: true, email_sent: !emailError })
+          .eq("id", newAssignmentId);
+      }
     }
 
     reclaimed.push({

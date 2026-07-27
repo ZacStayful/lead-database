@@ -1,7 +1,7 @@
 -- ============================================================================
--- Lock down the 0041 trigger functions.
+-- Lock down the 0043 trigger functions.
 --
--- 0041 revoked EXECUTE on mark_assignment_contacted but not on the four thin
+-- 0043 revoked EXECUTE on mark_assignment_contacted but not on the four thin
 -- trigger wrappers that call it. They are SECURITY DEFINER, so they were left
 -- granted to PUBLIC (and therefore to anon and authenticated) and surfaced on
 -- PostgREST as /rest/v1/rpc/<name> — which the Supabase database linter flags
