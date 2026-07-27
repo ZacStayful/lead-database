@@ -78,6 +78,23 @@ export async function PATCH(
   // move a lead through their pipeline at all. supabase-js types an embedded
   // to-one as an array while PostgREST returns an object, so accept both.
   if (body.pipeline_stage !== undefined) {
+    // A lead this customer has rejected is settled. They said they were passing
+    // on it, it stays chargeable (0019), and it is excluded from their working
+    // views — so moving it along a pipeline they have opted out of can only
+    // corrupt their own funnel figures. Worst case it reaches a terminal
+    // winning stage, whose trigger would then be asked to record a conversion
+    // on a lead they declined.
+    //
+    // Scoped to this assignment alone, which is exactly right: the same lead
+    // may sit with another operator as a separate row with its own status, and
+    // one customer's rejection must not freeze anybody else's pipeline.
+    if ((assignment as { status?: string }).status === "rejected") {
+      return NextResponse.json(
+        { error: "A rejected lead's pipeline stage cannot be changed" },
+        { status: 400 }
+      );
+    }
+
     const rawLead = (assignment as { leads?: unknown }).leads;
     const lead = (Array.isArray(rawLead) ? rawLead[0] : rawLead) as
       | { lead_type?: LeadType }

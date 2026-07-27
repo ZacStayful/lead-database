@@ -247,6 +247,11 @@ export function LeadDetail({
   const badge = statusBadge(status);
   const canDiscard = status === "new" && !hasNotes;
 
+  // Once this customer has rejected the lead the stage is read-only. Rejection
+  // is their own settled decision on their own assignment — another operator
+  // holding the same lead is unaffected.
+  const stageLocked = status === "rejected";
+
   // Reject is gated on the pipeline stage, not the status (0043). A lead still
   // at 'cold' has had nothing built on it — no meeting, no viewing, no contract
   // — so passing on it costs nothing downstream, even if the status has already
@@ -313,8 +318,19 @@ export function LeadDetail({
             <Badge variant="outline" className={badge.className}>
               {badge.label}
             </Badge>
-            {/* Pipeline stage — independent of status, click to edit */}
-            {editingPipeline ? (
+            {/* Pipeline stage — independent of status, click to edit.
+                Frozen once this customer has rejected the lead: they have
+                passed on it, so there is no pipeline left to move it through.
+                The API enforces the same rule. */}
+            {stageLocked ? (
+              <Badge
+                variant="outline"
+                className={pipelineBadgeClass(pipelineStage)}
+                title="Rejected leads can't be moved to another stage"
+              >
+                {pipelineStatusText(pipelineStage)}
+              </Badge>
+            ) : editingPipeline ? (
               <select
                 autoFocus
                 value={pipelineStage}
