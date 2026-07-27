@@ -31,6 +31,13 @@ export default async function DashboardLayout({
     unread = count ?? 0;
   }
 
+  // Goals is management-only: it targets signed management clients and reads a
+  // management-only counter. The gate is subscription_status, which is exactly
+  // what set_management_customer_goal (0050) checks — so the tab is never shown
+  // to somebody the save would then refuse. Hiding it is a courtesy, not a
+  // control: the page and the RPC each enforce this independently.
+  const holdsManagement = customer?.subscription_status === "active";
+
   const nav = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/dashboard/leads", label: "Leads" },
@@ -38,6 +45,7 @@ export default async function DashboardLayout({
     { href: "/dashboard/topup", label: "Top up leads" },
     { href: "/dashboard/filtering", label: "Lead filtering" },
     { href: "/dashboard/analytics", label: "Analytics" },
+    ...(holdsManagement ? [{ href: "/dashboard/goals", label: "Goals" }] : []),
     { href: "/dashboard/notifications", label: "Notifications" },
     { href: "/dashboard/documents", label: "Documents" },
     { href: "/dashboard/guide", label: "Guide" },
