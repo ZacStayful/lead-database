@@ -2,17 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendInactivityNudgeEmail } from "@/lib/emails";
 import { ENGAGEMENT_EVENT_TYPES, type Customer, type LeadType } from "@/lib/types";
+import { fetchUkBankHolidays, isBankHoliday, ukDate } from "@/lib/businessTime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-// gov.uk bank holidays API (division-specific endpoint, confirmed returning a
-// { division, events: [{ title, date, notes, bunting }] } object). Docs:
-// https://www.gov.uk/bank-holidays — the .json feeds are the documented API.
-const BANK_HOLIDAY_URL =
-  "https://www.gov.uk/bank-holidays/england-and-wales.json";
-const BANK_HOLIDAY_TIMEOUT_MS = 8000;
 
 // A lead whose status last changed longer ago than this (and has no note) is
 // "waiting for follow-up". Tunable via STALE_LEAD_THRESHOLD_DAYS (in days);
@@ -30,47 +24,6 @@ function thresholdHours(): number {
   const raw = process.env.STALE_LEAD_THRESHOLD_DAYS;
   const days = raw != null ? Number(raw) : NaN;
   return Number.isFinite(days) && days > 0 ? days * 24 : DEFAULT_THRESHOLD_HOURS;
-}
-
-/** Today's date (YYYY-MM-DD) in UK local time — en-CA formats as ISO date. */
-function ukDate(d: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/London",
-  }).format(d);
-}
-
-/**
- * True if today (UK date) is an England & Wales bank holiday.
- *
- * FAILS OPEN: any network error, timeout or non-200 returns false (treated as
- * "not a bank holiday"), so a gov.uk outage never suppresses the nudge. The
- * fall-open is logged.
- */
-async function isUkBankHolidayToday(today: string): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BANK_HOLIDAY_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(BANK_HOLIDAY_URL, { signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      console.warn(
-        `[inactivity-nudge] bank-holiday check HTTP ${res.status}; failing open`
-      );
-      return false;
-    }
-    const data = (await res.json()) as { events?: { date: string }[] };
-    return (data.events ?? []).some((e) => e.date === today);
-  } catch (err) {
-    console.warn(
-      "[inactivity-nudge] bank-holiday check errored; failing open",
-      err
-    );
-    return false;
-  }
 }
 
 type NudgeCustomer = Pick<
@@ -168,7 +121,8 @@ async function handle(request: NextRequest) {
   const today = ukDate(now);
 
   // Skip UK bank holidays (fail open on any error/timeout — see helper).
-  if (await isUkBankHolidayToday(today)) {
+  const holidays = await fetchUkBankHolidays();
+  if (isBankHoliday(now, holidays)) {
     console.log(`[inactivity-nudge] ${today} is a bank holiday; skipping.`);
     return NextResponse.json({
       status: "skipped",

@@ -442,6 +442,7 @@ export async function sendInactivityNudgeEmail(params: {
     <h1 style="margin:0 0 4px;font-size:18px">A quick nudge, ${esc(firstName)}</h1>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${count}</strong> ${noun} that haven't moved in over 48 hours and are waiting for their next step. A quick follow-up is often what turns an enquiry into a signed landlord.</p>
     ${list}
+    <p style="margin:0 0 18px;color:#6b706a;font-size:13px">If a lead is never opened, we offer it to a second operator after three working days. Opening it or getting in touch keeps it yours.</p>
     ${button(`${APP_URL}/dashboard/leads`, "Follow up now")}
   `;
   try {

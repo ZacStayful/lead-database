@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatLeadAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
@@ -282,6 +282,22 @@ export function LeadDetail({
       {toast && (
         <div className="rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3 text-sm">
           {toast}
+        </div>
+      )}
+
+      {/* Reclaimed lead — say plainly what this is before they pick up the
+          phone. Being told mid-call that the landlord has already spoken to
+          another operator is a much worse experience than knowing up front. */}
+      {assignment.is_reclaimed && (
+        <div className="rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3">
+          <p className="text-sm font-medium">
+            {formatLeadAge(lead.enquiry_date ?? lead.created_at)}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            This lead was offered to another operator first and wasn&apos;t taken
+            up, so it&apos;s come to you at a reduced rate. The landlord may not
+            have been contacted yet.
+          </p>
         </div>
       )}
 

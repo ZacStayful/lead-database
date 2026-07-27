@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AdminLeadControls } from "@/components/admin/AdminLeadControls";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatGBP } from "@/lib/utils";
 import type { Customer, Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -27,15 +27,27 @@ export default async function AdminLeadDetailPage({
 
   const { data: assignmentsRaw } = await admin
     .from("lead_assignments")
-    .select("id, assigned_at, customer_id, customers(id, business_name, email)")
-    .eq("lead_id", lead.id);
+    .select(
+      "id, assigned_at, customer_id, price_paid, reclaimed_at, is_reclaimed, customers(id, business_name, email)"
+    )
+    .eq("lead_id", lead.id)
+    .order("assigned_at");
 
   const assignments = (assignmentsRaw ?? []) as unknown as {
     id: string;
     assigned_at: string;
     customer_id: string;
+    price_paid: number;
+    reclaimed_at: string | null;
+    is_reclaimed: boolean;
     customers: { id: string; business_name: string; email: string } | null;
   }[];
+
+  // Reclaim history: which recipient lost exclusivity and when, and which one
+  // received the lead second-hand. Both sides matter when a customer queries a
+  // charge or asks why someone else has "their" lead.
+  const reclaimReleasedBy = assignments.filter((a) => a.reclaimed_at !== null);
+  const reclaimReceivedBy = assignments.filter((a) => a.is_reclaimed);
   const assignedIds = new Set(assignments.map((a) => a.customer_id));
 
   const { data: customersRaw } = await admin
@@ -140,17 +152,59 @@ export default async function AdminLeadDetailPage({
                         key={a.id}
                         className="flex items-center justify-between rounded-md border-[0.5px] border-border px-3 py-2 text-sm"
                       >
-                        <span className="font-medium">
+                        <span className="flex items-center gap-2 font-medium">
                           {a.customers?.business_name ?? "Unknown"}
+                          {a.is_reclaimed && (
+                            <Badge variant="muted">Reclaimed</Badge>
+                          )}
                         </span>
                         <span className="text-muted-foreground">
-                          {formatDate(a.assigned_at)}
+                          {formatDate(a.assigned_at)} · {formatGBP(a.price_paid)}
                         </span>
                       </li>
                     ))}
                   </ul>
                 )}
               </div>
+
+              {(reclaimReleasedBy.length > 0 ||
+                reclaimReceivedBy.length > 0) && (
+                <div className="mt-6">
+                  <h3 className="mb-2 text-sm font-medium">Reclaim history</h3>
+                  <ul className="space-y-2 text-sm">
+                    {reclaimReleasedBy.map((a) => (
+                      <li
+                        key={`rel-${a.id}`}
+                        className="rounded-md border-[0.5px] border-border px-3 py-2"
+                      >
+                        <span className="font-medium">
+                          {a.customers?.business_name ?? "Unknown"}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          did not action this lead — released to a second
+                          operator on {formatDate(a.reclaimed_at)}. Assignment
+                          kept, no refund.
+                        </span>
+                      </li>
+                    ))}
+                    {reclaimReceivedBy.map((a) => (
+                      <li
+                        key={`rec-${a.id}`}
+                        className="rounded-md border-[0.5px] border-border px-3 py-2"
+                      >
+                        <span className="font-medium">
+                          {a.customers?.business_name ?? "Unknown"}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          received it as a reclaimed lead on{" "}
+                          {formatDate(a.assigned_at)} at{" "}
+                          {formatGBP(a.price_paid)}.
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
