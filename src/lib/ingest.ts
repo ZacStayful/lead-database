@@ -5,6 +5,7 @@ import { extractCity } from "@/lib/utils";
 import { extractPostcode, postcodeArea } from "@/lib/postcode";
 import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
 import { sendNewLeadSms } from "@/lib/sms";
+import { leadPriceFor } from "@/lib/plans";
 import type {
   Customer,
   Lead,
@@ -13,8 +14,6 @@ import type {
   NotificationPreferences,
 } from "@/lib/types";
 
-const LEAD_PRICE = 15.0;
-const GR_LEAD_PRICE = 10.0;
 // Warn when the customer has this many lead credits left (the real allocation
 // gate is lead_balance, not the monthly counter, and this is plan-agnostic).
 const LOW_CREDITS_REMAINING = 2;
@@ -310,7 +309,7 @@ export async function autoAssignLead(
 
   const customerIds = selectCombinedCandidates(filtered, unfiltered, remaining);
 
-  const price = leadType === "guaranteed_rent" ? GR_LEAD_PRICE : LEAD_PRICE;
+  const price = leadPriceFor(leadType);
 
   let assignmentsMade = 0;
   for (const customerId of customerIds) {
