@@ -79,6 +79,16 @@ export interface Customer {
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).
   last_report_sent_at: string | null;
+  // Goals (management only, 0050). The target is customer-settable — but only
+  // through set_management_customer_goal(), never a direct write.
+  // null = no goal set, which is a distinct state from a goal of zero (the
+  // column's CHECK forbids zero).
+  management_customer_goal: number | null;
+  management_customer_goal_updated_at: string | null;
+  // Monotonic count of management leads ever delivered. NOT a pacing counter
+  // (leads_received_this_month resets on the anchor day) and NOT an allocation
+  // gate (lead_balance is spent and topped up) — it only ever counts up.
+  management_lifetime_leads_received: number;
   created_at: string;
   updated_at: string;
 }

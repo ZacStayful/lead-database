@@ -1,12 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { PIPELINE_STAGES } from "@/components/dashboard/pipelineStage";
+import { stagesForLeadType } from "@/components/dashboard/pipelineStage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const PIPELINE_VALUES = new Set(PIPELINE_STAGES.map((s) => s.value));
 
 /**
  * Update the authenticated customer's own lead assignment.
@@ -51,23 +49,14 @@ export async function PATCH(
     );
   }
 
-  if (
-    body.pipeline_stage !== undefined &&
-    !PIPELINE_VALUES.has(body.pipeline_stage as never)
-  ) {
-    return NextResponse.json(
-      { error: "Invalid pipeline_stage" },
-      { status: 400 }
-    );
-  }
-
   const admin = createAdminClient();
 
-  // Confirm ownership before mutating.
+  // Confirm ownership before mutating. lead_type comes back with it because
+  // the valid pipeline stages depend on which product the lead belongs to.
   const { data: assignment } = await admin
     .from("lead_assignments")
     .select(
-      "id, customer_id, viewed_at, first_contacted_at, status, customers!inner(user_id)"
+      "id, customer_id, viewed_at, first_contacted_at, status, customers!inner(user_id), lead:leads(lead_type)"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -77,6 +66,28 @@ export async function PATCH(
 
   if (!assignment || ownerId !== user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Validate the stage against THIS lead's product. Validating against the
+  // management list alone rejected every guaranteed-rent stage with a 400,
+  // even though LeadDetail offers exactly those options for a GR lead — so a
+  // GR operator could not record a viewing or a contract at all, and the GR
+  // pipeline could never leave 'cold'. Deliberately after the ownership
+  // lookup, since the lead's type is what decides the answer.
+  const leadType = (assignment as { lead?: { lead_type?: string } } | null)
+    ?.lead?.lead_type;
+  const allowedStages = new Set(
+    stagesForLeadType(leadType).map((s) => s.value as string)
+  );
+
+  if (
+    body.pipeline_stage !== undefined &&
+    !allowedStages.has(body.pipeline_stage)
+  ) {
+    return NextResponse.json(
+      { error: "Invalid pipeline_stage" },
+      { status: 400 }
+    );
   }
 
   const update: Record<string, unknown> = {};
