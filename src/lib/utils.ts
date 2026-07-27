@@ -60,6 +60,30 @@ export function formatDate(value?: string | null): string {
   });
 }
 
+/**
+ * How long ago an enquiry came in, phrased for a lead-age badge:
+ * "Enquired today", "Enquired 1 day ago", "Enquired 5 days ago".
+ *
+ * Shown on reclaimed leads so the second operator knows exactly what they are
+ * getting before they ring — a five-day-old enquiry is a different conversation
+ * from a fresh one, and finding that out mid-call is worse than being told.
+ * Whole days only; hour-level precision would imply a freshness the lead does
+ * not have.
+ */
+export function formatLeadAge(value?: string | null): string {
+  if (!value) return "";
+  // leads.enquiry_date arrives from Monday as "2026-07-27 09:29" — a space, not
+  // a T. V8 tolerates that; Safari returns Invalid Date. This runs in the
+  // browser (LeadCard/LeadDetail are client components), so the separator is
+  // normalised rather than trusted.
+  const d = new Date(value.trim().replace(" ", "T"));
+  if (isNaN(d.getTime())) return "";
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days <= 0) return "Enquired today";
+  if (days === 1) return "Enquired 1 day ago";
+  return `Enquired ${days} days ago`;
+}
+
 export function formatDateTime(value?: string | null): string {
   if (!value) return "—";
   const d = new Date(value);

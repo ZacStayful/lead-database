@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { cn, initials, formatDate, formatGBP } from "@/lib/utils";
+import { cn, initials, formatDate, formatGBP, formatLeadAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import type { AssignmentWithLead } from "@/lib/types";
@@ -114,6 +114,14 @@ export function LeadCard({
                 className="border-transparent bg-amber-100 text-amber-700"
               >
                 Call {formatDate(assignment.due_to_call_date)}
+              </Badge>
+            )}
+            {assignment.is_reclaimed && (
+              <Badge
+                variant="outline"
+                className="border-transparent bg-slate-100 text-slate-600"
+              >
+                {formatLeadAge(lead.enquiry_date ?? lead.created_at)}
               </Badge>
             )}
           </div>

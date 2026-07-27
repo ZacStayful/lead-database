@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatLeadAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
@@ -16,7 +16,12 @@ import {
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
-import type { AssignmentWithLead, LeadNote, LeadFile } from "@/lib/types";
+import type {
+  AssignmentWithLead,
+  ClientLeadEventType,
+  LeadNote,
+  LeadFile,
+} from "@/lib/types";
 import type { LeadSource } from "@/lib/leadOrder";
 import {
   ArrowLeft,
@@ -72,6 +77,34 @@ export function LeadDetail({
 
   const prevHref = prevLeadId ? `/dashboard/leads/${prevLeadId}?from=${from}` : null;
   const nextHref = nextLeadId ? `/dashboard/leads/${nextLeadId}?from=${from}` : null;
+
+  const assignmentId = assignment.id;
+
+  // Passive engagement telemetry. Deliberately fire-and-forget: the response is
+  // never read and a rejected promise is swallowed, so a failed or slow write
+  // cannot delay a phone call or block the UI. Repeat sends are collapsed
+  // server-side, which is what makes it safe to call this on every mount.
+  const recordEvent = useCallback(
+    (eventType: ClientLeadEventType) => {
+      void fetch("/api/customer/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignment_id: assignmentId, event_type: eventType }),
+        keepalive: true,
+      }).catch(() => {
+        /* telemetry is best-effort */
+      });
+    },
+    [assignmentId]
+  );
+
+  // Opening the detail page is the honest "this lead was read" signal, and it is
+  // NOT the same as viewed_at — that is set only by expanding a card in the
+  // feed, so arriving here by direct link or prev/next never sets it. Recorded
+  // here as its own event; viewed_at's existing behaviour is left alone.
+  useEffect(() => {
+    recordEvent("detail_opened");
+  }, [recordEvent]);
 
   // Keyboard prev/next — ignored while a text field or date picker is focused.
   useEffect(() => {
@@ -214,6 +247,17 @@ export function LeadDetail({
   const badge = statusBadge(status);
   const canDiscard = status === "new" && !hasNotes;
 
+  // Reject is gated on the pipeline stage, not the status (0043). A lead still
+  // at 'cold' has had nothing built on it — no meeting, no viewing, no contract
+  // — so passing on it costs nothing downstream, even if the status has already
+  // moved to 'contacted' (which now also happens automatically, e.g. on a phone
+  // click). Terminal outcomes are excluded: rejecting a signed lead would
+  // destroy a conversion record. Mirrors reject_lead_assignment exactly.
+  const canReject =
+    pipelineStage === "cold" && status !== "won" && status !== "rejected";
+
+  const showActions = status === "new" || canReject;
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       {/* Back + prev/next */}
@@ -238,6 +282,22 @@ export function LeadDetail({
       {toast && (
         <div className="rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3 text-sm">
           {toast}
+        </div>
+      )}
+
+      {/* Reclaimed lead — say plainly what this is before they pick up the
+          phone. Being told mid-call that the landlord has already spoken to
+          another operator is a much worse experience than knowing up front. */}
+      {assignment.is_reclaimed && (
+        <div className="rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3">
+          <p className="text-sm font-medium">
+            {formatLeadAge(lead.enquiry_date ?? lead.created_at)}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            This lead was offered to another operator first and wasn&apos;t taken
+            up, so it&apos;s come to you at a reduced rate. The landlord may not
+            have been contacted yet.
+          </p>
         </div>
       )}
 
@@ -291,8 +351,20 @@ export function LeadDetail({
         </div>
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <Detail icon={Mail} label="Email" value={lead.email} isEmail />
-          <Detail icon={Phone} label="Phone" value={lead.phone} isPhone />
+          <Detail
+            icon={Mail}
+            label="Email"
+            value={lead.email}
+            isEmail
+            onActivate={() => recordEvent("mailto_click")}
+          />
+          <Detail
+            icon={Phone}
+            label="Phone"
+            value={lead.phone}
+            isPhone
+            onActivate={() => recordEvent("tel_click")}
+          />
           <Detail icon={MapPin} label="Address" value={lead.address} />
           <Detail
             icon={Calendar}
@@ -398,48 +470,51 @@ export function LeadDetail({
           </Button>
         </div>
 
-        {status === "new" && (
+        {showActions && (
           <div className="mt-6 flex flex-col gap-3">
-            <button
-              onClick={() => handleAccept()}
-              disabled={busy}
-              className="w-full rounded-lg bg-[#3B6D11] px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-[#2d5409] disabled:opacity-60"
-            >
-              Mark as contacted
-            </button>
-            {!showRejectConfirm ? (
+            {status === "new" && (
               <button
-                onClick={() => setShowRejectConfirm(true)}
+                onClick={() => handleAccept()}
                 disabled={busy}
-                className="w-full rounded-lg border border-black/10 px-6 py-3 text-sm font-medium text-[#898781] transition-colors hover:bg-gray-50"
+                className="w-full rounded-lg bg-[#3B6D11] px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-[#2d5409] disabled:opacity-60"
               >
-                Reject this lead
+                Mark as contacted
               </button>
-            ) : (
-              <div className="rounded-xl border border-black/10 bg-white p-4">
-                <p className="mb-3 text-sm text-[#52514e]">
-                  Mark this lead as rejected? It still counts toward your leads
-                  this month and won&apos;t be replaced — this just records that
-                  you&apos;re passing on it.
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleReject()}
-                    disabled={busy}
-                    className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
-                  >
-                    Confirm rejection
-                  </button>
-                  <button
-                    onClick={() => setShowRejectConfirm(false)}
-                    disabled={busy}
-                    className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
             )}
+            {canReject &&
+              (!showRejectConfirm ? (
+                <button
+                  onClick={() => setShowRejectConfirm(true)}
+                  disabled={busy}
+                  className="w-full rounded-lg border border-black/10 px-6 py-3 text-sm font-medium text-[#898781] transition-colors hover:bg-gray-50"
+                >
+                  Reject this lead
+                </button>
+              ) : (
+                <div className="rounded-xl border border-black/10 bg-white p-4">
+                  <p className="mb-3 text-sm text-[#52514e]">
+                    Mark this lead as rejected? It still counts toward your leads
+                    this month and won&apos;t be replaced — this just records that
+                    you&apos;re passing on it.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleReject()}
+                      disabled={busy}
+                      className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                    >
+                      Confirm rejection
+                    </button>
+                    <button
+                      onClick={() => setShowRejectConfirm(false)}
+                      disabled={busy}
+                      className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ))}
 
             {/* Discard — only while brand new and un-noted. */}
             {canDiscard &&
@@ -582,12 +657,15 @@ function Detail({
   value,
   isEmail,
   isPhone,
+  onActivate,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value?: string | null;
   isEmail?: boolean;
   isPhone?: boolean;
+  /** Fired when a tel:/mailto: link is followed — engagement telemetry only. */
+  onActivate?: () => void;
 }) {
   const display = value || "—";
   return (
@@ -596,11 +674,19 @@ function Detail({
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
         {isEmail && value ? (
-          <a href={`mailto:${value}`} className="text-sm text-brand hover:underline">
+          <a
+            href={`mailto:${value}`}
+            onClick={onActivate}
+            className="text-sm text-brand hover:underline"
+          >
             {value}
           </a>
         ) : isPhone && value ? (
-          <a href={`tel:${value}`} className="text-sm text-brand hover:underline">
+          <a
+            href={`tel:${value}`}
+            onClick={onActivate}
+            className="text-sm text-brand hover:underline"
+          >
             {value}
           </a>
         ) : (
