@@ -166,7 +166,40 @@ async function handle(request: NextRequest) {
     const hasHistory = new Set(
       ((priorRows ?? []) as { customer_id: string }[]).map((r) => r.customer_id)
     );
-    const recipientId = candidateIds.find((id: string) => hasHistory.has(id));
+    const eligible = candidateIds.filter((id: string) => hasHistory.has(id));
+
+    // Engagement decides who gets a reclaimed lead, within the deficit-first
+    // pool above. This is the ONLY place engagement influences allocation:
+    // ordinary leads are still routed purely deficit-first, untouched.
+    //
+    // The justification is specific to reclaim. This lead was already ignored
+    // once, and giving it to whoever is merely next in line risks it being
+    // ignored again — which serves neither the landlord nor us. Handing it to
+    // the operator most likely to actually ring is the point of the feature.
+    //
+    // Best-effort: if scoring fails, fall back to the deficit-first order
+    // rather than skipping the reclaim. A lead placed in a slightly worse
+    // order beats a lead not placed at all.
+    let recipientId = eligible[0];
+    if (eligible.length > 1) {
+      const { data: scoreRows, error: scoreErr } = await admin.rpc(
+        "get_customer_engagement_scores",
+        { p_lead_type: c.lead_type, p_customer_ids: eligible }
+      );
+      if (scoreErr) {
+        console.error("[reclaim] engagement scoring failed; using deficit order", scoreErr);
+      } else {
+        const score = new Map(
+          ((scoreRows ?? []) as { customer_id: string; score: number }[]).map(
+            (r) => [r.customer_id, Number(r.score)]
+          )
+        );
+        // Stable: ties keep the deficit-first ordering they arrived in.
+        recipientId = [...eligible].sort(
+          (a, b) => (score.get(b) ?? 0) - (score.get(a) ?? 0)
+        )[0];
+      }
+    }
 
     if (!recipientId) {
       skipped.push({

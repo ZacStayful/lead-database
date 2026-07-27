@@ -1,6 +1,11 @@
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
+import {
+  EngagementBenchmarks,
+  type BenchmarkRow,
+} from "@/components/dashboard/EngagementBenchmarks";
 import { Card, CardContent } from "@/components/ui/card";
 import { PrintButton } from "@/components/dashboard/PrintButton";
 import {
@@ -38,6 +43,24 @@ export default async function AnalyticsPage() {
     viewed_at: string | null;
     income_estimate: number | null;
   }[];
+
+  // Cohort benchmarks. Called through the customer's OWN session, not the
+  // admin client: get_engagement_benchmarks derives identity from auth.uid()
+  // and returns aggregates only, so the service role would gain nothing and
+  // calling it as the user keeps the security boundary where it belongs.
+  const userClient = createClient();
+  const { data: benchmarkRaw } = await userClient.rpc(
+    "get_engagement_benchmarks"
+  );
+  const benchmarkRows = (benchmarkRaw ?? []) as BenchmarkRow[];
+
+  const { data: telemetrySetting } = await admin
+    .from("system_settings")
+    .select("value")
+    .eq("key", "telemetry_from")
+    .maybeSingle();
+  const telemetryFrom =
+    (telemetrySetting as { value?: string } | null)?.value ?? null;
 
   // Notes + files activity (files table may not exist yet — tolerate errors).
   const { count: notesCount } = await admin
@@ -185,6 +208,10 @@ export default async function AnalyticsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Cohort comparison — below the funnels, as the last block on the page:
+          it is context for everything above it, not a headline. */}
+      <EngagementBenchmarks rows={benchmarkRows} telemetryFrom={telemetryFrom} />
     </div>
   );
 }
