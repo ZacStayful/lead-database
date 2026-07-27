@@ -1,12 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { PIPELINE_STAGES } from "@/components/dashboard/pipelineStage";
+import { stagesForLeadType } from "@/components/dashboard/pipelineStage";
+import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const PIPELINE_VALUES = new Set(PIPELINE_STAGES.map((s) => s.value));
 
 /**
  * Update the authenticated customer's own lead assignment.
@@ -51,23 +50,15 @@ export async function PATCH(
     );
   }
 
-  if (
-    body.pipeline_stage !== undefined &&
-    !PIPELINE_VALUES.has(body.pipeline_stage as never)
-  ) {
-    return NextResponse.json(
-      { error: "Invalid pipeline_stage" },
-      { status: 400 }
-    );
-  }
-
   const admin = createAdminClient();
 
-  // Confirm ownership before mutating.
+  // Confirm ownership before mutating. The lead's type comes back too, because
+  // valid pipeline stages differ per product and cannot be checked until we
+  // know which product this is.
   const { data: assignment } = await admin
     .from("lead_assignments")
     .select(
-      "id, customer_id, viewed_at, first_contacted_at, status, customers!inner(user_id)"
+      "id, customer_id, viewed_at, first_contacted_at, status, customers!inner(user_id), leads(lead_type)"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -77,6 +68,45 @@ export async function PATCH(
 
   if (!assignment || ownerId !== user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Validate the stage against THIS lead's product.
+  //
+  // Previously this checked against PIPELINE_STAGES — the Management list — for
+  // every lead, so a Guaranteed Rent customer setting any of their own stages
+  // (viewing_booked / contract_sent / contract_signed) got a 400 and could not
+  // move a lead through their pipeline at all. supabase-js types an embedded
+  // to-one as an array while PostgREST returns an object, so accept both.
+  if (body.pipeline_stage !== undefined) {
+    // A lead this customer has rejected is settled. They said they were passing
+    // on it, it stays chargeable (0019), and it is excluded from their working
+    // views — so moving it along a pipeline they have opted out of can only
+    // corrupt their own funnel figures. Worst case it reaches a terminal
+    // winning stage, whose trigger would then be asked to record a conversion
+    // on a lead they declined.
+    //
+    // Scoped to this assignment alone, which is exactly right: the same lead
+    // may sit with another operator as a separate row with its own status, and
+    // one customer's rejection must not freeze anybody else's pipeline.
+    if ((assignment as { status?: string }).status === "rejected") {
+      return NextResponse.json(
+        { error: "A rejected lead's pipeline stage cannot be changed" },
+        { status: 400 }
+      );
+    }
+
+    const rawLead = (assignment as { leads?: unknown }).leads;
+    const lead = (Array.isArray(rawLead) ? rawLead[0] : rawLead) as
+      | { lead_type?: LeadType }
+      | null
+      | undefined;
+    const allowed = stagesForLeadType(lead?.lead_type);
+    if (!allowed.some((s) => s.value === body.pipeline_stage)) {
+      return NextResponse.json(
+        { error: "Invalid pipeline_stage for this lead type" },
+        { status: 400 }
+      );
+    }
   }
 
   const update: Record<string, unknown> = {};

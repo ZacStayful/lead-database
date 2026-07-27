@@ -82,7 +82,9 @@ One row per (lead, customer). Carries `price_paid`, `status`, `pipeline_stage`,
 `reclaimed_at` + `is_reclaimed` (0043).
 
 `status` ∈ `new, contacted, in_discussion, won, not_relevant, rejected`.
-`pipeline_stage` ∈ 9 values, **independent of status** (0010/0015).
+`pipeline_stage` ∈ 10 values (0010/0015/0050). Independent of status in general,
+with two deliberate couplings: moving off `cold` sets `contacted` (§6), and
+reaching a terminal winning stage sets `won` (§6A).
 
 ### `lead_events` *(0043, 0044)*
 Append-only passive telemetry. **The engagement basis for everything.**
@@ -132,7 +134,7 @@ the monthly counter — atomically.
 | | Reject | Discard |
 |---|---|---|
 | Eligibility | `pipeline_stage = 'cold'` and status not `won`/`rejected` | `status = 'new'` **and** no notes |
-| Effect | `status → 'rejected'` | Row deleted, `assignment_count − 1` |
+| Effect | `status → 'rejected'`; stage frozen (§6A) | Row deleted, `assignment_count − 1` |
 | Refund | **None** — still chargeable (0019) | None |
 | Replacement | None | Lead returns to the pool |
 
@@ -169,6 +171,30 @@ evidence of work. Four triggers call it: a note added, a file added,
 **Recursion guard:** the `lead_assignments` trigger is `AFTER UPDATE OF
 pipeline_stage`, and the flip never writes that column, so it cannot re-arm
 itself. The `WHEN` clause and status predicate are a second stop.
+
+### §6A — Automatic won flip *(0050)*
+
+Management gained a terminal `won` stage; GR already had `contract_signed`.
+Reaching either sets `status = 'won'` via `mark_assignment_won()`, on the same
+`AFTER UPDATE OF pipeline_stage` pattern and with the same recursion guard.
+
+Not cosmetic: the ROI funnel, the win-rate figure and the signed celebration all
+count `status = 'won'`, so a stage that were purely a label would let an operator
+mark a lead Won and have it register as a conversion nowhere. Both routes to a
+win — the "Mark as signed" button and the dropdown — end in the same place.
+
+`status = 'rejected'` is skipped. Reject is a settled, chargeable outcome (0019)
+and must not be silently converted into a win.
+
+**Stage edits are blocked entirely on a lead the customer has rejected** —
+`PATCH /api/customer/assignments/[id]` returns 400, and `LeadDetail` renders the
+badge read-only. Scoped to that one assignment: the same lead may sit with
+another operator as a separate row with its own status, and one customer's
+rejection must not freeze anybody else's pipeline.
+
+Product stage lists are enforced in the application (`stagesForLeadType`), not in
+the CHECK constraint — the column has always accepted the union of both products'
+stages and narrowing it would reject existing GR rows.
 
 ---
 
@@ -272,20 +298,20 @@ for being new with no way to earn out of it.
 
 ## 11. Known issues and gotchas
 
-- **`pipeline_stage` validation is management-only.** `PATCH
-  /api/customer/assignments/[id]` validates against `PIPELINE_STAGES` and the
-  analytics funnel renders only those, so the GR stages (`viewing_booked`,
-  `contract_sent`, `contract_signed`) are rejected with a 400 and dropped from
-  the funnel. `GR_PIPELINE_STAGES` and `stagesForLeadType()` exist and are not
-  imported. **Live bug.**
+- ~~**`pipeline_stage` validation is management-only.**~~ **Fixed (0050 branch).**
+  `PATCH /api/customer/assignments/[id]` validated every lead against
+  `PIPELINE_STAGES`, so a GR customer setting any of their own stages got a 400;
+  the analytics funnel had the mirror fault and rendered their pipeline card as
+  permanent zeros. Both now resolve the lead's product and use
+  `stagesForLeadType()` / `GR_PIPELINE_STAGES`.
 - **`viewed_at` ≠ telemetry.** `viewed_at` is set *only* by expanding a lead
   card in the feed. Opening `/dashboard/leads/[id]` does not set it, so a lead
   read end-to-end via a direct link leaves it null forever. `detail_opened` is
   the honest "this lead was read" signal. Never treat them as equivalent.
-- **`get_next_customers_for_lead` is executable by `anon`.** `0028`
-  blanket-revoked schema-wide, then `0038` dropped and recreated the function,
-  which discards its ACL. Low severity (returns UUIDs, needs a valid lead id)
-  but unintended. One-line fix, not yet applied.
+- ~~**`get_next_customers_for_lead` is executable by `anon`.**~~ **Fixed in
+  0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
+  the function, which discards its ACL. Re-revoked. Any future
+  `create or replace` on a privileged function must re-assert its grants.
 - **Orphaned reject columns.** `rejection_reason`, `contact_validation_result`,
   `claim_denied` exist on `lead_assignments` in production but in **no
   migration** and no code — left by an abandoned branch. Do not reference them;
@@ -301,7 +327,5 @@ for being new with no way to earn out of it.
 
 - Drive `/api/cron/post-call-offer-reminders` (no scheduler; table is empty so
   nothing has been missed yet).
-- Fix GR `pipeline_stage` validation (§11).
-- Revoke `anon` EXECUTE on `get_next_customers_for_lead` (§11).
 - Decide whether discard should gate on notes only (§5E).
 - Decide whether a rejected lead should be reclaimable (currently excluded).

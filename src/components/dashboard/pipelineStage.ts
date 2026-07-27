@@ -12,6 +12,7 @@ export const PIPELINE_STAGES: { value: PipelineStage; label: string }[] = [
   { value: "web_meeting_no_show", label: "Booked — did not attend" },
   { value: "web_meeting_attended", label: "Web meeting attended" },
   { value: "abandoned", label: "Abandoned" },
+  { value: "won", label: "Won" },
 ];
 
 /** Guaranteed-rent leads run a shorter, viewing-to-contract pipeline. */
@@ -61,6 +62,10 @@ export function pipelineBadgeClass(stage: string): string {
       return "border-transparent bg-red-100 text-red-700";
     case "abandoned":
       return "border-transparent bg-gray-600 text-white";
+    // Matches the green of the "Won" STATUS badge in leadStatus.ts — the two
+    // always agree now, so they must not look like different things.
+    case "won":
+      return "border-transparent bg-green-100 text-green-700";
     case "viewing_booked":
       return "border-transparent bg-amber-100 text-amber-800";
     case "contract_sent":

@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PrintButton } from "@/components/dashboard/PrintButton";
 import {
   PIPELINE_STAGES,
+  GR_PIPELINE_STAGES,
   pipelineBadgeClass,
 } from "@/components/dashboard/pipelineStage";
 import { formatDate, formatGBP } from "@/lib/utils";
@@ -34,15 +35,35 @@ export default async function AnalyticsPage() {
 
   const { data: rows } = await admin
     .from("lead_assignments")
-    .select("status, pipeline_stage, viewed_at, income_estimate")
+    .select("status, pipeline_stage, viewed_at, income_estimate, leads(lead_type)")
     .eq("customer_id", customer.id);
 
-  const assignments = (rows ?? []) as {
+  const assignments = (rows ?? []) as unknown as {
     status: string;
     pipeline_stage: string;
     viewed_at: string | null;
     income_estimate: number | null;
+    leads: { lead_type: string } | { lead_type: string }[] | null;
   }[];
+
+  // Which stage vocabulary to render. The funnel previously showed the
+  // Management list unconditionally, so a Guaranteed Rent customer's stages
+  // (viewing_booked / contract_sent / contract_signed) were counted but never
+  // displayed — their pipeline card was permanently all zeros.
+  const productOf = (a: (typeof assignments)[number]) => {
+    const raw = a.leads;
+    const lead = Array.isArray(raw) ? raw[0] : raw;
+    return lead?.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
+  };
+  const heldProducts = new Set(assignments.map(productOf));
+  const stagesToShow = [
+    ...(heldProducts.has("management") ? PIPELINE_STAGES : []),
+    ...(heldProducts.has("guaranteed_rent")
+      ? GR_PIPELINE_STAGES.filter(
+          (g) => !PIPELINE_STAGES.some((m) => m.value === g.value)
+        )
+      : []),
+  ];
 
   // Cohort benchmarks. Called through the customer's OWN session, not the
   // admin client: get_engagement_benchmarks derives identity from auth.uid()
@@ -163,7 +184,7 @@ export default async function AnalyticsPage() {
             Your own pipeline activity across every lead.
           </p>
           <div className="space-y-3">
-            {PIPELINE_STAGES.map((s) => {
+            {stagesToShow.map((s) => {
               const n = pipelineCounts.get(s.value) ?? 0;
               return (
                 <FunnelRow
