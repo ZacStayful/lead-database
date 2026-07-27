@@ -88,3 +88,29 @@ export function leadPriceFor(leadType: LeadType | string | undefined): number {
     ? LEAD_PRICE_GBP.guaranteed_rent
     : LEAD_PRICE_GBP.management;
 }
+
+/**
+ * Price recorded for a RECLAIMED lead, in pounds, per product.
+ *
+ * A reclaimed lead is a second-hand lead: another operator has had it for three
+ * working days and may still be working it. Roughly a third off full price
+ * reflects that, and both products carry the same discount because both are the
+ * same £15 a lead.
+ *
+ * Deliberately explicit rather than computed as a fraction of LEAD_PRICE_GBP.
+ * £15 × ⅔ is 10.000000000000002 in floating point, and a price is the last
+ * place to accept a rounding surprise — but it lives here, beside the full
+ * price, so the pair is read and changed together. Keeping them in separate
+ * files is exactly how the GR price went stale in the first place (#49).
+ */
+export const RECLAIM_PRICE_GBP: Record<LeadType, number> = {
+  management: 10.0,
+  guaranteed_rent: 10.0,
+};
+
+/** Price to record for a reclaimed lead of the given product. */
+export function reclaimPriceFor(leadType: LeadType | string | undefined): number {
+  return leadType === "guaranteed_rent"
+    ? RECLAIM_PRICE_GBP.guaranteed_rent
+    : RECLAIM_PRICE_GBP.management;
+}
