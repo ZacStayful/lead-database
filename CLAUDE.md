@@ -70,7 +70,7 @@ on a GR cancellation, so they must never gate GR behaviour.
 
 Also: `notification_preferences` (jsonb, 0034), `sms_alerts_enabled`,
 `last_nudge_sent_at`, `last_report_sent_at`, lead-filtering columns (0026),
-pause columns (0038).
+pause columns (0038), goal columns (0051 — see §13).
 
 ### `leads`
 `assignment_count` / `max_assignments` (default 2) cap ordinary assignment.
@@ -240,8 +240,13 @@ its single reclaim on a day when nobody had credit.
 **Customer:** `/api/customer/events` (telemetry),
 `/api/customer/assignments/[id]` (PATCH), `/api/customer/notes`,
 `/api/customer/files`, `/api/customer/settings`,
-`/api/customer/settings/notifications`, `/api/leads/[id]/reject`,
-`/api/leads/[id]/discard`, `/api/leads/export`, `/api/billing/portal`.
+`/api/customer/settings/notifications`, `/api/customer/goal` (§13),
+`/api/leads/[id]/reject`, `/api/leads/[id]/discard`, `/api/leads/export`,
+`/api/billing/portal`.
+
+`/api/customer/goal` is the **only** customer route with no admin client at
+all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
+here authenticates on the session client and then writes on the service role.
 
 **Admin:** `/api/admin/assign`, `/api/admin/assign/bulk`,
 `/api/admin/leads/[id]`, `/api/admin/leads/assign-pending`,
@@ -266,10 +271,13 @@ its single reclaim on a day when nobody had credit.
    branch must handle both `lead_type` values — and must not use a
    management-only column (`account_status`, `paused_at`,
    `subscription_status`) to gate GR.
-7. All privileged writes go through server routes on the service role. The only
-   `SECURITY DEFINER` function `authenticated` may call is
-   `get_engagement_benchmarks()` (§10).
+7. All privileged writes go through server routes on the service role. The two
+   `SECURITY DEFINER` functions `authenticated` may call are
+   `get_engagement_benchmarks()` (§10) and `set_management_customer_goal()`
+   (§13). Both take no id and resolve identity from `auth.uid()` internally.
 8. Capacity = `count(account_status = 'active')`.
+9. `management_lifetime_leads_received` only ever counts **up**. It is neither
+   the allocation gate nor a pacing counter (§13).
 
 ---
 
@@ -310,7 +318,10 @@ for being new with no way to earn out of it.
   `PIPELINE_STAGES`, so a GR customer setting any of their own stages got a 400;
   the analytics funnel had the mirror fault and rendered their pipeline card as
   permanent zeros. Both now resolve the lead's product and use
-  `stagesForLeadType()` / `GR_PIPELINE_STAGES`.
+  `stagesForLeadType()` / `GR_PIPELINE_STAGES`. The analytics half was then
+  taken further — see §14. (An earlier draft of this entry claimed
+  `GR_PIPELINE_STAGES` / `stagesForLeadType()` "are not imported"; that was
+  wrong when written — `LeadDetail.tsx` and the guide page both used them.)
 - **`viewed_at` ≠ telemetry.** `viewed_at` is set *only* by expanding a lead
   card in the feed. Opening `/dashboard/leads/[id]` does not set it, so a lead
   read end-to-end via a direct link leaves it null forever. `detail_opened` is
@@ -336,3 +347,82 @@ for being new with no way to earn out of it.
   nothing has been missed yet).
 - Decide whether discard should gate on notes only (§5E).
 - Decide whether a rejected lead should be reclaimable (currently excluded).
+- Decide whether Goals should get a GR equivalent (§13 — deliberately none).
+- Backfill accuracy: `management_lifetime_leads_received` cannot count leads
+  that were delivered and later **discarded**, because discard deletes the row
+  (§13). Only fixable by recording deliveries somewhere discard does not touch.
+
+---
+
+## 13. Goals *(0051, 0052)* — management only
+
+A subscriber states how many signed management clients they want out of the
+marketplace. `/dashboard/goals`, gated on `subscription_status = 'active'`.
+
+Three columns on `customers`, all management-only, **no `gr_` mirror** — the
+conversion model, price and sales cycle all differ, so a GR version is a
+separate decision, not a symmetry obligation.
+
+| Column | Meaning |
+|---|---|
+| `management_customer_goal` | Target signed clients. `NULL` = no goal set, which is **not** the same as 0 (a `CHECK` forbids 0). |
+| `management_customer_goal_updated_at` | Last set/cleared. |
+| `management_lifetime_leads_received` | Delivery odometer. |
+
+### The odometer is a third counter — do not confuse it
+
+`leads_received_this_month` resets on the anchor day; `lead_balance` is spent
+and topped up. Neither can answer "how many leads has this customer ever had".
+The odometer is monotonic: never reset, never decremented, and it gates
+nothing. Reject and discard touch no customer counters, so it cannot wind back.
+
+Both delivery paths bump it on the **management branch only**:
+`assign_lead_to_customer` (inside the existing customer `UPDATE`, so it can
+never disagree with the monthly counter) and `admin_assign_lead` (which writes
+its own `UPDATE` rather than calling the former). Reclaimed leads count — they
+route through `assign_lead_to_customer` — because the number means "leads
+received and workable", not "leads paid full price for".
+
+**0052 backfills it** from `lead_assignments` joined to management leads.
+Without that, an existing customer saw "3 of 5 won" above "leads received so
+far: 0" on one screen. The backfill uses `greatest()` so it is idempotent and
+can never make the odometer go backwards; it **understates** history by any
+discarded leads, which lengthens the estimate rather than shortening it.
+
+### Won count vs pipeline estimate
+
+**Won clients is the goal** — `status = 'won'` on management assignments, and
+the only thing that decides whether the goal is met. The **pipeline estimate**
+(`goal × 20` leads, months at `monthly_allocation`) is a model shown as
+supporting context. Someone who signs five from forty has met a goal of five.
+Never let the estimate gate the achieved state.
+
+### `set_management_customer_goal(p_goal)`
+
+The one customer-settable field in the schema. `customers` has a single
+`SELECT` policy and no write policy, so this is exposed without weakening
+that: no customer-id parameter, identity from `auth.uid()` inside the
+function, exactly two columns written by name, and it **raises** (never
+silently no-ops) for a missing row or a customer without an active management
+subscription.
+
+Gate on `subscription_status`, **not** `monthly_allocation`: the latter is
+nullable but never actually null (DB default 20, and every creation path sets
+it), so gating on it would admit every customer including the GR-only ones the
+gate exists to exclude. Also not `holdsTopupProduct()`, which ORs
+`account_status` in and is deliberately looser.
+
+---
+
+## 14. Analytics is split by product
+
+`/dashboard/analytics` previously counted both products together: one funnel,
+one win rate, `PIPELINE_STAGES` only. That was wrong for both products — GR
+runs a viewing-to-contract pipeline — and its "Won" figure disagreed with the
+Goals page, which has always been management-only.
+
+Each held product now gets its own block (stats, status funnel, pipeline via
+`stagesForLeadType()`, income, activity). Notes and files stay account-level:
+they hang off an assignment, not a product. A product is shown when the
+customer holds it **or** has ever received one of its leads, so a cancelled
+subscription does not hide the history it produced.

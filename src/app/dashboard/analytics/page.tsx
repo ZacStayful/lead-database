@@ -9,11 +9,11 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { PrintButton } from "@/components/dashboard/PrintButton";
 import {
-  PIPELINE_STAGES,
-  GR_PIPELINE_STAGES,
+  stagesForLeadType,
   pipelineBadgeClass,
 } from "@/components/dashboard/pipelineStage";
 import { formatDate, formatGBP } from "@/lib/utils";
+import type { LeadType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,34 @@ const STATUS_ORDER: { key: string; label: string }[] = [
   { key: "rejected", label: "Rejected" },
 ];
 
+/** Same wording as the benchmarks block, so one page uses one set of names. */
+const PRODUCT_LABEL: Record<LeadType, string> = {
+  management: "Management",
+  guaranteed_rent: "Guaranteed Rent",
+};
+
+/**
+ * The two products run different pipelines: management ends at a web meeting
+ * or the terminal `won` stage (0050), guaranteed rent at a signed contract.
+ * Counting them together produced a funnel that was wrong for both — and a
+ * "Won" figure that disagreed with the Goals page, which has always been
+ * management-only.
+ *
+ * Main's 0050 branch fixed the GR half of this by concatenating both stage
+ * lists into a single funnel. That is superseded here: one funnel still mixes
+ * the two products' totals, win rates and income, which is the part that made
+ * the numbers disagree. A block per product fixes both halves.
+ */
+const PRODUCTS: LeadType[] = ["management", "guaranteed_rent"];
+
+type AnalyticsAssignment = {
+  status: string;
+  pipeline_stage: string;
+  viewed_at: string | null;
+  income_estimate: number | null;
+  lead: { lead_type: LeadType } | null;
+};
+
 export default async function AnalyticsPage() {
   const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
@@ -33,37 +61,20 @@ export default async function AnalyticsPage() {
 
   const admin = createAdminClient();
 
+  // lead_assignments carries no lead_type of its own, so the product has to
+  // come from the joined lead.
   const { data: rows } = await admin
     .from("lead_assignments")
-    .select("status, pipeline_stage, viewed_at, income_estimate, leads(lead_type)")
+    .select(
+      "status, pipeline_stage, viewed_at, income_estimate, lead:leads(lead_type)"
+    )
     .eq("customer_id", customer.id);
 
-  const assignments = (rows ?? []) as unknown as {
-    status: string;
-    pipeline_stage: string;
-    viewed_at: string | null;
-    income_estimate: number | null;
-    leads: { lead_type: string } | { lead_type: string }[] | null;
-  }[];
-
-  // Which stage vocabulary to render. The funnel previously showed the
-  // Management list unconditionally, so a Guaranteed Rent customer's stages
-  // (viewing_booked / contract_sent / contract_signed) were counted but never
-  // displayed — their pipeline card was permanently all zeros.
-  const productOf = (a: (typeof assignments)[number]) => {
-    const raw = a.leads;
-    const lead = Array.isArray(raw) ? raw[0] : raw;
-    return lead?.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
-  };
-  const heldProducts = new Set(assignments.map(productOf));
-  const stagesToShow = [
-    ...(heldProducts.has("management") ? PIPELINE_STAGES : []),
-    ...(heldProducts.has("guaranteed_rent")
-      ? GR_PIPELINE_STAGES.filter(
-          (g) => !PIPELINE_STAGES.some((m) => m.value === g.value)
-        )
-      : []),
-  ];
+  // supabase-js types a to-one embed as an array even though PostgREST returns
+  // a single object, which is why the rest of the dashboard reads
+  // `a.lead?.lead_type` directly. Same runtime shape, so the cast goes through
+  // unknown rather than reshaping the data.
+  const assignments = (rows ?? []) as unknown as AnalyticsAssignment[];
 
   // Cohort benchmarks. Called through the customer's OWN session, not the
   // admin client: get_engagement_benchmarks derives identity from auth.uid()
@@ -83,7 +94,8 @@ export default async function AnalyticsPage() {
   const telemetryFrom =
     (telemetrySetting as { value?: string } | null)?.value ?? null;
 
-  // Notes + files activity (files table may not exist yet — tolerate errors).
+  // Notes + files are recorded against an assignment, not a product, and are
+  // reported at account level rather than split.
   const { count: notesCount } = await admin
     .from("lead_notes")
     .select("id", { count: "exact", head: true })
@@ -93,6 +105,72 @@ export default async function AnalyticsPage() {
     .select("id", { count: "exact", head: true })
     .eq("customer_id", customer.id);
 
+  // Show a product's section when the customer holds it OR has ever been sent
+  // one of its leads — so a cancelled subscription doesn't hide the history it
+  // produced. A customer with neither still sees their management section, so
+  // the page is never blank.
+  const holds: Record<LeadType, boolean> = {
+    management: customer.subscription_status === "active",
+    guaranteed_rent: customer.gr_subscription_status === "active",
+  };
+  const byProduct = (product: LeadType) =>
+    assignments.filter((a) => (a.lead?.lead_type ?? "management") === product);
+
+  const visible = PRODUCTS.filter(
+    (p) => holds[p] || byProduct(p).length > 0
+  );
+  const products = visible.length > 0 ? visible : (["management"] as LeadType[]);
+  const showProductLabels = products.length > 1;
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Your lead analytics</h1>
+          <p className="text-sm text-muted-foreground">
+            {customer.business_name} · {formatDate(new Date().toISOString())}
+          </p>
+        </div>
+        <PrintButton />
+      </div>
+
+      {products.map((product) => (
+        <ProductAnalytics
+          key={product}
+          product={product}
+          assignments={byProduct(product)}
+          showLabel={showProductLabels}
+        />
+      ))}
+
+      {/* Account-level activity: not attributable to one product. */}
+      <Card>
+        <CardContent className="pt-6">
+          <h2 className="mb-4 text-lg font-semibold">Your record keeping</h2>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <Metric label="Notes logged" value={notesCount ?? 0} />
+            <Metric label="Files uploaded" value={filesCount ?? 0} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Cohort comparison — below the funnels, as the last block on the page:
+          it is context for everything above it, not a headline. */}
+      <EngagementBenchmarks rows={benchmarkRows} telemetryFrom={telemetryFrom} />
+    </div>
+  );
+}
+
+/** Every figure for one product, computed only from that product's leads. */
+function ProductAnalytics({
+  product,
+  assignments,
+  showLabel,
+}: {
+  product: LeadType;
+  assignments: AnalyticsAssignment[];
+  showLabel: boolean;
+}) {
   const total = assignments.length;
   const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
 
@@ -109,15 +187,21 @@ export default async function AnalyticsPage() {
   const won = statusCounts.get("won") ?? 0;
   const winRate = pct(won);
   const contacted = assignments.filter((a) => a.status !== "new").length;
-  const meetingsBooked = assignments.filter((a) =>
-    ["web_meeting_booked", "web_meeting_no_show", "web_meeting_attended"].includes(
-      a.pipeline_stage
-    )
-  ).length;
-  const meetingsAttended = pipelineCounts.get("web_meeting_attended") ?? 0;
 
-  // Income aggregates from the customer's own per-lead estimates.
-  const sumIncome = (rows: typeof assignments) =>
+  // The two pipelines converge on different things, so the "did they get in
+  // front of the landlord" metric is not the same stage in each.
+  const meetingStages =
+    product === "guaranteed_rent"
+      ? ["viewing_booked", "contract_sent", "contract_signed"]
+      : ["web_meeting_booked", "web_meeting_no_show", "web_meeting_attended"];
+  const meetingsBooked = assignments.filter((a) =>
+    meetingStages.includes(a.pipeline_stage)
+  ).length;
+  const attendedStage =
+    product === "guaranteed_rent" ? "contract_signed" : "web_meeting_attended";
+  const meetingsAttended = pipelineCounts.get(attendedStage) ?? 0;
+
+  const sumIncome = (rows: AnalyticsAssignment[]) =>
     rows.reduce((s, a) => s + (a.income_estimate ?? 0), 0);
   const totalIncome = sumIncome(assignments);
   const wonIncome = sumIncome(assignments.filter((a) => a.status === "won"));
@@ -131,109 +215,121 @@ export default async function AnalyticsPage() {
     { label: "Total leads", value: String(total) },
     { label: "Won", value: String(won) },
     { label: "Win rate", value: `${winRate}%` },
-    { label: "Notes logged", value: String(notesCount ?? 0) },
   ];
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Your lead analytics</h1>
-          <p className="text-sm text-muted-foreground">
-            {customer.business_name} · {formatDate(new Date().toISOString())}
-          </p>
-        </div>
-        <PrintButton />
-      </div>
+    <section className="space-y-4">
+      {showLabel && (
+        <h2 className="text-lg font-semibold">{PRODUCT_LABEL[product]}</h2>
+      )}
 
-      {/* Headline stats */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((s) => (
-          <Card key={s.label}>
+      {total === 0 ? (
+        <Card>
+          <CardContent className="pt-6 text-sm text-muted-foreground">
+            No {PRODUCT_LABEL[product].toLowerCase()} leads yet. Your figures
+            will appear here once the first one arrives.
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {stats.map((s) => (
+              <Card key={s.label}>
+                <CardContent className="pt-6">
+                  <p className="text-sm text-muted-foreground">{s.label}</p>
+                  <p className="mt-1 text-3xl font-semibold">{s.value}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          <Card>
             <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground">{s.label}</p>
-              <p className="mt-1 text-3xl font-semibold">{s.value}</p>
+              <h3 className="mb-1 text-base font-semibold">
+                Lead status funnel
+              </h3>
+              <p className="mb-4 text-sm text-muted-foreground">
+                Where your {total} lead{total === 1 ? "" : "s"} sit across the
+                funnel.
+              </p>
+              <div className="space-y-3">
+                {STATUS_ORDER.map((s) => {
+                  const n = statusCounts.get(s.key) ?? 0;
+                  return (
+                    <FunnelRow key={s.key} label={s.label} n={n} pct={pct(n)} />
+                  );
+                })}
+              </div>
             </CardContent>
           </Card>
-        ))}
-      </div>
 
-      {/* Status funnel */}
-      <Card>
-        <CardContent className="pt-6">
-          <h2 className="mb-1 text-lg font-semibold">Lead status funnel</h2>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Where your {total} lead{total === 1 ? "" : "s"} sit across the funnel.
-          </p>
-          <div className="space-y-3">
-            {STATUS_ORDER.map((s) => {
-              const n = statusCounts.get(s.key) ?? 0;
-              return (
-                <FunnelRow key={s.key} label={s.label} n={n} pct={pct(n)} />
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <h3 className="mb-1 text-base font-semibold">Pipeline stages</h3>
+              <p className="mb-4 text-sm text-muted-foreground">
+                Your own pipeline activity across every lead.
+              </p>
+              <div className="space-y-3">
+                {stagesForLeadType(product).map((s) => {
+                  const n = pipelineCounts.get(s.value) ?? 0;
+                  return (
+                    <FunnelRow
+                      key={s.value}
+                      label={s.label}
+                      n={n}
+                      pct={pct(n)}
+                      pillClass={pipelineBadgeClass(s.value)}
+                    />
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
 
-      {/* Pipeline stages */}
-      <Card>
-        <CardContent className="pt-6">
-          <h2 className="mb-1 text-lg font-semibold">Pipeline stages</h2>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Your own pipeline activity across every lead.
-          </p>
-          <div className="space-y-3">
-            {stagesToShow.map((s) => {
-              const n = pipelineCounts.get(s.value) ?? 0;
-              return (
-                <FunnelRow
-                  key={s.value}
-                  label={s.label}
-                  n={n}
-                  pct={pct(n)}
-                  pillClass={pipelineBadgeClass(s.value)}
+          <Card>
+            <CardContent className="pt-6">
+              <h3 className="mb-1 text-base font-semibold">
+                Estimated monthly income
+              </h3>
+              <p className="mb-4 text-sm text-muted-foreground">
+                Based on the income figures you&apos;ve entered against each
+                lead.
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Metric label="In pipeline" money value={pipelineIncome} />
+                <Metric label="Won" money value={wonIncome} />
+                <Metric label="Across all leads" money value={totalIncome} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="pt-6">
+              <h3 className="mb-4 text-base font-semibold">Your activity</h3>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                <Metric label="Leads actioned" value={contacted} />
+                <Metric
+                  label={
+                    product === "guaranteed_rent"
+                      ? "Viewings or contracts"
+                      : "Web meetings booked"
+                  }
+                  value={meetingsBooked}
                 />
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Estimated income */}
-      <Card>
-        <CardContent className="pt-6">
-          <h2 className="mb-1 text-lg font-semibold">
-            Estimated monthly income
-          </h2>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Based on the income figures you&apos;ve entered against each lead.
-          </p>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Metric label="In pipeline" money value={pipelineIncome} />
-            <Metric label="Won" money value={wonIncome} />
-            <Metric label="Across all leads" money value={totalIncome} />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Activity */}
-      <Card>
-        <CardContent className="pt-6">
-          <h2 className="mb-4 text-lg font-semibold">Your activity</h2>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Metric label="Leads actioned" value={contacted} />
-            <Metric label="Web meetings booked" value={meetingsBooked} />
-            <Metric label="Web meetings attended" value={meetingsAttended} />
-            <Metric label="Files uploaded" value={filesCount ?? 0} />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Cohort comparison — below the funnels, as the last block on the page:
-          it is context for everything above it, not a headline. */}
-      <EngagementBenchmarks rows={benchmarkRows} telemetryFrom={telemetryFrom} />
-    </div>
+                <Metric
+                  label={
+                    product === "guaranteed_rent"
+                      ? "Contracts signed"
+                      : "Web meetings attended"
+                  }
+                  value={meetingsAttended}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </section>
   );
 }
 
