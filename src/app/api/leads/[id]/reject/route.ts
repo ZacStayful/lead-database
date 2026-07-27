@@ -8,8 +8,14 @@ export const dynamic = "force-dynamic";
 /**
  * Mark a lead assignment as rejected. Rejection is a pipeline/feedback signal
  * only: the lead still counts toward the customer's monthly leads and remains
- * chargeable, no credit is refunded, and no replacement is assigned. The status
- * flip is atomic and only permitted while the assignment is still 'new'.
+ * chargeable, no credit is refunded, and no replacement is assigned.
+ *
+ * Eligibility is decided entirely inside reject_lead_assignment — this route
+ * runs no pre-flight status check of its own, so the two cannot disagree. Since
+ * 0041 the rule is pipeline_stage = 'cold' (nothing built on the lead yet)
+ * rather than status = 'new', because status now moves by itself on the first
+ * sign of activity and would otherwise lock an operator out of passing on a
+ * lead they had merely rung. Terminal statuses ('won', 'rejected') stay barred.
  */
 export async function POST(req: NextRequest) {
   const supabase = createClient();

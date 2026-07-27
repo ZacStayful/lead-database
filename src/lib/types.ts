@@ -137,6 +137,48 @@ export interface LeadAssignment {
   // brand-new 'new' assignment is stamped at assignment time). Powers the
   // inactivity nudge's "days since last activity" measure.
   last_status_change_at: string;
+  // Soft reclaim (0041). Set on the ORIGINAL assignment when its lead is
+  // released to a second operator; null otherwise.
+  reclaimed_at: string | null;
+  // True only on the SECOND (discounted) assignment of a reclaimed lead, never
+  // on the original.
+  is_reclaimed: boolean;
+}
+
+/**
+ * Passive engagement signals (lead_events, 0041).
+ *
+ * These record what the operator DID, as distinct from `status`, which records
+ * what they said they did. Only the browser-driven three are emitted today;
+ * the remaining three are reserved for server-side emission.
+ *
+ * Distinct from `viewed_at`: that is set solely by expanding a lead CARD in the
+ * feed, so a lead read end-to-end via a direct link or prev/next navigation
+ * never sets it. `detail_opened` is the honest "this lead was read" signal.
+ */
+export type LeadEventType =
+  | "detail_opened"
+  | "tel_click"
+  | "mailto_click"
+  | "note_added"
+  | "file_added"
+  | "stage_changed";
+
+/** Events a browser client is permitted to report via POST /api/customer/events. */
+export const CLIENT_LEAD_EVENT_TYPES = [
+  "detail_opened",
+  "tel_click",
+  "mailto_click",
+] as const satisfies readonly LeadEventType[];
+
+export type ClientLeadEventType = (typeof CLIENT_LEAD_EVENT_TYPES)[number];
+
+export interface LeadEvent {
+  id: string;
+  assignment_id: string;
+  event_type: LeadEventType;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface AssignmentWithLead extends LeadAssignment {
