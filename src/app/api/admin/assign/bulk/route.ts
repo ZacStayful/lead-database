@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
 import { completeAssignment } from "@/lib/ingest";
 import type { Lead } from "@/lib/types";
+import { leadPriceFor } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,8 +12,6 @@ export const dynamic = "force-dynamic";
 // up to 300s; Hobby clamps to 60s — the batch cap below keeps us well inside it.
 export const maxDuration = 300;
 
-const LEAD_PRICE = 15.0;
-const GR_LEAD_PRICE = 10.0;
 
 // Bound the fan-out so one request can't run away. Notifications are sent in
 // parallel (see NOTIFY_CONCURRENCY), so these caps keep a batch fast enough to
@@ -118,7 +117,7 @@ export async function POST(request: NextRequest) {
   // avoid lock contention. Collect successes for the (slow) notify phase.
   const placed: { lead: Lead; customerId: string; assignmentId: string }[] = [];
   for (const lead of leads) {
-    const price = lead.lead_type === "guaranteed_rent" ? GR_LEAD_PRICE : LEAD_PRICE;
+    const price = leadPriceFor(lead.lead_type);
     for (const customerId of customerIds) {
       const { data: assignmentId, error: assignError } = await admin.rpc(
         override ? "admin_assign_lead" : "assign_lead_to_customer",

@@ -7,6 +7,8 @@
  * (get_next_customers_for_lead, assign_lead_to_customer, pacing) needs no change.
  */
 
+import type { LeadType } from "@/lib/types";
+
 export type PlanKey = "lead_10" | "lead_20";
 
 export interface Plan {
@@ -55,4 +57,34 @@ export function stripePriceIdFor(allocation: number): string {
     );
   }
   return id;
+}
+
+/**
+ * Price recorded against a single delivered lead, in POUNDS, per product.
+ *
+ * This is what goes into lead_assignments.price_paid — the per-lead attribution
+ * every revenue figure sums. It is NOT what the customer is invoiced; that is
+ * the monthly subscription above.
+ *
+ * Both products are £150/month for 10 leads, so both are £15 a lead.
+ *
+ * WHY THIS LIVES HERE
+ * -------------------
+ * It used to be three separate pairs of constants — in lib/ingest.ts, in
+ * api/admin/assign/bulk, and as a bare literal in api/admin/assign. When
+ * Guaranteed Rent was repriced from £100/mo to £150/mo (#46) the landing page,
+ * signup page and .env.example were all updated and the code was not, so every
+ * GR lead carried on being recorded at £10 against a £15 sale. Three copies is
+ * why it was missed; one copy is the fix.
+ */
+export const LEAD_PRICE_GBP: Record<LeadType, number> = {
+  management: 15.0,
+  guaranteed_rent: 15.0,
+};
+
+/** Price to record for a lead of the given product. */
+export function leadPriceFor(leadType: LeadType | string | undefined): number {
+  return leadType === "guaranteed_rent"
+    ? LEAD_PRICE_GBP.guaranteed_rent
+    : LEAD_PRICE_GBP.management;
 }

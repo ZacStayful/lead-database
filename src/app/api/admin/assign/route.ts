@@ -4,11 +4,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
 import { completeAssignment } from "@/lib/ingest";
 import type { Lead } from "@/lib/types";
+import { leadPriceFor } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const LEAD_PRICE = 15.0;
 
 /** Force-assign a lead to a specific customer. Admin only. */
 export async function POST(request: NextRequest) {
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
   }
 
   const typedLead = lead as Lead;
-  const defaultPrice = typedLead.lead_type === "guaranteed_rent" ? 10.0 : LEAD_PRICE;
+  const defaultPrice = leadPriceFor(typedLead.lead_type);
   const price = body.price ?? defaultPrice;
 
   const assigned: string[] = [];
