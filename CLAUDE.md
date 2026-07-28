@@ -248,6 +248,9 @@ its single reclaim on a day when nobody had credit.
 all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
 here authenticates on the session client and then writes on the service role.
 
+**Unauthenticated:** `/api/auth/forgot-password` (POST) — password reset. No
+session by definition; see §15 for why it exists at all.
+
 **Admin:** `/api/admin/assign`, `/api/admin/assign/bulk`,
 `/api/admin/leads/[id]`, `/api/admin/leads/assign-pending`,
 `/api/admin/customers/[id]/*`, `/api/admin/settings/capacity`,
@@ -278,6 +281,8 @@ here authenticates on the session client and then writes on the service role.
 8. Capacity = `count(account_status = 'active')`.
 9. `management_lifetime_leads_received` only ever counts **up**. It is neither
    the allocation gate nor a pacing counter (§13).
+10. **No code path may ask Supabase to send an email.** Links are minted with
+    `generateLink` and delivered through Resend (§15).
 
 ---
 
@@ -426,3 +431,59 @@ Each held product now gets its own block (stats, status funnel, pipeline via
 they hang off an assignment, not a product. A product is shown when the
 customer holds it **or** has ever received one of its leads, so a cancelled
 subscription does not hide the history it produced.
+
+---
+
+## 15. Email transport — Resend only, never Supabase's mailer
+
+Every customer-facing email goes out through **Resend**. Supabase's built-in
+auth mailer is a shared test relay capped at roughly **two emails per hour for
+the whole project**, so it cannot be used for anything real.
+
+The pattern, used by `/api/auth/forgot-password`, the invite and resend-invite
+routes, and `provisioning.ts`:
+
+1. `admin.auth.admin.generateLink({ type: "recovery", email })` — mints the
+   token and **sends nothing**.
+2. Build `/auth/confirm?token_hash=<hashed_token>&type=recovery&next=…`.
+3. Send that URL yourself via Resend.
+
+Use the **token hash**, not `properties.action_link`. The raw action link uses
+the PKCE `?code` flow, which needs a code-verifier cookie belonging to the
+browser that started the flow. A link minted server-side never has one, so it
+breaks the ordinary case of requesting on a laptop and opening on a phone.
+`/auth/confirm` calls `verifyOtp`, which needs no verifier and works
+cross-device.
+
+### Why this section exists
+
+`/forgot-password` originally called `supabase.auth.resetPasswordForEmail()`
+from the browser, which is the one thing that reaches Supabase's mailer. Four
+reset attempts in an evening exhausted the project quota, and every further
+attempt — by any customer, on any flow — returned
+`429: email rate limit exceeded`. One customer sat locked out of an active
+paid account for a week because of it.
+
+It read as fixed several times because the Resend integration works fine and
+was repeatedly confirmed working. **Supabase auth email is configured
+separately from Resend** (Dashboard → Authentication → SMTP Settings) and no
+amount of Resend work touches it. That disconnect is the whole trap.
+
+Two distinct 429s come back from `/recover`, and they mean different things:
+
+| Error | Scope | Meaning |
+|---|---|---|
+| `For security purposes, you can only request this after N seconds` | Per user | Normal cooldown, harmless |
+| `email rate limit exceeded` | **Project-wide** | Quota gone; everyone is locked out |
+
+Only the second is a real fault. Never collapse them into one "wait an hour"
+message — it sends the customer away for an hour when the wait may be seconds,
+and it hides a project-wide outage behind what looks like a personal limit.
+
+**Still worth doing:** configure custom SMTP in the Supabase dashboard as
+defence in depth, so that if any future code path does reach the auth mailer it
+is not on a 2/hour test sender. Nothing in the app depends on it today.
+
+The reset route's abuse throttle is a per-instance in-memory map, so it is
+best-effort across serverless instances. Swap it for a durable store if the
+endpoint is ever actually abused.

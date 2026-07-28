@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,28 +34,36 @@ export default function ForgotPasswordPage() {
     setLoading(true);
     setError(null);
 
-    const supabase = createClient();
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      // Land on the server callback, which exchanges the code for a session
-      // and sets the auth cookies before forwarding to the reset form. This is
-      // far more reliable than exchanging the code purely client-side.
-      redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
-    });
+    // Goes through our own route, which mints the recovery link server-side and
+    // delivers it via Resend. The browser must NOT call
+    // supabase.auth.resetPasswordForEmail() here: that uses Supabase's built-in
+    // mailer, whose shared test sender is capped at a couple of emails per hour
+    // across the entire project, so a few retries by one customer locked
+    // everybody out with "email rate limit exceeded".
+    let message: string | null = null;
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        message =
+          body?.error ??
+          "Something went wrong sending your reset email. Please contact support.";
+      }
+    } catch {
+      message =
+        "We couldn't reach the server. Check your connection and try again.";
+    }
 
-    // Don't reveal whether an account exists — always show the same confirmation
-    // on success. Surface only genuine configuration/transport errors.
-    if (error) {
-      const status = (error as { status?: number }).status;
-      const msg = error.message?.toLowerCase() ?? "";
-      const rateLimited =
-        status === 429 ||
-        msg.includes("rate limit") ||
-        msg.includes("you can only request");
-      setError(
-        rateLimited
-          ? "We can only send a limited number of reset emails per hour, and that limit has just been reached. Please wait about an hour and try again."
-          : error.message
-      );
+    // Don't reveal whether an account exists — an unknown address still shows
+    // the same confirmation. Surface only genuine transport failures.
+    if (message) {
+      setError(message);
       setLoading(false);
       return;
     }
