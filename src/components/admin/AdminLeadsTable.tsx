@@ -37,6 +37,38 @@ export interface CustomerRow {
   gr_subscription_status: string;
 }
 
+/**
+ * Turn a raw Postgres error from the assign RPCs into something an admin can act
+ * on. 0053 makes the functions raise readable messages themselves, so most of
+ * these pass straight through — but the duplicate case is kept here too, because
+ * a database that hasn't had 0053 applied yet still returns the bare constraint
+ * name, and "duplicate key value violates unique constraint
+ * lead_assignments_lead_id_customer_id_key" tells the reader nothing about what
+ * to do next.
+ */
+function friendlyFailure(raw: string): string {
+  const msg = raw.toLowerCase();
+  if (
+    msg.includes("lead_assignments_lead_id_customer_id_key") ||
+    msg.includes("already has this lead")
+  ) {
+    return "customer already has that lead";
+  }
+  if (msg.includes("at max assignments")) {
+    return "lead already at its recipient limit";
+  }
+  if (msg.includes("no remaining gr lead balance")) {
+    return "customer is out of Guaranteed Rent credits";
+  }
+  if (msg.includes("no remaining lead balance")) {
+    return "customer is out of lead credits";
+  }
+  if (msg.includes("is paused")) {
+    return "customer is paused";
+  }
+  return raw;
+}
+
 export function AdminLeadsTable({
   leads,
   customers,
@@ -146,9 +178,22 @@ export function AdminLeadsTable({
         data.leads_affected === 1 ? "" : "s"
       }.`;
       if (failed.length > 0) {
+        // Summarise every distinct reason with a count. Showing only the first
+        // failure hid the fact that a batch usually fails for one repeated,
+        // mundane reason — most often that the customer already holds the lead —
+        // and made a wholly-skipped batch look like a broken feature.
+        const byReason = new Map<string, number>();
+        failed.forEach((f) => {
+          const reason = friendlyFailure(f.error);
+          byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+        });
+        const reasons = Array.from(byReason.entries())
+          .sort((a, b) => b[1] - a[1])
+          .map(([reason, n]) => `${n} × ${reason}`)
+          .join("; ");
         msg += ` ${failed.length} pair${
           failed.length === 1 ? "" : "s"
-        } skipped: ${failed[0].error}`;
+        } skipped — ${reasons}.`;
       }
       setMessage(msg);
       setSelectedCustomers(new Set());
