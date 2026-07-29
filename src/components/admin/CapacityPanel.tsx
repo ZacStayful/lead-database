@@ -5,18 +5,39 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+/**
+ * One product's subscriber capacity: usage, the bar, and the editable cap.
+ *
+ * Rendered once per product on the admin overview. The two instances are
+ * independent — separate settings keys, separate populations — so nothing is
+ * shared between them beyond this component.
+ */
 export function CapacityPanel({
+  product = "management",
+  title = "Subscriber capacity",
   weightedUsed,
   rawActiveCount,
+  activeLabel = "active customer",
   initialLimit,
   waitlistedCount,
 }: {
+  /** Which cap this panel edits. Selects the system_settings key server-side. */
+  product?: "management" | "guaranteed_rent";
+  /** Heading above the figure. */
+  title?: string;
   /** Weighted slots consumed by active customers (20-lead = 1, 10-lead = 0.5). */
   weightedUsed: number;
   /** Unweighted count of active customers, shown for context. */
   rawActiveCount: number;
+  /** Singular noun for the count line; pluralised with a trailing "s". */
+  activeLabel?: string;
   initialLimit: number;
-  waitlistedCount: number;
+  /**
+   * Waitlisted accounts, shown only when provided. The waitlist is a management
+   * concept (`account_status`), so the GR panel omits it rather than showing a
+   * zero that would read as "nobody is waiting for Guaranteed Rent".
+   */
+  waitlistedCount?: number;
 }) {
   const [limit, setLimit] = useState(initialLimit);
   const [input, setInput] = useState(String(initialLimit));
@@ -25,6 +46,9 @@ export function CapacityPanel({
 
   const pct = limit > 0 ? Math.min(100, Math.round((weightedUsed / limit) * 100)) : 0;
   const full = weightedUsed >= limit;
+  // Unique per panel — two capacity panels render on the same page, and a
+  // duplicated id would point both labels at the management input.
+  const inputId = `capacity-limit-${product}`;
 
   async function save() {
     const capacity = parseInt(input, 10);
@@ -38,7 +62,7 @@ export function CapacityPanel({
       const res = await fetch("/api/admin/settings/capacity", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capacity }),
+        body: JSON.stringify({ capacity, product }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not update capacity");
@@ -55,7 +79,7 @@ export function CapacityPanel({
     <Card>
       <CardContent className="space-y-4 pt-6">
         <div>
-          <p className="text-sm text-muted-foreground">Subscriber capacity</p>
+          <p className="text-sm text-muted-foreground">{title}</p>
           <p className="mt-1 text-2xl font-semibold">
             {weightedUsed} / {limit}{" "}
             <span className="text-lg font-normal text-muted-foreground">
@@ -63,7 +87,8 @@ export function CapacityPanel({
             </span>
           </p>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {rawActiveCount} active customer{rawActiveCount === 1 ? "" : "s"}
+            {rawActiveCount} {activeLabel}
+            {rawActiveCount === 1 ? "" : "s"}
           </p>
         </div>
 
@@ -77,13 +102,13 @@ export function CapacityPanel({
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
             <label
-              htmlFor="capacity-limit"
+              htmlFor={inputId}
               className="block text-xs text-muted-foreground"
             >
               Capacity limit
             </label>
             <Input
-              id="capacity-limit"
+              id={inputId}
               type="number"
               min={1}
               value={input}
@@ -99,10 +124,12 @@ export function CapacityPanel({
           )}
         </div>
 
-        <p className="text-sm text-muted-foreground">
-          Waitlisted accounts:{" "}
-          <span className="font-medium text-foreground">{waitlistedCount}</span>
-        </p>
+        {waitlistedCount !== undefined && (
+          <p className="text-sm text-muted-foreground">
+            Waitlisted accounts:{" "}
+            <span className="font-medium text-foreground">{waitlistedCount}</span>
+          </p>
+        )}
       </CardContent>
     </Card>
   );

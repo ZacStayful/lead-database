@@ -278,7 +278,11 @@ session by definition; see §15 for why it exists at all.
    `SECURITY DEFINER` functions `authenticated` may call are
    `get_engagement_benchmarks()` (§10) and `set_management_customer_goal()`
    (§13). Both take no id and resolve identity from `auth.uid()` internally.
-8. Capacity = `count(account_status = 'active')`.
+8. Subscriber capacity is **per product and weighted** (§16). Management sums
+   `monthly_allocation` over `account_status = 'active'` against
+   `max_active_customers`; GR sums `gr_monthly_allocation` over
+   `gr_subscription_status = 'active'` against `gr_max_active_customers`. The
+   GR side must never read `account_status` (see 6).
 9. `management_lifetime_leads_received` only ever counts **up**. It is neither
    the allocation gate nor a pacing counter (§13).
 10. **No code path may ask Supabase to send an email.** Links are minted with
@@ -487,3 +491,48 @@ is not on a 2/hour test sender. Nothing in the app depends on it today.
 The reset route's abuse throttle is a per-instance in-memory map, so it is
 best-effort across serverless instances. Swap it for a durable store if the
 endpoint is ever actually abused.
+
+---
+
+## 16. Subscriber capacity is per product *(0054)*
+
+`/admin` shows two capacity panels. They are independent numbers over
+independent populations, and `src/lib/capacity.ts` is the only place either is
+derived.
+
+| | Management | Guaranteed Rent |
+|---|---|---|
+| Setting key | `max_active_customers` | `gr_max_active_customers` |
+| Population | `account_status = 'active'` | `gr_subscription_status = 'active'` |
+| Weight | `monthly_allocation / 20` | `gr_monthly_allocation / 10` |
+| Default cap | 10 | 10 |
+
+**The slot unit differs on purpose.** Management sells 10- and 20-lead plans, so
+a 20-lead customer is one slot and a 10-lead customer half — the cap is a bound
+on committed lead volume, not on heads. GR sells one plan (£150/mo, 10 leads),
+so its unit is 10 and one standard GR subscriber is exactly one slot. That is
+what makes a cap of 10 read as "10 guaranteed rent customers", which is how it
+is set. Weighting rather than counting heads still keeps a hand-edited GR
+allocation honest.
+
+**The GR side must not read `account_status`.** It is management-only (§3): the
+Stripe webhook leaves it untouched on a GR cancellation, so it would keep
+counting departed GR subscribers *and* count management-only customers who never
+held GR. `gr_subscription_status` is the GR population, full stop.
+
+`POST /api/admin/settings/capacity` takes `{ capacity, product? }`, `product`
+defaulting to `management` so older callers are unaffected. It resolves the key
+through `capacitySettingKey()` — a request can never name a key the reader does
+not know — and upserts, because an `update` against an unseeded key matches zero
+rows and still reports success.
+
+### What the GR cap does and does not do
+
+It is **reporting and admin judgement only**. Nothing gates on it yet. Signup
+deliberately does not capacity-check GR (`/api/signup`: "no capacity gate — GR
+has its own allocation"), so a GR sale can still take the panel past its limit
+and the panel will show that honestly, in red. Management is unchanged: it still
+gates signup and warns on invite.
+
+Making GR waitlist at the cap is a real behaviour change — a paid product would
+start refusing checkout — and is a separate decision. See §12.
