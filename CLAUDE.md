@@ -73,7 +73,11 @@ Also: `notification_preferences` (jsonb, 0034), `sms_alerts_enabled`,
 pause columns (0038), goal columns (0051 — see §13).
 
 ### `leads`
-`assignment_count` / `max_assignments` (default 2) cap ordinary assignment.
+`assignment_count` / `max_assignments` (**default 3** since 0055, was 2) cap
+ordinary assignment. The default applies to newly ingested leads only — leads
+ingested before 0055 keep the 2 they were created with, so a lead's reach is
+whatever its own row says, never a global constant. `DEFAULT_MAX_ASSIGNMENTS`
+in `types.ts` mirrors the DB default and is only a null fallback.
 `lead_type` selects the product. Idempotent on `monday_item_id`.
 
 ### `lead_assignments`

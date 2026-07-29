@@ -107,6 +107,12 @@ export interface Lead {
   postcode_area: string | null;
   lead_type: LeadType;
   assignment_count: number;
+  /**
+   * How many customers this lead may reach through ordinary routing. Defaults
+   * to DEFAULT_MAX_ASSIGNMENTS at the database level; admin can override it per
+   * lead. Soft reclaim adds a derived slot on top of this without changing it
+   * (0046).
+   */
   max_assignments: number;
   created_at: string;
   // GR-specific fields (null for management leads).
@@ -186,6 +192,18 @@ export type LeadEventType =
  * explicitly — counting every lead_events row would let our own nudges inflate
  * the score of the least engaged customers, inverting the measure.
  */
+/**
+ * How many customers one lead reaches through ordinary routing.
+ *
+ * This mirrors the database default on `leads.max_assignments` (0055 raised it
+ * from 2 to 3). It is only ever a fallback for a row whose column is somehow
+ * null — the stored per-lead value always wins, because admin can override it
+ * on a single lead. Kept in one place so the three shortfall calculations
+ * (ingest top-up, the admin overview count, assign-pending) cannot drift apart
+ * the way the per-lead price once did.
+ */
+export const DEFAULT_MAX_ASSIGNMENTS = 3;
+
 export const ENGAGEMENT_EVENT_TYPES = [
   "detail_opened",
   "tel_click",
