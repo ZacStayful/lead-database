@@ -43,6 +43,9 @@ export default async function DashboardLayout({
     { href: "/dashboard/leads", label: "Leads" },
     { href: "/dashboard/leads/priority", label: "Priority" },
     { href: "/dashboard/topup", label: "Top up leads" },
+    // Shown to everyone: its whole job is to tell a customer about the product
+    // they do NOT have, so gating it on holding that product is backwards.
+    { href: "/dashboard/packages", label: "Packages" },
     { href: "/dashboard/filtering", label: "Lead filtering" },
     { href: "/dashboard/analytics", label: "Analytics" },
     ...(holdsManagement ? [{ href: "/dashboard/goals", label: "Goals" }] : []),
