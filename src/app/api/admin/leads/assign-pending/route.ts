@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
 import { autoAssignLead } from "@/lib/ingest";
-import type { Lead, LeadType } from "@/lib/types";
+import { DEFAULT_MAX_ASSIGNMENTS, type Lead, type LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,7 +65,7 @@ async function handle(request: NextRequest) {
   }
 
   const pending = ((leadsRaw ?? []) as Lead[]).filter(
-    (l) => (l.assignment_count ?? 0) < (l.max_assignments ?? 2)
+    (l) => (l.assignment_count ?? 0) < (l.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS)
   );
 
   let assignments = 0;

@@ -6,12 +6,13 @@ import { extractPostcode, postcodeArea } from "@/lib/postcode";
 import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
 import { sendNewLeadSms } from "@/lib/sms";
 import { leadPriceFor } from "@/lib/plans";
-import type {
-  Customer,
-  Lead,
-  LeadType,
-  N8nLeadPayload,
-  NotificationPreferences,
+import {
+  DEFAULT_MAX_ASSIGNMENTS,
+  type Customer,
+  type Lead,
+  type LeadType,
+  type N8nLeadPayload,
+  type NotificationPreferences,
 } from "@/lib/types";
 
 // Warn when the customer has this many lead credits left (the real allocation
@@ -273,7 +274,8 @@ export async function autoAssignLead(
   supabase: ReturnType<typeof createAdminClient>,
   lead: Lead
 ): Promise<number> {
-  const remaining = (lead.max_assignments ?? 2) - (lead.assignment_count ?? 0);
+  const remaining =
+    (lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS) - (lead.assignment_count ?? 0);
   if (remaining <= 0) return 0;
 
   const leadType = lead.lead_type;
