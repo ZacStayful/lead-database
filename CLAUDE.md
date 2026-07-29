@@ -245,8 +245,8 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/assignments/[id]` (PATCH), `/api/customer/notes`,
 `/api/customer/files`, `/api/customer/settings`,
 `/api/customer/settings/notifications`, `/api/customer/goal` (§13),
-`/api/leads/[id]/reject`, `/api/leads/[id]/discard`, `/api/leads/export`,
-`/api/billing/portal`.
+`/api/customer/subscribe` (§17), `/api/leads/[id]/reject`,
+`/api/leads/[id]/discard`, `/api/leads/export`, `/api/billing/portal`.
 
 `/api/customer/goal` is the **only** customer route with no admin client at
 all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
@@ -540,3 +540,63 @@ gates signup and warns on invite.
 
 Making GR waitlist at the cap is a real behaviour change — a paid product would
 start refusing checkout — and is a separate decision. See §12.
+
+---
+
+## 17. The Packages tab and self-serve cross-sell *(no migration)*
+
+`/dashboard/packages` shows the customer which lead package they hold and
+explains the one they don't, with a Stripe Checkout button for it.
+
+**Why the description matters as much as the button.** Management and
+Guaranteed Rent sell to different businesses — a management operator earns an
+ongoing fee, a rent-to-rent operator earns the margin between the rent they pay
+and what the property makes. "10 more leads a month" is meaningless to somebody
+who does not already run the other model, so `PRODUCT_COPY` in
+`src/lib/products.ts` carries three fields the card leads with: what a lead of
+that type **is**, how it was **qualified**, and how the operator **makes money**
+from it. Price comes last.
+
+`holdsProduct()` is per product and reads only that product's columns, for the
+usual reason (invariant 6): management from `account_status` /
+`subscription_status`, GR from `gr_subscription_status`. `past_due` counts as
+held — that is a billing problem to fix in the portal, not a thing to buy twice.
+
+### `POST /api/customer/subscribe` is not a reopening of signup
+
+`/api/signup` refuses every non-owner with "please enquire via our contact
+form". Self-serve **acquisition** stays retired. This route only ever serves an
+authenticated customer **who already holds the other product** — vetted,
+paying, already on a Stripe customer record. Two guards keep it that way:
+
+1. Identity comes from the session, never the body.
+2. A customer holding **neither** product is refused (403). Those are the
+   waitlisted accounts, and checkout here would be a way to jump the queue.
+   They still see the descriptions; the call to action is support.
+
+**Nothing in the route grants a product.** The Stripe webhook does that, routing
+by price id: `invoice.paid` credits the leads and promotes `account_status` out
+of `invited`/`waitlisted`. So a self-serve buyer lands in exactly the same state
+as an admin-invited one, and an abandoned checkout changes nothing.
+
+**Management is capacity-gated here, GR is not** — the same asymmetry as signup
+(§16). The check is a headcount against `max_active_customers`, deliberately
+copied from `/api/signup` rather than using the weighted helper, so the cap
+means the same thing however a customer arrives. See the §16 note: those two
+readings of the same setting still disagree.
+
+### The one trap: `monthly_allocation` must be set before checkout
+
+`invoice.paid` credits `planForAllocation(customer.monthly_allocation).leads`,
+**not** the plan the invoice was actually for. A customer buying the £150/10
+plan on a row still carrying the default 20 would be credited 20 leads a month,
+every month, silently. The route therefore writes `monthly_allocation` from the
+chosen plan **before** creating the session, putting the row in the same shape
+an admin invite produces so the webhook needs no special case. Abandoning
+checkout leaves the column inert — it gates nothing for a customer who does not
+hold management.
+
+An `allocationFromPrices()` helper already exists in the webhook and would fix
+this at source, but it is only used for post-call-offer labelling; switching the
+credit onto it would silently re-size any hand-edited allocation that disagrees
+with its price, so it was left alone.
