@@ -1,87 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendInactivityNudgeEmail } from "@/lib/emails";
-import { ENGAGEMENT_EVENT_TYPES, type Customer, type LeadType } from "@/lib/types";
+import {
+  MAX_LEADS_LISTED,
+  NUDGE_CUSTOMER_COLUMNS,
+  findLeadsAwaitingFollowUp,
+  sendInactivityDigest,
+  staleCutoffIso,
+  wantsInactivityNudge,
+  type NudgeCustomer,
+} from "@/lib/followUp";
 import { fetchUkBankHolidays, isBankHoliday, ukDate } from "@/lib/businessTime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-// A lead whose status last changed longer ago than this (and has no note) is
-// "waiting for follow-up". Tunable via STALE_LEAD_THRESHOLD_DAYS (in days);
-// defaults to 2 days (48h) — the historical value — when unset or invalid.
-const DEFAULT_THRESHOLD_HOURS = 48;
-// How many leads to name in the email before summarising the remainder.
-const MAX_LEADS_LISTED = 8;
-
-/**
- * Resolve the "waiting for follow-up" threshold in hours. STALE_LEAD_THRESHOLD_DAYS
- * lets ops tune how many days a lead may sit untouched before it triggers a
- * nudge; a missing / non-positive / non-numeric value keeps the 48h default.
- */
-function thresholdHours(): number {
-  const raw = process.env.STALE_LEAD_THRESHOLD_DAYS;
-  const days = raw != null ? Number(raw) : NaN;
-  return Number.isFinite(days) && days > 0 ? days * 24 : DEFAULT_THRESHOLD_HOURS;
-}
-
-type NudgeCustomer = Pick<
-  Customer,
-  | "id"
-  | "email"
-  | "contact_name"
-  | "notification_preferences"
-  | "last_nudge_sent_at"
-  | "account_status"
-  | "subscription_status"
-  | "gr_subscription_status"
-  | "paused_at"
->;
-
-/** Missing / unset key defaults to true — opt-out is only an explicit false. */
-function wantsInactivityNudge(customer: NudgeCustomer): boolean {
-  return customer.notification_preferences?.inactivity_nudge !== false;
-}
-
-/**
- * Whether this customer is live on the product a given lead belongs to.
- *
- * Deliberately mirrors get_next_customers_for_lead's two branches rather than
- * inventing a rule: if they are eligible to RECEIVE a lead of this type they are
- * eligible to be nudged about one, and if they are not, they should hear
- * nothing. The management branch carries account_status and the pause check;
- * the GR branch carries neither, because both of those columns describe the
- * management subscription only.
- */
-function eligibleFor(customer: NudgeCustomer, leadType: LeadType): boolean {
-  if (leadType === "guaranteed_rent") {
-    return customer.gr_subscription_status === "active";
-  }
-  return (
-    customer.account_status === "active" &&
-    customer.subscription_status === "active" &&
-    customer.paused_at == null
-  );
-}
-
-type RawLead = {
-  lead_name: string | null;
-  address: string | null;
-  lead_type: LeadType | null;
-};
-type RawAssignment = {
-  id: string;
-  last_status_change_at: string;
-  // supabase-js infers an embedded to-one as an array; PostgREST returns a
-  // single object at runtime. Accept both and normalise with oneLead().
-  leads: RawLead | RawLead[] | null;
-};
-
-function oneLead(leads: RawLead | RawLead[] | null): RawLead | null {
-  if (!leads) return null;
-  return Array.isArray(leads) ? leads[0] ?? null : leads;
-}
 
 /**
  * Monday inactivity-nudge cron. Auth: CRON_SECRET bearer only (a pure scheduled
@@ -91,11 +23,12 @@ function oneLead(leads: RawLead | RawLead[] | null): RawLead | null {
  * first follow-up and, if any, send ONE grouped in-portal notification + ONE
  * grouped email, then stamp last_nudge_sent_at for same-day dedup.
  *
- * "Awaiting follow-up" definition: an assignment still in an early-funnel state
- * (status 'new' or 'contacted') whose status last changed >= 48h ago
- * (last_status_change_at, 0035) and which carries no note. This catches both a
- * lead untouched since assignment AND a lead that was contacted and then went
- * quiet. Covers Management and GR both (shared status vocabulary).
+ * The "awaiting follow-up" rule itself lives in @/lib/followUp, shared with the
+ * admin-triggered reminder on the customers table so the two cannot drift apart.
+ * The digest leaves includeAlreadyNudged off, making the nudge
+ * once-per-assignment-ever: a lead the operator has decided to leave alone must
+ * not reappear every week, which teaches people to ignore the digest rather than
+ * the lead.
  */
 async function handle(request: NextRequest) {
   const auth = request.headers.get("authorization");
@@ -145,13 +78,11 @@ async function handle(request: NextRequest) {
   // leaves both untouched on a GR cancellation), so neither may gate GR.
   //
   // The filter below is the union — anyone live on EITHER product — and each
-  // assignment is then matched against its own product's eligibility in
-  // eligibleFor() before it can appear in a digest.
+  // assignment is then matched against its own product's eligibility inside
+  // findLeadsAwaitingFollowUp before it can appear in a digest.
   const { data: customerRows, error: custErr } = await admin
     .from("customers")
-    .select(
-      "id, email, contact_name, notification_preferences, last_nudge_sent_at, account_status, subscription_status, gr_subscription_status, paused_at"
-    )
+    .select(NUDGE_CUSTOMER_COLUMNS)
     .eq("is_active", true)
     .or("subscription_status.eq.active,gr_subscription_status.eq.active");
 
@@ -159,16 +90,14 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ error: custErr.message }, { status: 500 });
   }
 
-  const cutoffIso = new Date(
-    now.getTime() - thresholdHours() * 60 * 60 * 1000
-  ).toISOString();
+  const cutoffIso = staleCutoffIso(now);
 
   let nudged = 0;
   let noLeads = 0;
   let alreadyToday = 0;
   let optedOut = 0;
 
-  for (const customer of (customerRows ?? []) as NudgeCustomer[]) {
+  for (const customer of (customerRows ?? []) as unknown as NudgeCustomer[]) {
     if (!wantsInactivityNudge(customer)) {
       optedOut += 1;
       continue;
@@ -184,104 +113,21 @@ async function handle(request: NextRequest) {
       continue;
     }
 
-    const { data: assignmentRows, error: aErr } = await admin
-      .from("lead_assignments")
-      .select("id, last_status_change_at, leads(lead_name, address, lead_type)")
-      .eq("customer_id", customer.id)
-      // Rejected leads are excluded by this status filter alone: reject sets
-      // status = 'rejected' (0019), so no separate rejection check is needed.
-      .in("status", ["new", "contacted"])
-      .lte("last_status_change_at", cutoffIso);
-
-    if (aErr) {
+    const { waiting, error } = await findLeadsAwaitingFollowUp(admin, customer, {
+      cutoffIso,
+    });
+    if (error) {
       console.error("[inactivity-nudge] assignment query failed", {
         customer: customer.id,
-        error: aErr.message,
+        error,
       });
       continue;
     }
 
-    const candidates = (assignmentRows ?? []) as unknown as RawAssignment[];
-
-    if (candidates.length === 0) {
-      noLeads += 1;
-      continue;
-    }
-
-    // Drop anything on a product this customer is not live on. Without this a
-    // customer who cancelled Management but kept GR would still be chased about
-    // their old management leads.
-    const onLiveProduct = candidates.filter((a) =>
-      eligibleFor(customer, oneLead(a.leads)?.lead_type ?? "management")
-    );
-    if (onLiveProduct.length === 0) {
-      noLeads += 1;
-      continue;
-    }
-
-    // Exclude any assignment that already carries a note — a note means the
-    // customer has started working the lead, so it is not "waiting".
-    const ids = onLiveProduct.map((a) => a.id);
-    const { data: notedRows } = await admin
-      .from("lead_notes")
-      .select("lead_assignment_id")
-      .in("lead_assignment_id", ids);
-    const noted = new Set(
-      (notedRows ?? []).map(
-        (n) => (n as { lead_assignment_id: string }).lead_assignment_id
-      )
-    );
-
-    // Exclude anything the operator has demonstrably engaged with, and anything
-    // already nudged.
-    //
-    // The telemetry check is what makes this honest. status and
-    // last_status_change_at only know what the operator DECLARED; a lead that
-    // was opened and read, or whose landlord was rung, may still sit at 'new'.
-    // Worse, since the auto-contact trigger a phone click moves the status to
-    // 'contacted' — which keeps it inside the status filter above — so without
-    // this the digest would chase leads the operator had already actioned.
-    //
-    // nudge_sent makes the nudge once-per-assignment-ever. Previously a lead the
-    // operator had decided to leave alone reappeared in the digest every week,
-    // which teaches people to ignore the digest rather than the lead.
-    const { data: eventRows } = await admin
-      .from("lead_events")
-      .select("assignment_id, event_type")
-      .in("assignment_id", ids)
-      .in("event_type", [...ENGAGEMENT_EVENT_TYPES, "nudge_sent"]);
-
-    const excludedByEvent = new Set(
-      (eventRows ?? []).map(
-        (e) => (e as { assignment_id: string }).assignment_id
-      )
-    );
-
-    const waiting = onLiveProduct.filter(
-      (a) => !noted.has(a.id) && !excludedByEvent.has(a.id)
-    );
     if (waiting.length === 0) {
       noLeads += 1;
       continue;
     }
-
-    const count = waiting.length;
-    // Only the leads actually NAMED in the email are marked as nudged.
-    //
-    // The digest lists at most MAX_LEADS_LISTED and summarises the rest as
-    // "…and N more". Marking all of them would, combined with the
-    // once-per-assignment rule, mean a customer sitting on 30 stale leads gets
-    // one email naming 8 and never hears about the other 22 again. Marking only
-    // the named ones lets the digest work through the backlog a slice at a
-    // time, and every lead gets named exactly once.
-    const listed = waiting.slice(0, MAX_LEADS_LISTED);
-    const leadsForEmail = listed.map((a) => {
-      const lead = oneLead(a.leads);
-      return {
-        name: lead?.lead_name ?? "Lead",
-        address: lead?.address ?? null,
-      };
-    });
 
     // Dry run: report exactly who would be emailed and about what, then stop
     // before any side effect. Nothing is sent, nothing is stamped, no event is
@@ -290,65 +136,17 @@ async function handle(request: NextRequest) {
       wouldNudge.push({
         customer_id: customer.id,
         email: customer.email,
-        lead_count: count,
-        management_leads: waiting.filter(
-          (a) => oneLead(a.leads)?.lead_type !== "guaranteed_rent"
-        ).length,
-        gr_leads: waiting.filter(
-          (a) => oneLead(a.leads)?.lead_type === "guaranteed_rent"
-        ).length,
-        leads: leadsForEmail.map((l) => l.name),
+        lead_count: waiting.length,
+        management_leads: waiting.filter((l) => l.leadType !== "guaranteed_rent")
+          .length,
+        gr_leads: waiting.filter((l) => l.leadType === "guaranteed_rent").length,
+        leads: waiting.slice(0, MAX_LEADS_LISTED).map((l) => l.name),
       });
       nudged += 1;
       continue;
     }
 
-    // One grouped in-portal notification (not tied to a single assignment).
-    await admin.from("notifications").insert({
-      customer_id: customer.id,
-      lead_assignment_id: null,
-      notification_type: "inactivity_nudge",
-      message: `You have ${count} lead${count === 1 ? "" : "s"} waiting for follow-up`,
-    });
-
-    // One grouped email.
-    const { error: emailError } = await sendInactivityNudgeEmail({
-      to: customer.email,
-      contactName: customer.contact_name,
-      count,
-      leads: leadsForEmail,
-    });
-    if (emailError) {
-      console.error("[inactivity-nudge] email failed", {
-        customer: customer.id,
-        error: emailError,
-      });
-    }
-
-    // Record the nudge against each assignment the email actually NAMED, so no
-    // lead is ever chased twice and none is silently written off. Written even
-    // if the email failed: a failed send is retried by nothing, and re-listing
-    // the same lead next week is the behaviour this is here to stop. The
-    // grouped notification above already landed in-portal.
-    const { error: eventErr } = await admin.from("lead_events").insert(
-      listed.map((a) => ({
-        assignment_id: a.id,
-        event_type: "nudge_sent" as const,
-      }))
-    );
-    if (eventErr) {
-      console.error("[inactivity-nudge] nudge_sent insert failed", {
-        customer: customer.id,
-        error: eventErr.message,
-      });
-    }
-
-    // Stamp the send so a same-day re-run skips this customer next time.
-    await admin
-      .from("customers")
-      .update({ last_nudge_sent_at: now.toISOString() })
-      .eq("id", customer.id);
-
+    await sendInactivityDigest(admin, customer, waiting, now);
     nudged += 1;
   }
 

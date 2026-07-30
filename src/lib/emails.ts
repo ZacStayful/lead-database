@@ -458,6 +458,84 @@ export async function sendInactivityNudgeEmail(params: {
   }
 }
 
+/**
+ * Admin-triggered "log in and follow up your leads" reminder, sent from the
+ * customers table when an operator has gone quiet.
+ *
+ * Two variants in one function, because the admin presses one button and should
+ * not have to know which applies: with leads waiting it names them and asks for
+ * follow-up; with none waiting it is a shorter prompt to sign back in. Kept
+ * separate from sendInactivityNudgeEmail so the automated digest's copy (and its
+ * "haven't moved in 48 hours" framing) can change without touching this one.
+ */
+export async function sendFollowUpReminderEmail(params: {
+  to: string;
+  contactName: string;
+  /** Leads awaiting follow-up. 0 sends the "sign back in" variant. */
+  count: number;
+  leads: { name: string; address: string | null }[];
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, count, leads } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+
+  if (count === 0) {
+    const inner = `
+      <h1 style="margin:0 0 4px;font-size:18px">Your leads are waiting, ${esc(firstName)}</h1>
+      <p style="margin:0 0 18px;color:#6b706a;font-size:14px">It's been a while since you signed in. Every lead assigned to you stays in your portal with its full financial model, contact details and pipeline stage — worth a look to make sure nothing has gone cold.</p>
+      <p style="margin:0 0 18px;color:#6b706a;font-size:13px">If a lead is never opened, we offer it to a further operator after three working days. Opening it or getting in touch keeps it yours.</p>
+      ${button(LOGIN_URL, "Log in to your dashboard")}
+    `;
+    try {
+      const { data, error } = await getResend().emails.send({
+        from: fromAddress(),
+        to,
+        subject: "Sign in to review your Stayful leads",
+        html: shell(inner),
+      });
+      return { id: data?.id ?? null, error };
+    } catch (error) {
+      return { id: null, error };
+    }
+  }
+
+  const noun = count === 1 ? "lead" : "leads";
+  const subject = `${count} ${noun} waiting for you to follow up`;
+
+  const more = count - leads.length;
+  const items = leads
+    .map(
+      (l) =>
+        `<li>${esc(l.name)}${l.address ? ` — <span style="color:#6b706a">${esc(l.address)}</span>` : ""}</li>`
+    )
+    .join("");
+  const moreItem =
+    more > 0
+      ? `<li style="color:#6b706a">…and ${more} more in your dashboard</li>`
+      : "";
+  const list = leads.length
+    ? `<ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7">${items}${moreItem}</ul>`
+    : "";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Time to follow up, ${esc(firstName)}</h1>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${count}</strong> ${noun} in your portal still waiting for their next step. Log in to pick them up — a quick follow-up is often what turns an enquiry into a signed landlord.</p>
+    ${list}
+    <p style="margin:0 0 18px;color:#6b706a;font-size:13px">If a lead is never opened, we offer it to a further operator after three working days. Opening it or getting in touch keeps it yours.</p>
+    ${button(LOGIN_URL, "Log in and follow up")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Format a date as e.g. "23 October 2026" (UK long form). */
 function ukLongDate(iso: string): string {
   return new Intl.DateTimeFormat("en-GB", {

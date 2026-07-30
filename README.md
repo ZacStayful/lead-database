@@ -149,6 +149,25 @@ capacity **and the management pause block** — so a paused customer is never
 assigned a lead by any path. Admins can also set a customer's management
 `lead_balance` directly from the customer editor.
 
+### Chasing quiet customers by hand
+
+The weekly digest (`/api/cron/inactivity-nudge`) chases leads on its own
+schedule, but `/admin/customers` can also send that reminder on demand — tick any
+row (or **Select dormant**, meaning no portal sign-in for 14+ days, shown in
+amber in **Last active**) and press **Send follow-up reminder**; a single row has
+its own **Send reminder** action. Both call `POST /api/admin/customers/reminders`
+(`{ ids[] }`, max 25 per request — the table chunks larger selections).
+
+The "waiting for follow-up" rule itself lives once in `src/lib/followUp.ts` and is
+shared with the cron: an assignment still `new`/`contacted` whose status last
+changed over `STALE_LEAD_THRESHOLD_DAYS` ago, with no note and no engagement
+telemetry. The manual send differs from the digest in two deliberate ways — it
+ignores the same-day and once-per-assignment dedup (an admin pressing the button
+wants the reminder to go out now), and it still sends a shorter "sign in and
+review your pipeline" email when nothing is waiting. It refuses to email anyone
+who has opted out of reminders, has no portal login, is switched off, or is no
+longer live on either product, reporting the reason per recipient instead.
+
 ## Routes
 
 | Area | Route | Notes |
@@ -156,7 +175,7 @@ assigned a lead by any path. Admins can also set a customer's management
 | Public | `/`, `/login`, `/signup` | Landing, auth, Stripe checkout |
 | Customer | `/dashboard`, `/dashboard/leads`, `/dashboard/notifications`, `/dashboard/settings` | Realtime lead feed |
 | Admin | `/admin`, `/admin/customers`, `/admin/customers/[id]`, `/admin/leads`, `/admin/leads/[id]`, `/admin/offers` | Requires `role: admin` |
-| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation`, `/api/admin/post-call-offer`, `/api/cron/post-call-offer-reminders` | Plus customer assignment / lead reject / billing-portal helpers |
+| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation`, `/api/admin/customers/reminders`, `/api/admin/post-call-offer`, `/api/cron/post-call-offer-reminders` | Plus customer assignment / lead reject / billing-portal helpers |
 
 ## Design
 
