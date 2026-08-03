@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
+import { AdminAccessPanel } from "@/components/admin/AdminAccessPanel";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
@@ -106,6 +107,12 @@ export default async function AdminCustomerDetailPage({
               <AdminCustomerForm customer={customer} />
             </CardContent>
           </Card>
+
+          <AdminAccessPanel
+            customerId={customer.id}
+            email={customer.email}
+            hasLogin={customer.user_id != null}
+          />
 
           <GrSubscriptionCard customer={customer} />
 
