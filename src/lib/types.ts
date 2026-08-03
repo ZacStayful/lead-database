@@ -241,6 +241,43 @@ export interface Testimonial {
   created_at: string;
 }
 
+export type TrainingContentType = "video" | "audio" | "article";
+
+export type TrainingVideoProvider = "loom" | "youtube" | "vimeo";
+
+/** Which product a module applies to. 'both' is the default and the common case. */
+export type TrainingLeadTypeScope = LeadType | "both";
+
+export interface TrainingModule {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  content_type: TrainingContentType;
+  sort_order: number;
+  video_provider: TrainingVideoProvider | null;
+  video_url: string | null;
+  video_duration_seconds: number | null;
+  /** Path inside the private 'training-audio' bucket, never a public URL. */
+  audio_storage_path: string | null;
+  audio_duration_seconds: number | null;
+  body_markdown: string | null;
+  lead_type_scope: TrainingLeadTypeScope;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrainingProgress {
+  id: string;
+  customer_id: string;
+  module_id: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LeadNote {
   id: string;
   lead_assignment_id: string;
