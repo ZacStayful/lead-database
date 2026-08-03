@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { GoalForm } from "@/components/dashboard/GoalForm";
@@ -28,6 +29,14 @@ const EMAILS_PER_LEAD_LOW = 8;
 const EMAILS_PER_LEAD_HIGH = 12;
 const CALLS_PER_LEAD_LOW = 4;
 const CALLS_PER_LEAD_HIGH = 6;
+
+/**
+ * Rows to render in the month-by-month table before collapsing the middle —
+ * the opening "Now" row plus two years of plan. A ten-lead plan against a large
+ * goal can run to eight years of months, and a table nobody scrolls to the
+ * bottom of communicates less than a short one that says what it left out.
+ */
+const MAX_PROJECTION_ROWS = 25;
 
 type GoalRow = {
   id: string;
@@ -139,6 +148,26 @@ export default async function GoalsPage() {
     10
   );
 
+  // The month-by-month path. The per-month figures above are the steady-state
+  // workload; this is what that workload accumulates to, month by month, until
+  // it reaches the leads the goal implies.
+  const projection = buildProjection({
+    lifetime,
+    leadsNeededTotal,
+    allocation,
+    won,
+  });
+  const hiddenMonths = Math.max(projection.length - MAX_PROJECTION_ROWS, 0);
+  // Keep the final month whatever happens — it is the row that reaches the
+  // goal, and dropping it would end the table in the middle of nowhere.
+  const visibleProjection =
+    hiddenMonths > 0
+      ? [
+          ...projection.slice(0, MAX_PROJECTION_ROWS - 1),
+          projection[projection.length - 1],
+        ]
+      : projection;
+
   return (
     <div className="space-y-6">
       <div>
@@ -243,6 +272,89 @@ export default async function GoalsPage() {
               each month is what makes the goal land.
             </p>
           </section>
+
+          {projection.length > 1 && (
+            <section className="rounded-xl border border-black/10 bg-white p-6">
+              <h2 className="text-lg font-semibold">
+                Month by month to your goal
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Where each month leaves you at your current {allocation}-lead
+                plan. Every figure is a running total, so the last row is the
+                whole goal. Leads and presentations are the same number — one
+                analysis per lead.
+              </p>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[40rem] border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b-[0.5px] border-border text-left">
+                      <th className="pb-2 font-medium">Month</th>
+                      <th className="pb-2 text-right font-medium">Leads</th>
+                      <th className="pb-2 text-right font-medium">Emails</th>
+                      <th className="pb-2 text-right font-medium">Calls</th>
+                      <th className="pb-2 text-right font-medium">Invested</th>
+                      <th className="pb-2 text-right font-medium">Clients</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleProjection.map((row, index) => (
+                      <Fragment key={row.key}>
+                        {hiddenMonths > 0 &&
+                          index === visibleProjection.length - 1 && (
+                            <tr className="border-b-[0.5px] border-border">
+                              <td
+                                colSpan={6}
+                                className="py-2.5 text-muted-foreground"
+                              >
+                                {hiddenMonths} further{" "}
+                                {hiddenMonths === 1 ? "month" : "months"} at the
+                                same pace, not shown
+                              </td>
+                            </tr>
+                          )}
+                        <tr className="border-b-[0.5px] border-border last:border-0">
+                          <td className="py-2.5 font-medium">{row.label}</td>
+                          <td className="py-2.5 text-right">
+                            {formatNumber(row.leads)}
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {roundedRange(
+                              row.leads * EMAILS_PER_LEAD_LOW,
+                              row.leads * EMAILS_PER_LEAD_HIGH,
+                              100
+                            )}
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {roundedRange(
+                              row.leads * CALLS_PER_LEAD_LOW,
+                              row.leads * CALLS_PER_LEAD_HIGH,
+                              100
+                            )}
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {formatGbp(row.invested)}
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {row.projected
+                              ? `~${formatNumber(row.clients)}`
+                              : formatNumber(row.clients)}
+                          </td>
+                        </tr>
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="mt-4 text-sm text-muted-foreground">
+                The opening row is where you actually are. Everything below it
+                is modelled at the long-run rate, not a forecast of your own
+                pipeline — your goal is met by clients you sign and mark as won,
+                whenever that happens.
+              </p>
+            </section>
+          )}
         </>
       )}
 
@@ -291,6 +403,79 @@ function ActivityFigure({ value, label }: { value: string; label: string }) {
   );
 }
 
+type ProjectionRow = {
+  key: string;
+  label: string;
+  /** Leads received by the end of this row's month — a running total. */
+  leads: number;
+  /** Running total spend, in pounds. */
+  invested: number;
+  /** Signed clients: the real figure on the opening row, modelled on the rest. */
+  clients: number;
+  projected: boolean;
+};
+
+/**
+ * Build the month-by-month path from where the customer is now to the leads
+ * their goal implies.
+ *
+ * The opening row is the present, and its client count is the REAL won figure
+ * rather than a model — the projection starts from what has actually happened,
+ * so the table cannot show somebody a modelled number for a month they have
+ * already lived through. Every later row is modelled and marked with a tilde.
+ *
+ * Clients are floored, not rounded. A projection that overstates progress
+ * towards a goal is worse than one that understates it, and the final row still
+ * lands exactly on the goal because leadsNeededTotal is an exact multiple of
+ * LEADS_PER_WON_CLIENT.
+ *
+ * The last month is partial whenever the remaining leads do not divide evenly
+ * by the allocation, so the table ends on leadsNeededTotal rather than
+ * overshooting it. Returns nothing without an allocation to advance by — the
+ * caller renders the same "no active plan" wording the timeline row uses.
+ */
+function buildProjection({
+  lifetime,
+  leadsNeededTotal,
+  allocation,
+  won,
+}: {
+  lifetime: number;
+  leadsNeededTotal: number;
+  allocation: number;
+  won: number;
+}): ProjectionRow[] {
+  if (allocation <= 0) return [];
+
+  const rows: ProjectionRow[] = [
+    {
+      key: "now",
+      label: "Now",
+      leads: lifetime,
+      invested: lifetime * LEAD_PRICE_GBP.management,
+      clients: won,
+      projected: false,
+    },
+  ];
+
+  let cumulative = lifetime;
+  let month = 0;
+  while (cumulative < leadsNeededTotal) {
+    month += 1;
+    cumulative = Math.min(cumulative + allocation, leadsNeededTotal);
+    rows.push({
+      key: `month-${month}`,
+      label: `Month ${month}`,
+      leads: cumulative,
+      invested: cumulative * LEAD_PRICE_GBP.management,
+      clients: Math.floor(cumulative / LEADS_PER_WON_CLIENT),
+      projected: true,
+    });
+  }
+
+  return rows;
+}
+
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString("en-GB");
 }
@@ -301,17 +486,35 @@ function formatGbp(value: number): string {
 }
 
 /**
+ * The coarsest step is only allowed to move a bound by so much before the
+ * rounding stops being presentational and starts being wrong. A fifth of the
+ * lower bound is the line: 1,600–2,400 rounds to hundreds happily, but 120–180
+ * to the nearest hundred is "100–200", which overstates the spread by more than
+ * the figures themselves are worth.
+ */
+const MAX_ROUNDING_SHARE = 0.2;
+
+/**
  * Round a low/high pair to a clean step so a range reads as an estimate rather
  * than a computation — 1,600–2,400, not 1,584–2,376.
  *
- * Falls back to a finer step when the coarse one would collapse the range or
- * round a bound down to nothing. A goal of 1 implies 80–120 calls, which to the
- * nearest hundred is "100–100" — technically the requested rounding, and
- * visibly broken. The fallback keeps small goals readable without giving large
- * ones spurious precision.
+ * Steps are tried coarsest first and rejected on two grounds: distorting a
+ * small pair (above), or collapsing the range to a single number. A goal of 1
+ * implies 80–120 calls, which to the nearest hundred is "100–100" — the
+ * rounding as specified, and visibly broken. Between hundreds and tens sits 50,
+ * which is what keeps mid-sized pairs such as 480–720 reading as 500–700 rather
+ * than falling all the way back to exact figures.
+ *
+ * The early rows of the month-by-month table are where this matters: they carry
+ * the smallest numbers on the page and would otherwise be the least accurate.
  */
 function roundedRange(low: number, high: number, step: number): string {
-  for (const candidate of [step, 10, 1].filter((s) => s <= step)) {
+  // A customer who has received nothing yet has a genuine zero, and "0–0" reads
+  // as a broken range rather than as none.
+  if (high <= 0) return "0";
+
+  for (const candidate of [step, 50, 10, 1].filter((s) => s <= step)) {
+    if (candidate > 1 && candidate > low * MAX_ROUNDING_SHARE) continue;
     const lo = Math.round(low / candidate) * candidate;
     const hi = Math.round(high / candidate) * candidate;
     if (lo > 0 && lo < hi) return `${formatNumber(lo)}–${formatNumber(hi)}`;
