@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { GoalForm } from "@/components/dashboard/GoalForm";
+import { LEAD_PRICE_GBP } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,22 @@ export const dynamic = "force-dynamic";
  * only ever drives the supporting estimate, never the completion check.
  */
 const LEADS_PER_WON_CLIENT = 20;
+
+/**
+ * Activity behind a lead — the work the operator does, per lead, whether or not
+ * that lead ever signs. Derived from analysis of converted customers and shown
+ * as ranges because that is what they are: a spread observed across real
+ * operators, not a figure this system measures or promises.
+ *
+ * Presentations are exact and singular on purpose. Every lead gets one income
+ * analysis; a range on a constant of 1 would read as false precision dressed up
+ * as honesty.
+ */
+const PRESENTATIONS_PER_LEAD = 1;
+const EMAILS_PER_LEAD_LOW = 8;
+const EMAILS_PER_LEAD_HIGH = 12;
+const CALLS_PER_LEAD_LOW = 4;
+const CALLS_PER_LEAD_HIGH = 6;
 
 type GoalRow = {
   id: string;
@@ -86,6 +103,42 @@ export default async function GoalsPage() {
   // not only after time passes.
   const achieved = goal !== null && won >= goal;
 
+  // Investment, in pounds. Per-lead price comes from lib/plans so this figure
+  // cannot drift from what a delivered lead is actually recorded at; see the
+  // note there about three copies of the price going stale.
+  const investmentTotal = leadsNeededTotal * LEAD_PRICE_GBP.management;
+  const investmentRemaining = leadsStillNeeded * LEAD_PRICE_GBP.management;
+
+  // Activity projection. Anchored to the same lead figures as everything above:
+  // totals to the whole goal, per-month to the customer's actual allocation.
+  // `allocation` is a real per-month lead count on this page, so there is no
+  // need to derive one from the timeline — and `months` divides leads STILL
+  // needed, not the total, so deriving from it would be wrong for anyone who
+  // has already received leads.
+  const totalPresentations = leadsNeededTotal * PRESENTATIONS_PER_LEAD;
+  const totalEmails = roundedRange(
+    leadsNeededTotal * EMAILS_PER_LEAD_LOW,
+    leadsNeededTotal * EMAILS_PER_LEAD_HIGH,
+    100
+  );
+  const totalCalls = roundedRange(
+    leadsNeededTotal * CALLS_PER_LEAD_LOW,
+    leadsNeededTotal * CALLS_PER_LEAD_HIGH,
+    100
+  );
+
+  const monthlyPresentations = allocation * PRESENTATIONS_PER_LEAD;
+  const monthlyEmails = roundedRange(
+    allocation * EMAILS_PER_LEAD_LOW,
+    allocation * EMAILS_PER_LEAD_HIGH,
+    10
+  );
+  const monthlyCalls = roundedRange(
+    allocation * CALLS_PER_LEAD_LOW,
+    allocation * CALLS_PER_LEAD_HIGH,
+    10
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -116,6 +169,16 @@ export default async function GoalsPage() {
               <EstimateRow label="Leads needed in total" value={leadsNeededTotal} />
               <EstimateRow label="Leads received so far" value={lifetime} />
               <EstimateRow label="Leads still needed" value={leadsStillNeeded} />
+              <EstimateRow
+                label={`Investment in total, at ${formatGbp(
+                  LEAD_PRICE_GBP.management
+                )} a lead`}
+                value={formatGbp(investmentTotal)}
+              />
+              <EstimateRow
+                label="Investment still to come"
+                value={formatGbp(investmentRemaining)}
+              />
               <div className="flex flex-wrap justify-between gap-2 border-t border-black/10 pt-3 text-sm">
                 <dt className="text-muted-foreground">
                   Estimated time remaining
@@ -131,6 +194,54 @@ export default async function GoalsPage() {
                 </dd>
               </div>
             </dl>
+          </section>
+
+          <section className="rounded-xl border border-black/10 bg-white p-6">
+            <h2 className="text-lg font-semibold">The work behind this goal</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Reaching {goal} customers means running the full process across
+              around {formatNumber(totalPresentations)} leads. In total, plan for
+              roughly:
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <ActivityFigure
+                value={`~${formatNumber(totalPresentations)}`}
+                label="presentations"
+              />
+              <ActivityFigure value={totalEmails} label="emails" />
+              <ActivityFigure value={totalCalls} label="calls" />
+            </div>
+
+            {allocation > 0 ? (
+              <>
+                <p className="mt-6 text-sm text-muted-foreground">
+                  Month by month, that is about:
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <ActivityFigure
+                    value={`~${formatNumber(monthlyPresentations)}`}
+                    label="presentations"
+                  />
+                  <ActivityFigure value={monthlyEmails} label="emails" />
+                  <ActivityFigure value={monthlyCalls} label="calls" />
+                </div>
+              </>
+            ) : (
+              // Same honesty as the timeline row above: without a monthly
+              // allocation there is no per-month figure to show, and inventing
+              // a default plan here would put a number on this page that
+              // describes nobody.
+              <p className="mt-6 text-sm text-muted-foreground">
+                Month by month figures are not available without an active
+                monthly plan.
+              </p>
+            )}
+
+            <p className="mt-6 border-t border-black/10 pt-4 text-sm text-muted-foreground">
+              Around 1 in 20 leads signs, so the full process runs on every lead
+              — not just the ones that convert. Working your whole allocation
+              each month is what makes the goal land.
+            </p>
           </section>
         </>
       )}
@@ -156,11 +267,54 @@ export default async function GoalsPage() {
   );
 }
 
-function EstimateRow({ label, value }: { label: string; value: number }) {
+function EstimateRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | string;
+}) {
   return (
     <div className="flex flex-wrap justify-between gap-2 text-sm">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-medium">{value}</dd>
     </div>
   );
+}
+
+function ActivityFigure({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="rounded-lg border border-black/10 p-4">
+      <p className="text-xl font-semibold">{value}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function formatNumber(value: number): string {
+  return Math.round(value).toLocaleString("en-GB");
+}
+
+/** Whole pounds. Every figure here is a modelled estimate, so pence would be noise. */
+function formatGbp(value: number): string {
+  return `£${formatNumber(value)}`;
+}
+
+/**
+ * Round a low/high pair to a clean step so a range reads as an estimate rather
+ * than a computation — 1,600–2,400, not 1,584–2,376.
+ *
+ * Falls back to a finer step when the coarse one would collapse the range or
+ * round a bound down to nothing. A goal of 1 implies 80–120 calls, which to the
+ * nearest hundred is "100–100" — technically the requested rounding, and
+ * visibly broken. The fallback keeps small goals readable without giving large
+ * ones spurious precision.
+ */
+function roundedRange(low: number, high: number, step: number): string {
+  for (const candidate of [step, 10, 1].filter((s) => s <= step)) {
+    const lo = Math.round(low / candidate) * candidate;
+    const hi = Math.round(high / candidate) * candidate;
+    if (lo > 0 && lo < hi) return `${formatNumber(lo)}–${formatNumber(hi)}`;
+  }
+  return `${formatNumber(low)}–${formatNumber(high)}`;
 }
