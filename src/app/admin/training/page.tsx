@@ -50,12 +50,20 @@ export default async function AdminTrainingPage() {
             published.
           </p>
         </div>
-        <Link
-          href="/admin/training/new"
-          className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90"
-        >
-          New module
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/admin/training/case-studies"
+            className="rounded-md border-[0.5px] border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent"
+          >
+            Case studies
+          </Link>
+          <Link
+            href="/admin/training/new"
+            className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90"
+          >
+            New module
+          </Link>
+        </div>
       </div>
 
       <div className="rounded-lg border-[0.5px] border-border bg-card">

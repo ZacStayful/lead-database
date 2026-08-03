@@ -278,6 +278,75 @@ export interface TrainingProgress {
   updated_at: string;
 }
 
+export type CaseStudyOutcome = "signed" | "lost";
+
+export type CaseStudyLossReason =
+  | "ghosted_pre_meeting"
+  | "competitor"
+  | "numbers_did_not_stack"
+  | "timing";
+
+/** How far the lead got before it ended. */
+export type CaseStudyGate = "pre_meeting" | "meeting_or_after";
+
+export type CaseStudyChannel =
+  | "form"
+  | "email"
+  | "call"
+  | "sms"
+  | "web_meeting"
+  | "offer"
+  | "telemetry"
+  | "onboarding";
+
+export type CaseStudyDirection = "outbound" | "inbound" | "none";
+
+export type CaseStudyConfidence = "crm_verified" | "partly_reconstructed";
+
+/**
+ * An anonymised lead journey. There is deliberately no name, date, address or
+ * postcode field — see migration 0057 for why those are absent from the schema
+ * rather than merely left blank.
+ */
+export interface CaseStudy {
+  id: string;
+  slug: string;
+  reference: string;
+  outcome: CaseStudyOutcome;
+  loss_reason: CaseStudyLossReason | null;
+  gate_reached: CaseStudyGate;
+  days_to_outcome: number;
+  property_summary: string;
+  headline: string;
+  summary: string;
+  lesson_markdown: string | null;
+  emails_out: number | null;
+  calls_made: number | null;
+  calls_answered: number | null;
+  inbound_replies: number | null;
+  meetings_sat: number | null;
+  had_no_show: boolean;
+  offer_applied: boolean;
+  data_confidence: CaseStudyConfidence;
+  sort_order: number;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseStudyEvent {
+  id: string;
+  case_study_id: string;
+  /** Days from enquiry, 0-based. Never a date. */
+  day_offset: number;
+  channel: CaseStudyChannel;
+  direction: CaseStudyDirection;
+  description: string;
+  is_setback: boolean;
+  is_outcome: boolean;
+  sort_order: number;
+}
+
 export interface LeadNote {
   id: string;
   lead_assignment_id: string;

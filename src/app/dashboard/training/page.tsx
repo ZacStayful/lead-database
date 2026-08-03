@@ -3,7 +3,12 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDuration, ordinal, readMinutes } from "@/lib/training";
-import type { TrainingModule, TrainingProgress } from "@/lib/types";
+import { OUTCOME_LABEL } from "@/lib/caseStudies";
+import type {
+  CaseStudy,
+  TrainingModule,
+  TrainingProgress,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +75,16 @@ export default async function TrainingPage() {
   const completedCount = modules.filter(
     (m) => progress.get(m.id)?.completed_at
   ).length;
+
+  const { data: caseRows } = await admin
+    .from("case_studies")
+    .select("*")
+    .eq("is_published", true)
+    .order("sort_order", { ascending: true });
+
+  const cases = (caseRows ?? []) as CaseStudy[];
+  const signedCount = cases.filter((c) => c.outcome === "signed").length;
+  const lostCount = cases.length - signedCount;
 
   return (
     <div className="space-y-6">
@@ -142,6 +157,61 @@ export default async function TrainingPage() {
             })}
           </div>
         </>
+      )}
+
+      {cases.length > 0 && (
+        <section className="space-y-4 pt-2">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-[#1a1a19]">
+                Real lead journeys
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {cases.length} real landlord leads, anonymised. {signedCount}{" "}
+                signed, {lostCount} didn&apos;t. The losses are here on purpose.
+              </p>
+            </div>
+            <Link
+              href="/dashboard/training/case-studies"
+              className="text-sm font-medium text-[#5D8156] hover:underline"
+            >
+              Compare all {cases.length}
+            </Link>
+          </div>
+
+          <div className="space-y-4">
+            {cases.map((c) => (
+              <Link
+                key={c.id}
+                href={`/dashboard/training/case-studies/${c.slug}`}
+                className="block rounded-xl border border-black/10 bg-white p-6 transition-colors hover:border-black/20"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
+                  <span className="text-sm font-medium text-[#898781]">
+                    {c.reference}
+                  </span>
+                  <span
+                    className={
+                      "text-sm font-medium " +
+                      (c.outcome === "signed"
+                        ? "text-[#5D8156]"
+                        : "text-[#52514e]")
+                    }
+                  >
+                    {OUTCOME_LABEL[c.outcome]}
+                  </span>
+                </div>
+
+                <h3 className="mt-2 text-lg font-semibold text-[#1a1a19]">
+                  {c.headline}
+                </h3>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  {c.property_summary} · {c.days_to_outcome} days
+                </p>
+              </Link>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
