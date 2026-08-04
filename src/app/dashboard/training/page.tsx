@@ -4,8 +4,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDuration, ordinal, readMinutes } from "@/lib/training";
 import { OUTCOME_LABEL } from "@/lib/caseStudies";
+import { buildSalesTimeline } from "@/lib/salesTimeline";
+import { SalesProcessTimeline } from "@/components/dashboard/SalesProcessTimeline";
 import type {
   CaseStudy,
+  CaseStudyEvent,
   TrainingModule,
   TrainingProgress,
 } from "@/lib/types";
@@ -86,6 +89,23 @@ export default async function TrainingPage() {
   const signedCount = cases.filter((c) => c.outcome === "signed").length;
   const lostCount = cases.length - signedCount;
 
+  // The process summary is derived from the journeys on display, so it cannot
+  // claim a timing the records underneath it do not show.
+  const { data: eventRows } = await admin
+    .from("case_study_events")
+    .select("*")
+    .in("case_study_id", cases.length > 0 ? cases.map((c) => c.id) : ["none"]);
+
+  const eventsByCase = new Map<string, CaseStudyEvent[]>();
+  for (const row of (eventRows ?? []) as CaseStudyEvent[]) {
+    const list = eventsByCase.get(row.case_study_id) ?? [];
+    list.push(row);
+    eventsByCase.set(row.case_study_id, list);
+  }
+
+  const timeline =
+    cases.length > 0 ? buildSalesTimeline(cases, eventsByCase) : null;
+
   return (
     <div className="space-y-6">
       <div>
@@ -95,6 +115,8 @@ export default async function TrainingPage() {
           your subscription.
         </p>
       </div>
+
+      {timeline && <SalesProcessTimeline timeline={timeline} />}
 
       {modules.length === 0 ? (
         <section className="rounded-xl border border-black/10 bg-white p-6">
