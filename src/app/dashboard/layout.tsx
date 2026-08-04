@@ -51,6 +51,9 @@ export default async function DashboardLayout({
     ...(holdsManagement ? [{ href: "/dashboard/goals", label: "Goals" }] : []),
     { href: "/dashboard/notifications", label: "Notifications" },
     { href: "/dashboard/documents", label: "Documents" },
+    // Free to every subscriber — no product or subscription gate, unlike the
+    // items around it.
+    { href: "/dashboard/training", label: "Training" },
     { href: "/dashboard/guide", label: "Guide" },
     { href: "/dashboard/settings", label: "Settings" },
     { href: "/dashboard/support", label: "Support" },

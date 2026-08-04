@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
+import { AdminAccessPanel } from "@/components/admin/AdminAccessPanel";
+import { SwapLeadControl } from "@/components/admin/SwapLeadControl";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
@@ -107,6 +109,12 @@ export default async function AdminCustomerDetailPage({
             </CardContent>
           </Card>
 
+          <AdminAccessPanel
+            customerId={customer.id}
+            email={customer.email}
+            hasLogin={customer.user_id != null}
+          />
+
           <GrSubscriptionCard customer={customer} />
 
           <FilterCard customer={customer} />
@@ -125,6 +133,7 @@ export default async function AdminCustomerDetailPage({
                     <TableHead>Status</TableHead>
                     <TableHead>Received</TableHead>
                     <TableHead>Email</TableHead>
+                    <TableHead className="pr-6 text-right">Replace</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -152,12 +161,19 @@ export default async function AdminCustomerDetailPage({
                           </Badge>
                         )}
                       </TableCell>
+                      <TableCell className="pr-6 text-right align-top">
+                        <SwapLeadControl
+                          assignmentId={a.id}
+                          leadName={a.lead?.lead_name ?? null}
+                          status={a.status ?? null}
+                        />
+                      </TableCell>
                     </TableRow>
                   ))}
                   {assignments.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={4}
+                        colSpan={5}
                         className="py-10 text-center text-muted-foreground"
                       >
                         No leads assigned yet.
