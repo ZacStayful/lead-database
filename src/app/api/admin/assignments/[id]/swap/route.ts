@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
+import { completeAssignment } from "@/lib/ingest";
+import type { Lead } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -145,5 +147,57 @@ export async function POST(
     );
   }
 
-  return NextResponse.json({ ok: true, assignment_id: data });
+  const newAssignmentId = data as string;
+
+  // Notify exactly as an ordinary delivery does — in-portal notification,
+  // Resend email and the instant SMS — by calling the same completeAssignment
+  // that ingest and the admin force-assign route use. A replacement is a
+  // delivery from the customer's point of view: they have a new lead to work
+  // and no reason to know it arrived by a different route, so a second
+  // notification path written just for swaps would be a second thing to keep
+  // in step with their preferences and opt-outs.
+  //
+  // sendThresholdWarnings is FALSE. A swap spends no credit, so the balance has
+  // not moved; the low-credits and top-up-offer branches key on exact balance
+  // values and would either misfire or re-fire on every swap. Same reasoning
+  // the admin override already uses.
+  let notified = false;
+  try {
+    const { data: created } = await admin
+      .from("lead_assignments")
+      .select("id, customer_id, lead_id")
+      .eq("id", newAssignmentId)
+      .maybeSingle();
+
+    if (created) {
+      const { data: lead } = await admin
+        .from("leads")
+        .select("*")
+        .eq("id", created.lead_id as string)
+        .maybeSingle();
+
+      if (lead) {
+        await completeAssignment(
+          admin,
+          lead as Lead,
+          created.customer_id as string,
+          newAssignmentId,
+          false
+        );
+        notified = true;
+      }
+    }
+  } catch (err) {
+    // The swap itself is already committed and correct. A failed send must not
+    // be reported as a failed swap — that would invite a retry that then hits
+    // "customer already has the replacement lead". Surfaced in the response so
+    // the admin knows to tell them by hand.
+    console.error("swap: replacement placed but notification failed", err);
+  }
+
+  return NextResponse.json({
+    ok: true,
+    assignment_id: newAssignmentId,
+    notified,
+  });
 }

@@ -85,6 +85,16 @@ export function SwapLeadControl({
         setError(data?.error ?? "Could not swap this lead.");
         return;
       }
+      // The swap succeeded either way; a failed send is worth saying out loud
+      // rather than leaving the admin to assume the customer was told.
+      if (data?.notified === false) {
+        setError(
+          "Swapped, but the customer could not be notified. Let them know by hand."
+        );
+        router.refresh();
+        return;
+      }
+
       setOpen(false);
       router.refresh();
     } catch {
@@ -133,7 +143,8 @@ export function SwapLeadControl({
         {leadName ?? "This lead"} will be removed from this customer and taken
         out of circulation — it will not be offered to anyone else. Any notes or
         files they added to it are deleted with it. No credit is charged; the
-        replacement carries the same price.
+        replacement carries the same price. The customer gets the usual new-lead
+        email and text for the replacement.
       </p>
 
       <div>
