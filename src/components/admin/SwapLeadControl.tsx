@@ -52,12 +52,20 @@ export function SwapLeadControl({
       const res = await fetch(`/api/admin/assignments/${assignmentId}/swap`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(data?.error ?? "Could not load leads.");
+        setError(
+          `Could not load leads (HTTP ${res.status}): ${
+            data?.error ?? "no message from the server"
+          }`
+        );
         return;
       }
-      setCandidates((data.candidates ?? []) as Candidate[]);
-    } catch {
-      setError("Could not load leads.");
+      setCandidates((data?.candidates ?? []) as Candidate[]);
+    } catch (err) {
+      setError(
+        `Could not reach the server: ${
+          err instanceof Error ? err.message : "unknown error"
+        }`
+      );
     } finally {
       setLoading(false);
     }
@@ -163,9 +171,11 @@ export function SwapLeadControl({
           <option value="">
             {loading
               ? "Loading leads…"
-              : candidates.length === 0
-                ? "No eligible leads"
-                : `Choose a replacement (${candidates.length} available)`}
+              : error
+                ? "Could not load leads — see below"
+                : candidates.length === 0
+                  ? "No eligible leads"
+                  : `Choose a replacement (${candidates.length} available)`}
           </option>
           {candidates.map((c) => (
             <option key={c.id} value={c.id}>
