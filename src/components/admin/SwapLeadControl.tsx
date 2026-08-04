@@ -37,7 +37,6 @@ export function SwapLeadControl({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [search, setSearch] = useState("");
   const [chosen, setChosen] = useState<Candidate | null>(null);
   const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,16 +45,11 @@ export function SwapLeadControl({
   // button, so the refusal is visible before it is pressed.
   const isWon = status === "won";
 
-  async function load(term: string) {
+  async function load() {
     setLoading(true);
     setError(null);
     try {
-      const url = new URL(
-        `/api/admin/assignments/${assignmentId}/swap`,
-        window.location.origin
-      );
-      if (term) url.searchParams.set("q", term);
-      const res = await fetch(url.toString());
+      const res = await fetch(`/api/admin/assignments/${assignmentId}/swap`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         setError(data?.error ?? "Could not load leads.");
@@ -73,7 +67,7 @@ export function SwapLeadControl({
     setOpen(true);
     setChosen(null);
     setError(null);
-    void load("");
+    void load();
   }
 
   async function swap() {
@@ -142,58 +136,42 @@ export function SwapLeadControl({
         replacement carries the same price.
       </p>
 
-      <div className="flex gap-2">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void load(search);
-            }
-          }}
-          placeholder="Search name or postcode"
-          className="w-full rounded-md border-[0.5px] border-border bg-background px-3 py-1.5 text-sm"
-        />
-        <button
-          type="button"
-          onClick={() => void load(search)}
-          disabled={loading}
-          className="rounded-md border-[0.5px] border-border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50"
+      <div>
+        <label htmlFor={`swap-${assignmentId}`} className="sr-only">
+          Replacement lead
+        </label>
+        <select
+          id={`swap-${assignmentId}`}
+          value={chosen?.id ?? ""}
+          disabled={loading || swapping}
+          onChange={(e) =>
+            setChosen(candidates.find((c) => c.id === e.target.value) ?? null)
+          }
+          className="w-full rounded-md border-[0.5px] border-border bg-background px-3 py-2 text-sm disabled:opacity-60"
         >
-          {loading ? "…" : "Search"}
-        </button>
-      </div>
-
-      <div className="max-h-56 space-y-1 overflow-y-auto">
-        {candidates.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => setChosen(c)}
-            className={
-              "block w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors " +
-              (chosen?.id === c.id
-                ? "bg-[#5D8156] text-white"
-                : "hover:bg-accent")
-            }
-          >
-            <span className="font-medium">{c.lead_name ?? "Unnamed lead"}</span>
-            <span
-              className={
-                "ml-2 " +
-                (chosen?.id === c.id ? "text-white/80" : "text-muted-foreground")
-              }
-            >
-              {c.postcode ?? "no postcode"} · {c.assignment_count}/
-              {c.max_assignments} assigned
-            </span>
-          </button>
-        ))}
-        {!loading && candidates.length === 0 && (
-          <p className="px-2 py-1.5 text-sm text-muted-foreground">
-            No eligible leads. A replacement must be the same product, have room
-            left, and not already be with this customer.
+          <option value="">
+            {loading
+              ? "Loading leads…"
+              : candidates.length === 0
+                ? "No eligible leads"
+                : `Choose a replacement (${candidates.length} available)`}
+          </option>
+          {candidates.map((c) => (
+            <option key={c.id} value={c.id}>
+              {[
+                c.lead_name ?? "Unnamed lead",
+                c.postcode ?? null,
+                `${c.assignment_count}/${c.max_assignments} assigned`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </option>
+          ))}
+        </select>
+        {!loading && candidates.length === 0 && !error && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            A replacement must be the same product, have room left, and not
+            already be with this customer.
           </p>
         )}
       </div>
