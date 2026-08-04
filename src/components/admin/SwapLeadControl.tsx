@@ -52,10 +52,16 @@ export function SwapLeadControl({
       const res = await fetch(`/api/admin/assignments/${assignmentId}/swap`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
+        // A 404 here almost always means this row is stale: the assignment was
+        // swapped (or discarded) since the page rendered, so the id the button
+        // carries no longer exists. "Assignment not found" is accurate and
+        // useless; the actionable version names the cause and the remedy.
         setError(
-          `Could not load leads (HTTP ${res.status}): ${
-            data?.error ?? "no message from the server"
-          }`
+          res.status === 404
+            ? "This lead is no longer assigned to this customer — it has probably already been swapped. Refresh the page."
+            : `Could not load leads (HTTP ${res.status}): ${
+                data?.error ?? "no message from the server"
+              }`
         );
         return;
       }
@@ -90,7 +96,11 @@ export function SwapLeadControl({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(data?.error ?? "Could not swap this lead.");
+        setError(
+          res.status === 404
+            ? "This lead is no longer assigned to this customer — it has probably already been swapped. Refresh the page."
+            : (data?.error ?? "Could not swap this lead.")
+        );
         return;
       }
       // The swap succeeded either way; a failed send is worth saying out loud
