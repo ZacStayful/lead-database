@@ -39,7 +39,7 @@ export async function GET(
 
   const { data: assignment } = await admin
     .from("lead_assignments")
-    .select("id, customer_id, lead_id, leads!inner(lead_type)")
+    .select("id, customer_id, lead_id")
     .eq("id", params.id)
     .maybeSingle();
 
@@ -47,7 +47,33 @@ export async function GET(
     return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
   }
 
-  const leadType = (assignment.leads as unknown as { lead_type: string }).lead_type;
+  // The product is fetched separately rather than through an embedded
+  // `leads!inner(lead_type)` select. PostgREST returns an embedded row as
+  // either an object or an array depending on how it infers the relationship,
+  // and reading `.lead_type` off the array form yields undefined — which
+  // becomes `lead_type=eq.undefined`, matches nothing, and renders as an empty
+  // dropdown indistinguishable from "no eligible leads". Two plain queries
+  // cannot go wrong that way.
+  const { data: currentLead } = await admin
+    .from("leads")
+    .select("lead_type")
+    .eq("id", assignment.lead_id as string)
+    .maybeSingle();
+
+  const leadType = currentLead?.lead_type as string | undefined;
+
+  // Fail loudly. An empty list is a legitimate answer, so a lookup that cannot
+  // determine the product must not be allowed to masquerade as one.
+  if (!leadType) {
+    console.error("swap candidates: could not resolve lead_type", {
+      assignmentId: params.id,
+      leadId: assignment.lead_id,
+    });
+    return NextResponse.json(
+      { error: "Could not determine this lead's product." },
+      { status: 500 }
+    );
+  }
 
   // Everything this customer already holds, so the picker cannot offer a
   // duplicate the function would reject.
