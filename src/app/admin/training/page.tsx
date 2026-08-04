@@ -22,7 +22,7 @@ const SCOPE_LABEL: Record<string, string> = {
 
 const TYPE_LABEL: Record<string, string> = {
   video: "Video",
-  audio: "Audio",
+  recording: "Recording",
   article: "Article",
 };
 

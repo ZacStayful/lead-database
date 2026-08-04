@@ -76,7 +76,7 @@ export function publishBlocker(module: {
   is_published: boolean;
   video_url?: string | null;
   video_provider?: string | null;
-  audio_storage_path?: string | null;
+  media_storage_path?: string | null;
   body_markdown?: string | null;
 }): string | null {
   if (!module.is_published) return null;
@@ -87,9 +87,9 @@ export function publishBlocker(module: {
     }
   }
 
-  if (module.content_type === "audio") {
-    if (!module.audio_storage_path) {
-      return "A published audio module needs an uploaded recording.";
+  if (module.content_type === "recording") {
+    if (!module.media_storage_path) {
+      return "A published recording needs an uploaded file.";
     }
   }
 
@@ -102,7 +102,7 @@ export function publishBlocker(module: {
   return null;
 }
 
-export const CONTENT_TYPES: TrainingContentType[] = ["video", "audio", "article"];
+export const CONTENT_TYPES: TrainingContentType[] = ["video", "recording", "article"];
 export const LEAD_TYPE_SCOPES: TrainingLeadTypeScope[] = [
   "both",
   "management",

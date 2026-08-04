@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 const TYPE_LABEL: Record<string, string> = {
   video: "Video",
-  audio: "Audio",
+  recording: "Recording",
   article: "Read",
 };
 
@@ -120,7 +120,7 @@ export default async function TrainingPage() {
                       formatDuration(
                         m.content_type === "video"
                           ? m.video_duration_seconds
-                          : m.audio_duration_seconds
+                          : m.media_duration_seconds
                       ),
                     ]
                       .filter(Boolean)

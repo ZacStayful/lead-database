@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import { slugFromTitle } from "@/lib/training";
 import type {
   TrainingContentType,
@@ -20,7 +21,7 @@ const INPUT =
  * patches /api/admin/training/[id]. The fields are identical, and keeping them
  * in one place is what stops the two drifting.
  *
- * The audio upload only appears in edit mode. A recording is stored under the
+ * The upload only appears in edit mode. A recording is stored under the
  * module's id, so the module has to exist before a file can belong to it —
  * create first, then upload.
  */
@@ -57,12 +58,13 @@ export function AdminTrainingForm({
   const [videoDuration, setVideoDuration] = useState(
     module?.video_duration_seconds ? String(module.video_duration_seconds) : ""
   );
-  const [audioDuration, setAudioDuration] = useState(
-    module?.audio_duration_seconds ? String(module.audio_duration_seconds) : ""
+  const [mediaDuration, setMediaDuration] = useState(
+    module?.media_duration_seconds ? String(module.media_duration_seconds) : ""
   );
   const [bodyMarkdown, setBodyMarkdown] = useState(module?.body_markdown ?? "");
 
-  const [audioPath, setAudioPath] = useState(module?.audio_storage_path ?? null);
+  const [mediaPath, setMediaPath] = useState(module?.media_storage_path ?? null);
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -94,7 +96,7 @@ export function AdminTrainingForm({
       video_provider: contentType === "video" ? provider || null : null,
       video_url: contentType === "video" ? videoUrl || null : null,
       video_duration_seconds: videoDuration || null,
-      audio_duration_seconds: audioDuration || null,
+      media_duration_seconds: mediaDuration || null,
       body_markdown: bodyMarkdown || null,
     };
 
@@ -128,29 +130,72 @@ export function AdminTrainingForm({
     }
   }
 
-  async function uploadAudio(file: File) {
+  /**
+   * Upload in two steps, with the file going straight to Supabase Storage.
+   *
+   * The bytes deliberately never pass through our API. A Vercel function caps
+   * its request body at 4.5 MB, so routing a captured web meeting through the
+   * server would fail well below the size of any real recording — and fail as
+   * an opaque platform error rather than something the admin could act on.
+   *
+   * The module row is only updated after the upload lands, so a cancelled or
+   * failed upload leaves the module pointing where it pointed before.
+   */
+  async function uploadMedia(file: File) {
     setUploading(true);
+    setUploadPercent(0);
     setError(null);
     setNotice(null);
+
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch(`/api/admin/training/${module!.id}/audio`, {
+      const startRes = await fetch(`/api/admin/training/${module!.id}/media`, {
         method: "POST",
-        body: form,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type,
+          size: file.size,
+        }),
       });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        setError(data?.error ?? "Could not upload the recording.");
+      const start = await startRes.json().catch(() => null);
+      if (!startRes.ok) {
+        setError(start?.error ?? "Could not start the upload.");
         return;
       }
-      setAudioPath(data.path as string);
+
+      const supabase = createClient();
+      const { error: uploadError } = await supabase.storage
+        .from(start.bucket as string)
+        .uploadToSignedUrl(start.path as string, start.token as string, file, {
+          contentType: file.type,
+        });
+
+      if (uploadError) {
+        setError("The upload did not complete. Please try again.");
+        return;
+      }
+
+      setUploadPercent(100);
+
+      const commitRes = await fetch(`/api/admin/training/${module!.id}/media`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: start.path, mimeType: file.type }),
+      });
+      const commit = await commitRes.json().catch(() => null);
+      if (!commitRes.ok) {
+        setError(commit?.error ?? "Uploaded, but the module could not be updated.");
+        return;
+      }
+
+      setMediaPath(commit.path as string);
       setNotice("Recording uploaded");
       router.refresh();
     } catch {
       setError("Could not upload the recording.");
     } finally {
       setUploading(false);
+      setUploadPercent(null);
     }
   }
 
@@ -237,7 +282,7 @@ export function AdminTrainingForm({
             className={INPUT}
           >
             <option value="video">Video</option>
-            <option value="audio">Audio</option>
+            <option value="recording">Recording (upload)</option>
             <option value="article">Article</option>
           </select>
         </div>
@@ -324,7 +369,7 @@ export function AdminTrainingForm({
         </div>
       )}
 
-      {contentType === "audio" && (
+      {contentType === "recording" && (
         <div className="space-y-4 rounded-md border-[0.5px] border-border p-4">
           {!isEdit ? (
             <p className="text-sm text-muted-foreground">
@@ -333,37 +378,43 @@ export function AdminTrainingForm({
           ) : (
             <>
               <div>
-                <label htmlFor="audio" className="text-sm font-medium">
+                <label htmlFor="media" className="text-sm font-medium">
                   Recording
                 </label>
                 <input
-                  id="audio"
+                  id="media"
                   type="file"
-                  accept="audio/*"
+                  accept="audio/*,video/*"
                   disabled={uploading || saving}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) void uploadAudio(file);
+                    if (file) void uploadMedia(file);
                   }}
                   className={INPUT}
                 />
                 <p className="mt-1 text-sm text-muted-foreground">
                   {uploading
-                    ? "Uploading"
-                    : audioPath
-                      ? `Stored: ${audioPath}`
+                    ? uploadPercent === 100
+                      ? "Finishing"
+                      : "Uploading — this can take a while for video"
+                    : mediaPath
+                      ? `Stored: ${mediaPath}`
                       : "No recording uploaded yet."}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  MP4, MOV, WebM, MP3, M4A or WAV. Up to 500 MB. The file goes
+                  straight to storage, so large videos are fine.
                 </p>
               </div>
               <div>
-                <label htmlFor="audio_duration" className="text-sm font-medium">
+                <label htmlFor="media_duration" className="text-sm font-medium">
                   Duration (seconds)
                 </label>
                 <input
-                  id="audio_duration"
+                  id="media_duration"
                   type="number"
-                  value={audioDuration}
-                  onChange={(e) => setAudioDuration(e.target.value)}
+                  value={mediaDuration}
+                  onChange={(e) => setMediaDuration(e.target.value)}
                   disabled={saving}
                   className={INPUT}
                 />

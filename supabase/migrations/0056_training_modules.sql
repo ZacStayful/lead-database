@@ -18,21 +18,27 @@ create table if not exists public.training_modules (
   title                   text not null,
   summary                 text not null,
   content_type            text not null
-                            check (content_type in ('video', 'audio', 'article')),
+                            check (content_type in ('video', 'recording', 'article')),
   sort_order              integer not null default 0,
 
-  -- Video: an embed URL on an allowlisted host. No video file ever enters
-  -- Storage — the provider serves it.
+  -- 'video' means an EMBED on an allowlisted host — Loom, YouTube, Vimeo. No
+  -- file enters Storage; the provider serves it.
   video_provider          text check (video_provider in ('loom', 'youtube', 'vimeo')),
   video_url               text,
   video_duration_seconds  integer,
 
-  -- Audio: a path inside the private 'training-audio' bucket. Unlike video,
-  -- these are our own files (call recordings), so they are stored rather than
-  -- embedded — and stored privately, because a recording of a real landlord is
+  -- 'recording' means OUR OWN uploaded file — a call recording or a captured
+  -- web meeting, audio or video. Stored rather than embedded because we hold
+  -- the file, and stored PRIVATELY because a recording of a real landlord is
   -- personal data and a public object URL is permanent and guessable.
-  audio_storage_path      text,
-  audio_duration_seconds  integer,
+  --
+  -- media_mime_type decides the player: a video element for video/*, an audio
+  -- bar otherwise. Stored rather than sniffed from the file extension, because
+  -- an extension is a naming convention and a MIME type is what the browser
+  -- actually acts on.
+  media_storage_path      text,
+  media_duration_seconds  integer,
+  media_mime_type         text,
 
   -- Article body, and optional notes beneath a video or recording.
   body_markdown           text,
@@ -52,8 +58,8 @@ create table if not exists public.training_modules (
     or (content_type = 'video'
         and video_url is not null
         and video_provider is not null)
-    or (content_type = 'audio'
-        and audio_storage_path is not null)
+    or (content_type = 'recording'
+        and media_storage_path is not null)
     or (content_type = 'article'
         and body_markdown is not null
         and btrim(body_markdown) <> '')
@@ -111,30 +117,40 @@ create policy "training_progress_select_own" on public.training_progress
   );
 
 -- ---------------------------------------------------------------------------
--- Storage bucket for audio.
+-- Storage bucket for uploaded recordings, audio and video alike.
 --
--- Private, 100 MB per object. Reads are served through short-lived signed URLs
--- minted server-side, so nothing here needs a public object URL — and must not
--- have one. These are recordings of real, identifiable people; a public bucket
--- path works for anyone who has it, forever, with no login.
+-- Private, 500 MB per object — a captured web meeting is an order of magnitude
+-- larger than a phone call, and a limit set for audio would reject the video
+-- silently at upload time.
 --
--- Path convention: training-audio/<module_id>/<filename>. Unlike lead-files
+-- Reads are served through short-lived signed URLs minted server-side, so
+-- nothing here needs a public object URL — and must not have one. These are
+-- recordings of real, identifiable people; a public bucket path works for
+-- anyone who has it, forever, with no login.
+--
+-- Path convention: training-media/<module_id>/<filename>. Unlike lead-files
 -- (0011), which keys its policy on the owner's uid because each object belongs
--- to one customer, training audio is shared content every subscriber reads —
--- so the read policy is bucket-wide and there is no per-user prefix to check.
--- Writes are service-role only: no insert, update or delete policy is created
--- for authenticated users.
+-- to one customer, a training recording is shared content every subscriber
+-- reads — so the read policy is bucket-wide and there is no per-user prefix to
+-- check.
+--
+-- No INSERT policy for authenticated users. Uploads go through a signed upload
+-- URL minted by an admin route on the service role: the browser sends the file
+-- straight to Storage, which is what makes a large video possible at all
+-- (a Vercel function caps its request body at 4.5 MB, so a file routed through
+-- the API would fail well below the size of a real web meeting capture). The
+-- signature is the authorisation; the bucket still grants nobody write access.
 -- ---------------------------------------------------------------------------
 insert into storage.buckets (id, name, public, file_size_limit)
-values ('training-audio', 'training-audio', false, 104857600)
+values ('training-media', 'training-media', false, 524288000)
 on conflict (id) do update set
   public = false,
   file_size_limit = excluded.file_size_limit;
 
-drop policy if exists "training_audio_object_select" on storage.objects;
-create policy "training_audio_object_select" on storage.objects
+drop policy if exists "training_media_object_select" on storage.objects;
+create policy "training_media_object_select" on storage.objects
   for select to authenticated
-  using (bucket_id = 'training-audio');
+  using (bucket_id = 'training-media');
 
 -- ---------------------------------------------------------------------------
 -- Seed. All unpublished and scoped to both products, with no media — the

@@ -8,14 +8,14 @@ import {
   isAllowedEmbedUrl,
   readMinutes,
 } from "@/lib/training";
-import { signedAudioUrl } from "@/lib/trainingAudio";
+import { isVideoMime, signedMediaUrl } from "@/lib/trainingMedia";
 import type { TrainingModule, TrainingProgress } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 const TYPE_LABEL: Record<string, string> = {
   video: "Video",
-  audio: "Audio",
+  recording: "Recording",
   article: "Read",
 };
 
@@ -78,10 +78,11 @@ export default async function TrainingModulePage({
   const embeddable =
     module.content_type === "video" && isAllowedEmbedUrl(module.video_url);
 
-  const audioUrl =
-    module.content_type === "audio"
-      ? await signedAudioUrl(module.audio_storage_path)
+  const mediaUrl =
+    module.content_type === "recording"
+      ? await signedMediaUrl(module.media_storage_path)
       : null;
+  const mediaIsVideo = isVideoMime(module.media_mime_type);
 
   const marker =
     module.content_type === "article"
@@ -91,7 +92,7 @@ export default async function TrainingModulePage({
           formatDuration(
             module.content_type === "video"
               ? module.video_duration_seconds
-              : module.audio_duration_seconds
+              : module.media_duration_seconds
           ),
         ]
           .filter(Boolean)
@@ -131,13 +132,25 @@ export default async function TrainingModulePage({
         </section>
       )}
 
-      {module.content_type === "audio" && (
-        <section className="rounded-xl border border-black/10 bg-white p-6">
-          {audioUrl ? (
-            // eslint-disable-next-line jsx-a11y/media-has-caption
-            <audio controls preload="none" src={audioUrl} className="w-full">
-              Your browser cannot play this recording.
-            </audio>
+      {module.content_type === "recording" && (
+        <section className="overflow-hidden rounded-xl border border-black/10 bg-white p-6">
+          {mediaUrl ? (
+            mediaIsVideo ? (
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <video
+                controls
+                preload="metadata"
+                src={mediaUrl}
+                className="w-full rounded-lg bg-black"
+              >
+                Your browser cannot play this recording.
+              </video>
+            ) : (
+              // eslint-disable-next-line jsx-a11y/media-has-caption
+              <audio controls preload="none" src={mediaUrl} className="w-full">
+                Your browser cannot play this recording.
+              </audio>
+            )
           ) : (
             <p className="text-sm text-[#52514e]">
               This recording cannot be played at the moment. Please let us know.

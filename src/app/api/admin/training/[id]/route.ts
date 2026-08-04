@@ -5,7 +5,7 @@ import {
   validateTrainingWrite,
   publishError,
 } from "@/lib/trainingAdmin";
-import { TRAINING_AUDIO_BUCKET } from "@/lib/trainingAudio";
+import { TRAINING_MEDIA_BUCKET } from "@/lib/trainingMedia";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,7 +35,7 @@ export async function PATCH(
 
   const { data: existing } = await admin
     .from("training_modules")
-    .select("id, audio_storage_path")
+    .select("id, media_storage_path")
     .eq("id", params.id)
     .maybeSingle();
 
@@ -43,9 +43,9 @@ export async function PATCH(
     return NextResponse.json({ error: "Module not found" }, { status: 404 });
   }
 
-  // The audio path is read from the stored row, never the request body, so a
+  // The media path is read from the stored row, never the request body, so a
   // caller cannot point a module at an arbitrary object in the bucket.
-  const blocker = publishError(parsed.value, existing.audio_storage_path);
+  const blocker = publishError(parsed.value, existing.media_storage_path);
   if (blocker) {
     return NextResponse.json({ error: blocker }, { status: 400 });
   }
@@ -82,7 +82,7 @@ export async function DELETE(
 
   const { data: existing } = await admin
     .from("training_modules")
-    .select("id, audio_storage_path")
+    .select("id, media_storage_path")
     .eq("id", params.id)
     .maybeSingle();
 
@@ -104,12 +104,12 @@ export async function DELETE(
   // a deleted object with a surviving row would be a module that renders a
   // broken player. Failing the request here would report a delete that did
   // happen as a failure.
-  if (existing.audio_storage_path) {
+  if (existing.media_storage_path) {
     const { error: removeError } = await admin.storage
-      .from(TRAINING_AUDIO_BUCKET)
-      .remove([existing.audio_storage_path]);
+      .from(TRAINING_MEDIA_BUCKET)
+      .remove([existing.media_storage_path]);
     if (removeError) {
-      console.error("admin training: orphaned audio object", removeError);
+      console.error("admin training: orphaned media object", removeError);
     }
   }
 

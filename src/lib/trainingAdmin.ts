@@ -45,7 +45,7 @@ export type TrainingWrite = {
   video_provider: TrainingVideoProvider | null;
   video_url: string | null;
   video_duration_seconds: number | null;
-  audio_duration_seconds: number | null;
+  media_duration_seconds: number | null;
   body_markdown: string | null;
   lead_type_scope: TrainingLeadTypeScope;
   is_published: boolean;
@@ -68,7 +68,7 @@ function asNullableInt(value: unknown): number | null {
  * The form's job is to make the rules visible early; this is the one that
  * counts, because a form is a suggestion and a route is a boundary.
  *
- * `audio_storage_path` is deliberately absent: it is never set from a JSON
+ * `media_storage_path` is deliberately absent: it is never set from a JSON
  * body, only by the upload route, so a caller cannot point a module at an
  * arbitrary object in the bucket.
  */
@@ -91,7 +91,7 @@ export function validateTrainingWrite(
 
   const contentType = asTrimmedString(body.content_type) as TrainingContentType;
   if (!CONTENT_TYPES.includes(contentType)) {
-    return { ok: false, error: "Content type must be video, audio or article." };
+    return { ok: false, error: "Content type must be video, recording or article." };
   }
 
   const scope = asTrimmedString(body.lead_type_scope) as TrainingLeadTypeScope;
@@ -142,7 +142,7 @@ export function validateTrainingWrite(
     video_provider: videoProvider,
     video_url: videoUrl,
     video_duration_seconds: asNullableInt(body.video_duration_seconds),
-    audio_duration_seconds: asNullableInt(body.audio_duration_seconds),
+    media_duration_seconds: asNullableInt(body.media_duration_seconds),
     body_markdown: bodyMarkdown,
     lead_type_scope: scope,
     is_published: isPublished,
@@ -152,22 +152,22 @@ export function validateTrainingWrite(
 }
 
 /**
- * Publish-time check for a write, given whatever audio the row already has.
+ * Publish-time check for a write, given whatever media the row already has.
  *
- * Audio comes from the stored row rather than the request because the upload
- * is a separate step: an admin publishes an audio module whose file was
+ * The path comes from the stored row rather than the request because the
+ * upload is a separate step: an admin publishes a recording whose file was
  * uploaded earlier, and the body never carries the path.
  */
 export function publishError(
   value: TrainingWrite,
-  existingAudioPath: string | null
+  existingMediaPath: string | null
 ): string | null {
   return publishBlocker({
     content_type: value.content_type,
     is_published: value.is_published,
     video_url: value.video_url,
     video_provider: value.video_provider,
-    audio_storage_path: existingAudioPath,
+    media_storage_path: existingMediaPath,
     body_markdown: value.body_markdown,
   });
 }

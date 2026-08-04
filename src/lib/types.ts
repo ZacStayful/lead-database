@@ -241,7 +241,12 @@ export interface Testimonial {
   created_at: string;
 }
 
-export type TrainingContentType = "video" | "audio" | "article";
+/**
+ * 'video' is an embed on an allowlisted host; 'recording' is our own uploaded
+ * file, audio or video. The distinction is where the bytes live, not what the
+ * viewer sees.
+ */
+export type TrainingContentType = "video" | "recording" | "article";
 
 export type TrainingVideoProvider = "loom" | "youtube" | "vimeo";
 
@@ -258,9 +263,11 @@ export interface TrainingModule {
   video_provider: TrainingVideoProvider | null;
   video_url: string | null;
   video_duration_seconds: number | null;
-  /** Path inside the private 'training-audio' bucket, never a public URL. */
-  audio_storage_path: string | null;
-  audio_duration_seconds: number | null;
+  /** Path inside the private 'training-media' bucket, never a public URL. */
+  media_storage_path: string | null;
+  media_duration_seconds: number | null;
+  /** Decides the player: a video element for video/*, an audio bar otherwise. */
+  media_mime_type: string | null;
   body_markdown: string | null;
   lead_type_scope: TrainingLeadTypeScope;
   is_published: boolean;
