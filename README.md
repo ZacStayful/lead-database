@@ -50,9 +50,18 @@ Or run the individual migrations in order:
 
 ### 3. Stripe
 
-Create two products and copy the price IDs into env:
+Create the products and copy the price IDs into env:
 
 - **Stayful Lead Subscription** — £300 / month recurring → `STRIPE_MONTHLY_PRICE_ID`
+  (also readable as `STRIPE_PRICE_ID_20`); the £150 / 10-lead management price →
+  `STRIPE_PRICE_ID_10`
+- **Guaranteed Rent** — £150 / month for 10 leads → `STRIPE_GR_MONTHLY_PRICE_ID`;
+  £300 / month for 20 leads → `STRIPE_GR_PRICE_ID_20`
+
+Every GR price id must be in env. The webhook routes an event to the management
+or GR column set by matching its price ids against these vars, so an unlisted GR
+price is treated as management — it would credit management leads for a GR
+invoice and write management `account_status` on a GR cancellation.
 
 Add a webhook endpoint → `{APP_URL}/api/webhook/stripe` listening for
 `customer.subscription.{created,updated,deleted}`, `invoice.paid`,

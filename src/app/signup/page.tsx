@@ -15,6 +15,10 @@ function SignupForm() {
   const product = searchParams.get("product");
   const isGuaranteedRent =
     product === "guaranteed-rent" || product === "guaranteed_rent";
+  // Optional GR plan selector, e.g. /signup?product=guaranteed-rent&plan=lead_20
+  // for the £300/20 plan. Omitted — as every existing GR link omits it — the
+  // route falls back to the £150/10 plan GR has always sold.
+  const plan = searchParams.get("plan");
 
   const [form, setForm] = useState({
     business_name: "",
@@ -41,7 +45,13 @@ function SignupForm() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          isGuaranteedRent ? { ...form, product: "guaranteed-rent" } : form
+          isGuaranteedRent
+            ? {
+                ...form,
+                product: "guaranteed-rent",
+                ...(plan ? { plan } : {}),
+              }
+            : form
         ),
       });
       const data = await res.json();

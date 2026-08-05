@@ -2,7 +2,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { planForAllocation } from "@/lib/plans";
+import {
+  GR_PLANS,
+  grAllocationForPriceIds,
+  grPlanForAllocation,
+  isGuaranteedRentPriceId,
+  planForAllocation,
+} from "@/lib/plans";
 import {
   sendFilterLiftCompletedEmail,
   sendAccountReadyEmail,
@@ -170,6 +176,30 @@ function priceIdsFromInvoice(invoice: Stripe.Invoice): string[] {
   return ids.filter(Boolean);
 }
 
+/**
+ * PostgREST filter selecting the customer row a Stripe event belongs to.
+ *
+ * Management bills against `stripe_customer_id` and always has. GR may bill
+ * against EITHER that shared column or its own `gr_stripe_customer_id` (0056):
+ * every GR subscription created through signup or the dashboard reuses the
+ * shared Stripe customer, while a GR Payment Link mints its own. Matching both
+ * is what lets those two coexist without either product stealing the other's
+ * id.
+ *
+ * Interpolating into a filter string is safe here because Stripe customer ids
+ * are `cus_` + alphanumerics — no commas, quotes or parens for PostgREST to
+ * mis-parse — and the value comes from a signature-verified Stripe event, not
+ * from user input.
+ */
+function customerMatchFilter(
+  stripeCustomerId: string,
+  isGuaranteedRent: boolean
+): string {
+  return isGuaranteedRent
+    ? `gr_stripe_customer_id.eq.${stripeCustomerId},stripe_customer_id.eq.${stripeCustomerId}`
+    : `stripe_customer_id.eq.${stripeCustomerId}`;
+}
+
 function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
   return allocationFromPrices(priceIds, invoice.subtotal) === 10 ? "10" : "20";
 }
@@ -228,10 +258,12 @@ export async function POST(request: NextRequest) {
         const subPriceIds = (sub.items?.data ?? [])
           .map((item) => item.price?.id)
           .filter((id): id is string => Boolean(id));
-        const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-        const isGuaranteedRent = Boolean(
-          grPriceId && subPriceIds.includes(grPriceId)
-        );
+        // Matches ANY configured GR price, not just the original £150/10 one —
+        // see isGuaranteedRentPriceId. With a single-price check, a £300/20 GR
+        // subscription was routed into the management branch below, which on a
+        // cancellation would set account_status = 'cancelled' on a customer
+        // whose management subscription was never involved.
+        const isGuaranteedRent = isGuaranteedRentPriceId(subPriceIds);
 
         const update: Record<string, unknown> = {
           updated_at: new Date().toISOString(),
@@ -251,6 +283,36 @@ export async function POST(request: NextRequest) {
           update.gr_stripe_subscription_id = sub.id;
           update.gr_stripe_price_id = subPriceIds[0] ?? null;
           if (anchor) update.gr_billing_cycle_anchor = anchor;
+
+          // Re-size gr_monthly_allocation when — and only when — the GR
+          // subscription's PRICE changes. `invoice.paid` credits
+          // gr_monthly_allocation, not the price on the invoice, so without
+          // this a 20-lead buyer sitting on the column's default of 10 is
+          // credited half what they pay for, every month.
+          //
+          // The checkout routes set the allocation before redirecting (the GR
+          // half of the CLAUDE.md §17 trap). This is the backstop for every
+          // other way a GR subscription's price can be set or changed: a
+          // Payment Link, a plan switch in the Stripe billing portal, or an
+          // admin editing the subscription in Stripe directly.
+          //
+          // Keyed on "the price is not the one we last recorded" rather than on
+          // the event type. That is precisely a plan change — on creation the
+          // stored id is null, so it fires there too. An allocation an admin
+          // has hand-edited while the price stayed put is never touched, which
+          // is the silent re-sizing §17 declined to introduce on the management
+          // side. An unrecognised price id changes nothing.
+          const grAllocation = grAllocationForPriceIds(subPriceIds);
+          if (grAllocation) {
+            const { data: grRow } = await admin
+              .from("customers")
+              .select("gr_stripe_price_id")
+              .or(customerMatchFilter(customerId, true))
+              .maybeSingle();
+            if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0]) {
+              update.gr_monthly_allocation = grAllocation;
+            }
+          }
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
@@ -264,7 +326,7 @@ export async function POST(request: NextRequest) {
         await admin
           .from("customers")
           .update(update)
-          .eq("stripe_customer_id", customerId);
+          .or(customerMatchFilter(customerId, isGuaranteedRent));
 
         // Resume detection (management only). If the management subscription is
         // NOT paused in Stripe but our record still marks it paused, the customer
@@ -316,26 +378,94 @@ export async function POST(request: NextRequest) {
         if (subscriptionId) {
           // Detect the product from the invoice line item price ids.
           const priceIds = priceIdsFromInvoice(invoice);
-          const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-          const isGuaranteedRent = Boolean(
-            grPriceId && priceIds.includes(grPriceId)
-          );
+          const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
 
           if (isGuaranteedRent) {
-            // Guaranteed Rent renewal — credit 10 GR leads and mark the GR
-            // subscription active. Management fields are left untouched.
-            const { data: customer } = await admin
+            // Guaranteed Rent renewal — credit the customer's GR allocation and
+            // mark the GR subscription active. Management fields are untouched.
+            // A GR subscription may be billed against either the shared
+            // stripe_customer_id or a GR-only gr_stripe_customer_id minted by a
+            // Payment Link (0056). Match on either.
+            let { data: customer } = await admin
               .from("customers")
-              .select("id")
-              .eq("stripe_customer_id", customerId)
+              .select("id, gr_monthly_allocation")
+              .or(customerMatchFilter(customerId, true))
               .maybeSingle();
 
             if (!customer) {
+              // No linked portal account — a GR Payment Link purchase that
+              // never went through signup or an admin invite. Provision one now
+              // (create/link the customers row + a login) and then credit it,
+              // mirroring the management branch below. Without this the payer
+              // was charged and got nothing: the old code logged and bailed,
+              // which is survivable while GR had no public purchase path and
+              // becomes a silent "took the money, delivered no leads" the
+              // moment a GR Payment Link exists.
+              const sc = await stripe.customers.retrieve(customerId);
+              const email = "deleted" in sc && sc.deleted ? null : sc.email;
+              const name = "deleted" in sc && sc.deleted ? null : sc.name;
+              if (email) {
+                const result = await provisionPaidSubscriber(admin, {
+                  stripeCustomerId: customerId,
+                  email,
+                  name: name ?? null,
+                  subscriptionId,
+                  // Size the plan from the price actually paid. Unlike the
+                  // renewal path there is no customer row to read an allocation
+                  // from yet — this call is what creates it — so the invoice is
+                  // the only source of truth available.
+                  allocation:
+                    grAllocationForPriceIds(priceIds) ?? GR_PLANS.lead_10.leads,
+                  billingAnchor: toDateString(invoice.period_start),
+                  leadType: "guaranteed_rent",
+                });
+                if (result) {
+                  if (result.createdUser && result.setPasswordUrl) {
+                    await sendAccountReadyEmail({
+                      to: email,
+                      contactName: name ?? email,
+                      setPasswordUrl: result.setPasswordUrl,
+                    });
+                  }
+                  const { data: linked } = await admin
+                    .from("customers")
+                    .select("id, gr_monthly_allocation")
+                    .eq("id", result.customerId)
+                    .maybeSingle();
+                  customer = linked ?? null;
+                }
+              }
+            }
+
+            if (!customer) {
               console.error(
-                "invoice.paid (GR) for unknown stripe_customer_id — no credit granted",
+                "invoice.paid (GR) for unknown stripe customer and could not provision — no credit granted",
                 customerId
               );
               break;
+            }
+
+            // How many GR leads this invoice buys. Read from the customer row,
+            // exactly as the management branch reads monthly_allocation, so an
+            // allocation an admin has hand-edited is honoured rather than being
+            // silently re-sized by whatever price the invoice happens to carry
+            // (CLAUDE.md §17). This was a bare `10` while GR had one plan; left
+            // as a literal it would credit a £300/20 subscriber 10 leads a
+            // month, for ever, with nothing in the UI to show it.
+            const grCredits = grPlanForAllocation(
+              customer.gr_monthly_allocation ?? 10
+            ).leads;
+
+            // The row is the source of truth, but if it disagrees with the
+            // price actually being billed, somebody is being over- or
+            // under-credited every month. Log it loudly rather than papering
+            // over it — this is the one signal that a GR checkout was created
+            // without its allocation being set first.
+            const grInvoiceAllocation = grAllocationForPriceIds(priceIds);
+            if (grInvoiceAllocation && grInvoiceAllocation !== grCredits) {
+              console.error(
+                `GR allocation drift for customer ${customer.id}: invoice price implies ${grInvoiceAllocation} leads but gr_monthly_allocation credits ${grCredits}. Crediting ${grCredits} — correct gr_monthly_allocation in admin.`
+              );
             }
 
             // Idempotent, invoice-keyed credit: records the paid invoice and
@@ -344,7 +474,7 @@ export async function POST(request: NextRequest) {
             // after this line can be safely retried without double-crediting.
             const { error: creditError } = await admin.rpc("credit_invoice", {
               p_customer_id: customer.id,
-              p_amount: 10,
+              p_amount: grCredits,
               p_invoice_id: invoice.id,
               p_payment_intent_id:
                 (invoice.payment_intent as string | null) ?? null,
@@ -526,26 +656,29 @@ export async function POST(request: NextRequest) {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
 
+        // Detect the product from the invoice's line-item price ids, exactly as
+        // invoice.paid does. Without this the handler was product-blind: every
+        // failure was recorded as a management 'subscription' payment AND
+        // marked the MANAGEMENT subscription past_due — so a failed GR invoice
+        // silently degraded the customer's management subscription, breaking
+        // the parallel-column invariant. Branch on the product and touch only
+        // that product's columns.
+        //
+        // Resolved BEFORE the lookup because which column identifies the
+        // customer depends on the product: a GR Payment Link subscriber is
+        // keyed on gr_stripe_customer_id (0056), and looking them up by
+        // stripe_customer_id alone would find nothing and drop the failure
+        // silently.
+        const priceIds = priceIdsFromInvoice(invoice);
+        const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
+
         const { data: customer } = await admin
           .from("customers")
           .select("id")
-          .eq("stripe_customer_id", customerId)
+          .or(customerMatchFilter(customerId, isGuaranteedRent))
           .maybeSingle();
 
         if (customer) {
-          // Detect the product from the invoice's line-item price ids, exactly
-          // as invoice.paid does. Without this the handler was product-blind:
-          // every failure was recorded as a management 'subscription' payment
-          // AND marked the MANAGEMENT subscription past_due — so a failed GR
-          // invoice silently degraded the customer's management subscription,
-          // breaking the parallel-column invariant. Branch on the product and
-          // touch only that product's columns.
-          const priceIds = priceIdsFromInvoice(invoice);
-          const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-          const isGuaranteedRent = Boolean(
-            grPriceId && priceIds.includes(grPriceId)
-          );
-
           await admin.from("payments").insert({
             customer_id: customer.id,
             stripe_invoice_id: invoice.id,
