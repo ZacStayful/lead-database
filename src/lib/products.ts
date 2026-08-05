@@ -1,4 +1,4 @@
-import { PLANS, type PlanKey } from "@/lib/plans";
+import { GR_PLANS, PLANS, type PlanKey } from "@/lib/plans";
 import type { Customer, LeadType } from "@/lib/types";
 
 /**
@@ -93,9 +93,15 @@ export const PRODUCT_COPY: Record<LeadType, ProductCopy> = {
     plans: [
       {
         key: "lead_10",
-        leads: 10,
-        priceGbp: 150,
-        label: "10 leads a month",
+        leads: GR_PLANS.lead_10.leads,
+        priceGbp: GR_PLANS.lead_10.priceGbp,
+        label: `${GR_PLANS.lead_10.leads} leads a month`,
+      },
+      {
+        key: "lead_20",
+        leads: GR_PLANS.lead_20.leads,
+        priceGbp: GR_PLANS.lead_20.priceGbp,
+        label: `${GR_PLANS.lead_20.leads} leads a month`,
       },
     ],
   },

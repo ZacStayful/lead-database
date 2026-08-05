@@ -2,7 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { planForAllocation } from "@/lib/plans";
+import {
+  grAllocationForPriceIds,
+  grPlanForAllocation,
+  isGuaranteedRentPriceId,
+  planForAllocation,
+} from "@/lib/plans";
 import {
   sendFilterLiftCompletedEmail,
   sendAccountReadyEmail,
@@ -228,10 +233,12 @@ export async function POST(request: NextRequest) {
         const subPriceIds = (sub.items?.data ?? [])
           .map((item) => item.price?.id)
           .filter((id): id is string => Boolean(id));
-        const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-        const isGuaranteedRent = Boolean(
-          grPriceId && subPriceIds.includes(grPriceId)
-        );
+        // Matches ANY configured GR price, not just the original £150/10 one —
+        // see isGuaranteedRentPriceId. With a single-price check, a £300/20 GR
+        // subscription was routed into the management branch below, which on a
+        // cancellation would set account_status = 'cancelled' on a customer
+        // whose management subscription was never involved.
+        const isGuaranteedRent = isGuaranteedRentPriceId(subPriceIds);
 
         const update: Record<string, unknown> = {
           updated_at: new Date().toISOString(),
@@ -251,6 +258,36 @@ export async function POST(request: NextRequest) {
           update.gr_stripe_subscription_id = sub.id;
           update.gr_stripe_price_id = subPriceIds[0] ?? null;
           if (anchor) update.gr_billing_cycle_anchor = anchor;
+
+          // Re-size gr_monthly_allocation when — and only when — the GR
+          // subscription's PRICE changes. `invoice.paid` credits
+          // gr_monthly_allocation, not the price on the invoice, so without
+          // this a 20-lead buyer sitting on the column's default of 10 is
+          // credited half what they pay for, every month.
+          //
+          // The checkout routes set the allocation before redirecting (the GR
+          // half of the CLAUDE.md §17 trap). This is the backstop for every
+          // other way a GR subscription's price can be set or changed: a
+          // Payment Link, a plan switch in the Stripe billing portal, or an
+          // admin editing the subscription in Stripe directly.
+          //
+          // Keyed on "the price is not the one we last recorded" rather than on
+          // the event type. That is precisely a plan change — on creation the
+          // stored id is null, so it fires there too. An allocation an admin
+          // has hand-edited while the price stayed put is never touched, which
+          // is the silent re-sizing §17 declined to introduce on the management
+          // side. An unrecognised price id changes nothing.
+          const grAllocation = grAllocationForPriceIds(subPriceIds);
+          if (grAllocation) {
+            const { data: grRow } = await admin
+              .from("customers")
+              .select("gr_stripe_price_id")
+              .eq("stripe_customer_id", customerId)
+              .maybeSingle();
+            if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0]) {
+              update.gr_monthly_allocation = grAllocation;
+            }
+          }
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
@@ -316,17 +353,14 @@ export async function POST(request: NextRequest) {
         if (subscriptionId) {
           // Detect the product from the invoice line item price ids.
           const priceIds = priceIdsFromInvoice(invoice);
-          const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-          const isGuaranteedRent = Boolean(
-            grPriceId && priceIds.includes(grPriceId)
-          );
+          const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
 
           if (isGuaranteedRent) {
-            // Guaranteed Rent renewal — credit 10 GR leads and mark the GR
-            // subscription active. Management fields are left untouched.
+            // Guaranteed Rent renewal — credit the customer's GR allocation and
+            // mark the GR subscription active. Management fields are untouched.
             const { data: customer } = await admin
               .from("customers")
-              .select("id")
+              .select("id, gr_monthly_allocation")
               .eq("stripe_customer_id", customerId)
               .maybeSingle();
 
@@ -338,13 +372,36 @@ export async function POST(request: NextRequest) {
               break;
             }
 
+            // How many GR leads this invoice buys. Read from the customer row,
+            // exactly as the management branch reads monthly_allocation, so an
+            // allocation an admin has hand-edited is honoured rather than being
+            // silently re-sized by whatever price the invoice happens to carry
+            // (CLAUDE.md §17). This was a bare `10` while GR had one plan; left
+            // as a literal it would credit a £300/20 subscriber 10 leads a
+            // month, for ever, with nothing in the UI to show it.
+            const grCredits = grPlanForAllocation(
+              customer.gr_monthly_allocation ?? 10
+            ).leads;
+
+            // The row is the source of truth, but if it disagrees with the
+            // price actually being billed, somebody is being over- or
+            // under-credited every month. Log it loudly rather than papering
+            // over it — this is the one signal that a GR checkout was created
+            // without its allocation being set first.
+            const grInvoiceAllocation = grAllocationForPriceIds(priceIds);
+            if (grInvoiceAllocation && grInvoiceAllocation !== grCredits) {
+              console.error(
+                `GR allocation drift for customer ${customer.id}: invoice price implies ${grInvoiceAllocation} leads but gr_monthly_allocation credits ${grCredits}. Crediting ${grCredits} — correct gr_monthly_allocation in admin.`
+              );
+            }
+
             // Idempotent, invoice-keyed credit: records the paid invoice and
             // moves gr_lead_balance in a single transaction. A replayed delivery
             // of an already-credited invoice is a no-op, so a failure anywhere
             // after this line can be safely retried without double-crediting.
             const { error: creditError } = await admin.rpc("credit_invoice", {
               p_customer_id: customer.id,
-              p_amount: 10,
+              p_amount: grCredits,
               p_invoice_id: invoice.id,
               p_payment_intent_id:
                 (invoice.payment_intent as string | null) ?? null,
@@ -541,10 +598,7 @@ export async function POST(request: NextRequest) {
           // breaking the parallel-column invariant. Branch on the product and
           // touch only that product's columns.
           const priceIds = priceIdsFromInvoice(invoice);
-          const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-          const isGuaranteedRent = Boolean(
-            grPriceId && priceIds.includes(grPriceId)
-          );
+          const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
 
           await admin.from("payments").insert({
             customer_id: customer.id,

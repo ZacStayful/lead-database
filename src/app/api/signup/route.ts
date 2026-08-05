@@ -3,6 +3,7 @@ import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
 import { isOwnerEmail } from "@/lib/owner";
+import { GR_PLANS, stripeGrPriceIdFor, toGrPlanKey } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest) {
     phone?: string;
     password?: string;
     product?: string;
+    plan?: string;
   };
   try {
     body = await request.json();
@@ -45,6 +47,11 @@ export async function POST(request: NextRequest) {
   // subscription; anything else is the default management subscription.
   const isGuaranteedRent =
     product === "guaranteed-rent" || product === "guaranteed_rent";
+
+  // Which GR plan. toGrPlanKey defaults to the £150/10 plan, so every existing
+  // GR marketing link — none of which sends a plan — keeps buying exactly what
+  // it bought before the £300/20 plan existed.
+  const grAllocation = GR_PLANS[toGrPlanKey(body.plan)].leads;
 
   const owner = isOwnerEmail(email);
 
@@ -104,8 +111,11 @@ export async function POST(request: NextRequest) {
   if (!owner || isGuaranteedRent) {
     if (!process.env.STRIPE_SECRET_KEY) missing.push("STRIPE_SECRET_KEY");
     if (isGuaranteedRent) {
-      if (!process.env.STRIPE_GR_MONTHLY_PRICE_ID)
-        missing.push("STRIPE_GR_MONTHLY_PRICE_ID");
+      // Name the env var for the plan actually being bought, so a missing
+      // £300/20 price id reports itself rather than looking like GR is
+      // unconfigured entirely.
+      const grPriceEnv = GR_PLANS[toGrPlanKey(body.plan)].priceEnv;
+      if (!process.env[grPriceEnv]) missing.push(grPriceEnv);
     } else if (!process.env.STRIPE_MONTHLY_PRICE_ID) {
       missing.push("STRIPE_MONTHLY_PRICE_ID");
     }
@@ -136,7 +146,7 @@ export async function POST(request: NextRequest) {
     // Stripe), rather than being provisioned as a plain non-admin customer.
     if (isGuaranteedRent && !owner) {
       const stripe = getStripe();
-      const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID!;
+      const grPriceId = stripeGrPriceIdFor(grAllocation);
 
       const { data: existing } = await admin
         .from("customers")
@@ -149,6 +159,18 @@ export async function POST(request: NextRequest) {
         stripeCustomerId: string,
         userId: string | null
       ) => {
+        // Size the GR plan on the row BEFORE checkout. `invoice.paid` credits
+        // gr_monthly_allocation, not the plan the invoice was for, so a £300/20
+        // buyer left on the column's default of 10 would be credited half what
+        // they pay for every month. Same rule as the management side of
+        // /api/customer/subscribe (CLAUDE.md §17). Inert if checkout is
+        // abandoned — the column gates nothing without an active GR
+        // subscription.
+        await admin
+          .from("customers")
+          .update({ gr_monthly_allocation: grAllocation })
+          .eq("id", customerId);
+
         const session = await stripe.checkout.sessions.create({
           mode: "subscription",
           customer: stripeCustomerId,
