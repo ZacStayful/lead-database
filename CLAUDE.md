@@ -620,6 +620,29 @@ event. On a genuine disagreement the webhook credits the **row** and logs a
 
 ### GR price ids are the product router
 
+### GR Payment Links and `gr_stripe_customer_id` *(0056)*
+
+A GR Stripe **Payment Link** mints its own Stripe customer for the payer. That
+broke the one Stripe field the two products still shared: `stripe_customer_id`.
+An existing management subscriber buying GR through a link would have their
+`stripe_customer_id` repointed at the new GR customer by `invoice.paid`
+provisioning, detaching their **management** subscription from every future
+webhook lookup — and management's own provisioning would repoint it back on its
+next renewal, the two products fighting over one column indefinitely.
+
+`gr_stripe_customer_id` (0056) is the GR half. **Reads match either column**
+(`customerMatchFilter()` in the webhook); **only GR writers set the gr_ column**,
+and the GR path never writes `stripe_customer_id`. Nothing is backfilled: a null
+`gr_stripe_customer_id` means "GR bills against the shared customer", which is
+what every pre-Payment-Link GR subscription does.
+
+`invoice.paid` on a GR invoice for an unknown Stripe customer now **provisions**
+the account (row + login + set-password email) exactly as the management branch
+does, instead of logging and bailing. Bailing was survivable while GR had no
+public purchase path; with a Payment Link it is a silent "took the money,
+delivered no leads". GR provisioning writes **no** management column, so a GR-only
+buyer never comes out looking like an active management subscriber (invariant 6).
+
 `isGuaranteedRentPriceId()` in `plans.ts` decides, for **every** Stripe webhook
 event, whether it belongs to GR or management. It matches against every price id
 in `GR_PLANS`, so **each GR plan's price id must be in env**. This was an

@@ -49,6 +49,10 @@ export interface Customer {
   gr_subscription_status: SubscriptionStatus | string;
   gr_stripe_subscription_id: string | null;
   gr_stripe_price_id: string | null;
+  /** Set only when GR bills against a different Stripe customer than
+   *  `stripe_customer_id` — i.e. a GR Payment Link purchase (0056). NULL means
+   *  GR shares the management Stripe customer. */
+  gr_stripe_customer_id: string | null;
   gr_monthly_allocation: number;
   gr_leads_received_this_month: number;
   gr_billing_cycle_anchor: string | null;

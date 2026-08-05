@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  GR_PLANS,
   grAllocationForPriceIds,
   grPlanForAllocation,
   isGuaranteedRentPriceId,
@@ -175,6 +176,30 @@ function priceIdsFromInvoice(invoice: Stripe.Invoice): string[] {
   return ids.filter(Boolean);
 }
 
+/**
+ * PostgREST filter selecting the customer row a Stripe event belongs to.
+ *
+ * Management bills against `stripe_customer_id` and always has. GR may bill
+ * against EITHER that shared column or its own `gr_stripe_customer_id` (0056):
+ * every GR subscription created through signup or the dashboard reuses the
+ * shared Stripe customer, while a GR Payment Link mints its own. Matching both
+ * is what lets those two coexist without either product stealing the other's
+ * id.
+ *
+ * Interpolating into a filter string is safe here because Stripe customer ids
+ * are `cus_` + alphanumerics — no commas, quotes or parens for PostgREST to
+ * mis-parse — and the value comes from a signature-verified Stripe event, not
+ * from user input.
+ */
+function customerMatchFilter(
+  stripeCustomerId: string,
+  isGuaranteedRent: boolean
+): string {
+  return isGuaranteedRent
+    ? `gr_stripe_customer_id.eq.${stripeCustomerId},stripe_customer_id.eq.${stripeCustomerId}`
+    : `stripe_customer_id.eq.${stripeCustomerId}`;
+}
+
 function planFromInvoice(invoice: Stripe.Invoice, priceIds: string[]): "10" | "20" {
   return allocationFromPrices(priceIds, invoice.subtotal) === 10 ? "10" : "20";
 }
@@ -282,7 +307,7 @@ export async function POST(request: NextRequest) {
             const { data: grRow } = await admin
               .from("customers")
               .select("gr_stripe_price_id")
-              .eq("stripe_customer_id", customerId)
+              .or(customerMatchFilter(customerId, true))
               .maybeSingle();
             if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0]) {
               update.gr_monthly_allocation = grAllocation;
@@ -301,7 +326,7 @@ export async function POST(request: NextRequest) {
         await admin
           .from("customers")
           .update(update)
-          .eq("stripe_customer_id", customerId);
+          .or(customerMatchFilter(customerId, isGuaranteedRent));
 
         // Resume detection (management only). If the management subscription is
         // NOT paused in Stripe but our record still marks it paused, the customer
@@ -358,15 +383,63 @@ export async function POST(request: NextRequest) {
           if (isGuaranteedRent) {
             // Guaranteed Rent renewal — credit the customer's GR allocation and
             // mark the GR subscription active. Management fields are untouched.
-            const { data: customer } = await admin
+            // A GR subscription may be billed against either the shared
+            // stripe_customer_id or a GR-only gr_stripe_customer_id minted by a
+            // Payment Link (0056). Match on either.
+            let { data: customer } = await admin
               .from("customers")
               .select("id, gr_monthly_allocation")
-              .eq("stripe_customer_id", customerId)
+              .or(customerMatchFilter(customerId, true))
               .maybeSingle();
 
             if (!customer) {
+              // No linked portal account — a GR Payment Link purchase that
+              // never went through signup or an admin invite. Provision one now
+              // (create/link the customers row + a login) and then credit it,
+              // mirroring the management branch below. Without this the payer
+              // was charged and got nothing: the old code logged and bailed,
+              // which is survivable while GR had no public purchase path and
+              // becomes a silent "took the money, delivered no leads" the
+              // moment a GR Payment Link exists.
+              const sc = await stripe.customers.retrieve(customerId);
+              const email = "deleted" in sc && sc.deleted ? null : sc.email;
+              const name = "deleted" in sc && sc.deleted ? null : sc.name;
+              if (email) {
+                const result = await provisionPaidSubscriber(admin, {
+                  stripeCustomerId: customerId,
+                  email,
+                  name: name ?? null,
+                  subscriptionId,
+                  // Size the plan from the price actually paid. Unlike the
+                  // renewal path there is no customer row to read an allocation
+                  // from yet — this call is what creates it — so the invoice is
+                  // the only source of truth available.
+                  allocation:
+                    grAllocationForPriceIds(priceIds) ?? GR_PLANS.lead_10.leads,
+                  billingAnchor: toDateString(invoice.period_start),
+                  leadType: "guaranteed_rent",
+                });
+                if (result) {
+                  if (result.createdUser && result.setPasswordUrl) {
+                    await sendAccountReadyEmail({
+                      to: email,
+                      contactName: name ?? email,
+                      setPasswordUrl: result.setPasswordUrl,
+                    });
+                  }
+                  const { data: linked } = await admin
+                    .from("customers")
+                    .select("id, gr_monthly_allocation")
+                    .eq("id", result.customerId)
+                    .maybeSingle();
+                  customer = linked ?? null;
+                }
+              }
+            }
+
+            if (!customer) {
               console.error(
-                "invoice.paid (GR) for unknown stripe_customer_id — no credit granted",
+                "invoice.paid (GR) for unknown stripe customer and could not provision — no credit granted",
                 customerId
               );
               break;
@@ -583,23 +656,29 @@ export async function POST(request: NextRequest) {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
 
+        // Detect the product from the invoice's line-item price ids, exactly as
+        // invoice.paid does. Without this the handler was product-blind: every
+        // failure was recorded as a management 'subscription' payment AND
+        // marked the MANAGEMENT subscription past_due — so a failed GR invoice
+        // silently degraded the customer's management subscription, breaking
+        // the parallel-column invariant. Branch on the product and touch only
+        // that product's columns.
+        //
+        // Resolved BEFORE the lookup because which column identifies the
+        // customer depends on the product: a GR Payment Link subscriber is
+        // keyed on gr_stripe_customer_id (0056), and looking them up by
+        // stripe_customer_id alone would find nothing and drop the failure
+        // silently.
+        const priceIds = priceIdsFromInvoice(invoice);
+        const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
+
         const { data: customer } = await admin
           .from("customers")
           .select("id")
-          .eq("stripe_customer_id", customerId)
+          .or(customerMatchFilter(customerId, isGuaranteedRent))
           .maybeSingle();
 
         if (customer) {
-          // Detect the product from the invoice's line-item price ids, exactly
-          // as invoice.paid does. Without this the handler was product-blind:
-          // every failure was recorded as a management 'subscription' payment
-          // AND marked the MANAGEMENT subscription past_due — so a failed GR
-          // invoice silently degraded the customer's management subscription,
-          // breaking the parallel-column invariant. Branch on the product and
-          // touch only that product's columns.
-          const priceIds = priceIdsFromInvoice(invoice);
-          const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
-
           await admin.from("payments").insert({
             customer_id: customer.id,
             stripe_invoice_id: invoice.id,
