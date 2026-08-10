@@ -13,7 +13,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { formatDate } from "@/lib/utils";
-import { cityForArea } from "@/lib/postcode";
+import {
+  activeLeadFilters,
+  bedroomPhrase,
+  locationText,
+} from "@/lib/leadFilter";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
 import { offerState, formatRemaining, type PostCallOffer } from "@/lib/postCallOffers";
 import { Download } from "lucide-react";
@@ -174,14 +178,6 @@ export default async function AdminCustomerDetailPage({
   );
 }
 
-function bedroomPhrase(min: number | null, max: number | null): string {
-  if (min == null && max == null) return "Any";
-  if (min != null && max != null) {
-    return min === max ? `Exactly ${min}` : `${min}–${max}`;
-  }
-  if (min != null) return `${min}+`;
-  return `Up to ${max}`;
-}
 
 /**
  * Admin-only view of a customer's lead filter(s), including the internal
@@ -189,41 +185,13 @@ function bedroomPhrase(min: number | null, max: number | null): string {
  * Never shown to the customer.
  */
 function FilterCard({ customer }: { customer: Customer }) {
-  const filtered = (s: string | null | undefined) =>
-    s === "active" || s === "pending_lift";
-
-  const products: {
-    label: string;
-    status: string;
-    areas: string[] | null;
-    min: number | null;
-    max: number | null;
-    liftDate: string | null;
-    priority: number;
-  }[] = [];
-
-  if (filtered(customer.filter_status)) {
-    products.push({
-      label: "Management",
-      status: customer.filter_status,
-      areas: customer.filter_areas,
-      min: customer.filter_min_bedrooms,
-      max: customer.filter_max_bedrooms,
-      liftDate: customer.filter_lift_effective_date,
-      priority: computePacing(customer).deficit,
-    });
-  }
-  if (filtered(customer.gr_filter_status)) {
-    products.push({
-      label: "Guaranteed Rent",
-      status: customer.gr_filter_status,
-      areas: customer.gr_filter_areas,
-      min: customer.gr_filter_min_bedrooms,
-      max: customer.gr_filter_max_bedrooms,
-      liftDate: customer.gr_filter_lift_effective_date,
-      priority: computeGrPacing(customer).deficit,
-    });
-  }
+  const products = activeLeadFilters(customer).map((f) => ({
+    ...f,
+    priority:
+      f.leadType === "guaranteed_rent"
+        ? computeGrPacing(customer).deficit
+        : computePacing(customer).deficit,
+  }));
 
   if (products.length === 0) return null;
 
@@ -245,15 +213,13 @@ function FilterCard({ customer }: { customer: Customer }) {
               <div>
                 <dt className="text-xs text-muted-foreground">Areas</dt>
                 <dd className="mt-0.5 font-medium">
-                  {p.areas && p.areas.length > 0
-                    ? p.areas.map((a) => cityForArea(a) || a).join(", ")
-                    : "Any"}
+                  {locationText(p.areas)}
                 </dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Bedrooms</dt>
                 <dd className="mt-0.5 font-medium">
-                  {bedroomPhrase(p.min, p.max)}
+                  {bedroomPhrase(p.minBedrooms, p.maxBedrooms)}
                 </dd>
               </div>
               <div>

@@ -14,6 +14,12 @@ import { Badge } from "@/components/ui/badge";
 import { Filter, Pause } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { computePacing, type PacingStatus } from "@/lib/pacing";
+import {
+  activeLeadFilters,
+  filterSummary,
+  filterTooltip,
+  hasLeadFilter,
+} from "@/lib/leadFilter";
 import type { Customer } from "@/lib/types";
 
 type Tab = "all" | "active" | "waitlisted" | "invited" | "cancelled";
@@ -46,10 +52,7 @@ const hasGuaranteedRent = (c: Customer) => c.gr_subscription_status === "active"
 const isPaused = (c: Customer) => Boolean(c.paused_at);
 
 // A customer with an active or pending-lift filter on either product.
-const isFiltered = (s: string | null | undefined) =>
-  s === "active" || s === "pending_lift";
-const hasFilter = (c: Customer) =>
-  isFiltered(c.filter_status) || isFiltered(c.gr_filter_status);
+const hasFilter = hasLeadFilter;
 
 const ACCOUNT_BADGE: Record<string, string> = {
   active: "border-transparent bg-green-100 text-green-700",
@@ -206,6 +209,7 @@ export function AdminCustomersTable({
             {rows.map((c) => {
               const status = accountStatus(c);
               const pacing = computePacing(c);
+              const filters = activeLeadFilters(c);
               return (
                 <TableRow key={c.id}>
                   <TableCell className="font-medium">
@@ -234,6 +238,30 @@ export function AdminCustomersTable({
                         </span>
                       )}
                     </span>
+                    {/* What they actually filtered for. The badge alone said a
+                        filter existed but not what it excluded, so judging why a
+                        customer is starved of leads meant opening their page. */}
+                    {filters.map((f) => (
+                      <span
+                        key={f.leadType}
+                        title={filterTooltip(f)}
+                        className="mt-0.5 block text-xs font-normal text-muted-foreground"
+                      >
+                        {filters.length > 1 && (
+                          <span className="font-medium">
+                            {f.leadType === "guaranteed_rent" ? "GR" : "Mgmt"}:{" "}
+                          </span>
+                        )}
+                        {filterSummary(f)}
+                        {f.status === "pending_lift" && (
+                          <span className="text-amber-700">
+                            {" "}
+                            · lifting
+                            {f.liftDate ? ` ${formatDate(f.liftDate)}` : ""}
+                          </span>
+                        )}
+                      </span>
+                    ))}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{c.email}</TableCell>
                   <TableCell>
