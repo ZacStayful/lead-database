@@ -158,7 +158,15 @@ export default async function AdminLeadDetailPage({
                         className="flex items-center justify-between rounded-md border-[0.5px] border-border px-3 py-2 text-sm"
                       >
                         <span className="flex items-center gap-2 font-medium">
-                          {a.customers?.business_name ?? "Unknown"}
+                          {/* Through to what this operator has actually done
+                              with the lead — their notes, pipeline and contact
+                              record. Each holder has their own. */}
+                          <Link
+                            href={`/admin/assignments/${a.id}`}
+                            className="text-brand hover:underline"
+                          >
+                            {a.customers?.business_name ?? "Unknown"}
+                          </Link>
                           {a.is_reclaimed && (
                             <Badge variant="muted">Reclaimed</Badge>
                           )}

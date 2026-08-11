@@ -144,7 +144,12 @@ export default async function AdminCustomerDetailPage({
                   {assignments.map((a) => (
                     <TableRow key={a.id}>
                       <TableCell className="pl-6 font-medium">
-                        {a.lead?.lead_name}
+                        <Link
+                          href={`/admin/assignments/${a.id}`}
+                          className="text-brand hover:underline"
+                        >
+                          {a.lead?.lead_name}
+                        </Link>
                       </TableCell>
                       <TableCell>
                         {a.viewed_at ? (
