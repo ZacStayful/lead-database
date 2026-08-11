@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
+import type { LeadType } from "@/lib/types";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -36,31 +37,65 @@ export async function provisionPaidSubscriber(
     subscriptionId: string | null;
     allocation: number;
     billingAnchor: string | null;
+    /** Which product was paid for. Defaults to management. */
+    leadType?: LeadType;
   }
 ): Promise<ProvisionResult | null> {
   const email = params.email.trim().toLowerCase();
   if (!email) return null;
   const name = params.name?.trim() || email;
+  const isGuaranteedRent = params.leadType === "guaranteed_rent";
 
-  // Already linked by Stripe id → the standard flow owns this account.
+  // Already linked by Stripe id → the standard flow owns this account. A GR
+  // payer may be keyed on either column (see 0056), so check both.
   const { data: byStripe } = await admin
     .from("customers")
     .select("id")
-    .eq("stripe_customer_id", params.stripeCustomerId)
+    .or(
+      isGuaranteedRent
+        ? `gr_stripe_customer_id.eq.${params.stripeCustomerId},stripe_customer_id.eq.${params.stripeCustomerId}`
+        : `stripe_customer_id.eq.${params.stripeCustomerId}`
+    )
     .maybeSingle();
   if (byStripe) {
     return { customerId: byStripe.id, createdUser: false, setPasswordUrl: null };
   }
 
-  const activation = {
-    stripe_customer_id: params.stripeCustomerId,
-    stripe_subscription_id: params.subscriptionId,
-    subscription_status: "active",
-    account_status: "active",
-    monthly_allocation: params.allocation,
-    ...(params.billingAnchor ? { billing_cycle_anchor: params.billingAnchor } : {}),
-    updated_at: new Date().toISOString(),
-  };
+  // The columns that mark this product as bought and paid for.
+  //
+  // The GR set deliberately writes NO management column — not
+  // `account_status`, not `subscription_status`, not `monthly_allocation`
+  // (CLAUDE.md invariant 6). A GR Payment Link buyer who never bought
+  // management must not come out of this looking like an active management
+  // subscriber; GR routing gates on gr_subscription_status and gr_lead_balance
+  // alone, so the GR columns are all it needs to start receiving leads.
+  //
+  // GR writes `gr_stripe_customer_id`, never `stripe_customer_id`. A Payment
+  // Link mints its own Stripe customer, and repointing the shared column would
+  // detach this customer's management subscription from every future webhook
+  // lookup — see 0056.
+  const activation = isGuaranteedRent
+    ? {
+        gr_stripe_customer_id: params.stripeCustomerId,
+        gr_stripe_subscription_id: params.subscriptionId,
+        gr_subscription_status: "active",
+        gr_monthly_allocation: params.allocation,
+        ...(params.billingAnchor
+          ? { gr_billing_cycle_anchor: params.billingAnchor }
+          : {}),
+        updated_at: new Date().toISOString(),
+      }
+    : {
+        stripe_customer_id: params.stripeCustomerId,
+        stripe_subscription_id: params.subscriptionId,
+        subscription_status: "active",
+        account_status: "active",
+        monthly_allocation: params.allocation,
+        ...(params.billingAnchor
+          ? { billing_cycle_anchor: params.billingAnchor }
+          : {}),
+        updated_at: new Date().toISOString(),
+      };
 
   // Reuse an existing row for this email (e.g. an enquiry-form lead), else
   // create one. Emails are matched lowercased.
@@ -78,13 +113,19 @@ export async function provisionPaidSubscriber(
     userId = (byEmail.user_id as string | null) ?? null;
     // Link (or RE-link) this row to the paying Stripe customer. We only reach
     // here when NO row is linked to params.stripeCustomerId (the byStripe lookup
-    // above was empty), so any existing non-null stripe_customer_id on this row
-    // is a STALE id from an earlier signup whose subscription now lives on a
-    // different (Payment-Link) Stripe customer. Relinking — rather than the old
-    // "only claim while null" guard — is what heals that duplicate: from here on
-    // credits, activation, and subscription lifecycle events all match this row
-    // directly instead of silently missing it. Same email = same person for this
-    // product, so there is no legitimate row to protect from being clobbered.
+    // above was empty), so for MANAGEMENT any existing non-null
+    // stripe_customer_id on this row is a STALE id from an earlier signup whose
+    // subscription now lives on a different (Payment-Link) Stripe customer.
+    // Relinking — rather than the old "only claim while null" guard — is what
+    // heals that duplicate: from here on credits, activation, and subscription
+    // lifecycle events all match this row directly instead of silently missing
+    // it. Same email = same person for this product, so there is no legitimate
+    // row to protect from being clobbered.
+    //
+    // For GR the same reasoning applies to `gr_stripe_customer_id`, which this
+    // is the only writer of. `stripe_customer_id` is untouched on the GR path,
+    // so an active management subscription on a different Stripe customer keeps
+    // matching — the failure 0056 exists to prevent.
     await admin
       .from("customers")
       .update(activation)

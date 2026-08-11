@@ -18,7 +18,11 @@ operators on monthly subscriptions. Two independent products:
 | Product | Column prefix | Price/lead | Typical plan |
 |---|---|---|---|
 | **Management** | *(none)* | £15 | £150/mo for 10, £300/mo for 20 |
-| **Guaranteed Rent** | `gr_` | £15 | £150/mo for 10 |
+| **Guaranteed Rent** | `gr_` | £15 | £150/mo for 10, £300/mo for 20 |
+
+Both products are two-plan and both price at £15 a lead, so `LEAD_PRICE_GBP`
+needs no per-plan branch. Plan tables live in `plans.ts` (`PLANS` / `GR_PLANS`);
+each plan names the env var holding its Stripe price id.
 
 Next.js 14 (App Router) · Supabase (Postgres + Auth) · Stripe · Resend · Vercel.
 Leads originate in Monday.com and arrive via n8n webhooks or a scheduled sync.
@@ -513,11 +517,15 @@ derived.
 
 **The slot unit differs on purpose.** Management sells 10- and 20-lead plans, so
 a 20-lead customer is one slot and a 10-lead customer half — the cap is a bound
-on committed lead volume, not on heads. GR sells one plan (£150/mo, 10 leads),
-so its unit is 10 and one standard GR subscriber is exactly one slot. That is
-what makes a cap of 10 read as "10 guaranteed rent customers", which is how it
-is set. Weighting rather than counting heads still keeps a hand-edited GR
-allocation honest.
+on committed lead volume, not on heads. GR's unit is 10, so a standard £150/10
+GR subscriber is exactly one slot. That is what makes a cap of 10 read as "10
+guaranteed rent customers", which is how it was set.
+
+⚠️ Since the £300/20 GR plan, a 20-lead GR subscriber consumes **two** GR slots.
+That is the correct reading of a cap on committed lead volume and needs no code
+change — `grCapacityWeight` derives it — but it does mean the GR cap no longer
+reads as a headcount. Nothing gates on the GR cap (below), so this is a
+reporting nuance today, not a behaviour change.
 
 **The GR side must not read `account_status`.** It is management-only (§3): the
 Stripe webhook leaves it untouched on a GR cancellation, so it would keep
@@ -585,7 +593,7 @@ copied from `/api/signup` rather than using the weighted helper, so the cap
 means the same thing however a customer arrives. See the §16 note: those two
 readings of the same setting still disagree.
 
-### The one trap: `monthly_allocation` must be set before checkout
+### The one trap: the allocation column must be set before checkout
 
 `invoice.paid` credits `planForAllocation(customer.monthly_allocation).leads`,
 **not** the plan the invoice was actually for. A customer buying the £150/10
@@ -600,3 +608,52 @@ An `allocationFromPrices()` helper already exists in the webhook and would fix
 this at source, but it is only used for post-call-offer labelling; switching the
 credit onto it would silently re-size any hand-edited allocation that disagrees
 with its price, so it was left alone.
+
+**The same trap applies to GR**, in the opposite direction. `gr_monthly_allocation`
+defaults to **10**, so a £300/20 GR buyer left on the default is credited *half*
+what they pay for. Both GR checkout paths (`/api/customer/subscribe` and the GR
+branch of `/api/signup`) now write it before creating the session, and
+`customer.subscription.created` sets it from the price id as a backstop —
+creation only, so it can never undo an admin's hand-edit on a later `updated`
+event. On a genuine disagreement the webhook credits the **row** and logs a
+"GR allocation drift" error; the row stays the source of truth.
+
+### GR price ids are the product router
+
+### GR Payment Links and `gr_stripe_customer_id` *(0056)*
+
+A GR Stripe **Payment Link** mints its own Stripe customer for the payer. That
+broke the one Stripe field the two products still shared: `stripe_customer_id`.
+An existing management subscriber buying GR through a link would have their
+`stripe_customer_id` repointed at the new GR customer by `invoice.paid`
+provisioning, detaching their **management** subscription from every future
+webhook lookup — and management's own provisioning would repoint it back on its
+next renewal, the two products fighting over one column indefinitely.
+
+`gr_stripe_customer_id` (0056) is the GR half. **Reads match either column**
+(`customerMatchFilter()` in the webhook); **only GR writers set the gr_ column**,
+and the GR path never writes `stripe_customer_id`. Nothing is backfilled: a null
+`gr_stripe_customer_id` means "GR bills against the shared customer", which is
+what every pre-Payment-Link GR subscription does.
+
+`invoice.paid` on a GR invoice for an unknown Stripe customer now **provisions**
+the account (row + login + set-password email) exactly as the management branch
+does, instead of logging and bailing. Bailing was survivable while GR had no
+public purchase path; with a Payment Link it is a silent "took the money,
+delivered no leads". GR provisioning writes **no** management column, so a GR-only
+buyer never comes out looking like an active management subscriber (invariant 6).
+
+`isGuaranteedRentPriceId()` in `plans.ts` decides, for **every** Stripe webhook
+event, whether it belongs to GR or management. It matches against every price id
+in `GR_PLANS`, so **each GR plan's price id must be in env**. This was an
+equality test against the single `STRIPE_GR_MONTHLY_PRICE_ID` while GR had one
+plan; a second GR price would have fallen through to the management branch and
+credited management leads for a GR invoice, set `account_status = 'cancelled'`
+on a GR cancellation, and marked management `past_due` on a failed GR payment —
+invariant 6, breached three ways from one missing env var.
+
+It fails **open to management** by design: an unknown price is treated as
+management so a management Payment Link referencing a price object that is not
+in env keeps working (the reason `allocationFromPrices` has a subtotal
+fallback). That is exactly why a missing GR price id is dangerous rather than
+merely broken — set it before the product goes on sale.

@@ -3,7 +3,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getStripe } from "@/lib/stripe";
 import { APP_URL } from "@/lib/env";
-import { PLANS, stripePriceIdFor, toPlanKey } from "@/lib/plans";
+import {
+  GR_PLANS,
+  PLANS,
+  stripeGrPriceIdFor,
+  stripePriceIdFor,
+  toGrPlanKey,
+  toPlanKey,
+} from "@/lib/plans";
 import { holdsProduct, toLeadType } from "@/lib/products";
 
 export const runtime = "nodejs";
@@ -99,14 +106,18 @@ export async function POST(req: NextRequest) {
   let allocation: number | null = null;
 
   if (leadType === "guaranteed_rent") {
-    const grPriceId = process.env.STRIPE_GR_MONTHLY_PRICE_ID;
-    if (!grPriceId) {
+    // GR is a two-plan product as of the £300/20 plan. Resolve the chosen plan
+    // the same way management does; toGrPlanKey defaults to the £150/10 plan so
+    // a caller that names no plan gets what GR has always sold.
+    allocation = GR_PLANS[toGrPlanKey(body.plan)].leads;
+    try {
+      priceId = stripeGrPriceIdFor(allocation);
+    } catch {
       return NextResponse.json(
         { error: "Guaranteed Rent isn't configured for checkout yet." },
         { status: 500 }
       );
     }
-    priceId = grPriceId;
   } else {
     // Management capacity gate. Mirrors /api/signup exactly — a headcount of
     // active accounts against max_active_customers — so the cap means the same
@@ -162,18 +173,27 @@ export async function POST(req: NextRequest) {
       .eq("id", customer.id);
   }
 
-  // Size the management plan on the row BEFORE checkout. `invoice.paid` credits
-  // `planForAllocation(customer.monthly_allocation)` leads, so a customer who
-  // bought the £150/10 plan on a row still carrying the default 20 would be
-  // credited 20 leads a month for a 10-lead price — every month, silently.
-  // Writing it here puts the row in the same shape an admin invite produces, so
-  // the webhook needs no special case. If the customer abandons checkout the
-  // column is inert: it gates nothing for a customer who does not hold
-  // management, and any later admin invite sets it again.
-  if (leadType === "management" && allocation != null) {
+  // Size the plan on the row BEFORE checkout. `invoice.paid` credits the
+  // allocation stored on the customer, NOT the plan the invoice was for, so a
+  // customer who bought the £150/10 plan on a row still carrying the default 20
+  // would be credited 20 leads a month for a 10-lead price — every month,
+  // silently. Writing it here puts the row in the same shape an admin invite
+  // produces, so the webhook needs no special case. If the customer abandons
+  // checkout the column is inert: it gates nothing for a customer who does not
+  // hold the product, and any later admin action sets it again.
+  //
+  // This now covers BOTH products. It was management-only while GR had a single
+  // plan and gr_monthly_allocation could only ever be its default of 10; with a
+  // 20-lead GR plan on sale, leaving it out would under-credit every £300 GR
+  // subscriber by half.
+  if (allocation != null) {
     await admin
       .from("customers")
-      .update({ monthly_allocation: allocation })
+      .update(
+        leadType === "guaranteed_rent"
+          ? { gr_monthly_allocation: allocation }
+          : { monthly_allocation: allocation }
+      )
       .eq("id", customer.id);
   }
 
