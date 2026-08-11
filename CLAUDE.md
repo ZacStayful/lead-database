@@ -657,3 +657,97 @@ management so a management Payment Link referencing a price object that is not
 in env keeps working (the reason `allocationFromPrices` has a subtotal
 fallback). That is exactly why a missing GR price id is dangerous rather than
 merely broken — set it before the product goes on sale.
+
+---
+
+## 18. Onboarding a customer onto a product *(no migration)*
+
+`POST /api/admin/customers/[id]/invite` takes `{ product? }`, defaulting to
+`management` so older callers are unaffected (the same shape as the capacity
+route, §16). The admin table offers the two invites as separate buttons.
+
+**Until this existed there was no in-app way to onboard a GR customer at all.**
+The route always billed `stripePriceIdFor(monthly_allocation)` — a *management*
+price — and `/api/signup` is retired for non-owners while
+`/api/customer/subscribe` (§17) requires already holding the other product. The
+only way to sell GR was a hand-made Stripe Payment Link, which is what made the
+mis-provisioning in §17 possible in the first place.
+
+Each product bills off its **own** allocation column: `grPlanForAllocation` /
+`stripeGrPriceIdFor` from `gr_monthly_allocation`, management from
+`monthly_allocation`. Reading the management column for a GR invite would sell a
+20-lead management customer the £300 GR plan by accident.
+
+### A GR invite must not touch `account_status`
+
+`waitlisted` / `invited` / `active` are **management** states (§3, invariant 6),
+and the GR half of the Stripe webhook deliberately never writes `account_status`.
+So the GR path:
+
+- **does not** gate on `account_status = 'waitlisted'` — it refuses only when the
+  customer already holds GR (`holdsProduct`). That admits both a waitlisted
+  prospect and an existing management subscriber adding the second product.
+- **does not** set `account_status = 'invited'` on success. A GR invitee stays
+  exactly as they were until payment sets `gr_subscription_status = 'active'` —
+  the one state GR routing and GR capacity actually read.
+- weighs capacity against the **GR** cap via `getProductCapacityStatus(product)`.
+  Charging a GR invite against the management panel is how a GR sale consumed a
+  management slot.
+
+The end state for a GR-only customer is `account_status = 'waitlisted'` with
+`gr_subscription_status = 'active'`. They hold no management product, so every
+management gate excludes them and every GR gate admits them.
+
+### 18A — Admin must not read a GR customer through management columns
+
+That end state is correct in the database and actively misleading on screen. A
+GR-only subscriber has `account_status = 'waitlisted'`, `subscription_status =
+'inactive'`, `lead_balance = 0` and no `stripe_subscription_id` — so every admin
+surface reading those columns reported an active paying customer as an
+unconverted prospect with no credits, and the first real GR subscriber was
+effectively invisible. Each now resolves per product:
+
+| Surface | Was | Now |
+|---|---|---|
+| Overview MRR | management subs only | management **+** GR, summed per product, split shown |
+| Overview "Active customers" | `subscription_status = 'active'` | active on **either** product |
+| Overview waitlist count | every `waitlisted` row | excludes GR holders (not queuing for management) |
+| Customers tab / badge | `account_status` | `effectiveStatus()` — holding GR reads as active |
+| Customers billing / credits / pacing | management columns | one line per held product |
+| Bulk assigner pool | `account_status = 'active'` | holders of either product |
+| Lead override pool | `account_status = 'active'` | holders of either product |
+
+MRR sums **per product, not per customer**: the two subscriptions are
+independent, so a customer holding both contributes both fees, and the
+per-product counts in the hint deliberately add up to more than the customer
+count. The GR side keys on `gr_stripe_subscription_id` — the management
+subscription id says nothing about whether GR is billed, and a comped account has
+neither.
+
+Neither `assign_lead_to_customer` nor `admin_assign_lead` gates on
+`account_status`, so none of this needed a database change — it was purely which
+customers the UI offered.
+
+### 18B — Customer emails are per product too
+
+Both weekly crons select the union
+(`subscription_status.eq.active,gr_subscription_status.eq.active`) and then
+re-check each assignment against **its own** product via a local `eligibleFor()`,
+rather than trusting the customer-level filter. The two-step is the point: the
+union decides who is worth looking at, the per-assignment check decides what they
+may be written to about, so a customer who cancelled Management but kept GR is
+chased about GR leads only.
+
+`inactivity-nudge` has worked this way since it was written. `progress-report`
+did not — it required `account_status` **and** `subscription_status`, so a
+GR-only subscriber never received a weekly summary of work they had genuinely
+done.
+
+One deliberate asymmetry: the nudge's management branch excludes paused customers
+and the report's does not. A nudge asks for work and should not go to somebody
+whose delivery is paused; a report describes work already done. `progress-report`
+has never excluded paused customers, and widening GR eligibility was not a reason
+to change that.
+
+**Still management-only, deliberately:** pause/resume, top-ups and the goals page
+all gate on `account_status` (§13, §16, §17).
