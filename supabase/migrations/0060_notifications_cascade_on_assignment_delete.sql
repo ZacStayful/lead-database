@@ -17,7 +17,7 @@
 --     constraint notifications_lead_assignment_id_fkey". Discard has never
 --     worked for any lead that was actually notified — which is all of them.
 --
---   * admin_swap_lead_assignment (0058) — hit the same wall as soon as it
+--   * admin_swap_lead_assignment (0059) — hit the same wall as soon as it
 --     shipped, which is how the older fault was found.
 --
 -- CASCADE rather than SET NULL. A notification exists to tell a customer they

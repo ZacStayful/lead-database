@@ -62,7 +62,7 @@ function blankRow(): EventRow {
  *
  * There is no field here for a name, a date, an address or a postcode. That is
  * not an omission to be corrected later — the columns do not exist (migration
- * 0057), so the anonymised shape is the only shape this form can produce.
+ * 0058), so the anonymised shape is the only shape this form can produce.
  *
  * The event rows are sent as one array with the parent and replace the stored
  * timeline wholesale, inside a single transaction. Row order in this list is

@@ -316,7 +316,7 @@ export type CaseStudyConfidence = "crm_verified" | "partly_reconstructed";
 
 /**
  * An anonymised lead journey. There is deliberately no name, date, address or
- * postcode field — see migration 0057 for why those are absent from the schema
+ * postcode field — see migration 0058 for why those are absent from the schema
  * rather than merely left blank.
  */
 export interface CaseStudy {

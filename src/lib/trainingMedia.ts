@@ -2,7 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const TRAINING_MEDIA_BUCKET = "training-media";
 
-/** 500 MB, matching the bucket's file_size_limit set in migration 0056. */
+/** 500 MB, matching the bucket's file_size_limit set in migration 0057. */
 export const MAX_MEDIA_BYTES = 524_288_000;
 
 /**

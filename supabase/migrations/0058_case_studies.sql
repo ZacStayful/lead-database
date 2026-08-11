@@ -85,7 +85,7 @@ create index if not exists idx_case_study_events_ordering
   on public.case_study_events(case_study_id, day_offset, sort_order);
 
 -- ---------------------------------------------------------------------------
--- RLS — same shape as training_modules (0056).
+-- RLS — same shape as training_modules (0057).
 -- ---------------------------------------------------------------------------
 alter table public.case_studies      enable row level security;
 alter table public.case_study_events enable row level security;

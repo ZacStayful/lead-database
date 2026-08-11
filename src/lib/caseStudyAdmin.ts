@@ -63,7 +63,7 @@ function nullableInt(value: unknown): number | null {
  * Validate an admin-submitted case study.
  *
  * There is no name, date, address or postcode field to validate, because there
- * is no such column to write to (migration 0057). Anonymisation is a property
+ * is no such column to write to (migration 0058). Anonymisation is a property
  * of the schema here, not a rule this function enforces.
  */
 export function validateCaseStudy(
