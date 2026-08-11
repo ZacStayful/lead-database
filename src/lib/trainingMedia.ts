@@ -1,45 +1,36 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 
+// Formats, limits and mime resolution live in lib/training.ts because the
+// admin upload form is a client component and needs them, and this module
+// imports the service-role client. Re-exported so server callers still have a
+// single import site for everything training-media.
+export {
+  ALLOWED_MEDIA_MIME,
+  isVideoMime,
+  maxBytesForMime,
+  formatMediaBytes,
+  resolveMediaMime,
+  MAX_AUDIO_BYTES,
+  MAX_VIDEO_BYTES,
+} from "@/lib/training";
+
 export const TRAINING_MEDIA_BUCKET = "training-media";
 
-/** 500 MB, matching the bucket's file_size_limit set in migration 0057. */
-export const MAX_MEDIA_BYTES = 524_288_000;
 
 /**
- * Formats the player can actually play, and that we are willing to store.
+ * Seconds a signed playback URL stays valid.
  *
- * An allowlist rather than a "not executable" denylist: the set of things a
- * browser will happily execute is open-ended, and the set of recording formats
- * worth accepting is short.
- *
- * video/quicktime is here because a .mov straight off a Mac is the single most
- * likely thing to be dragged into this form, and rejecting it would look like a
- * bug rather than a policy.
+ * An hour was shorter than the content. A 40-minute meeting watched with a
+ * couple of pauses outlives it, and the URL then 400s mid-session with nothing
+ * to explain it. Six hours covers any realistic sitting; a tab left open past
+ * that recovers through /api/customer/training/[moduleId]/play-url, which
+ * re-checks entitlement and mints a fresh one.
  */
-export const ALLOWED_MEDIA_MIME = new Set([
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/m4a",
-  "audio/x-m4a",
-  "audio/wav",
-  "audio/x-wav",
-  "audio/webm",
-  "video/mp4",
-  "video/webm",
-  "video/quicktime",
-]);
-
-/** Seconds a signed playback URL stays valid. */
-const PLAYBACK_URL_TTL_SECONDS = 60 * 60;
+const PLAYBACK_URL_TTL_SECONDS = 6 * 60 * 60;
 
 /** Seconds an admin has to complete an upload once the URL is minted. */
 const UPLOAD_URL_TTL_SECONDS = 60 * 60 * 2;
 
-/** True when this recording should render in a video element rather than an audio bar. */
-export function isVideoMime(mime: string | null | undefined): boolean {
-  return Boolean(mime && mime.startsWith("video/"));
-}
 
 /**
  * Strip a filename down to something safe to place in an object path.
@@ -75,7 +66,7 @@ export function mediaObjectPath(moduleId: string, fileName: string): string {
  */
 export async function createMediaUploadUrl(
   storagePath: string
-): Promise<{ path: string; token: string } | null> {
+): Promise<{ path: string; token: string; signedUrl: string } | null> {
   const admin = createAdminClient();
 
   // Replacing an existing recording at the same path needs the old object gone
@@ -86,11 +77,19 @@ export async function createMediaUploadUrl(
     .from(TRAINING_MEDIA_BUCKET)
     .createSignedUploadUrl(storagePath, { upsert: true });
 
-  if (error || !data?.token) {
+  if (error || !data?.token || !data?.signedUrl) {
     console.error("training media: could not sign upload url", error);
     return null;
   }
-  return { path: data.path ?? storagePath, token: data.token };
+  // signedUrl is handed to the browser so it can PUT with XHR and report real
+  // progress. supabase-js `uploadToSignedUrl` would take the token instead,
+  // but it offers no upload progress — and on a 40-minute video that means a
+  // bar sitting at 0% for several minutes, which reads as a hang.
+  return {
+    path: data.path ?? storagePath,
+    token: data.token,
+    signedUrl: data.signedUrl,
+  };
 }
 
 /**

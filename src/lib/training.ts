@@ -132,3 +132,96 @@ export function formatDuration(seconds: number | null | undefined): string | nul
 export function ordinal(index: number): string {
   return String(index + 1).padStart(2, "0");
 }
+
+// ---------------------------------------------------------------------------
+// Media formats and limits.
+//
+// These live here rather than in lib/trainingMedia.ts because the admin upload
+// form is a client component and needs them, and trainingMedia.ts imports the
+// service-role client — nothing reachable from a "use client" file may pull
+// that into the browser bundle. trainingMedia.ts re-exports them so server
+// callers keep one import site.
+// ---------------------------------------------------------------------------
+
+/**
+ * Formats the player can actually play, and that we are willing to store.
+ *
+ * An allowlist rather than a "not executable" denylist: the set of things a
+ * browser will happily execute is open-ended, and the set of recording formats
+ * worth accepting is short.
+ *
+ * video/quicktime is here because a .mov straight off a Mac is the single most
+ * likely thing to be dragged into this form, and rejecting it would look like a
+ * bug rather than a policy.
+ */
+export const ALLOWED_MEDIA_MIME = new Set([
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/x-m4a",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/webm",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+]);
+
+/** True when this recording should render in a video element, not an audio bar. */
+export function isVideoMime(mime: string | null | undefined): boolean {
+  return Boolean(mime && mime.startsWith("video/"));
+}
+
+/**
+ * Per-kind upload ceilings (0061 raises the bucket to 2 GB to match).
+ *
+ * One 500 MB limit for everything was the wrong shape. A 10-minute call
+ * recording is ~15 MB, so 500 MB let through anything a mistake could produce;
+ * a 40-minute web meeting at a high bitrate runs past 500 MB, so the same
+ * number rejected the main thing this feature exists to carry — and rejected it
+ * only after the admin had waited out the whole upload.
+ *
+ * Both sit under the bucket's hard limit, so the app refuses first and can say
+ * why rather than surfacing a storage error.
+ */
+export const MAX_AUDIO_BYTES = 100 * 1024 * 1024; // 100 MB
+export const MAX_VIDEO_BYTES = 1536 * 1024 * 1024; // 1.5 GB
+
+export function maxBytesForMime(mime: string): number {
+  return isVideoMime(mime) ? MAX_VIDEO_BYTES : MAX_AUDIO_BYTES;
+}
+
+/** "1.4 GB" / "480 MB" — for limit messages and the admin list. */
+export function formatMediaBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/**
+ * Canonical Content-Type for a file, derived from its extension.
+ *
+ * `File.type` cannot be trusted for this. Browsers report an MP3 as
+ * `audio/mpeg`, `audio/mp3` or an empty string depending on platform and OS
+ * registry, and an empty string fails the allowlist — so the same recording
+ * uploads fine on one machine and is refused as "unsupported" on another. The
+ * extension is the one thing that travels with the file.
+ *
+ * Falls back to the browser's guess for anything not listed, so the allowlist
+ * stays the single gate on what is acceptable.
+ */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+};
+
+export function resolveMediaMime(fileName: string, browserType: string): string {
+  const ext = fileName.toLowerCase().split(".").pop() ?? "";
+  return MIME_BY_EXTENSION[ext] ?? browserType;
+}

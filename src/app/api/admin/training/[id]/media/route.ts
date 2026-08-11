@@ -4,9 +4,11 @@ import { isAdminRequest } from "@/lib/trainingAdmin";
 import {
   TRAINING_MEDIA_BUCKET,
   ALLOWED_MEDIA_MIME,
-  MAX_MEDIA_BYTES,
   createMediaUploadUrl,
+  formatMediaBytes,
+  maxBytesForMime,
   mediaObjectPath,
+  resolveMediaMime,
 } from "@/lib/trainingMedia";
 
 export const runtime = "nodejs";
@@ -44,12 +46,20 @@ export async function POST(
   }
 
   const fileName = typeof body.fileName === "string" ? body.fileName : "";
-  const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
   const size = Number(body.size);
 
   if (!fileName) {
     return NextResponse.json({ error: "No file name provided" }, { status: 400 });
   }
+
+  // Re-derived from the name rather than taken from the body, so the row can
+  // never describe the object as something it is not, and an MP3 whose
+  // File.type came through empty is not rejected as an unsupported format.
+  const mimeType = resolveMediaMime(
+    fileName,
+    typeof body.mimeType === "string" ? body.mimeType : ""
+  );
+
   if (!ALLOWED_MEDIA_MIME.has(mimeType)) {
     return NextResponse.json(
       {
@@ -60,10 +70,16 @@ export async function POST(
     );
   }
   // Checked here as well as by the bucket, so an admin who picks a two-hour
-  // recording is told before waiting for the upload to fail.
-  if (Number.isFinite(size) && size > MAX_MEDIA_BYTES) {
+  // recording is told before waiting for the upload to fail. Video gets a far
+  // larger allowance than audio — see maxBytesForMime.
+  const limit = maxBytesForMime(mimeType);
+  if (Number.isFinite(size) && size > limit) {
     return NextResponse.json(
-      { error: "Recordings must be 500 MB or smaller." },
+      {
+        error: `That file is ${formatMediaBytes(size)}. The limit for ${
+          mimeType.startsWith("video/") ? "video" : "audio"
+        } is ${formatMediaBytes(limit)}.`,
+      },
       { status: 400 }
     );
   }
@@ -94,6 +110,7 @@ export async function POST(
     bucket: TRAINING_MEDIA_BUCKET,
     path: signed.path,
     token: signed.token,
+    signedUrl: signed.signedUrl,
   });
 }
 
@@ -106,7 +123,13 @@ export async function PUT(
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
-  let body: { path?: unknown; mimeType?: unknown };
+  let body: {
+    path?: unknown;
+    mimeType?: unknown;
+    fileName?: unknown;
+    size?: unknown;
+    durationSeconds?: unknown;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -114,7 +137,11 @@ export async function PUT(
   }
 
   const path = typeof body.path === "string" ? body.path : "";
-  const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
+  const fileName = typeof body.fileName === "string" ? body.fileName : "";
+  const mimeType = resolveMediaMime(
+    fileName || path,
+    typeof body.mimeType === "string" ? body.mimeType : ""
+  );
 
   if (!ALLOWED_MEDIA_MIME.has(mimeType)) {
     return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
@@ -137,11 +164,22 @@ export async function PUT(
     return NextResponse.json({ error: "Module not found" }, { status: 404 });
   }
 
+  // Duration is probed in the browser off the media element before upload, so
+  // the admin no longer types it in. Null when the browser would not parse the
+  // file — it is a label, never a gate, so a missing value costs nothing.
+  const duration = Number(body.durationSeconds);
+  const size = Number(body.size);
+
   const { error } = await admin
     .from("training_modules")
     .update({
       media_storage_path: path,
       media_mime_type: mimeType,
+      media_file_name: fileName || null,
+      media_size_bytes: Number.isFinite(size) && size > 0 ? Math.round(size) : null,
+      ...(Number.isFinite(duration) && duration > 0
+        ? { media_duration_seconds: Math.round(duration) }
+        : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", params.id);

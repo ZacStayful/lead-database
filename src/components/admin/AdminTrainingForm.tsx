@@ -2,8 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import { slugFromTitle } from "@/lib/training";
+import {
+  formatMediaBytes,
+  isVideoMime,
+  maxBytesForMime,
+  resolveMediaMime,
+  slugFromTitle,
+} from "@/lib/training";
 import type {
   TrainingContentType,
   TrainingLeadTypeScope,
@@ -13,6 +18,70 @@ import type {
 
 const INPUT =
   "mt-1 w-full rounded-md border-[0.5px] border-border bg-background px-3 py-2 text-sm disabled:opacity-60";
+
+/**
+ * Read a recording's duration in the browser, before it is uploaded.
+ *
+ * The file is already in memory here, so this costs nothing. Doing it
+ * server-side would mean either an ffmpeg dependency or pulling a 40-minute
+ * object back down. Resolves null for anything the browser will not parse —
+ * duration is a label on the module, never a gate, so a missing value is fine.
+ */
+function probeDuration(file: File, mimeType: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const el = document.createElement(
+      mimeType.startsWith("video/") ? "video" : "audio"
+    );
+    let settled = false;
+    const done = (value: number | null) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(value);
+    };
+    el.preload = "metadata";
+    el.onloadedmetadata = () =>
+      done(Number.isFinite(el.duration) && el.duration > 0 ? el.duration : null);
+    el.onerror = () => done(null);
+    // Some browsers fire neither event for a codec they cannot decode.
+    setTimeout(() => done(null), 15000);
+    el.src = url;
+  });
+}
+
+/**
+ * PUT the file straight at Storage on the signed URL, reporting progress.
+ *
+ * XHR rather than fetch purely for `upload.onprogress` — fetch still has no
+ * upload progress in any shipping browser, and a 40-minute video takes long
+ * enough that a static bar reads as a hang. Resolves an error message, or null
+ * on success.
+ */
+function putSignedUpload(
+  signedUrl: string,
+  file: File,
+  contentType: string,
+  onProgress: (pct: number) => void
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", signedUrl);
+    xhr.setRequestHeader("Content-Type", contentType);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () =>
+      resolve(
+        xhr.status >= 200 && xhr.status < 300
+          ? null
+          : "The upload did not complete. Please try again."
+      );
+    xhr.onerror = () =>
+      resolve("The upload did not complete — check the connection.");
+    xhr.send(file);
+  });
+}
 
 /**
  * Create and edit form for a training module.
@@ -147,13 +216,32 @@ export function AdminTrainingForm({
     setError(null);
     setNotice(null);
 
+    // Derived from the extension, not File.type: browsers report an MP3 as
+    // audio/mpeg, audio/mp3 or an empty string depending on the machine, and
+    // an empty string fails the allowlist on the way in.
+    const mimeType = resolveMediaMime(file.name, file.type);
+
+    // Refused here as well as server-side, so a 2 GB export is rejected before
+    // the admin sits through the upload rather than after.
+    const limit = maxBytesForMime(mimeType);
+    if (file.size > limit) {
+      setError(
+        `That file is ${formatMediaBytes(file.size)}. The limit for ${
+          isVideoMime(mimeType) ? "video" : "audio"
+        } is ${formatMediaBytes(limit)}.`
+      );
+      setUploading(false);
+      setUploadPercent(null);
+      return;
+    }
+
     try {
       const startRes = await fetch(`/api/admin/training/${module!.id}/media`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fileName: file.name,
-          mimeType: file.type,
+          mimeType,
           size: file.size,
         }),
       });
@@ -163,15 +251,19 @@ export function AdminTrainingForm({
         return;
       }
 
-      const supabase = createClient();
-      const { error: uploadError } = await supabase.storage
-        .from(start.bucket as string)
-        .uploadToSignedUrl(start.path as string, start.token as string, file, {
-          contentType: file.type,
-        });
+      // Read the duration off the file before sending it, so the admin does
+      // not have to type it in and it cannot disagree with the recording.
+      const durationSeconds = await probeDuration(file, mimeType);
+
+      const uploadError = await putSignedUpload(
+        start.signedUrl as string,
+        file,
+        mimeType,
+        setUploadPercent
+      );
 
       if (uploadError) {
-        setError("The upload did not complete. Please try again.");
+        setError(uploadError);
         return;
       }
 
@@ -180,7 +272,13 @@ export function AdminTrainingForm({
       const commitRes = await fetch(`/api/admin/training/${module!.id}/media`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: start.path, mimeType: file.type }),
+        body: JSON.stringify({
+          path: start.path,
+          mimeType,
+          fileName: file.name,
+          size: file.size,
+          durationSeconds,
+        }),
       });
       const commit = await commitRes.json().catch(() => null);
       if (!commitRes.ok) {

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { TrainingProgressControls } from "@/components/dashboard/TrainingProgressControls";
+import { TrainingMediaPlayer } from "@/components/dashboard/TrainingMediaPlayer";
 import {
   formatDuration,
   isAllowedEmbedUrl,
@@ -135,22 +136,11 @@ export default async function TrainingModulePage({
       {module.content_type === "recording" && (
         <section className="overflow-hidden rounded-xl border border-black/10 bg-white p-6">
           {mediaUrl ? (
-            mediaIsVideo ? (
-              // eslint-disable-next-line jsx-a11y/media-has-caption
-              <video
-                controls
-                preload="metadata"
-                src={mediaUrl}
-                className="w-full rounded-lg bg-black"
-              >
-                Your browser cannot play this recording.
-              </video>
-            ) : (
-              // eslint-disable-next-line jsx-a11y/media-has-caption
-              <audio controls preload="none" src={mediaUrl} className="w-full">
-                Your browser cannot play this recording.
-              </audio>
-            )
+            <TrainingMediaPlayer
+              moduleId={module.id}
+              isVideo={mediaIsVideo}
+              initialUrl={mediaUrl}
+            />
           ) : (
             <p className="text-sm text-[#52514e]">
               This recording cannot be played at the moment. Please let us know.
