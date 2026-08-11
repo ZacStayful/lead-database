@@ -60,7 +60,12 @@ export function computePacing(customer: Customer, now: Date = new Date()): Pacin
  */
 export function computeGrPacing(customer: Customer, now: Date = new Date()): Pacing {
   const anchorStr = customer.gr_billing_cycle_anchor ?? customer.created_at;
+  // Normalised to midnight for the same reason computePacing is: the SQL counts
+  // from coalesce(gr_billing_cycle_anchor, created_at::date), and created_at is
+  // a full timestamp. Without this the fallback path kept its time-of-day and
+  // could report a day less elapsed than the value used for lead-ordering.
   const anchor = new Date(anchorStr);
+  anchor.setHours(0, 0, 0, 0);
 
   const msPerDay = 1000 * 60 * 60 * 24;
   const rawElapsed = Math.floor((now.getTime() - anchor.getTime()) / msPerDay);

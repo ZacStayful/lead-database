@@ -17,7 +17,7 @@ import {
   capacityWeight,
   grCapacityWeight,
 } from "@/lib/capacity";
-import { holdsProduct, toLeadType, PRODUCT_COPY } from "@/lib/products";
+import { holdsProduct, toLeadType } from "@/lib/products";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
