@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AdminCustomersTable } from "@/components/admin/AdminCustomersTable";
-import { computePacing } from "@/lib/pacing";
-import type { Customer } from "@/lib/types";
+import { computePacing, computeGrPacing } from "@/lib/pacing";
+import type { Customer, LeadType } from "@/lib/types";
 import { AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -34,13 +34,58 @@ export default async function AdminCustomersPage() {
     if (c.user_id) lastActive[c.id] = lastSignInByUser.get(c.user_id) ?? null;
   }
 
-  // Supply-problem alerts: behind by 5+, fewer than 10 days left, still active.
-  const alerts = customers
-    .map((customer) => ({ customer, pacing: computePacing(customer) }))
-    .filter(
-      ({ customer, pacing }) =>
-        customer.is_active && pacing.deficit >= 5 && pacing.daysRemaining < 10
+  // Supply-problem alerts: behind by 5+, fewer than 10 days left, on a product
+  // the customer is actually LIVE on.
+  //
+  // The only guard here used to be `is_active`, which is a generic row flag that
+  // is true for every account — including waitlisted prospects who have never
+  // subscribed. Those rows have no billing_cycle_anchor, so computePacing falls
+  // back to created_at and reports a signup from three weeks ago as "0 received
+  // vs 9 expected". That shortfall can never resolve, because the customer is
+  // not entitled to leads at all, so the banner became permanent noise naming
+  // people who were never owed anything.
+  //
+  // Each branch mirrors the corresponding half of get_next_customers_for_lead:
+  // if the routing functions would not send them a lead, they cannot be behind
+  // on one. Paused management customers are excluded for the same reason — their
+  // delivery is stopped deliberately, which is not a supply problem.
+  //
+  // Pacing is per product, so a customer holding both is judged on each
+  // separately and can appear once per product.
+  const alerts = customers.flatMap((customer) => {
+    if (!customer.is_active) return [];
+    const rows: {
+      customer: Customer;
+      pacing: ReturnType<typeof computePacing>;
+      product: LeadType;
+      received: number;
+    }[] = [];
+
+    if (
+      customer.account_status === "active" &&
+      customer.subscription_status === "active" &&
+      customer.paused_at == null
+    ) {
+      rows.push({
+        customer,
+        pacing: computePacing(customer),
+        product: "management",
+        received: customer.leads_received_this_month,
+      });
+    }
+    if (customer.gr_subscription_status === "active") {
+      rows.push({
+        customer,
+        pacing: computeGrPacing(customer),
+        product: "guaranteed_rent",
+        received: customer.gr_leads_received_this_month,
+      });
+    }
+
+    return rows.filter(
+      ({ pacing }) => pacing.deficit >= 5 && pacing.daysRemaining < 10
     );
+  });
 
   return (
     <div className="space-y-6">
@@ -61,11 +106,14 @@ export default async function AdminCustomersPage() {
             </p>
           </div>
           <ul className="mt-2 space-y-1 text-sm text-amber-800">
-            {alerts.map(({ customer, pacing }) => (
-              <li key={customer.id}>
-                <span className="font-medium">{customer.business_name}</span> —{" "}
-                {customer.leads_received_this_month} received vs {pacing.expected}{" "}
-                expected, {pacing.daysRemaining} day
+            {alerts.map(({ customer, pacing, product, received }) => (
+              <li key={`${customer.id}:${product}`}>
+                <span className="font-medium">{customer.business_name}</span>{" "}
+                <span className="text-xs">
+                  ({product === "guaranteed_rent" ? "Guaranteed Rent" : "Management"})
+                </span>{" "}
+                — {received} received vs {pacing.expected} expected,{" "}
+                {pacing.daysRemaining} day
                 {pacing.daysRemaining === 1 ? "" : "s"} remaining
               </li>
             ))}

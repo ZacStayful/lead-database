@@ -751,3 +751,29 @@ to change that.
 
 **Still management-only, deliberately:** pause/resume, top-ups and the goals page
 all gate on `account_status` (§13, §16, §17).
+
+### 18C — The supply-problem banner is scoped to live customers
+
+`/admin/customers` warns when a customer is 5+ leads behind with under 10 days
+left. Its only guard was `is_active` — a generic row flag that is **true for
+every account**, including waitlisted prospects who never subscribed.
+
+Those rows have no `billing_cycle_anchor`, so `computePacing` falls back to
+`created_at` (the documented fallback, so the number is meaningful for a real
+subscriber whose webhook has not landed). On a prospect it reports a three-week-old
+signup as "0 received vs 9 expected" — a shortfall that can never resolve,
+because they are not entitled to leads at all. The banner became permanent noise
+naming people who were never owed anything, which is how a real shortfall would
+have been missed.
+
+Each branch now mirrors the matching half of `get_next_customers_for_lead`: if
+routing would not send them a lead, they cannot be behind on one. Paused
+management customers are excluded for the same reason — stopped delivery is
+deliberate, not a supply problem. Pacing is per product, so a customer holding
+both is judged on each separately and the row names which product is short.
+
+**This was never about manual assignment.** Both `assign_lead_to_customer` and
+`admin_assign_lead` increment `leads_received_this_month` and stamp
+`last_assignment_at`, so an admin force-assign paces identically to an automatic
+one — verified against live data, where every active customer's counter equals
+their assignment count for the cycle.
