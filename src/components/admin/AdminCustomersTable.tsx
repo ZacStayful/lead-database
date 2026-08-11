@@ -96,26 +96,46 @@ export function AdminCustomersTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customers, tab, product, statusOverride]);
 
-  async function handleInvite(id: string, email: string) {
+  /**
+   * Invite a customer to subscribe to ONE product.
+   *
+   * The product is explicit at the call site rather than inferred, because the
+   * two products cost the same for the same number of leads: a wrong guess here
+   * bills the customer correctly and provisions them onto the wrong product,
+   * which is invisible on the invoice and only shows up as the wrong leads
+   * arriving.
+   */
+  async function handleInvite(
+    id: string,
+    email: string,
+    product: "management" | "guaranteed_rent"
+  ) {
     setBusyId(id);
     setToast(null);
+    const productLabel =
+      product === "guaranteed_rent" ? "Guaranteed Rent" : "Management";
     try {
       const res = await fetch(`/api/admin/customers/${id}/invite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product }),
       });
       const data = await res.json();
       if (!res.ok) {
         setToast(data.error ?? "Could not send invitation.");
         return;
       }
-      setStatusOverride((s) => ({ ...s, [id]: "invited" }));
+      // Only a management invite moves account_status — 'invited' is a
+      // management-only state, and the GR route deliberately leaves it alone.
+      if (product === "management") {
+        setStatusOverride((s) => ({ ...s, [id]: "invited" }));
+      }
       // Capacity is non-blocking: the invite always succeeds, but flag it when
       // this customer would push weighted usage over the limit.
       setToast(
         data.capacityWarning && data.warningMessage
-          ? `Invitation sent to ${email}. ${data.warningMessage}`
-          : `Invitation sent to ${email}`
+          ? `${productLabel} invitation sent to ${email}. ${data.warningMessage}`
+          : `${productLabel} invitation sent to ${email}`
       );
     } catch {
       setToast("Could not send invitation.");
@@ -340,11 +360,30 @@ export function AdminCustomersTable({
                     <div className="flex items-center justify-end gap-3">
                       {status === "waitlisted" && (
                         <button
-                          onClick={() => handleInvite(c.id, c.email)}
+                          onClick={() =>
+                            handleInvite(c.id, c.email, "management")
+                          }
                           disabled={busyId === c.id}
                           className="text-sm font-medium text-[#5D8156] hover:underline disabled:opacity-50"
                         >
-                          Invite to subscribe
+                          Invite: Management
+                        </button>
+                      )}
+                      {/*
+                        Offered independently of account_status. A GR invite is
+                        valid both for a waitlisted prospect and for an existing
+                        management subscriber adding the second product — the
+                        only disqualifier is already holding GR.
+                      */}
+                      {!hasGuaranteedRent(c) && (
+                        <button
+                          onClick={() =>
+                            handleInvite(c.id, c.email, "guaranteed_rent")
+                          }
+                          disabled={busyId === c.id}
+                          className="text-sm font-medium text-[#5D8156] hover:underline disabled:opacity-50"
+                        >
+                          Invite: Guaranteed Rent
                         </button>
                       )}
                       {status === "invited" && (

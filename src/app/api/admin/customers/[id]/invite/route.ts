@@ -6,8 +6,18 @@ import { getStripe } from "@/lib/stripe";
 import { isAdminUser } from "@/lib/auth";
 import { APP_URL } from "@/lib/env";
 import { sendActivationEmail } from "@/lib/emails/activation";
-import { planForAllocation, stripePriceIdFor } from "@/lib/plans";
-import { getCapacityStatus, capacityWeight } from "@/lib/capacity";
+import {
+  planForAllocation,
+  grPlanForAllocation,
+  stripePriceIdFor,
+  stripeGrPriceIdFor,
+} from "@/lib/plans";
+import {
+  getProductCapacityStatus,
+  capacityWeight,
+  grCapacityWeight,
+} from "@/lib/capacity";
+import { holdsProduct, toLeadType, PRODUCT_COPY } from "@/lib/products";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +34,23 @@ async function isAdminRequest(req: NextRequest): Promise<boolean> {
   return isAdminUser(user);
 }
 
-/** Mark a waitlisted customer as invited and send the activation email. */
+/**
+ * Invite a customer to subscribe to one product and send the activation email.
+ *
+ * `product` defaults to 'management', so every existing caller is unaffected.
+ *
+ * WHY THIS TAKES A PRODUCT
+ * ------------------------
+ * This route used to be hard-coded to management: it always billed
+ * `stripePriceIdFor(monthly_allocation)`, which is a MANAGEMENT price id. Since
+ * the Stripe webhook identifies the product purely by the invoice's price id,
+ * and both products are £150/month for 10 leads, a Guaranteed Rent sale
+ * onboarded here was billed the right amount on the wrong price and provisioned
+ * as a management customer — management credits, management capacity,
+ * management leads. There was no other way to onboard a GR customer at all
+ * (/api/signup is retired for non-owners and /api/customer/subscribe requires
+ * already holding the other product), so every GR sale hit this.
+ */
 export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -32,6 +58,11 @@ export async function POST(
   if (!(await isAdminRequest(req))) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
+
+  // Body is optional — an older caller sending none gets management, unchanged.
+  const body = await req.json().catch(() => ({}));
+  const product = toLeadType(body?.product) ?? "management";
+  const isGr = product === "guaranteed_rent";
 
   const admin = createAdminClient();
 
@@ -45,7 +76,19 @@ export async function POST(
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });
   }
 
-  if (customer.account_status !== "waitlisted") {
+  // Eligibility is per product, because 'waitlisted' is a MANAGEMENT state.
+  // account_status / subscription_status are management-only columns (CLAUDE.md
+  // §3, invariant 6), so gating a GR invite on them would both refuse a paying
+  // management customer who also wants GR, and read a column the GR side must
+  // never depend on. The honest GR test is simply "do they already hold GR".
+  if (isGr) {
+    if (holdsProduct(customer, "guaranteed_rent")) {
+      return NextResponse.json(
+        { error: "Customer already has a Guaranteed Rent subscription" },
+        { status: 400 }
+      );
+    }
+  } else if (customer.account_status !== "waitlisted") {
     return NextResponse.json({ error: "Customer is not waitlisted" }, { status: 400 });
   }
 
@@ -55,14 +98,22 @@ export async function POST(
   // the action. (Inviting flips the account to 'invited', which doesn't yet
   // consume a slot — only 'active' does — so we project the post-activation
   // weight on top of current usage.)
-  const capacity = await getCapacityStatus();
+  //
+  // Each product is capped independently over its own population (§16), so a GR
+  // invite must be weighed against the GR cap. Charging it against the
+  // management panel is what let a GR sale consume management capacity.
+  const capacity = await getProductCapacityStatus(product);
   const projectedWeighted =
     Math.round(
-      (capacity.weightedUsed + capacityWeight(customer.monthly_allocation)) * 100
+      (capacity.weightedUsed +
+        (isGr
+          ? grCapacityWeight(customer.gr_monthly_allocation)
+          : capacityWeight(customer.monthly_allocation))) *
+        100
     ) / 100;
   const capacityWarning = projectedWeighted > capacity.limit;
   const warningMessage = capacityWarning
-    ? `Inviting this customer projects weighted usage to ${projectedWeighted} of ${capacity.limit} slots, over the capacity limit.`
+    ? `Inviting this customer projects ${capacity.product === "guaranteed_rent" ? "Guaranteed Rent" : "Management"} weighted usage to ${projectedWeighted} of ${capacity.limit} slots, over the capacity limit.`
     : null;
 
   try {
@@ -105,19 +156,46 @@ export async function POST(
         .eq("id", customer.id);
     }
 
-    // Fresh Checkout session for this customer's plan (10 or 20 leads).
-    // stripePriceIdFor throws if the plan's price env var is missing — caught
+    // Fresh Checkout session for this customer's plan. Each product bills off
+    // its OWN allocation column — billing a GR invite from monthly_allocation
+    // would sell a 20-lead management customer the £300 GR plan by accident.
+    // Both resolvers throw when the plan's price env var is missing, caught
     // below and surfaced as a descriptive error instead of an opaque 500.
-    const plan = planForAllocation(customer.monthly_allocation ?? 20);
+    const plan = isGr
+      ? grPlanForAllocation(customer.gr_monthly_allocation ?? 10)
+      : planForAllocation(customer.monthly_allocation ?? 20);
+    const priceId = isGr
+      ? stripeGrPriceIdFor(customer.gr_monthly_allocation ?? 10)
+      : stripePriceIdFor(customer.monthly_allocation ?? 20);
+
+    // Put the row in the shape the webhook expects BEFORE checkout, the same
+    // reason /api/customer/subscribe does (CLAUDE.md §17): the invoice.paid
+    // handler sizes the credit and paces from the customer's stored allocation,
+    // not from the invoice. Abandoning checkout leaves this inert — it gates
+    // nothing for a customer who does not hold the product.
+    if (isGr && customer.gr_monthly_allocation !== plan.leads) {
+      await admin
+        .from("customers")
+        .update({ gr_monthly_allocation: plan.leads })
+        .eq("id", customer.id);
+    }
+
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "subscription",
-      line_items: [
-        { price: stripePriceIdFor(customer.monthly_allocation ?? 20), quantity: 1 },
-      ],
-      success_url: `${APP_URL}/dashboard?checkout=success`,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${APP_URL}/dashboard?checkout=success${isGr ? "&product=guaranteed-rent" : ""}`,
       cancel_url: `${APP_URL}/signup?checkout=cancelled`,
-      metadata: { supabase_customer_id: customer.id },
+      // product_type mirrors /api/signup's GR checkout so the subscription is
+      // self-describing in Stripe. The webhook still routes on the price id —
+      // this is for humans reading the dashboard.
+      ...(isGr
+        ? { subscription_data: { metadata: { product_type: "guaranteed_rent" } } }
+        : {}),
+      metadata: {
+        supabase_customer_id: customer.id,
+        ...(isGr ? { product_type: "guaranteed_rent" } : {}),
+      },
     });
     if (!session.url) {
       throw new Error("Stripe did not return a checkout URL");
@@ -166,14 +244,25 @@ export async function POST(
       leads: plan.leads,
       priceGbp: plan.priceGbp,
       setPasswordUrl,
+      product,
     });
 
-    await admin
-      .from("customers")
-      .update({ account_status: "invited" })
-      .eq("id", customer.id);
+    // 'invited' is a MANAGEMENT state — account_status is management-only, and
+    // the GR half of the Stripe webhook deliberately never writes it. Marking a
+    // GR invitee 'invited' would put them in the management funnel and, once
+    // paid, leave them looking like a management customer to every reader of
+    // that column. A GR invitee simply stays as they were until their GR
+    // payment sets gr_subscription_status = 'active'; that is the only state
+    // that makes them a GR customer, and it is the one the GR routing and
+    // capacity queries read.
+    if (!isGr) {
+      await admin
+        .from("customers")
+        .update({ account_status: "invited" })
+        .eq("id", customer.id);
+    }
 
-    return NextResponse.json({ ok: true, capacityWarning, warningMessage });
+    return NextResponse.json({ ok: true, product, capacityWarning, warningMessage });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Invite failed";
     console.error("invite route error", err);
