@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { TrainingPublishToggle } from "@/components/admin/TrainingPublishToggle";
+import { mediumLabel } from "@/lib/training";
 import type { TrainingModule } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -19,12 +20,6 @@ const SCOPE_LABEL: Record<string, string> = {
   both: "Both",
   management: "Management",
   guaranteed_rent: "Guaranteed Rent",
-};
-
-const TYPE_LABEL: Record<string, string> = {
-  video: "Video",
-  recording: "Recording",
-  article: "Article",
 };
 
 /**
@@ -93,7 +88,7 @@ export default async function AdminTrainingPage() {
                 </TableCell>
                 <TableCell>
                   <Badge className="border-transparent bg-gray-100 text-gray-700">
-                    {TYPE_LABEL[m.content_type] ?? m.content_type}
+                    {mediumLabel(m)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-muted-foreground">

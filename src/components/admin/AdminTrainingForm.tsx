@@ -287,7 +287,15 @@ export function AdminTrainingForm({
       }
 
       setMediaPath(commit.path as string);
-      setNotice("Recording uploaded");
+      // Mirror the probed duration into the form's own state. router.refresh()
+      // re-renders the server component but does NOT re-run useState
+      // initialisers, so without this the field keeps whatever it held before
+      // the upload — and the next save of any other field would write that
+      // stale value back over the duration we just measured.
+      if (durationSeconds) setMediaDuration(String(Math.round(durationSeconds)));
+      setNotice(
+        isVideoMime(mimeType) ? "Video uploaded" : "Recording uploaded"
+      );
       router.refresh();
     } catch {
       setError("Could not upload the recording.");
@@ -379,8 +387,17 @@ export function AdminTrainingForm({
             disabled={saving}
             className={INPUT}
           >
-            <option value="video">Video</option>
-            <option value="recording">Recording (upload)</option>
+            {/*
+              Labelled by where the file comes from, not what medium it is.
+              "Video" / "Recording (upload)" read as a choice between moving
+              pictures and sound, so anyone wanting to upload an MP4 picked
+              "Video" — which offers a link box and no file picker at all. The
+              stored values are unchanged; 'recording' has always meant "the
+              bytes are ours", for video as much as audio, and the player picks
+              <video> or <audio> from the file's own type.
+            */}
+            <option value="recording">Upload a file (video or audio)</option>
+            <option value="video">Video link (Loom, YouTube, Vimeo)</option>
             <option value="article">Article</option>
           </select>
         </div>
@@ -476,13 +493,15 @@ export function AdminTrainingForm({
         <div className="space-y-4 rounded-md border-[0.5px] border-border p-4">
           {!isEdit ? (
             <p className="text-sm text-muted-foreground">
-              Save this module first, then upload the recording.
+              Save this module first, then upload the file. The upload is stored
+              under the module&apos;s id, so the module has to exist before a
+              file can belong to it.
             </p>
           ) : (
             <>
               <div>
                 <label htmlFor="media" className="text-sm font-medium">
-                  Recording
+                  Video or audio file
                 </label>
                 <input
                   id="media"

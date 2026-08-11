@@ -256,6 +256,24 @@ export const ALLOWED_MEDIA_MIME = new Set([
   "video/quicktime",
 ]);
 
+/**
+ * What to call a module on screen.
+ *
+ * content_type alone cannot answer this: 'recording' means "the file is ours"
+ * and covers an uploaded MP4 as much as an MP3, so labelling by content_type
+ * would announce a 40-minute web meeting as a "Recording". The file's own mime
+ * type is what actually decides which element plays it, so it decides the word
+ * too.
+ */
+export function mediumLabel(module: {
+  content_type: string;
+  media_mime_type?: string | null;
+}): string {
+  if (module.content_type === "article") return "Read";
+  if (module.content_type === "video") return "Video";
+  return isVideoMime(module.media_mime_type) ? "Video" : "Recording";
+}
+
 /** True when this recording should render in a video element, not an audio bar. */
 export function isVideoMime(mime: string | null | undefined): boolean {
   return Boolean(mime && mime.startsWith("video/"));

@@ -7,18 +7,13 @@ import { TrainingMediaPlayer } from "@/components/dashboard/TrainingMediaPlayer"
 import {
   formatDuration,
   isAllowedEmbedUrl,
+  mediumLabel,
   readMinutes,
 } from "@/lib/training";
 import { isVideoMime, signedMediaUrl } from "@/lib/trainingMedia";
 import type { TrainingModule, TrainingProgress } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-const TYPE_LABEL: Record<string, string> = {
-  video: "Video",
-  recording: "Recording",
-  article: "Read",
-};
 
 export default async function TrainingModulePage({
   params,
@@ -89,7 +84,7 @@ export default async function TrainingModulePage({
     module.content_type === "article"
       ? `Read · ${readMinutes(module.body_markdown)} min`
       : [
-          TYPE_LABEL[module.content_type],
+          mediumLabel(module),
           formatDuration(
             module.content_type === "video"
               ? module.video_duration_seconds

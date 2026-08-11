@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { formatDuration, ordinal, readMinutes } from "@/lib/training";
+import { formatDuration, mediumLabel, ordinal, readMinutes } from "@/lib/training";
 import { OUTCOME_LABEL } from "@/lib/caseStudies";
 import { buildSalesTimeline } from "@/lib/salesTimeline";
 import { SalesProcessTimeline } from "@/components/dashboard/SalesProcessTimeline";
@@ -14,12 +14,6 @@ import type {
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-const TYPE_LABEL: Record<string, string> = {
-  video: "Video",
-  recording: "Recording",
-  article: "Read",
-};
 
 /**
  * Training — free to every subscriber.
@@ -138,7 +132,7 @@ export default async function TrainingPage() {
                 m.content_type === "article"
                   ? `Read · ${readMinutes(m.body_markdown)} min`
                   : [
-                      TYPE_LABEL[m.content_type],
+                      mediumLabel(m),
                       formatDuration(
                         m.content_type === "video"
                           ? m.video_duration_seconds
