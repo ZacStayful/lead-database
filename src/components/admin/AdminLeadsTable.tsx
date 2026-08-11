@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -69,6 +69,17 @@ function friendlyFailure(raw: string): string {
   return raw;
 }
 
+/**
+ * Where the collapsed/expanded choice for the bulk-assign bar is remembered.
+ *
+ * The bar is sticky and tall enough to cover several table rows while you scroll
+ * — including the Type column, which is the one thing you need to read while
+ * choosing which leads to batch. Collapsing it leaves a slim summary strip, and
+ * the choice persists so an admin who prefers it out of the way doesn't have to
+ * re-collapse it on every visit.
+ */
+const BAR_COLLAPSED_KEY = "admin:bulk-assign-bar-collapsed";
+
 export function AdminLeadsTable({
   leads,
   customers,
@@ -84,6 +95,30 @@ export function AdminLeadsTable({
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // Starts expanded so the bar behaves exactly as it always has on a fresh
+  // browser; the stored preference is applied after mount to avoid a hydration
+  // mismatch between server-rendered HTML and localStorage.
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      setCollapsed(window.localStorage.getItem(BAR_COLLAPSED_KEY) === "1");
+    } catch {
+      // Private mode / storage disabled — the bar just always starts expanded.
+    }
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(BAR_COLLAPSED_KEY, next ? "1" : "0");
+      } catch {
+        // Not being able to remember the choice is not worth failing the click.
+      }
+      return next;
+    });
+  }
 
   // Only leads still below capacity can take another recipient.
   const selectableIds = useMemo(
@@ -96,14 +131,27 @@ export function AdminLeadsTable({
   const allSelected =
     selectableIds.length > 0 && selectedLeads.size === selectableIds.length;
 
-  // Which lead types are in the current selection — used to flag GR/mgmt mixing.
-  const selectedTypes = useMemo(() => {
-    const t = new Set<string>();
-    for (const l of leads) if (selectedLeads.has(l.id)) t.add(l.lead_type);
-    return t;
+  // How the current selection splits by product — used to flag GR/mgmt mixing,
+  // and shown in the bar so the split stays readable even when the bar is
+  // collapsed over the Type column.
+  const selectedCounts = useMemo(() => {
+    let management = 0;
+    let guaranteedRent = 0;
+    for (const l of leads) {
+      if (!selectedLeads.has(l.id)) continue;
+      if (l.lead_type === "guaranteed_rent") guaranteedRent += 1;
+      else management += 1;
+    }
+    return { management, guaranteedRent };
   }, [leads, selectedLeads]);
-  const hasGr = selectedTypes.has("guaranteed_rent");
-  const hasMgmt = selectedTypes.has("management");
+  const hasGr = selectedCounts.guaranteedRent > 0;
+  const hasMgmt = selectedCounts.management > 0;
+  const selectionBreakdown = [
+    hasMgmt ? `${selectedCounts.management} Management` : null,
+    hasGr ? `${selectedCounts.guaranteedRent} Guaranteed Rent` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   function toggleLead(id: string) {
     setMessage(null);
@@ -303,110 +351,154 @@ export function AdminLeadsTable({
         </Table>
       </Card>
 
-      {/* Sticky bulk-assign bar — appears once leads are selected. */}
+      {/* Sticky bulk-assign bar — appears once leads are selected. Collapses to
+          a slim summary strip so it stops covering the table underneath. */}
       {selectedLeads.size > 0 && (
         <div className="sticky bottom-4 z-10 mx-auto max-w-3xl rounded-xl border border-border bg-card p-4 shadow-lg">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium">
-              {selectedLeads.size} lead{selectedLeads.size === 1 ? "" : "s"}{" "}
-              selected
-            </span>
-            <button
-              type="button"
-              onClick={clearSelection}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3 w-3" /> Clear
-            </button>
-          </div>
-
-          <p className="mt-3 mb-1.5 text-xs font-medium text-muted-foreground">
-            Assign to which customers?
-          </p>
-          <div className="grid gap-1.5 sm:grid-cols-2">
-            {customers.map((c) => {
-              const isSel = selectedCustomers.has(c.id);
-              const bits: string[] = [];
-              if (hasMgmt) bits.push(`Mgmt ${c.lead_balance}`);
-              if (hasGr) bits.push(`GR ${c.gr_lead_balance}`);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => toggleCustomer(c.id)}
-                  disabled={busy}
-                  className={
-                    "flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors " +
-                    (isSel
-                      ? "border-brand bg-brand/10"
-                      : "border-border hover:bg-muted")
-                  }
-                >
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium">
-                      {c.business_name}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {bits.join(" · ") || "credits"}
-                    </span>
-                  </span>
-                  <span
-                    className={
-                      "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border " +
-                      (isSel
-                        ? "border-brand bg-brand text-white"
-                        : "border-border")
-                    }
-                  >
-                    {isSel && <Check className="h-3 w-3" />}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={override}
-              onChange={() => setOverride((v) => !v)}
-              disabled={busy}
-              className="mt-0.5 h-4 w-4 accent-brand"
-            />
-            <span>
-              <span className="font-medium text-foreground">
-                Override credit limit
-              </span>{" "}
-              <span className="text-muted-foreground">
-                — place these even with customers who are out of credits or not
-                subscribed. No credit is spent. (Paused customers are still
-                blocked.)
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="min-w-0">
+              <span className="text-sm font-medium">
+                {selectedLeads.size} lead{selectedLeads.size === 1 ? "" : "s"}{" "}
+                selected
               </span>
-            </span>
-          </label>
-
-          <div className="mt-3 flex items-center gap-3">
-            <Button
-              onClick={assign}
-              disabled={busy || selectedCustomers.size === 0}
-            >
-              {busy
-                ? "Assigning…"
-                : `Assign ${selectedLeads.size} lead${
-                    selectedLeads.size === 1 ? "" : "s"
-                  } to ${selectedCustomers.size || ""} ${
-                    selectedCustomers.size === 1 ? "customer" : "customers"
-                  }`.trim()}
-            </Button>
-            {message && (
-              <span className="text-xs text-muted-foreground">{message}</span>
-            )}
+              {selectionBreakdown && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {selectionBreakdown}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {/* Collapsed, the customer picker is hidden — but a picker choice
+                  survives the collapse, so an admin batching lead after lead to
+                  the same customers can assign without expanding again. */}
+              {collapsed && selectedCustomers.size > 0 && (
+                <Button size="sm" onClick={assign} disabled={busy}>
+                  {busy ? "Assigning…" : `Assign to ${selectedCustomers.size}`}
+                </Button>
+              )}
+              <button
+                type="button"
+                onClick={toggleCollapsed}
+                aria-expanded={!collapsed}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {collapsed ? (
+                  <>
+                    <ChevronUp className="h-3 w-3" /> Show options
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3 w-3" /> Hide options
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" /> Clear
+              </button>
+            </div>
           </div>
-          {!override && hasGr && (
-            <p className="mt-2 text-xs text-amber-700">
-              GR leads are selected — without override, only customers with an
-              active GR subscription and GR credits will take them.
-            </p>
+
+          {collapsed && message && (
+            <p className="mt-2 text-xs text-muted-foreground">{message}</p>
+          )}
+
+          {!collapsed && (
+            <>
+              <p className="mt-3 mb-1.5 text-xs font-medium text-muted-foreground">
+                Assign to which customers?
+              </p>
+              <div className="grid max-h-[32vh] gap-1.5 overflow-y-auto sm:grid-cols-2">
+                {customers.map((c) => {
+                  const isSel = selectedCustomers.has(c.id);
+                  const bits: string[] = [];
+                  if (hasMgmt) bits.push(`Mgmt ${c.lead_balance}`);
+                  if (hasGr) bits.push(`GR ${c.gr_lead_balance}`);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => toggleCustomer(c.id)}
+                      disabled={busy}
+                      className={
+                        "flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors " +
+                        (isSel
+                          ? "border-brand bg-brand/10"
+                          : "border-border hover:bg-muted")
+                      }
+                    >
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate font-medium">
+                          {c.business_name}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {bits.join(" · ") || "credits"}
+                        </span>
+                      </span>
+                      <span
+                        className={
+                          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border " +
+                          (isSel
+                            ? "border-brand bg-brand text-white"
+                            : "border-border")
+                        }
+                      >
+                        {isSel && <Check className="h-3 w-3" />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={override}
+                  onChange={() => setOverride((v) => !v)}
+                  disabled={busy}
+                  className="mt-0.5 h-4 w-4 accent-brand"
+                />
+                <span>
+                  <span className="font-medium text-foreground">
+                    Override credit limit
+                  </span>{" "}
+                  <span className="text-muted-foreground">
+                    — place these even with customers who are out of credits or
+                    not subscribed. No credit is spent. (Paused customers are
+                    still blocked.)
+                  </span>
+                </span>
+              </label>
+
+              <div className="mt-3 flex items-center gap-3">
+                <Button
+                  onClick={assign}
+                  disabled={busy || selectedCustomers.size === 0}
+                >
+                  {busy
+                    ? "Assigning…"
+                    : `Assign ${selectedLeads.size} lead${
+                        selectedLeads.size === 1 ? "" : "s"
+                      } to ${selectedCustomers.size || ""} ${
+                        selectedCustomers.size === 1 ? "customer" : "customers"
+                      }`.trim()}
+                </Button>
+                {message && (
+                  <span className="text-xs text-muted-foreground">
+                    {message}
+                  </span>
+                )}
+              </div>
+              {!override && hasGr && (
+                <p className="mt-2 text-xs text-amber-700">
+                  GR leads are selected — without override, only customers with
+                  an active GR subscription and GR credits will take them.
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
