@@ -9,9 +9,13 @@ import { cn } from "@/lib/utils";
 type NavItem = { href: string; label: string };
 
 /**
- * Mobile navigation. The desktop nav is hidden below the `sm` breakpoint, so
- * on phones this hamburger button reveals a full-width dropdown of the same
- * links — otherwise the whole dashboard is unreachable on mobile.
+ * Small-screen navigation. The desktop nav is hidden below `lg`, so on phones
+ * and tablets this hamburger button reveals a full-width dropdown of the same
+ * links — otherwise the whole dashboard is unreachable there.
+ *
+ * The list stays flat rather than mirroring the desktop grouping: this is a
+ * full-height vertical sheet with room for every link, so collapsing them into
+ * sections would add a tap and hide nothing worth hiding.
  */
 export function MobileNav({ items }: { items: NavItem[] }) {
   const [open, setOpen] = useState(false);
@@ -33,7 +37,11 @@ export function MobileNav({ items }: { items: NavItem[] }) {
   }, [open]);
 
   return (
-    <div className="sm:hidden">
+    /* Hidden from `lg` up, where DesktopNav takes over. These two breakpoints
+       must stay in step: the grouped desktop nav needs more room than the old
+       flat row, so it starts at `lg`, and anything narrower — tablets included
+       — gets this menu instead of a cramped, overlapping header. */
+    <div className="lg:hidden">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

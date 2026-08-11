@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { MobileNav } from "@/components/dashboard/MobileNav";
+import { DesktopNav, type NavGroup } from "@/components/dashboard/DesktopNav";
 import { Logo } from "@/components/Logo";
 
 export default async function DashboardLayout({
@@ -38,30 +39,70 @@ export default async function DashboardLayout({
   // control: the page and the RPC each enforce this independently.
   const holdsManagement = customer?.subscription_status === "active";
 
-  const nav = [
-    { href: "/dashboard", label: "Dashboard" },
-    { href: "/dashboard/leads", label: "Leads" },
-    { href: "/dashboard/leads/priority", label: "Priority" },
-    { href: "/dashboard/topup", label: "Top up leads" },
-    // Shown to everyone: its whole job is to tell a customer about the product
-    // they do NOT have, so gating it on holding that product is backwards.
-    { href: "/dashboard/packages", label: "Packages" },
-    { href: "/dashboard/filtering", label: "Lead filtering" },
-    { href: "/dashboard/analytics", label: "Analytics" },
-    ...(holdsManagement ? [{ href: "/dashboard/goals", label: "Goals" }] : []),
-    { href: "/dashboard/notifications", label: "Notifications" },
-    { href: "/dashboard/documents", label: "Documents" },
-    // Free to every subscriber — no product or subscription gate, unlike the
-    // items around it.
-    { href: "/dashboard/training", label: "Training" },
-    { href: "/dashboard/guide", label: "Guide" },
-    { href: "/dashboard/settings", label: "Settings" },
-    { href: "/dashboard/support", label: "Support" },
-    { href: "/dashboard/objection-assistant", label: "Objection Assistant" },
+  // Header navigation, grouped.
+  //
+  // Sixteen destinations rendered as one flat row no longer fitted beside the
+  // logo, and since the nav shares its flex row with the notification bell and
+  // sign-out, the overflow ran underneath them — "Admin", appended last for
+  // admins, landed on top of the bell.
+  //
+  // Grouping into six top-level entries keeps every destination reachable in at
+  // most two clicks with nothing hidden behind an unlabelled overflow control.
+  // The groups are built here, on the server, so the visibility rules stay
+  // beside the reasoning for them.
+  const navGroups: NavGroup[] = [
+    { label: "Dashboard", href: "/dashboard" },
+    {
+      label: "Leads",
+      items: [
+        { href: "/dashboard/leads", label: "All leads" },
+        { href: "/dashboard/leads/priority", label: "Priority" },
+        { href: "/dashboard/filtering", label: "Lead filtering" },
+        { href: "/dashboard/topup", label: "Top up leads" },
+      ],
+    },
+    {
+      label: "Insights",
+      items: [
+        { href: "/dashboard/analytics", label: "Analytics" },
+        ...(holdsManagement
+          ? [{ href: "/dashboard/goals", label: "Goals" }]
+          : []),
+      ],
+    },
+    {
+      label: "Learn",
+      items: [
+        // Free to every subscriber — no product or subscription gate, unlike
+        // most of what sits around it.
+        { href: "/dashboard/training", label: "Training" },
+        { href: "/dashboard/guide", label: "Guide" },
+        { href: "/dashboard/objection-assistant", label: "Objection Assistant" },
+        { href: "/dashboard/documents", label: "Documents" },
+      ],
+    },
+    {
+      label: "Account",
+      items: [
+        // Shown to everyone: its whole job is to tell a customer about the
+        // product they do NOT have, so gating it on holding that product is
+        // backwards.
+        { href: "/dashboard/packages", label: "Packages" },
+        { href: "/dashboard/notifications", label: "Notifications" },
+        { href: "/dashboard/settings", label: "Settings" },
+        { href: "/dashboard/support", label: "Support" },
+      ],
+    },
   ];
   if (isAdminUser(user)) {
-    nav.push({ href: "/admin", label: "Admin" });
+    navGroups.push({ label: "Admin", href: "/admin" });
   }
+
+  // The mobile menu stays a flat list — it is a full-height vertical sheet with
+  // room for every link, so grouping there would add a tap for nothing.
+  const nav = navGroups.flatMap((g) =>
+    g.href ? [{ href: g.href, label: g.label }] : (g.items ?? [])
+  );
 
   return (
     <div className="min-h-screen bg-muted/20">
@@ -78,17 +119,7 @@ export default async function DashboardLayout({
                 Lead Database
               </span>
             </Link>
-            <nav className="hidden items-center gap-1 sm:flex">
-              {nav.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
+            <DesktopNav groups={navGroups} />
           </div>
           <div className="flex flex-shrink-0 items-center gap-1">
             {customer && (
