@@ -4,6 +4,8 @@ import { isAdminUser } from "@/lib/auth";
 import {
   isAllowedEmbedUrl,
   isValidSlug,
+  normaliseEmbedUrl,
+  providerForEmbedUrl,
   publishBlocker,
   CONTENT_TYPES,
   LEAD_TYPE_SCOPES,
@@ -114,7 +116,10 @@ export function validateTrainingWrite(
       videoProvider = provider as TrainingVideoProvider;
     }
 
-    const url = asTrimmedString(body.video_url);
+    // Normalise before validating, so the link an admin actually has — Loom's
+    // "Copy link" gives loom.com/share/<id> — is accepted rather than refused
+    // for not already being in embed form. See normaliseEmbedUrl.
+    const url = normaliseEmbedUrl(asTrimmedString(body.video_url));
     if (url) {
       // The allowlist. Refusing here is what stops an arbitrary iframe ever
       // reaching a subscriber's browser — the render-time check is a second
@@ -123,10 +128,13 @@ export function validateTrainingWrite(
         return {
           ok: false,
           error:
-            "Video URL must be an https embed link on Loom, YouTube or Vimeo.",
+            "Video URL must be an https link on Loom, YouTube or Vimeo.",
         };
       }
       videoUrl = url;
+      // Derived from the URL when the form did not say, so the provider can
+      // never disagree with the link it labels.
+      videoProvider = videoProvider ?? providerForEmbedUrl(url);
     }
   }
 

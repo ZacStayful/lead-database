@@ -440,16 +440,21 @@ export function AdminTrainingForm({
           </div>
           <div className="sm:col-span-2">
             <label htmlFor="video_url" className="text-sm font-medium">
-              Embed URL
+              Video link
             </label>
             <input
               id="video_url"
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder="https://www.loom.com/embed/…"
+              placeholder="https://www.loom.com/share/…"
               disabled={saving}
               className={INPUT}
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Paste the link straight from Loom&apos;s Copy link button, or a
+              YouTube or Vimeo link. It is converted to the embeddable form on
+              save, and the provider is filled in from the link.
+            </p>
           </div>
           <div>
             <label htmlFor="video_duration" className="text-sm font-medium">

@@ -10,6 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { TrainingPublishToggle } from "@/components/admin/TrainingPublishToggle";
 import type { TrainingModule } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -99,15 +100,10 @@ export default async function AdminTrainingPage() {
                   {SCOPE_LABEL[m.lead_type_scope] ?? m.lead_type_scope}
                 </TableCell>
                 <TableCell>
-                  {m.is_published ? (
-                    <Badge className="border-transparent bg-green-100 text-green-700">
-                      Published
-                    </Badge>
-                  ) : (
-                    <Badge className="border-transparent bg-amber-100 text-amber-700">
-                      Draft
-                    </Badge>
-                  )}
+                  <TrainingPublishToggle
+                    moduleId={m.id}
+                    isPublished={m.is_published}
+                  />
                 </TableCell>
                 <TableCell className="text-right">
                   <Link

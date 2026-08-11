@@ -46,6 +46,94 @@ export function isAllowedEmbedUrl(value: string | null | undefined): boolean {
   return ALLOWED_EMBED_HOSTS.has(url.hostname.toLowerCase());
 }
 
+/**
+ * Turn a link somebody actually has into the embed link an iframe needs.
+ *
+ * This exists because the two are not the same, and only one of them works.
+ * Loom's "Copy link" button gives you `loom.com/share/<id>`; dropped into an
+ * iframe that renders Loom's own page furniture — or nothing at all, because
+ * the share page sets framing headers. The embeddable form is
+ * `loom.com/embed/<id>`, and nothing in Loom's UI hands you that. Asking an
+ * admin to hand-edit the path is asking them to remember a detail that has no
+ * reason to be theirs, and the failure is silent: the URL saves, and the
+ * module renders an empty box for every customer.
+ *
+ * The same holds for YouTube (`watch?v=`, `youtu.be/`, `/live/`, `/shorts/`)
+ * and Vimeo (`vimeo.com/<id>`).
+ *
+ * Anything already in embed form, or on a host this does not recognise, comes
+ * back unchanged — isAllowedEmbedUrl still has the final say on what may be
+ * stored, so this only ever moves a URL between forms of the same video.
+ * YouTube normalises to youtube-nocookie.com, which does not set cookies until
+ * playback.
+ */
+export function normaliseEmbedUrl(value: string | null | undefined): string {
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const segments = url.pathname.split("/").filter(Boolean);
+
+  if (host === "loom.com") {
+    // /share/<id> and /embed/<id> both carry the id in the second segment.
+    // The trailing ?sid=… on a share link is a tracking parameter and is not
+    // wanted on the embed.
+    if (segments.length >= 2 && (segments[0] === "share" || segments[0] === "embed")) {
+      return `https://www.loom.com/embed/${segments[1]}`;
+    }
+    return raw;
+  }
+
+  if (host === "youtube.com" || host === "youtube-nocookie.com") {
+    const id =
+      url.searchParams.get("v") ??
+      (["embed", "live", "shorts"].includes(segments[0]) ? segments[1] : null);
+    return id ? `https://www.youtube-nocookie.com/embed/${id}` : raw;
+  }
+
+  if (host === "youtu.be") {
+    return segments[0] ? `https://www.youtube-nocookie.com/embed/${segments[0]}` : raw;
+  }
+
+  if (host === "vimeo.com") {
+    // A plain vimeo.com/<id>; player.vimeo.com/video/<id> is already embeddable.
+    const id = segments[0];
+    return id && /^\d+$/.test(id) ? `https://player.vimeo.com/video/${id}` : raw;
+  }
+
+  return raw;
+}
+
+/**
+ * Which provider a URL belongs to, so the admin does not have to state it
+ * separately and cannot state it wrongly. Null for anything unrecognised.
+ */
+export function providerForEmbedUrl(
+  value: string | null | undefined
+): "loom" | "youtube" | "vimeo" | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  let host: string;
+  try {
+    host = new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+  if (host === "loom.com") return "loom";
+  if (host === "youtube.com" || host === "youtube-nocookie.com" || host === "youtu.be") {
+    return "youtube";
+  }
+  if (host === "vimeo.com" || host === "player.vimeo.com") return "vimeo";
+  return null;
+}
+
 /** Lowercase letters, digits and single hyphens — the slug used in the URL. */
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
