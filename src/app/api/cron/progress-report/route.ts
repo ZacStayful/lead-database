@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendProgressReportEmail } from "@/lib/emails";
-import type { Customer } from "@/lib/types";
+import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,11 +25,51 @@ type ReportCustomer = Pick<
   | "contact_name"
   | "notification_preferences"
   | "last_report_sent_at"
+  | "account_status"
+  | "subscription_status"
+  | "gr_subscription_status"
 >;
 
 /** Missing / unset key defaults to true — opt-out is only an explicit false. */
 function wantsProgressReport(customer: ReportCustomer): boolean {
   return customer.notification_preferences?.progress_report !== false;
+}
+
+/**
+ * Whether this customer is live on the product a given lead belongs to.
+ *
+ * Mirrors the inactivity-nudge cron: eligibility is decided per product, because
+ * account_status and subscription_status describe the MANAGEMENT subscription
+ * only (CLAUDE.md invariant 6). Requiring them, as this route used to, excluded
+ * every Guaranteed-Rent-only customer outright — they never received a weekly
+ * report about work they had genuinely done.
+ *
+ * The management branch deliberately carries no paused_at check, unlike the
+ * nudge: this route has never excluded paused customers, and a report is a
+ * summary of work already done rather than a prompt to do more, so pausing lead
+ * delivery is no reason to withhold it.
+ */
+function eligibleFor(customer: ReportCustomer, leadType: LeadType): boolean {
+  if (leadType === "guaranteed_rent") {
+    return customer.gr_subscription_status === "active";
+  }
+  return (
+    customer.account_status === "active" &&
+    customer.subscription_status === "active"
+  );
+}
+
+type RawLead = { lead_type: LeadType | null };
+type RawRow = {
+  status: string;
+  // supabase-js infers an embedded to-one as an array; PostgREST returns a
+  // single object at runtime. Accept both and normalise with oneLead().
+  leads: RawLead | RawLead[] | null;
+};
+
+function oneLead(leads: RawLead | RawLead[] | null): RawLead | null {
+  if (!leads) return null;
+  return Array.isArray(leads) ? (leads[0] ?? null) : leads;
 }
 
 /**
@@ -58,15 +98,19 @@ async function handle(request: NextRequest) {
   const admin = createAdminClient();
 
   // Target only customers who are actually live on the platform — the same
-  // population that receives leads (is_active + account_status + subscription).
+  // population that receives leads.
+  //
+  // The filter is the union: anyone live on EITHER product. Each assignment is
+  // then matched against its own product's eligibility in eligibleFor() before
+  // it can be counted, so a customer who cancelled Management but kept GR is
+  // reported on their GR work and not their old management leads.
   const { data: customerRows, error: custErr } = await admin
     .from("customers")
     .select(
-      "id, email, contact_name, notification_preferences, last_report_sent_at"
+      "id, email, contact_name, notification_preferences, last_report_sent_at, account_status, subscription_status, gr_subscription_status"
     )
     .eq("is_active", true)
-    .eq("account_status", "active")
-    .eq("subscription_status", "active");
+    .or("subscription_status.eq.active,gr_subscription_status.eq.active");
 
   if (custErr) {
     return NextResponse.json({ error: custErr.message }, { status: 500 });
@@ -102,7 +146,7 @@ async function handle(request: NextRequest) {
 
     const { data: rows, error: aErr } = await admin
       .from("lead_assignments")
-      .select("status")
+      .select("status, leads(lead_type)")
       .eq("customer_id", customer.id)
       .in("status", PROGRESS_STATUSES)
       .gte("last_status_change_at", sinceIso);
@@ -118,7 +162,10 @@ async function handle(request: NextRequest) {
     let contacted = 0;
     let inDiscussion = 0;
     let won = 0;
-    for (const row of (rows ?? []) as { status: string }[]) {
+    for (const row of (rows ?? []) as unknown as RawRow[]) {
+      // Count only work on a product this customer is still live on.
+      const leadType = oneLead(row.leads)?.lead_type ?? "management";
+      if (!eligibleFor(customer, leadType)) continue;
       if (row.status === "contacted") contacted += 1;
       else if (row.status === "in_discussion") inDiscussion += 1;
       else if (row.status === "won") won += 1;
