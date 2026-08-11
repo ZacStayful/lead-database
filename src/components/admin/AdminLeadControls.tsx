@@ -42,13 +42,24 @@ export function AdminLeadControls({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const remainingSlots = Math.max(0, Number(max) - assignmentCount);
   const atCapacity = remainingSlots === 0;
 
   // Normal mode only lists customers who can actually be charged a credit;
   // override mode lists every approved customer regardless of credit/subscription.
-  const list = override ? overrideCustomers : customers;
+  const pool = override ? overrideCustomers : customers;
+  // The pool renders in a short fixed-height scroller, so past the first few
+  // names an admin has to know to scroll inside it. Search makes the whole
+  // pool reachable without that; ticked customers always stay listed.
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return pool;
+    return pool.filter(
+      (c) => selected.has(c.id) || c.business_name.toLowerCase().includes(q)
+    );
+  }, [pool, query, selected]);
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
 
   function toggle(id: string) {
@@ -186,7 +197,7 @@ export function AdminLeadControls({
           </span>
         </label>
 
-        {list.length === 0 ? (
+        {pool.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             {override
               ? "No approved customers available to assign."
@@ -202,6 +213,16 @@ export function AdminLeadControls({
               Pick up to {remainingSlots} customer
               {remainingSlots === 1 ? "" : "s"}, then assign in one go.
             </p>
+            {pool.length > 6 && (
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                disabled={busy}
+                placeholder="Search customers by name…"
+                className="w-full rounded-md border-[0.5px] border-border bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-brand"
+              />
+            )}
             <div className="max-h-60 space-y-1 overflow-y-auto rounded-md border-[0.5px] border-border p-1">
               {list.map((c) => {
                 const isSelected = selected.has(c.id);
@@ -248,6 +269,11 @@ export function AdminLeadControls({
                   </button>
                 );
               })}
+              {list.length === 0 && (
+                <p className="px-2 py-2 text-xs text-muted-foreground">
+                  No customer matches “{query}”.
+                </p>
+              )}
             </div>
           </>
         )}

@@ -99,6 +99,7 @@ export function AdminLeadsTable({
   // browser; the stored preference is applied after mount to avoid a hydration
   // mismatch between server-rendered HTML and localStorage.
   const [collapsed, setCollapsed] = useState(false);
+  const [customerQuery, setCustomerQuery] = useState("");
 
   useEffect(() => {
     try {
@@ -152,6 +153,33 @@ export function AdminLeadsTable({
   ]
     .filter(Boolean)
     .join(" · ");
+
+  // The picker is a fixed-height scroller, so a name that doesn't match the
+  // search is genuinely unreachable — keep anything already ticked visible
+  // regardless, or a stale query would silently hide part of the batch.
+  const visibleCustomers = useMemo(() => {
+    const q = customerQuery.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter(
+      (c) =>
+        selectedCustomers.has(c.id) ||
+        c.business_name.toLowerCase().includes(q)
+    );
+  }, [customers, customerQuery, selectedCustomers]);
+
+  // How many of the listed customers can actually be charged for what's
+  // selected. When this is 0 the answer is almost always "nobody has credits",
+  // not "the customer is missing" — say so rather than leaving an admin
+  // hunting the list for a name that is present but unaffordable.
+  const payableCount = useMemo(
+    () =>
+      customers.filter(
+        (c) =>
+          (hasMgmt && c.subscription_status === "active" && c.lead_balance > 0) ||
+          (hasGr && c.gr_subscription_status === "active" && c.gr_lead_balance > 0)
+      ).length,
+    [customers, hasMgmt, hasGr]
+  );
 
   function toggleLead(id: string) {
     setMessage(null);
@@ -354,7 +382,7 @@ export function AdminLeadsTable({
       {/* Sticky bulk-assign bar — appears once leads are selected. Collapses to
           a slim summary strip so it stops covering the table underneath. */}
       {selectedLeads.size > 0 && (
-        <div className="sticky bottom-4 z-10 mx-auto max-w-3xl rounded-xl border border-border bg-card p-4 shadow-lg">
+        <div className="sticky bottom-4 z-10 mx-auto flex max-h-[85vh] max-w-3xl flex-col overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-lg">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="min-w-0">
               <span className="text-sm font-medium">
@@ -408,11 +436,33 @@ export function AdminLeadsTable({
 
           {!collapsed && (
             <>
-              <p className="mt-3 mb-1.5 text-xs font-medium text-muted-foreground">
-                Assign to which customers?
-              </p>
-              <div className="grid max-h-[32vh] gap-1.5 overflow-y-auto sm:grid-cols-2">
-                {customers.map((c) => {
+              <div className="mt-3 mb-1.5 flex items-center justify-between gap-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Assign to which customers?
+                </p>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {selectedCustomers.size} of {customers.length} selected
+                </span>
+              </div>
+
+              {customers.length > 6 && (
+                <input
+                  type="search"
+                  value={customerQuery}
+                  onChange={(e) => setCustomerQuery(e.target.value)}
+                  disabled={busy}
+                  placeholder="Search customers by name…"
+                  className="mb-1.5 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-brand"
+                />
+              )}
+
+              {/* Bounded scroller. Without a height cap this grid grew with the
+                  customer list until the bar was taller than the viewport, and a
+                  sticky element cannot be scrolled past its own overflow — names
+                  beyond the fold became unreachable rather than merely
+                  off-screen. */}
+              <div className="grid max-h-[38vh] gap-1.5 overflow-y-auto sm:grid-cols-2">
+                {visibleCustomers.map((c) => {
                   const isSel = selectedCustomers.has(c.id);
                   const bits: string[] = [];
                   if (hasMgmt) bits.push(`Mgmt ${c.lead_balance}`);
@@ -451,7 +501,20 @@ export function AdminLeadsTable({
                     </button>
                   );
                 })}
+                {visibleCustomers.length === 0 && (
+                  <p className="px-1 py-2 text-xs text-muted-foreground">
+                    No customer matches “{customerQuery}”.
+                  </p>
+                )}
               </div>
+
+              {!override && payableCount === 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  No customer currently has credits for the selected lead
+                  {selectedLeads.size === 1 ? "" : "s"} — every name here will be
+                  refused unless you tick “Override credit limit”.
+                </p>
+              )}
 
               <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs">
                 <input
