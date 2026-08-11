@@ -777,3 +777,24 @@ both is judged on each separately and the row names which product is short.
 `last_assignment_at`, so an admin force-assign paces identically to an automatic
 one — verified against live data, where every active customer's counter equals
 their assignment count for the cycle.
+
+### 18D — `is_active = false` means archived
+
+A duplicate signup superseded by a later account is archived rather than deleted:
+the row keeps its history and can be restored, but leaves circulation.
+
+Routing has always honoured the flag — both candidate functions require
+`is_active = true` — but the **admin surfaces did not**, so a dead duplicate kept
+appearing beside the live account under the same name. That is how the
+supply-problem banner (§18C) came to name "Leslie Rogers" when the real Leslie
+Rogers had had her full allocation: the row it flagged was a different,
+superseded signup at another address.
+
+Archived rows now sit under their own **Archived** tab in the customers table
+and appear nowhere else, including "All" — visible enough to undo, invisible in
+day-to-day use. They are also excluded from the management waitlist count (a
+superseded row is not a prospect awaiting a slot) and from the bulk assigner,
+which selected `is_active` but never filtered on it.
+
+Archiving is **not** a substitute for `account_status`. It says "this row should
+not be in circulation at all", where `cancelled` says "this customer left".

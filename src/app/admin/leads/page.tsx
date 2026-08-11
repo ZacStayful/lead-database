@@ -60,6 +60,11 @@ export default async function AdminLeadsPage() {
     // it alone hid every GR-only subscriber from the assigner and from the
     // "eligible buyers" counts below — a paying GR customer could not be given a
     // GR lead, and the GR pool always reported zero buyers.
+    //
+    // is_active = false is archived (a superseded duplicate signup). Routing and
+    // the single-lead picker have always excluded those; this list selected the
+    // column but never filtered on it.
+    .eq("is_active", true)
     .or("account_status.eq.active,gr_subscription_status.eq.active")
     .order("business_name");
   const custs = (custRaw ?? []) as (CustomerRow & {

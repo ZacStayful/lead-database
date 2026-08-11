@@ -43,8 +43,13 @@ export default async function AdminOverviewPage() {
   // account_status 'waitlisted' permanently by design (§18) — they are a paying
   // customer, not someone queuing for management — so counting them here would
   // overstate the management waitlist the panel is sizing capacity against.
+  // Archived rows (is_active = false) are excluded for the same reason: a
+  // superseded duplicate signup is not a prospect waiting for a slot.
   const waitlistedAccounts = customers.filter(
-    (c) => c.account_status === "waitlisted" && c.gr_subscription_status !== "active"
+    (c) =>
+      c.account_status === "waitlisted" &&
+      c.gr_subscription_status !== "active" &&
+      c.is_active
   ).length;
 
   // Filter mix per product — reported separately, since a customer can filter

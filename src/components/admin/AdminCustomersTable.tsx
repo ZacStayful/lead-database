@@ -22,7 +22,13 @@ import {
 } from "@/lib/leadFilter";
 import type { Customer } from "@/lib/types";
 
-type Tab = "all" | "active" | "waitlisted" | "invited" | "cancelled";
+type Tab =
+  | "all"
+  | "active"
+  | "waitlisted"
+  | "invited"
+  | "cancelled"
+  | "archived";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "all", label: "All" },
@@ -30,7 +36,20 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "waitlisted", label: "Waitlisted" },
   { key: "invited", label: "Invited" },
   { key: "cancelled", label: "Cancelled" },
+  { key: "archived", label: "Archived" },
 ];
+
+/**
+ * `is_active = false` means archived: a row kept for its history but taken out
+ * of circulation, typically a duplicate signup superseded by a later account.
+ *
+ * Routing has always honoured it — both candidate functions require
+ * is_active = true — but every admin list showed these rows anyway, so a stale
+ * duplicate kept appearing beside the real account under the same name. They are
+ * hidden from every other tab and reachable only under Archived, so archiving
+ * stays reversible rather than becoming a row nobody can find again.
+ */
+const isArchived = (c: Customer) => c.is_active === false;
 
 type ProductTab = "all" | "management" | "guaranteed_rent" | "both";
 
@@ -105,7 +124,13 @@ export function AdminCustomersTable({
     effectiveStatus(c, statusOverride[c.id] ?? c.account_status);
 
   const rows = useMemo(() => {
-    let list = customers.filter((c) => tab === "all" || accountStatus(c) === tab);
+    // Archived rows appear under their own tab and nowhere else — including
+    // "All", which otherwise put a dead duplicate right beside the live account
+    // it was superseded by.
+    let list = customers.filter((c) =>
+      tab === "archived" ? isArchived(c) : !isArchived(c)
+    );
+    list = list.filter((c) => tab === "all" || tab === "archived" || accountStatus(c) === tab);
     list = list.filter((c) => {
       if (product === "management") return hasManagement(c);
       if (product === "guaranteed_rent") return hasGuaranteedRent(c);
