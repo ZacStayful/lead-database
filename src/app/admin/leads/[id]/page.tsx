@@ -79,8 +79,13 @@ export default async function AdminLeadDetailPage({
 
   // Override pool: any approved customer, regardless of subscription/credits,
   // for the admin override path (how GR leads get placed with no GR subscribers).
+  // Approval means holding EITHER product — account_status is management-only, so
+  // on its own it excluded every GR-only subscriber from the override pool.
   const overrideCustomers = notAssigned
-    .filter((c) => c.account_status === "active")
+    .filter(
+      (c) =>
+        c.account_status === "active" || c.gr_subscription_status === "active"
+    )
     .map((c) => ({
       id: c.id,
       business_name: c.business_name,

@@ -13,7 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Filter, Pause } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { computePacing, type PacingStatus } from "@/lib/pacing";
+import { computePacing, computeGrPacing, type PacingStatus } from "@/lib/pacing";
 import {
   activeLeadFilters,
   filterSummary,
@@ -47,6 +47,31 @@ const hasManagement = (c: Customer) =>
   c.subscription_status === "active" && c.account_status === "active";
 const hasGuaranteedRent = (c: Customer) => c.gr_subscription_status === "active";
 
+/**
+ * Whether a product is worth showing figures for on this row.
+ *
+ * Deliberately looser than hasManagement/hasGuaranteedRent, which mirror the
+ * routing gate: a past_due or cancelled subscription still has billing state and
+ * credits an admin needs to see. A row where neither product qualifies is a
+ * prospect who has never paid, and falls back to the management columns.
+ */
+const showsManagement = (c: Customer) =>
+  c.subscription_status !== "inactive" || c.lead_balance > 0;
+const showsGr = (c: Customer) =>
+  c.gr_subscription_status !== "inactive" || c.gr_lead_balance > 0;
+
+/**
+ * The account state to file a customer under.
+ *
+ * `account_status` is management-only (CLAUDE.md §3, invariant 6) and the GR
+ * webhook never writes it, so a GR-only subscriber sits at 'waitlisted' forever
+ * — which read as an unconverted prospect and buried an active paying customer
+ * under the Waitlisted tab. Holding GR makes them active, whatever the
+ * management column says.
+ */
+const effectiveStatus = (c: Customer, accountStatus: string) =>
+  hasGuaranteedRent(c) ? "active" : accountStatus;
+
 // A management subscriber whose subscription is currently paused (account_status
 // stays 'active', so they still appear under the Active tab).
 const isPaused = (c: Customer) => Boolean(c.paused_at);
@@ -76,7 +101,8 @@ export function AdminCustomersTable({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const accountStatus = (c: Customer) => statusOverride[c.id] ?? c.account_status;
+  const accountStatus = (c: Customer) =>
+    effectiveStatus(c, statusOverride[c.id] ?? c.account_status);
 
   const rows = useMemo(() => {
     let list = customers.filter((c) => tab === "all" || accountStatus(c) === tab);
@@ -318,34 +344,68 @@ export function AdminCustomersTable({
                       {status}
                     </Badge>
                   </TableCell>
+                  {/*
+                    Billing, credits and pacing are all per product. Showing only
+                    the management columns reported a GR-only subscriber as
+                    inactive with zero credits — the figures for the product they
+                    actually pay for were nowhere on the page.
+                  */}
                   <TableCell>
-                    <Badge
-                      variant={
-                        c.subscription_status === "active" ? "brand" : "muted"
-                      }
-                    >
-                      {c.subscription_status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="whitespace-nowrap">
-                      <span
-                        className={
-                          c.lead_balance <= 0
-                            ? "font-medium text-amber-700"
-                            : "font-medium text-foreground"
-                        }
-                      >
-                        {c.lead_balance} credit{c.lead_balance === 1 ? "" : "s"}
-                      </span>
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        · {c.leads_received_this_month}/{c.monthly_allocation}{" "}
-                        this cycle
-                      </span>
+                    <div className="flex flex-wrap gap-1">
+                      {showsManagement(c) && (
+                        <Badge
+                          variant={
+                            c.subscription_status === "active" ? "brand" : "muted"
+                          }
+                        >
+                          Mgmt {c.subscription_status}
+                        </Badge>
+                      )}
+                      {showsGr(c) && (
+                        <Badge
+                          variant={
+                            c.gr_subscription_status === "active"
+                              ? "brand"
+                              : "muted"
+                          }
+                        >
+                          GR {c.gr_subscription_status}
+                        </Badge>
+                      )}
+                      {!showsManagement(c) && !showsGr(c) && (
+                        <Badge variant="muted">{c.subscription_status}</Badge>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
-                    <PacingBadge status={pacing.status} />
+                    <div className="space-y-0.5">
+                      {(showsManagement(c) || !showsGr(c)) && (
+                        <CreditLine
+                          label={showsGr(c) ? "Mgmt" : null}
+                          balance={c.lead_balance}
+                          received={c.leads_received_this_month}
+                          allocation={c.monthly_allocation}
+                        />
+                      )}
+                      {showsGr(c) && (
+                        <CreditLine
+                          label="GR"
+                          balance={c.gr_lead_balance}
+                          received={c.gr_leads_received_this_month}
+                          allocation={c.gr_monthly_allocation}
+                        />
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {(showsManagement(c) || !showsGr(c)) && (
+                        <PacingBadge status={pacing.status} />
+                      )}
+                      {showsGr(c) && (
+                        <PacingBadge status={computeGrPacing(c).status} />
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {c.last_assignment_at ? formatDate(c.last_assignment_at) : "—"}
@@ -447,6 +507,45 @@ function LastActive({
     );
   }
   return <span title={lastSignInAt}>{formatDate(lastSignInAt)}</span>;
+}
+
+/**
+ * One product's credit balance and cycle progress. `label` is omitted when the
+ * customer holds a single product, so the common one-product row reads exactly
+ * as it always has.
+ */
+function CreditLine({
+  label,
+  balance,
+  received,
+  allocation,
+}: {
+  label: string | null;
+  balance: number;
+  received: number;
+  allocation: number;
+}) {
+  return (
+    <div className="whitespace-nowrap">
+      {label && (
+        <span className="mr-1 text-xs font-medium text-muted-foreground">
+          {label}
+        </span>
+      )}
+      <span
+        className={
+          balance <= 0
+            ? "font-medium text-amber-700"
+            : "font-medium text-foreground"
+        }
+      >
+        {balance} credit{balance === 1 ? "" : "s"}
+      </span>
+      <span className="ml-1 text-xs text-muted-foreground">
+        · {received}/{allocation} this cycle
+      </span>
+    </div>
+  );
 }
 
 function PacingBadge({ status }: { status: PacingStatus }) {

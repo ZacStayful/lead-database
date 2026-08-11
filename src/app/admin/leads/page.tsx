@@ -56,7 +56,11 @@ export default async function AdminLeadsPage() {
     .select(
       "id, business_name, is_active, account_status, subscription_status, lead_balance, gr_subscription_status, gr_lead_balance"
     )
-    .eq("account_status", "active")
+    // Holders of EITHER product. account_status is management-only, so gating on
+    // it alone hid every GR-only subscriber from the assigner and from the
+    // "eligible buyers" counts below — a paying GR customer could not be given a
+    // GR lead, and the GR pool always reported zero buyers.
+    .or("account_status.eq.active,gr_subscription_status.eq.active")
     .order("business_name");
   const custs = (custRaw ?? []) as (CustomerRow & {
     is_active: boolean;

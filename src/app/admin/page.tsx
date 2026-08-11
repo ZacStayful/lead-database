@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
-import { planForAllocation } from "@/lib/plans";
+import { planForAllocation, grPlanForAllocation } from "@/lib/plans";
 import { getCapacityStatus, getGrCapacityStatus } from "@/lib/capacity";
 import { DEFAULT_MAX_ASSIGNMENTS, type Customer } from "@/lib/types";
 
@@ -12,8 +12,20 @@ export default async function AdminOverviewPage() {
 
   const { data: customersRaw } = await admin.from("customers").select("*");
   const customers = (customersRaw ?? []) as Customer[];
-  const activeCustomers = customers.filter(
+
+  // "Active" spans BOTH products. subscription_status is management-only, so a
+  // GR-only subscriber — whose management columns stay inactive by design
+  // (CLAUDE.md §18) — was counted nowhere on this page despite paying monthly.
+  const activeManagement = customers.filter(
     (c) => c.subscription_status === "active" && c.is_active
+  );
+  const activeGr = customers.filter(
+    (c) => c.gr_subscription_status === "active" && c.is_active
+  );
+  const activeCustomers = customers.filter(
+    (c) =>
+      c.is_active &&
+      (c.subscription_status === "active" || c.gr_subscription_status === "active")
   );
 
   // Capacity management uses account_status (admin approval), independent of
@@ -27,8 +39,12 @@ export default async function AdminOverviewPage() {
     getCapacityStatus(),
     getGrCapacityStatus(),
   ]);
+  // Prospects awaiting a MANAGEMENT slot. A GR-only subscriber sits at
+  // account_status 'waitlisted' permanently by design (§18) — they are a paying
+  // customer, not someone queuing for management — so counting them here would
+  // overstate the management waitlist the panel is sizing capacity against.
   const waitlistedAccounts = customers.filter(
-    (c) => c.account_status === "waitlisted"
+    (c) => c.account_status === "waitlisted" && c.gr_subscription_status !== "active"
   ).length;
 
   // Filter mix per product — reported separately, since a customer can filter
@@ -54,13 +70,24 @@ export default async function AdminOverviewPage() {
 
   // MRR counts only customers on a real Stripe subscription — comped/owner
   // accounts are active but generate no revenue.
-  const payingCustomers = activeCustomers.filter(
-    (c) => c.stripe_subscription_id
-  );
-  const mrr = payingCustomers.reduce(
-    (sum, c) => sum + planForAllocation(c.monthly_allocation).priceGbp,
-    0
-  );
+  //
+  // Summed per PRODUCT, not per customer: the two subscriptions are independent
+  // and someone holding both is paying both fees, so they contribute twice. The
+  // GR side is keyed on gr_stripe_subscription_id for the usual reason — the
+  // management subscription id says nothing about whether GR is being billed.
+  const mgmtMrr = activeManagement
+    .filter((c) => c.stripe_subscription_id)
+    .reduce(
+      (sum, c) => sum + planForAllocation(c.monthly_allocation).priceGbp,
+      0
+    );
+  const grMrr = activeGr
+    .filter((c) => c.gr_stripe_subscription_id)
+    .reduce(
+      (sum, c) => sum + grPlanForAllocation(c.gr_monthly_allocation).priceGbp,
+      0
+    );
+  const mrr = mgmtMrr + grMrr;
   const leadsThisMonth = customers.reduce(
     (sum, c) => sum + (c.leads_received_this_month ?? 0),
     0
@@ -76,8 +103,16 @@ export default async function AdminOverviewPage() {
   ).length;
 
   const stats = [
-    { label: "Monthly recurring revenue", value: `£${mrr.toLocaleString()}` },
-    { label: "Active customers", value: String(activeCustomers.length) },
+    {
+      label: "Monthly recurring revenue",
+      value: `£${mrr.toLocaleString()}`,
+      hint: `Management £${mgmtMrr.toLocaleString()} · Guaranteed Rent £${grMrr.toLocaleString()}`,
+    },
+    {
+      label: "Active customers",
+      value: String(activeCustomers.length),
+      hint: `Management ${activeManagement.length} · Guaranteed Rent ${activeGr.length}`,
+    },
     { label: "Leads sent this month", value: String(leadsThisMonth) },
     { label: "Leads awaiting assignment", value: String(notFullyAssigned) },
   ];
@@ -116,6 +151,9 @@ export default async function AdminOverviewPage() {
             <CardContent className="pt-6">
               <p className="text-sm text-muted-foreground">{s.label}</p>
               <p className="mt-1 text-3xl font-semibold">{s.value}</p>
+              {s.hint && (
+                <p className="mt-1 text-xs text-muted-foreground">{s.hint}</p>
+              )}
             </CardContent>
           </Card>
         ))}
