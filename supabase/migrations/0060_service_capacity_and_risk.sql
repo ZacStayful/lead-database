@@ -13,10 +13,46 @@
 -- number goes stale silently and is trusted anyway, which is the worst
 -- combination.
 --
--- get_service_capacity() derives the figure from what actually happened:
--- leads ingested in the window, and the caps those leads carry. Because
--- escalation RAISES leads.max_assignments, the capacity number rises by itself
--- as escalations fire. Nobody has to remember to re-tune it.
+-- get_service_capacity() derives the figure from what actually happened.
+--
+-- IT REPORTS FOUR DIFFERENT THINGS, BECAUSE ONE NUMBER LIES.
+--
+-- An earlier version compared new-lead slots against promised allocations and
+-- reported management at 114% — "oversubscribed". That was wrong, and checking
+-- it against delivery proved it: every customer received 100% of their promised
+-- allocation, and 276 management leads a month were delivered against 260
+-- promised. The figure counted only leads ingested in the window and ignored
+-- the standing inventory of unsold leads, which is where the difference came
+-- from.
+--
+-- So inflow and inventory are now reported SEPARATELY and never added:
+--
+--   slots_per_month     sustainable. What arrives each month and can be sold.
+--                       This is the number that decides how many customers can
+--                       be carried indefinitely.
+--   inventory_slots_now a one-off buffer. Real, sellable, and it can absorb new
+--                       customers immediately — but only once. Adding
+--                       subscribers against it borrows from a stock that does
+--                       not refill.
+--   delivered_per_month what actually happened, as the check on both.
+--   fully_served        how many customers have received everything they were
+--                       promised this cycle. The guarantee, measured rather
+--                       than assumed.
+--
+-- Because escalation RAISES leads.max_assignments, slots_per_month rises by
+-- itself as escalations fire. Nobody has to re-tune it.
+--
+-- ON REASSIGNMENT CAPACITY
+-- ------------------------
+-- Escalated leads are not extra supply on top of this — they spend the same
+-- customer credits as fresh leads, and are already counted in slots_per_month
+-- through the raised caps. What escalation actually needs is somebody holding
+-- credit at the moment it fires, and that comes from billing dates being spread
+-- across the month: with anchors on the 20th, 23rd, 24th, 25th, 27th, 28th,
+-- 29th, 1st, 3rd, 4th, 7th, 8th and 10th, a customer tops up every day or two
+-- and each top-up is 10 or 20 credits of somewhere to reassign to. That is why
+-- reassignment capacity is not a separate reserve to hold back; it is a
+-- consequence of having enough customers on staggered dates.
 --
 -- The typed setting is deliberately left in place and untouched. It still gates
 -- signup and the invite warning, and switching a live gate onto a derived
@@ -54,12 +90,15 @@ returns table (
   lead_type            public.lead_type,
   leads_per_month      numeric,
   slots_per_month      numeric,
+  inventory_slots_now  integer,
+  unsold_leads_now     integer,
   demand_per_month     integer,
-  headroom_per_month   numeric,
-  utilisation          numeric,
+  delivered_per_month  numeric,
   active_customers     integer,
-  open_slots_now       integer,
-  unsold_leads_now     integer
+  fully_served         integer,
+  avg_allocation       numeric,
+  sustainable_customers integer,
+  room_for_customers   integer
 )
 language sql
 stable
@@ -70,38 +109,61 @@ as $$
   supply as (
     select
       lt.lead_type,
-      count(l.id)                                          as leads_in_window,
-      coalesce(sum(l.max_assignments), 0)                  as slots_in_window
+      count(l.id)                         as leads_in_window,
+      coalesce(sum(l.max_assignments), 0) as slots_in_window
     from (select unnest(enum_range(null::public.lead_type)) as lead_type) lt
     left join public.leads l
       on l.lead_type = lt.lead_type
      and l.created_at >= now() - make_interval(days => (select days from w))
     group by lt.lead_type
   ),
-  demand as (
+  delivered as (
+    select lt.lead_type, count(la.id) as n
+    from (select unnest(enum_range(null::public.lead_type)) as lead_type) lt
+    left join public.leads l on l.lead_type = lt.lead_type
+    left join public.lead_assignments la
+      on la.lead_id = l.id
+     and la.assigned_at >= now() - make_interval(days => (select days from w))
+    group by lt.lead_type
+  ),
+  -- Per customer per product: promised against received since their own billing
+  -- anchor. The guarantee is per customer per cycle, so it can only be measured
+  -- against each customer's own anchor date, never a shared calendar month.
+  served as (
     select
       'management'::public.lead_type as lead_type,
-      -- is_active is the master switch, and it belongs in the demand figure as
-      -- much as in routing. The admin demo account is switched off there but
-      -- still carries an allocation, and counting it would have this panel
-      -- report 20 leads a month of commitment that nobody is owed.
-      coalesce(sum(c.monthly_allocation) filter (
-        where c.is_active
-          and c.account_status = 'active' and c.subscription_status = 'active'
-      ), 0)::integer as demand,
-      count(*) filter (
-        where c.is_active
-          and c.account_status = 'active' and c.subscription_status = 'active'
-      )::integer as customers
-    from public.customers c
+      count(*)::integer as customers,
+      count(*) filter (where got >= promised)::integer as fully_served,
+      coalesce(round(avg(promised), 1), 0) as avg_alloc,
+      coalesce(sum(promised), 0)::integer as demand
+    from (
+      select c.id, c.monthly_allocation as promised,
+        (select count(*) from public.lead_assignments la
+           join public.leads l on l.id = la.lead_id
+          where la.customer_id = c.id and l.lead_type = 'management'
+            and la.assigned_at >= coalesce(c.billing_cycle_anchor, c.created_at::date)
+        ) as got
+      from public.customers c
+      where c.is_active and c.account_status = 'active'
+        and c.subscription_status = 'active'
+    ) m
     union all
     select
       'guaranteed_rent'::public.lead_type,
-      coalesce(sum(c.gr_monthly_allocation) filter (
-        where c.is_active and c.gr_subscription_status = 'active'
-      ), 0)::integer,
-      count(*) filter (where c.is_active and c.gr_subscription_status = 'active')::integer
-    from public.customers c
+      count(*)::integer,
+      count(*) filter (where got >= promised)::integer,
+      coalesce(round(avg(promised), 1), 0),
+      coalesce(sum(promised), 0)::integer
+    from (
+      select c.id, c.gr_monthly_allocation as promised,
+        (select count(*) from public.lead_assignments la
+           join public.leads l on l.id = la.lead_id
+          where la.customer_id = c.id and l.lead_type = 'guaranteed_rent'
+            and la.assigned_at >= coalesce(c.gr_billing_cycle_anchor, c.created_at::date)
+        ) as got
+      from public.customers c
+      where c.is_active and c.gr_subscription_status = 'active'
+    ) g
   ),
   inventory as (
     select
@@ -116,17 +178,30 @@ as $$
     s.lead_type,
     round(s.leads_in_window * 30.0 / (select days from w), 1),
     round(s.slots_in_window * 30.0 / (select days from w), 1),
-    d.demand,
-    round(s.slots_in_window * 30.0 / (select days from w) - d.demand, 1),
-    case when s.slots_in_window > 0
-         then round(d.demand / (s.slots_in_window * 30.0 / (select days from w)), 3)
-    end,
-    d.customers,
     i.open_slots,
-    i.unsold
+    i.unsold,
+    sv.demand,
+    round(d.n * 30.0 / (select days from w), 1),
+    sv.customers,
+    sv.fully_served,
+    sv.avg_alloc,
+    -- The ceiling: sustainable monthly slots divided by what an average
+    -- customer is promised. Inventory is deliberately excluded — it can seat a
+    -- few more customers today and then never again, so counting it here would
+    -- recommend a headcount the monthly inflow cannot keep serving.
+    case when sv.avg_alloc > 0
+         then floor((s.slots_in_window * 30.0 / (select days from w)) / sv.avg_alloc)::integer
+         else 0 end,
+    case when sv.avg_alloc > 0
+         then greatest(
+           floor((s.slots_in_window * 30.0 / (select days from w)) / sv.avg_alloc)::integer
+             - sv.customers,
+           0)
+         else 0 end
   from supply s
-  join demand d    on d.lead_type = s.lead_type
-  join inventory i on i.lead_type = s.lead_type;
+  join delivered d  on d.lead_type = s.lead_type
+  join served sv    on sv.lead_type = s.lead_type
+  join inventory i  on i.lead_type = s.lead_type;
 $$;
 
 revoke execute on function public.get_service_capacity() from public, anon, authenticated;

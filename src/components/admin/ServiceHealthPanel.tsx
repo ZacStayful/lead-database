@@ -34,8 +34,7 @@ function gbp(n: number): string {
 }
 
 function CapacityRow({ c }: { c: ProductCapacity }) {
-  const over = c.headroomPerMonth < 0;
-  const pct = c.utilisation == null ? null : Math.round(c.utilisation * 100);
+  const short = c.demandPerMonth - c.slotsPerMonth;
 
   return (
     <div className="border-[0.5px] border-border rounded-lg p-4">
@@ -43,68 +42,60 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         <h3 className="text-sm font-medium">
           {PRODUCT_LABEL[c.product] ?? c.product}
         </h3>
-        <span
-          className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            over ? "bg-red-100 text-red-800" : "bg-brand/10 text-brand"
-          }`}
-        >
-          {pct == null ? "No supply data" : `${pct}% of supply committed`}
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {c.fullyServed} of {c.activeCustomers} fully served this cycle
         </span>
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
         <div>
-          <dt className="text-xs text-muted-foreground">New leads / month</dt>
-          <dd className="tabular-nums">{c.leadsPerMonth}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Sellable slots / month</dt>
+          <dt className="text-xs text-muted-foreground">Sustainable slots / mo</dt>
           <dd className="tabular-nums">{c.slotsPerMonth}</dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">
-            Committed ({c.activeCustomers} customers)
-          </dt>
+          <dt className="text-xs text-muted-foreground">Promised / mo</dt>
           <dd className="tabular-nums">{c.demandPerMonth}</dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">Spare / month</dt>
-          <dd className={`tabular-nums ${over ? "text-red-700 font-medium" : ""}`}>
-            {c.headroomPerMonth}
-          </dd>
+          <dt className="text-xs text-muted-foreground">Actually delivered / mo</dt>
+          <dd className="tabular-nums">{c.deliveredPerMonth}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Unsold in stock</dt>
+          <dd className="tabular-nums">{c.inventorySlotsNow}</dd>
         </div>
       </dl>
 
-      <p className="mt-3 text-sm text-muted-foreground">
-        {over ? (
-          <>
-            <span className="font-medium text-red-700">Oversubscribed.</span>{" "}
-            Customers are promised {Math.abs(c.headroomPerMonth)} more leads a
-            month than arrive, so allocations run out early and nobody should be
-            added until supply or the escalation ladder closes the gap.
-          </>
+      <p className="mt-3 text-sm">
+        <span className="font-medium">
+          Can carry {c.sustainableCustomers} customers at {c.avgAllocation} leads
+          each. You have {c.activeCustomers}.
+        </span>{" "}
+        {c.roomForCustomers > 0 ? (
+          <span className="text-muted-foreground">
+            Room for {c.roomForCustomers} more without touching the guarantee.
+          </span>
         ) : (
-          <>
-            Room for roughly{" "}
-            <span className="font-medium text-foreground">
-              {c.roomForCustomers.atTwenty} more 20-lead
-            </span>{" "}
-            or{" "}
-            <span className="font-medium text-foreground">
-              {c.roomForCustomers.atTen} more 10-lead
-            </span>{" "}
-            customers.
-          </>
-        )}{" "}
-        {c.openSlotsNow > 0 && (
-          <>
-            {c.openSlotsNow} slots unfilled right now across the back catalogue
-            {c.unsoldLeadsNow > 0
-              ? `, ${c.unsoldLeadsNow} leads never sold to anyone.`
-              : "."}
-          </>
+          <span className="text-muted-foreground">No room at current volume.</span>
         )}
       </p>
+
+      {c.borrowingFromInventory && (
+        <p className="mt-2 text-sm text-amber-800">
+          Promising {short} more leads a month than arrive, and covering it from
+          the {c.inventorySlotsNow} unsold slots in stock. Everyone is being
+          served today; that stops when the stock runs out. Escalation raises the
+          sustainable figure because it sells ignored leads to a further
+          operator.
+        </p>
+      )}
+
+      {!c.borrowingFromInventory && c.unsoldLeadsNow > 0 && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {c.unsoldLeadsNow} leads have never been sold to anyone — there are
+          more leads here than customers to buy them.
+        </p>
+      )}
     </div>
   );
 }
@@ -171,9 +162,11 @@ export function ServiceHealthPanel({ health }: { health: ServiceHealth }) {
         <CardContent className="p-5">
           <h2 className="text-base font-medium">How many customers can we serve</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Derived from leads actually ingested over the last 28 days and the
-            caps those leads carry, so it moves on its own as volume changes and
-            as escalation opens extra slots. Recalculated on every page load.
+            Sustainable slots are what arrives each month and can be sold;
+            unsold stock is a one-off buffer and is never added to it. Delivered
+            is what actually happened, as the check on both. Recalculated on
+            every page load, and it rises on its own as escalation opens extra
+            slots.
           </p>
           <div className="mt-4 space-y-3">
             {health.capacity.map((c) => (

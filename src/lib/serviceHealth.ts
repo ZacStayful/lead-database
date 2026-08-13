@@ -20,23 +20,33 @@ export interface ProductCapacity {
   /** New leads ingested per month, from a 28-day window scaled to 30 days. */
   leadsPerMonth: number;
   /**
-   * Sellable slots per month — the sum of max_assignments over those leads, not
-   * a lead count times a constant. Rises by itself as escalation raises caps.
+   * Sustainable sellable slots per month — the sum of max_assignments over
+   * newly ingested leads. Rises by itself as escalation raises caps. This is
+   * the number that decides how many customers can be carried indefinitely.
    */
   slotsPerMonth: number;
-  /** Sum of monthly allocations across active customers of this product. */
-  demandPerMonth: number;
-  /** slots − demand. Negative means oversubscribed. */
-  headroomPerMonth: number;
-  /** demand / slots. Above 1.0 means promising more leads than arrive. */
-  utilisation: number | null;
-  activeCustomers: number;
-  /** Unfilled slots sitting in inventory right now. */
-  openSlotsNow: number;
-  /** Leads never sold to anybody. */
+  /**
+   * Slots sitting unsold in the back catalogue. Real and sellable, but a
+   * ONE-OFF buffer — kept separate from slotsPerMonth and never added to it,
+   * because seating customers against a stock that does not refill is how you
+   * end up unable to serve them next month.
+   */
+  inventorySlotsNow: number;
   unsoldLeadsNow: number;
-  /** How many more customers the headroom supports, at each plan size. */
-  roomForCustomers: { atTen: number; atTwenty: number };
+  /** Sum of monthly allocations promised to active customers. */
+  demandPerMonth: number;
+  /** What was actually delivered per month — the check on the other two. */
+  deliveredPerMonth: number;
+  activeCustomers: number;
+  /** Customers who have received their full allocation in the current cycle. */
+  fullyServed: number;
+  avgAllocation: number;
+  /** Customers this product's monthly inflow can carry indefinitely. */
+  sustainableCustomers: number;
+  /** sustainableCustomers − activeCustomers, floored at zero. */
+  roomForCustomers: number;
+  /** True when more is promised each month than sustainably arrives. */
+  borrowingFromInventory: boolean;
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -139,23 +149,22 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
   const capacity: ProductCapacity[] = (
     (capRes.data ?? []) as Record<string, unknown>[]
   ).map((r) => {
-    const headroom = Number(r.headroom_per_month ?? 0);
+    const slots = Number(r.slots_per_month ?? 0);
+    const demand = Number(r.demand_per_month ?? 0);
     return {
       product: r.lead_type as LeadType,
       leadsPerMonth: Number(r.leads_per_month ?? 0),
-      slotsPerMonth: Number(r.slots_per_month ?? 0),
-      demandPerMonth: Number(r.demand_per_month ?? 0),
-      headroomPerMonth: headroom,
-      utilisation: r.utilisation == null ? null : Number(r.utilisation),
-      activeCustomers: Number(r.active_customers ?? 0),
-      openSlotsNow: Number(r.open_slots_now ?? 0),
+      slotsPerMonth: slots,
+      inventorySlotsNow: Number(r.inventory_slots_now ?? 0),
       unsoldLeadsNow: Number(r.unsold_leads_now ?? 0),
-      // Floor, and never negative: an oversubscribed product has room for
-      // nobody, not for a negative number of people.
-      roomForCustomers: {
-        atTen: Math.max(0, Math.floor(headroom / 10)),
-        atTwenty: Math.max(0, Math.floor(headroom / 20)),
-      },
+      demandPerMonth: demand,
+      deliveredPerMonth: Number(r.delivered_per_month ?? 0),
+      activeCustomers: Number(r.active_customers ?? 0),
+      fullyServed: Number(r.fully_served ?? 0),
+      avgAllocation: Number(r.avg_allocation ?? 0),
+      sustainableCustomers: Number(r.sustainable_customers ?? 0),
+      roomForCustomers: Number(r.room_for_customers ?? 0),
+      borrowingFromInventory: demand > slots,
     };
   });
 
