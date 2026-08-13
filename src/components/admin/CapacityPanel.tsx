@@ -60,6 +60,12 @@ export function CapacityPanel({
   // somebody typed. A typed cap cannot know that volume moved last week or that
   // escalation has opened extra slots, and it goes stale silently while still
   // being trusted. The manual setting stays as a hard ceiling below.
+  //
+  // When the derived figure cannot be read the panel falls back to the typed
+  // one — but SAYS SO. Silently showing the old number is the failure this whole
+  // change exists to stop: the reader has no way to tell a live figure from a
+  // stale one when they look identical.
+  const derivedAvailable = derivedCeiling != null;
   const ceiling = derivedCeiling ?? limit;
   const pct = ceiling > 0 ? Math.min(100, Math.round((weightedUsed / ceiling) * 100)) : 0;
   const full = weightedUsed >= ceiling;
@@ -114,11 +120,22 @@ export function CapacityPanel({
           <p className="mt-0.5 text-sm text-muted-foreground">
             {rawActiveCount} {activeLabel}
             {rawActiveCount === 1 ? "" : "s"}
-            {derivedCeiling != null && (
+            {derivedAvailable ? (
               <> · ceiling derived from the last 28 days of lead volume</>
+            ) : (
+              <> · manual cap</>
             )}
           </p>
         </div>
+
+        {!derivedAvailable && (
+          <p className="text-sm text-amber-800">
+            Showing the manually set cap. The derived ceiling could not be
+            read — the migration for it has not been applied to this
+            environment, so this number is whatever was last typed rather than
+            what the lead supply can actually serve.
+          </p>
+        )}
 
         {shortfall != null && (
           <p className="text-sm">
