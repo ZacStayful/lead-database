@@ -221,8 +221,49 @@ export async function ingestLead(
     };
   }
 
-  // Insert the lead, mapping fields per product type.
   const leadType = leadTypeOf(payload);
+
+  // Same LANDLORD, different Monday item.
+  //
+  // The check above is idempotency on monday_item_id, which stops the same item
+  // being ingested twice. It has never stopped one landlord arriving as several
+  // items, and that is the bigger problem in practice: 31 duplicate groups in
+  // production, one landlord ingested six times, and another sold to four
+  // customers across two identical copies — two of whom wrote notes saying they
+  // had already contacted him.
+  //
+  // Matching needs all three of name, email and phone, and the key is null if
+  // any is missing (0064). The asymmetry is deliberate: under-matching costs a
+  // duplicate lead, over-matching silently discards a real enquiry a customer
+  // would have been sold. Only the first is recoverable.
+  //
+  // Reported as a duplicate rather than an error — this is the ordinary,
+  // expected outcome for a re-submitted enquiry, and the caller (webhook or
+  // sync) already treats "duplicate" as success.
+  const { data: duplicateOf, error: dupErr } = await supabase.rpc(
+    "find_duplicate_lead",
+    {
+      p_name: payload.lead_name != null ? String(payload.lead_name) : "",
+      p_email: String(payload.email ?? payload.text_mkztseha ?? ""),
+      p_phone: String(payload.phone ?? payload.text_mkztq5xb ?? ""),
+      p_lead_type: leadType,
+    }
+  );
+
+  if (dupErr) {
+    // Fail OPEN. A failed duplicate check must not drop a real lead — the worst
+    // case is one redundant copy, which the report surfaces for cleanup, and
+    // that is far better than silently losing an enquiry.
+    console.error("find_duplicate_lead check failed", dupErr);
+  } else if (duplicateOf) {
+    return {
+      status: "duplicate",
+      lead_id: duplicateOf as string,
+      assignments_made: 0,
+    };
+  }
+
+  // Insert the lead, mapping fields per product type.
   const insertPayload =
     leadType === "guaranteed_rent"
       ? buildGuaranteedRentInsert(payload)
