@@ -188,7 +188,7 @@ export default async function GuidePage() {
             <List>
               <li>
                 <strong>Contact &amp; property details</strong> — name, phone,
-                email, full address, bedrooms, enquiry date
+                email, full address, bedrooms, the date it was assigned to you
                 {mgmt ? ", and a written lead profile" : ""}.
               </li>
               <li>

@@ -37,6 +37,7 @@ import {
   Phone,
   Presentation,
   Trash2,
+  Info,
 } from "lucide-react";
 
 export function LeadDetail({
@@ -715,6 +716,24 @@ export function LeadDetail({
         signedNumber={signedCountBefore + 1}
         assignmentId={assignment.id}
       />
+
+      {/* Sits immediately above the notes and files rather than at the top of
+          the page: this is the point where the customer can actually act on it,
+          and a notice placed where the action is gets read where one stacked
+          with the contact details gets scrolled past. */}
+      <div className="flex items-start gap-3 rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="text-sm">
+          <p className="font-medium">Keep this lead up to date</p>
+          <p className="mt-1 text-muted-foreground">
+            Updating the status and adding a note after each contact keeps your
+            pipeline organised, and it&apos;s how we measure how well the lead
+            database is working for you. The more we can see of what happens
+            after a lead lands, the more specific the advice we can give on
+            improving your sales results.
+          </p>
+        </div>
+      </div>
 
       <LeadFiles
         assignmentId={assignment.id}
