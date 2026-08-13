@@ -81,20 +81,26 @@ as $$
   demand as (
     select
       'management'::public.lead_type as lead_type,
+      -- is_active is the master switch, and it belongs in the demand figure as
+      -- much as in routing. The admin demo account is switched off there but
+      -- still carries an allocation, and counting it would have this panel
+      -- report 20 leads a month of commitment that nobody is owed.
       coalesce(sum(c.monthly_allocation) filter (
-        where c.account_status = 'active' and c.subscription_status = 'active'
+        where c.is_active
+          and c.account_status = 'active' and c.subscription_status = 'active'
       ), 0)::integer as demand,
       count(*) filter (
-        where c.account_status = 'active' and c.subscription_status = 'active'
+        where c.is_active
+          and c.account_status = 'active' and c.subscription_status = 'active'
       )::integer as customers
     from public.customers c
     union all
     select
       'guaranteed_rent'::public.lead_type,
       coalesce(sum(c.gr_monthly_allocation) filter (
-        where c.gr_subscription_status = 'active'
+        where c.is_active and c.gr_subscription_status = 'active'
       ), 0)::integer,
-      count(*) filter (where c.gr_subscription_status = 'active')::integer
+      count(*) filter (where c.is_active and c.gr_subscription_status = 'active')::integer
     from public.customers c
   ),
   inventory as (

@@ -140,10 +140,16 @@ export async function getProductCapacityStatus(
   const parsed = parseInt(setting?.value ?? "", 10);
   const limit = Number.isFinite(parsed) ? parsed : DEFAULT_LIMIT;
 
+  // is_active is the master switch: an account switched off receives no leads
+  // from any routing path, so it commits no monthly volume and must not consume
+  // a capacity slot. The admin demo account is the case in point — it holds an
+  // allocation for demonstration but is switched off, and counting it would
+  // reserve a full slot against a customer who will never be sent a lead.
   const { data: rows } = await admin
     .from("customers")
     .select(cfg.allocationColumn)
-    .eq(cfg.activeColumn, "active");
+    .eq(cfg.activeColumn, "active")
+    .eq("is_active", true);
 
   const active = (rows ?? []) as unknown as Array<Record<string, number | null>>;
   const rawActiveCount = active.length;
