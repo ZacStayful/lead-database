@@ -28,7 +28,7 @@
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/cron/reclaim-stale-leads",
+      "path": "/api/cron/escalate-leads",
       "schedule": "0 11 * * *"
     }
   ]

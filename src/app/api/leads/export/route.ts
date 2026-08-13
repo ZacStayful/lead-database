@@ -59,7 +59,6 @@ export async function GET() {
     Phone: a.lead?.phone ?? "",
     Bedrooms: a.lead?.bedrooms ?? "",
     "Lead profile": a.lead?.lead_profile ?? "",
-    "Enquiry date": a.lead?.enquiry_date ?? "",
     "Received on": a.assigned_at
       ? new Date(a.assigned_at).toLocaleDateString("en-GB")
       : "",
@@ -78,7 +77,6 @@ export async function GET() {
     { wch: 16 }, // Phone
     { wch: 10 }, // Bedrooms
     { wch: 40 }, // Lead profile
-    { wch: 14 }, // Enquiry date
     { wch: 14 }, // Received on
     { wch: 14 }, // Status
     { wch: 50 }, // Notes

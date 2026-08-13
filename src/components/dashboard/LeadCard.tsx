@@ -121,7 +121,7 @@ export function LeadCard({
                 variant="outline"
                 className="border-transparent bg-slate-100 text-slate-600"
               >
-                {formatLeadAge(lead.enquiry_date ?? lead.created_at)}
+                {formatLeadAge(assignment.assigned_at)}
               </Badge>
             )}
           </div>
@@ -160,8 +160,8 @@ export function LeadCard({
             <Detail icon={MapPin} label="Full address" value={lead.address} />
             <Detail
               icon={Calendar}
-              label="Enquiry date"
-              value={formatDate(lead.enquiry_date)}
+              label="Received"
+              value={formatDate(assignment.assigned_at)}
             />
           </div>
           {lead.lead_profile && (

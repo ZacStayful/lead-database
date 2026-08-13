@@ -296,7 +296,7 @@ export function LeadDetail({
       {assignment.is_reclaimed && (
         <div className="rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3">
           <p className="text-sm font-medium">
-            {formatLeadAge(lead.enquiry_date ?? lead.created_at)}
+            {formatLeadAge(assignment.assigned_at)}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             This lead was offered to another operator first and wasn&apos;t taken
@@ -384,8 +384,8 @@ export function LeadDetail({
           <Detail icon={MapPin} label="Address" value={lead.address} />
           <Detail
             icon={Calendar}
-            label="Enquiry date"
-            value={formatDate(lead.enquiry_date)}
+            label="Received"
+            value={formatDate(assignment.assigned_at)}
           />
         </div>
 

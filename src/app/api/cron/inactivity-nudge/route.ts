@@ -73,6 +73,7 @@ type RawLead = {
 type RawAssignment = {
   id: string;
   last_status_change_at: string;
+  inactivity_escalation_stage: number | null;
   // supabase-js infers an embedded to-one as an array; PostgREST returns a
   // single object at runtime. Accept both and normalise with oneLead().
   leads: RawLead | RawLead[] | null;
@@ -114,6 +115,7 @@ async function handle(request: NextRequest) {
     lead_count: number;
     management_leads: number;
     gr_leads: number;
+    cold_count: number;
     leads: string[];
   }[] = [];
 
@@ -186,7 +188,9 @@ async function handle(request: NextRequest) {
 
     const { data: assignmentRows, error: aErr } = await admin
       .from("lead_assignments")
-      .select("id, last_status_change_at, leads(lead_name, address, lead_type)")
+      .select(
+        "id, last_status_change_at, inactivity_escalation_stage, leads(lead_name, address, lead_type)"
+      )
       .eq("customer_id", customer.id)
       // Rejected leads are excluded by this status filter alone: reject sets
       // status = 'rejected' (0019), so no separate rejection check is needed.
@@ -257,9 +261,22 @@ async function handle(request: NextRequest) {
       )
     );
 
-    const waiting = onLiveProduct.filter(
+    const stillWaiting = onLiveProduct.filter(
       (a) => !noted.has(a.id) && !excludedByEvent.has(a.id)
     );
+
+    // Split off the leads that have already been escalated.
+    //
+    // Chasing somebody about a lead we have already offered to another operator
+    // reads as the system not knowing what it is doing — they still hold it, but
+    // it is no longer theirs alone and a first contact now is a race they are
+    // ten days late to. They are counted and mentioned as a group instead, so
+    // the digest names only the leads still genuinely worth a call today.
+    const waiting = stillWaiting.filter(
+      (a) => (a.inactivity_escalation_stage ?? 0) === 0
+    );
+    const coldCount = stillWaiting.length - waiting.length;
+
     if (waiting.length === 0) {
       noLeads += 1;
       continue;
@@ -297,6 +314,7 @@ async function handle(request: NextRequest) {
         gr_leads: waiting.filter(
           (a) => oneLead(a.leads)?.lead_type === "guaranteed_rent"
         ).length,
+        cold_count: coldCount,
         leads: leadsForEmail.map((l) => l.name),
       });
       nudged += 1;
@@ -317,6 +335,7 @@ async function handle(request: NextRequest) {
       contactName: customer.contact_name,
       count,
       leads: leadsForEmail,
+      coldCount,
     });
     if (emailError) {
       console.error("[inactivity-nudge] email failed", {

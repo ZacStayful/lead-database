@@ -70,18 +70,29 @@ export function formatDate(value?: string | null): string {
  * Whole days only; hour-level precision would imply a freshness the lead does
  * not have.
  */
+/**
+ * How long the CUSTOMER has held this lead, phrased from their side.
+ *
+ * Deliberately measured from lead_assignments.assigned_at, never from
+ * leads.enquiry_date. A customer sees when the lead reached THEM and nothing
+ * about how old the enquiry is — an escalated lead arriving on day 20 would
+ * otherwise announce itself as three weeks stale before its new operator had
+ * picked up the phone, which is both discouraging and none of their business.
+ * The enquiry date is still on the lead row and still shown in admin.
+ *
+ * Timestamps may arrive as "2026-07-27 09:29" — a space, not a T. V8 tolerates
+ * that; Safari returns Invalid Date. This runs in the browser (LeadCard and
+ * LeadDetail are client components), so the separator is normalised rather
+ * than trusted.
+ */
 export function formatLeadAge(value?: string | null): string {
   if (!value) return "";
-  // leads.enquiry_date arrives from Monday as "2026-07-27 09:29" — a space, not
-  // a T. V8 tolerates that; Safari returns Invalid Date. This runs in the
-  // browser (LeadCard/LeadDetail are client components), so the separator is
-  // normalised rather than trusted.
   const d = new Date(value.trim().replace(" ", "T"));
   if (isNaN(d.getTime())) return "";
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
-  if (days <= 0) return "Enquired today";
-  if (days === 1) return "Enquired 1 day ago";
-  return `Enquired ${days} days ago`;
+  if (days <= 0) return "Received today";
+  if (days === 1) return "Received 1 day ago";
+  return `Received ${days} days ago`;
 }
 
 export function formatDateTime(value?: string | null): string {

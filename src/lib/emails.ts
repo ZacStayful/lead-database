@@ -417,8 +417,15 @@ export async function sendInactivityNudgeEmail(params: {
   contactName: string;
   count: number;
   leads: { name: string; address: string | null }[];
+  /**
+   * Leads this customer still holds that have already been escalated to another
+   * operator. Not listed individually — they are past the point where naming
+   * them is a useful instruction, and listing them alongside live leads would
+   * bury the ones still worth a call today.
+   */
+  coldCount?: number;
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to, contactName, count, leads } = params;
+  const { to, contactName, count, leads, coldCount = 0 } = params;
   const firstName = contactName.trim().split(/\s+/)[0] || contactName;
   const noun = count === 1 ? "lead" : "leads";
   const subject = `You have ${count} ${noun} waiting for follow-up`;
@@ -438,11 +445,22 @@ export async function sendInactivityNudgeEmail(params: {
     ? `<ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7">${items}${moreItem}</ul>`
     : "";
 
+  // The older leads are mentioned as a group and framed as the customer's
+  // judgement call, not an instruction. They are still theirs to work and
+  // occasionally one of them lands — but they are past the point where chasing
+  // them is the best use of the next hour, and saying so is more useful than
+  // silently dropping them off the list.
+  const coldNote =
+    coldCount > 0
+      ? `<p style="margin:0 0 18px;color:#6b706a;font-size:13px">You also have <strong>${coldCount}</strong> older ${coldCount === 1 ? "lead" : "leads"} that ${coldCount === 1 ? "has" : "have"} had no activity for some time and ${coldCount === 1 ? "has" : "have"} likely gone cold. ${coldCount === 1 ? "It is" : "They are"} still in your dashboard if you want ${coldCount === 1 ? "it" : "them"}, but the ${count === 1 ? "lead" : "leads"} above ${count === 1 ? "is" : "are"} where a call will count for most today.</p>`
+      : "";
+
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">A quick nudge, ${esc(firstName)}</h1>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${count}</strong> ${noun} that haven't moved in over 48 hours and are waiting for their next step. A quick follow-up is often what turns an enquiry into a signed landlord.</p>
     ${list}
-    <p style="margin:0 0 18px;color:#6b706a;font-size:13px">If a lead is never opened, we offer it to a second operator after three working days. Opening it or getting in touch keeps it yours.</p>
+    ${coldNote}
+    <p style="margin:0 0 18px;color:#6b706a;font-size:13px">If a lead sits untouched for ten days we offer it to another operator, and again at twenty. Opening it or getting in touch resets that clock and keeps it yours.</p>
     ${button(`${APP_URL}/dashboard/leads`, "Follow up now")}
   `;
   try {

@@ -16,7 +16,7 @@ function time(value: string | null | undefined): number | null {
 /**
  * Priority sort:
  *   1. due_to_call_date ascending — earliest (overdue) first, nulls last
- *   2. within the same due date, enquiry_date ascending (oldest first)
+ *   2. within the same due date, assigned_at ascending (held longest first)
  */
 export function sortPriority(rows: AssignmentWithLead[]): AssignmentWithLead[] {
   return [...rows].sort((a, b) => {
@@ -26,8 +26,12 @@ export function sortPriority(rows: AssignmentWithLead[]): AssignmentWithLead[] {
     if (da !== null && db === null) return -1;
     if (da !== null && db !== null && da !== db) return da - db;
     // same (or both-null) due date → oldest enquiry first; unknown enquiry last
-    const ea = time(a.lead?.enquiry_date) ?? Infinity;
-    const eb = time(b.lead?.enquiry_date) ?? Infinity;
+    // Ordered by how long the CUSTOMER has held the lead, not by how old the
+    // enquiry is. Customers no longer see the enquiry date anywhere, so ranking
+    // by it would sort their queue on a fact they cannot see — and on an
+    // escalated lead the two disagree by up to three weeks.
+    const ea = time(a.assigned_at) ?? Infinity;
+    const eb = time(b.assigned_at) ?? Infinity;
     return ea - eb;
   });
 }
