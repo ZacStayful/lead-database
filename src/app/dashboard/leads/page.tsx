@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { Info } from "lucide-react";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadsList } from "@/components/dashboard/LeadsList";
@@ -32,6 +33,26 @@ export default async function LeadsPage() {
         </div>
         <ExportButton />
       </div>
+
+      {/* Why keeping records current matters, stated once where the leads are.
+          Framed as what the customer gets back rather than as an instruction —
+          the status and notes they keep are the only view we have of what
+          happens after a lead is delivered, so they are also the only basis for
+          telling them anything useful about their own conversion. */}
+      <div className="flex items-start gap-3 rounded-lg border-[0.5px] border-border bg-muted/50 px-4 py-3">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="text-sm">
+          <p className="font-medium">Keep your lead records up to date</p>
+          <p className="mt-1 text-muted-foreground">
+            Updating a lead&apos;s status and adding notes as you go keeps your
+            pipeline organised, and it&apos;s how we measure how well the lead
+            database is working for you. The more we can see of what happens
+            after a lead lands, the more specific the advice we can give on
+            improving your sales results.
+          </p>
+        </div>
+      </div>
+
       <LeadsList assignments={assignments} />
     </div>
   );
