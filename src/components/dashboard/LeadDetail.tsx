@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDate, formatLeadAge } from "@/lib/utils";
+import { CLOSE_REASONS, type CloseReason } from "@/lib/closeReasons";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
@@ -71,6 +72,7 @@ export function LeadDetail({
   const [hasNotes, setHasNotes] = useState(notes.length > 0);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [showCloseOptions, setShowCloseOptions] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [celebrateOpen, setCelebrateOpen] = useState(false);
@@ -181,6 +183,37 @@ export function LeadDetail({
       router.refresh();
     } catch {
       setToast("Could not reject this lead. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Record what happened on a lead that has actually been worked.
+   *
+   * The third exit, and the only one reachable after a call. Reject needs the
+   * pipeline still at cold and discard needs an untouched lead, so an operator
+   * who rang and got an answer could previously record nothing at all — which is
+   * why 70 worked leads carry no outcome.
+   *
+   * Stays on the page rather than routing away like discard does: the lead is
+   * still theirs and still in their list, it is simply finished.
+   */
+  async function handleClose(reason: CloseReason) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/leads/${assignment.lead_id}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignment_id: assignment.id, reason }),
+      });
+      if (!res.ok) throw new Error();
+      setStatus("not_relevant");
+      setShowCloseOptions(false);
+      setToast("Thanks — that helps us send better leads.");
+      router.refresh();
+    } catch {
+      setToast("Could not close this lead. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -589,10 +622,86 @@ export function LeadDetail({
           </div>
         )}
 
+        {/* Didn't work out. Deliberately sits beside "Mark as signed" and is
+            available from any working state, including 'new' — an operator can
+            ring a landlord without the status ever moving, and that is exactly
+            the case the other two exits refuse. */}
+        {(status === "new" ||
+          status === "contacted" ||
+          status === "in_discussion") && (
+          <div className="mt-3">
+            {!showCloseOptions ? (
+              <button
+                onClick={() => setShowCloseOptions(true)}
+                disabled={busy}
+                className="w-full rounded-lg border border-black/10 px-6 py-2.5 text-sm font-medium text-[#52514e] transition-colors hover:bg-black/[0.03] disabled:opacity-60"
+              >
+                Didn&apos;t work out
+              </button>
+            ) : (
+              <div className="rounded-lg border border-black/10 p-4">
+                <p className="text-sm font-medium">What happened?</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This closes the lead for you and stops us offering this
+                  landlord to anyone else. It doesn&apos;t refund the lead — if
+                  the contact details were wrong or unusable, contact support
+                  instead.
+                </p>
+                <div className="mt-3 flex flex-col gap-2">
+                  {(
+                    Object.entries(CLOSE_REASONS) as [CloseReason, string][]
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => handleClose(value)}
+                      disabled={busy}
+                      className="rounded-lg border border-black/10 px-4 py-2 text-sm text-left transition-colors hover:bg-black/[0.03] disabled:opacity-60"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setShowCloseOptions(false)}
+                    disabled={busy}
+                    className="px-4 py-1.5 text-sm text-muted-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {status === "not_relevant" && (
+          <div className="mt-6 rounded-lg border border-black/10 bg-black/[0.02] px-4 py-3 text-sm text-[#52514e]">
+            Closed — thanks for telling us. This landlord won&apos;t be offered
+            to anyone else.
+          </div>
+        )}
+
         {status === "won" && (
           <div className="mt-6 flex items-center gap-2 rounded-lg border border-[#5D8156]/30 bg-[#EAF3DE] px-4 py-3 text-sm font-medium text-[#3B6D11]">
             <PartyPopper className="h-4 w-4 shrink-0" />
             Signed — landlord onboarded. Nice one.
+            <button
+              onClick={async () => {
+                setBusy(true);
+                const res = await patch({ signed: false });
+                if (res.ok) {
+                  setStatus("contacted");
+                  setToast("Win removed.");
+                  router.refresh();
+                } else {
+                  setToast("Could not undo that. Please try again.");
+                }
+                setBusy(false);
+              }}
+              disabled={busy}
+              className="ml-auto shrink-0 text-xs font-normal underline underline-offset-2 opacity-70 hover:opacity-100 disabled:opacity-40"
+            >
+              Undo
+            </button>
           </div>
         )}
       </div>

@@ -265,6 +265,20 @@ export async function POST(request: NextRequest) {
         // whose management subscription was never involved.
         const isGuaranteedRent = isGuaranteedRentPriceId(subPriceIds);
 
+        // Read the current cancellation stamps before writing, so the first
+        // cancellation date is preserved rather than overwritten by a later one.
+        //
+        // Matched through customerMatchFilter, like every other lookup here: a
+        // GR customer's Stripe id can live in gr_stripe_customer_id rather than
+        // stripe_customer_id, and a plain .eq on the management column would
+        // find nothing for them — leaving the "first cancellation wins" guard
+        // reading an empty row and overwriting the date on every event.
+        const { data: existing } = await admin
+          .from("customers")
+          .select("cancelled_at, gr_cancelled_at")
+          .or(customerMatchFilter(customerId, isGuaranteedRent))
+          .maybeSingle<{ cancelled_at: string | null; gr_cancelled_at: string | null }>();
+
         const update: Record<string, unknown> = {
           updated_at: new Date().toISOString(),
         };
@@ -278,11 +292,27 @@ export async function POST(request: NextRequest) {
           null;
         const anchor = toDateString(periodStart);
 
+        // When a subscription ends, record WHEN.
+        //
+        // Without a date, the engagement history (0058) has nothing to line
+        // itself up against: "their activity fell away and six weeks later they
+        // left" is unanswerable if the leaving has no timestamp. This is the
+        // only place either column is ever written, and it is the input every
+        // future churn model needs.
+        //
+        // Set with coalesce semantics — first cancellation wins — so a customer
+        // who cancels, resubscribes and cancels again keeps the original date
+        // rather than having their history quietly rewritten. Cleared on
+        // reactivation below, which is the one case where the old date is
+        // genuinely wrong.
+        const nowIso = new Date().toISOString();
+
         if (isGuaranteedRent) {
           update.gr_subscription_status = status;
           update.gr_stripe_subscription_id = sub.id;
           update.gr_stripe_price_id = subPriceIds[0] ?? null;
           if (anchor) update.gr_billing_cycle_anchor = anchor;
+
 
           // Re-size gr_monthly_allocation when — and only when — the GR
           // subscription's PRICE changes. `invoice.paid` credits
@@ -312,6 +342,10 @@ export async function POST(request: NextRequest) {
             if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0]) {
               update.gr_monthly_allocation = grAllocation;
             }
+          if (status === "canceled") {
+            if (!existing?.gr_cancelled_at) update.gr_cancelled_at = nowIso;
+          } else if (status === "active") {
+            update.gr_cancelled_at = null;
           }
         } else {
           update.stripe_subscription_id = sub.id;
@@ -319,7 +353,12 @@ export async function POST(request: NextRequest) {
           // A cancelled management subscription must release its capacity slot —
           // capacity is counted by account_status = 'active'. GR cancellations
           // must NOT touch account_status.
-          if (status === "canceled") update.account_status = "cancelled";
+          if (status === "canceled") {
+            update.account_status = "cancelled";
+            if (!existing?.cancelled_at) update.cancelled_at = nowIso;
+          } else if (status === "active") {
+            update.cancelled_at = null;
+          }
           if (anchor) update.billing_cycle_anchor = anchor;
         }
 
