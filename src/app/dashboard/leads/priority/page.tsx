@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * Priority call list — active leads ordered by when they are due to be called.
  * Excludes won and not_relevant; every pipeline stage (including abandoned) is
  * included. Ordered by due_to_call_date ascending (overdue first, nulls last),
- * then enquiry_date ascending. Cards deep-link back with ?from=priority so
+ * then assigned_at ascending. Cards deep-link back with ?from=priority so
  * prev/next navigation follows this same order — the stage chips narrow the
  * list without disturbing it.
  */

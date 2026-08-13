@@ -25,7 +25,7 @@ export function sortPriority(rows: AssignmentWithLead[]): AssignmentWithLead[] {
     if (da === null && db !== null) return 1; // a has no due date → last
     if (da !== null && db === null) return -1;
     if (da !== null && db !== null && da !== db) return da - db;
-    // same (or both-null) due date → oldest enquiry first; unknown enquiry last
+    // same (or both-null) due date → longest held first; unknown last.
     // Ordered by how long the CUSTOMER has held the lead, not by how old the
     // enquiry is. Customers no longer see the enquiry date anywhere, so ranking
     // by it would sort their queue on a fact they cannot see — and on an

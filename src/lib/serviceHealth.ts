@@ -26,6 +26,26 @@ export interface ProductCapacity {
    */
   slotsPerMonth: number;
   /**
+   * Recurring slots recovered from leads nobody worked, via escalation.
+   *
+   * Unlike inventory this REFILLS: a measured share of everything delivered
+   * goes unworked every month and comes back to be sold again. That is what
+   * earns it a place in the ceiling where inventory is excluded.
+   */
+  recycledSlotsPerMonth: number;
+  /** slotsPerMonth + recycledSlotsPerMonth. What the ceiling is built from. */
+  serviceableSlotsPerMonth: number;
+  /** Share of delivered leads never worked inside their own first ten days. */
+  unworkedRate: number | null;
+  /** How many assignments that rate was measured over. */
+  recyclingSample: number;
+  /**
+   * One-off: aged assignments that would escalate today, long-abandoned backlog
+   * included. Sits beside inventorySlotsNow and is never added to the recurring
+   * figure — this wave clears once and does not come back.
+   */
+  recyclingBacklogNow: number;
+  /**
    * Slots sitting unsold in the back catalogue. Real and sellable, but a
    * ONE-OFF buffer — kept separate from slotsPerMonth and never added to it,
    * because seating customers against a stock that does not refill is how you
@@ -41,12 +61,27 @@ export interface ProductCapacity {
   /** Customers who have received their full allocation in the current cycle. */
   fullyServed: number;
   avgAllocation: number;
-  /** Customers this product's monthly inflow can carry indefinitely. */
+  /**
+   * Customers this product can carry indefinitely on serviceable supply —
+   * new leads PLUS recycling. The headline ceiling.
+   */
   sustainableCustomers: number;
+  /**
+   * What the ceiling would be on new leads alone. Shown beside the headline so
+   * the split is never taken on trust: the gap between the two is exactly how
+   * much of the headroom depends on customers continuing to ignore leads.
+   */
+  sustainableCustomersNewOnly: number;
   /** sustainableCustomers − activeCustomers, floored at zero. */
   roomForCustomers: number;
   /** True when more is promised each month than sustainably arrives. */
   borrowingFromInventory: boolean;
+  /**
+   * Absolute physical maximum: every lead sold the full five times. When
+   * serviceable slots approach this, the ceiling is assuming near-total
+   * abandonment and has no margin left in it.
+   */
+  physicalMaxSlotsPerMonth: number;
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -151,10 +186,16 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
   ).map((r) => {
     const slots = Number(r.slots_per_month ?? 0);
     const demand = Number(r.demand_per_month ?? 0);
+    const leads = Number(r.leads_per_month ?? 0);
     return {
       product: r.lead_type as LeadType,
-      leadsPerMonth: Number(r.leads_per_month ?? 0),
+      leadsPerMonth: leads,
       slotsPerMonth: slots,
+      recycledSlotsPerMonth: Number(r.recycled_slots_per_month ?? 0),
+      serviceableSlotsPerMonth: Number(r.serviceable_slots_per_month ?? slots),
+      unworkedRate: r.unworked_rate == null ? null : Number(r.unworked_rate),
+      recyclingSample: Number(r.recycling_sample ?? 0),
+      recyclingBacklogNow: Number(r.recycling_backlog_now ?? 0),
       inventorySlotsNow: Number(r.inventory_slots_now ?? 0),
       unsoldLeadsNow: Number(r.unsold_leads_now ?? 0),
       demandPerMonth: demand,
@@ -163,8 +204,16 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       fullyServed: Number(r.fully_served ?? 0),
       avgAllocation: Number(r.avg_allocation ?? 0),
       sustainableCustomers: Number(r.sustainable_customers ?? 0),
+      sustainableCustomersNewOnly: Number(r.sustainable_customers_new_only ?? 0),
       roomForCustomers: Number(r.room_for_customers ?? 0),
+      // Still measured against NEW-lead slots, not serviceable ones. The
+      // question this answers is "are we promising more than arrives", and
+      // recycled supply is a recovery from what already went out — folding it in
+      // would hide a genuine inflow shortfall behind our own customers'
+      // inactivity.
       borrowingFromInventory: demand > slots,
+      // ESCALATION_CEILING (5, §18) — the most times one lead can ever be sold.
+      physicalMaxSlotsPerMonth: leads * 5,
     };
   });
 

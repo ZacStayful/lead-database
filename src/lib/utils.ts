@@ -61,16 +61,6 @@ export function formatDate(value?: string | null): string {
 }
 
 /**
- * How long ago an enquiry came in, phrased for a lead-age badge:
- * "Enquired today", "Enquired 1 day ago", "Enquired 5 days ago".
- *
- * Shown on reclaimed leads so the second operator knows exactly what they are
- * getting before they ring — a five-day-old enquiry is a different conversation
- * from a fresh one, and finding that out mid-call is worse than being told.
- * Whole days only; hour-level precision would imply a freshness the lead does
- * not have.
- */
-/**
  * How long the CUSTOMER has held this lead, phrased from their side.
  *
  * Deliberately measured from lead_assignments.assigned_at, never from
@@ -78,7 +68,10 @@ export function formatDate(value?: string | null): string {
  * about how old the enquiry is — an escalated lead arriving on day 20 would
  * otherwise announce itself as three weeks stale before its new operator had
  * picked up the phone, which is both discouraging and none of their business.
- * The enquiry date is still on the lead row and still shown in admin.
+ *
+ * The enquiry date is no longer displayed anywhere, admin included: it is
+ * free-text of uneven quality from Monday, and the assignment date answers
+ * every question anyone was actually asking of it.
  *
  * Timestamps may arrive as "2026-07-27 09:29" — a space, not a T. V8 tolerates
  * that; Safari returns Invalid Date. This runs in the browser (LeadCard and

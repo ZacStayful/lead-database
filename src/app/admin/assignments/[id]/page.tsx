@@ -202,9 +202,6 @@ export default async function AdminAssignmentDetailPage({
             <Field label="Address">{lead.address}</Field>
             <Field label="Postcode">{lead.postcode}</Field>
             <Field label="Bedrooms">{lead.bedrooms}</Field>
-            <Field label="Enquiry date">
-              {lead.enquiry_date ? formatDate(lead.enquiry_date) : null}
-            </Field>
             <Field label="Reached">
               {lead.assignment_count} of {lead.max_assignments} operators
             </Field>

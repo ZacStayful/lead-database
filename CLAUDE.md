@@ -352,6 +352,12 @@ for being new with no way to earn out of it.
   card in the feed. Opening `/dashboard/leads/[id]` does not set it, so a lead
   read end-to-end via a direct link leaves it null forever. `detail_opened` is
   the honest "this lead was read" signal. Never treat them as equivalent.
+- **`enquiry_date` is not displayed anywhere**, admin included (0071 branch). It
+  is free text of uneven quality from Monday — `safe_enquiry_date()` exists in
+  0062 precisely because it does not always parse. Lead age is measured from
+  `lead_assignments.assigned_at` everywhere: `formatLeadAge` phrases it as
+  "Received N days ago", and `leadOrder` ranks on it. The column is still
+  ingested and still readable; nothing renders it.
 - ~~**`get_next_customers_for_lead` is executable by `anon`.**~~ **Fixed in
   0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
   the function, which discards its ACL. Re-revoked. Any future
@@ -883,21 +889,91 @@ over-matching silently discards a real enquiry. Scoped within `lead_type`.
 `/admin` — live service capacity (§18.1) and churn risk; escalation settings.
 `/admin/outcomes` — wins, customer scoreboard, outcome evidence, duplicates.
 
-### §18.1 — Capacity reports four numbers, never one
+### §18.1 — Capacity separates what refills from what does not
 
 An earlier version reported management "114% oversubscribed" by comparing
 new-lead slots against promised allocations. It was wrong: every customer had
 received 100% of their allocation and 276 leads/month were delivered against 260
 promised. It had ignored the standing inventory of unsold leads.
 
-**Inflow and inventory are reported separately and never added.**
-`slots_per_month` is sustainable and decides the customer ceiling;
-`inventory_slots_now` is a one-off buffer that can seat customers today and never
-again. `delivered_per_month` is the check on both, and `fully_served` measures
-the guarantee per customer against **their own billing anchor**.
+The organising rule that came out of that: **supply that REFILLS decides the
+customer ceiling; supply that clears once is reported beside it and never added.**
 
-`max_active_customers` is untouched and still gates signup — the panel shows
-both so the gap is visible.
+| | Refills monthly → in the ceiling | One-off → shown separately |
+|---|---|---|
+| New leads | `slots_per_month` | |
+| Ignored leads returning | `recycled_slots_per_month` (0071) | `recycling_backlog_now` |
+| Unsold back catalogue | | `inventory_slots_now` |
+
+`serviceable_slots_per_month` is the sum of the first column and is what
+`sustainable_customers` divides by `avg_allocation`.
+`sustainable_customers_new_only` is the same figure on new leads alone, always
+shown beside it — the gap is exactly how much headroom depends on customers
+continuing to ignore leads, and it must never be presented as one number.
+`delivered_per_month` is the check on all of it, and `fully_served` measures the
+guarantee per customer against **their own billing anchor**.
+
+Nothing gates on any of this (§16) — it is reporting and admin judgement.
+
+### §18.2 — Recycled supply *(0071)*
+
+0066 counted only lead inflow, so it answered "room for 0 more customers" while
+36% of delivered leads sat untouched. A lead nobody has worked **is supply** —
+escalation is the machine that recovers it, and unlike inventory that recovery
+recurs every month.
+
+**Measured with escalation's own test, or the number is a lie.** Two things must
+match `get_assignment_engagement_scores`, and both are easy to get wrong:
+
+- **Which signals count** — contact click, note, stage move, status advance. The
+  same set as `passive_only`. Opening a lead is *not* working it. Marking a lead
+  contacted **is**: an operator only does that to organise their own pipeline.
+  One documented inexactness: a lone `mailto_click` (0.30) sits just under the
+  0.35 threshold, so escalation recycles it where this test reads it as active.
+  Left alone rather than duplicating the weighted score, which would drift the
+  moment a weight is edited from admin. The error is one signal wide and it
+  **understates** recycling.
+- **When it is asked** — over each assignment's own first ten days, never its
+  lifetime. This is what separates recurring from one-off: asking "what looks
+  dead right now" sweeps in the long-abandoned backlog and answers **76%**, a
+  wave that clears once; asking "was this worked inside its own first ten days"
+  answers **41%**, which a fresh cohort repeats monthly.
+
+Both rungs count, the second **conditional** on the first, because
+`get_escalation_candidates` only offers stage 2 to assignments already at stage 1:
+
+```
+slots per delivered lead = rate_10 × (1 + rate_20_given_rung_1)
+```
+
+**Abandonment is permanent.** Of management assignments quiet by day 10, 53 of 53
+were still quiet at day 20 — and 10 of 10 on GR. Nobody who ignored a lead for
+ten days ever came back. So the conditional term is ~1.0 and a recycled lead
+yields two slots, not one. Still expressed as a measured rate rather than
+hard-coded at 2, since that term is the one most likely to move once escalation
+and nudges start changing behaviour.
+
+Bounded by `escalation_headroom` — `sum(5 − max_assignments)` over the window —
+so the estimate can never claim more than the ceiling of 5 physically permits.
+
+**No safety discount, deliberately.** The obvious objection is that recycled
+supply peaks when customers are least engaged, so capacity looks best right
+before churn. Rejected because the insurance costs more than the risk: holding
+capacity back means leads sit unsold longer, and a cold landlord is a permanent
+loss where a short month is not. **The guarantee rolls over** — `lead_balance`
+carries forward and only `leads_received_this_month` resets (invariant 2), so an
+undelivered lead survives as an unspent credit. Under-delivering is recoverable;
+letting a lead go cold for safety is not.
+
+The exposure is therefore **shown, not discounted**: the panel prints the
+new-leads-only ceiling beside the headline, and warns when serviceable slots
+approach `leads_per_month × 5` — at which point the figure is assuming near-total
+abandonment with no slack left. On live data management reads 487.8 of a hard
+maximum 493, so that warning is active.
+
+Same treatment for GR, with `recycling_sample` returned per row so a rate built
+on ten assignments is labelled as too thin to rely on rather than presented as
+solid.
 
 ### Churn
 

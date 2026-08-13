@@ -103,7 +103,10 @@ export default async function AdminLeadDetailPage({
     ["Address", lead.address],
     ["Bedrooms", lead.bedrooms],
     ["Lead profile", lead.lead_profile],
-    ["Enquiry date", lead.enquiry_date],
+    // Enquiry date is deliberately not shown anywhere, admin included. It is a
+    // free-text Monday field of uneven quality, and every question worth asking
+    // ("how long has this been sitting with someone?") is answered by the
+    // assignment date instead. Ingested is when it reached us.
     ["Ingested", formatDate(lead.created_at)],
   ];
 

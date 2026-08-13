@@ -33,8 +33,24 @@ function gbp(n: number): string {
   return `£${n.toLocaleString("en-GB")}`;
 }
 
+/** Thin sample: a rate off this few assignments is indicative, not solid. */
+const THIN_SAMPLE = 30;
+
+/**
+ * At or above this share of the physical maximum, the ceiling is assuming
+ * near-total abandonment and has no margin left. Said out loud rather than
+ * discounted away — the discount was considered and deliberately rejected
+ * (0071), so the honest alternative is to show the exposure.
+ */
+const NO_MARGIN_RATIO = 0.9;
+
 function CapacityRow({ c }: { c: ProductCapacity }) {
   const short = c.demandPerMonth - c.slotsPerMonth;
+  const fromRecycling = c.sustainableCustomers - c.sustainableCustomersNewOnly;
+  const thinSample = c.recyclingSample < THIN_SAMPLE;
+  const noMargin =
+    c.physicalMaxSlotsPerMonth > 0 &&
+    c.serviceableSlotsPerMonth >= c.physicalMaxSlotsPerMonth * NO_MARGIN_RATIO;
 
   return (
     <div className="border-[0.5px] border-border rounded-lg p-4">
@@ -47,10 +63,14 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         </span>
       </div>
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-5">
         <div>
-          <dt className="text-xs text-muted-foreground">Sustainable slots / mo</dt>
+          <dt className="text-xs text-muted-foreground">New-lead slots / mo</dt>
           <dd className="tabular-nums">{c.slotsPerMonth}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Recycled slots / mo</dt>
+          <dd className="tabular-nums">+{c.recycledSlotsPerMonth}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Promised / mo</dt>
@@ -73,20 +93,60 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         </span>{" "}
         {c.roomForCustomers > 0 ? (
           <span className="text-muted-foreground">
-            Room for {c.roomForCustomers} more without touching the guarantee.
+            Room for {c.roomForCustomers} more.
           </span>
         ) : (
           <span className="text-muted-foreground">No room at current volume.</span>
         )}
       </p>
 
+      {/* The split. Never let the combined number stand on its own — the gap is
+          exactly how much headroom depends on customers staying inactive. */}
+      <p className="mt-1 text-sm text-muted-foreground">
+        {c.sustainableCustomersNewOnly} of those come from new leads alone
+        {fromRecycling > 0 && (
+          <>
+            {" "}
+            and {fromRecycling} from recycling leads nobody worked
+            {c.unworkedRate != null && (
+              <> ({Math.round(c.unworkedRate * 100)}% go unworked)</>
+            )}
+          </>
+        )}
+        . If everyone started working their leads, the ceiling would fall back to{" "}
+        {c.sustainableCustomersNewOnly}.
+      </p>
+
+      {noMargin && fromRecycling > 0 && (
+        <p className="mt-2 text-sm text-amber-800">
+          This assumes almost every lead is sold the full 5 times —{" "}
+          {c.serviceableSlotsPerMonth} of a hard maximum of{" "}
+          {c.physicalMaxSlotsPerMonth}. There is no slack left in the figure, so
+          treat the top of that range as a stretch rather than a plan.
+        </p>
+      )}
+
+      {thinSample && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Recycling rate measured over just {c.recyclingSample}{" "}
+          {c.recyclingSample === 1 ? "lead" : "leads"} — too few to rely on yet.
+        </p>
+      )}
+
+      {c.recyclingBacklogNow > 0 && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Plus a one-off backlog of {c.recyclingBacklogNow} ignored leads ready
+          to escalate now. Like unsold stock, that clears once and does not come
+          back, so it seats nobody permanently.
+        </p>
+      )}
+
       {c.borrowingFromInventory && (
         <p className="mt-2 text-sm text-amber-800">
-          Promising {short} more leads a month than arrive, and covering it from
-          the {c.inventorySlotsNow} unsold slots in stock. Everyone is being
-          served today; that stops when the stock runs out. Escalation raises the
-          sustainable figure because it sells ignored leads to a further
-          operator.
+          Promising {short} more leads a month than arrive as new, and covering
+          it from the {c.inventorySlotsNow} unsold slots in stock. Everyone is
+          being served today; that stops when the stock runs out — unless
+          recycling keeps pace.
         </p>
       )}
 
@@ -162,11 +222,12 @@ export function ServiceHealthPanel({ health }: { health: ServiceHealth }) {
         <CardContent className="p-5">
           <h2 className="text-base font-medium">How many customers can we serve</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Sustainable slots are what arrives each month and can be sold;
-            unsold stock is a one-off buffer and is never added to it. Delivered
-            is what actually happened, as the check on both. Recalculated on
-            every page load, and it rises on its own as escalation opens extra
-            slots.
+            Two things refill every month and both count: new leads arriving, and
+            leads nobody worked coming back through escalation. One-off stock —
+            unsold leads and the ignored-lead backlog — is shown separately and
+            never added, because it seats a customer once and never again.
+            Delivered is what actually happened, as the check on all of it.
+            Recalculated on every page load.
           </p>
           <div className="mt-4 space-y-3">
             {health.capacity.map((c) => (
