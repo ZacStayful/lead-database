@@ -40,7 +40,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/monday/sync-gr` | `0 9 * * *` | Same, guaranteed rent |
 | `/api/cron/generate-public-stats` | `0 3 * * *` | Landing-page activity figures |
 | `/api/cron/inactivity-nudge` | `0 10 * * 1` | Mondays: leads awaiting follow-up |
-| `/api/cron/reclaim-stale-leads` | `0 11 * * *` | Soft reclaim (0046) |
+| `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily snapshot (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
 
@@ -213,7 +213,15 @@ stages and narrowing it would reject existing GR rows.
 
 ---
 
-## 7. Soft reclaim *(0046)*
+## 7. Soft reclaim *(0046)* — SUPERSEDED by §18
+
+The cron was removed from `vercel.json` in the escalation work; no new reclaim
+is ever granted. The functions are left in place unaltered so the (currently
+zero) rows carrying reclaim columns keep their meaning and a rollback is a
+`vercel.json` edit rather than a migration. `assign_lead_to_customer` still adds
+`lead_open_reclaim_slots()` to capacity.
+
+What follows describes it as built.
 
 After **three UK working days** with no `detail_opened` / `tel_click` /
 `mailto_click` / note / file, a lead is offered to one further operator at a
@@ -275,7 +283,8 @@ session by definition; see §15 for why it exists at all.
    credit atomically.
 2. Credits carry forward; monthly counters reset on the anchor day.
 3. A lead reaches at most `max_assignments` customers **through ordinary
-   routing**. Soft reclaim adds a derived slot invisible to that path (§7).
+   routing**. Escalation raises that column directly, ceiling 5 (§18); soft
+   reclaim's derived slot (§7) is retired but its functions remain.
 4. Every delivered lead is chargeable. Reject does not refund.
 5. Ingest is idempotent on `monday_item_id`; Stripe on `stripe_events`.
 6. Management and GR are fully parallel. Every balance/counter/pacing/eligibility
@@ -798,3 +807,115 @@ which selected `is_active` but never filtered on it.
 
 Archiving is **not** a substitute for `account_status`. It says "this row should
 not be in circulation at all", where `cancelled` says "this customer left".
+
+---
+
+## 18. Inactivity escalation *(0056–0064)*
+
+Replaces soft reclaim (§7). A lead nobody has engaged with for **10 days** goes
+to one further operator, and again at **20**, then stops. **Full price**
+(`leadPriceFor`), standard two-pool routing, standard new-lead notification. The
+original assignment is untouched — same status, same `price_paid`, no refund.
+
+`/api/cron/escalate-leads`, daily at 11:00. Checks `escalation_enabled` first
+and logs a skipped run rather than silently doing nothing.
+
+### Why this one increments `max_assignments` where reclaim would not
+
+§9.3 is still correct *for reclaim*: incrementing the cap would have handed a
+discounted slot away at full price through the sync's top-up path. Escalation
+has no discount and no bespoke recipient rule, so the top-up path is a **second
+executor of the same intent**, not a defeat. Ceiling is **5** — the brief said 4
+when the base default was 2, and 0055 moved the base to 3, so 4 would have left
+room for one rung and silently killed the day-20 step.
+
+### The score is per assignment, over a trailing window
+
+`get_assignment_engagement_scores(ids, since)` — weights live in the
+`engagement_weights` **table** (not a function like `engagement_score_params`)
+because they are provisional and must be tunable from admin without a deploy.
+
+Trailing window, not lifetime: a note written on day 1 must not shield a lead on
+day 40. `detail_opened` is weighted 0.30, as heavily as a note, because it is the
+only signal with usable volume — 278 opens against 3 contact-clicks in the first
+16 days. Thresholds (`system_settings`) are 0.30 at day 10 and 0.45 at day 20,
+tuned so **opening a lead buys ten more days and not twenty**. Changing a weight
+without re-reading that sentence breaks the ladder.
+
+Candidates are **not** gated on `status = 'new'` despite the brief saying so: 31
+of 87 ten-day-old assignments sit at `contacted` scoring ≤0.10, and the PATCH
+route lets an operator set that by hand, so it would have been a one-click
+permanent exemption. Only `won` and `rejected` are excluded by status.
+
+### Closing a lead *(0061)*
+
+`POST /api/leads/[id]/close`, reasons `not_interested` / `sorted_elsewhere`.
+Available at **any** stage — reject needs `pipeline_stage = 'cold'` and discard
+needs an untouched `new` assignment, so both refuse the operator who actually
+rang. That gap is why 70 worked leads carry no outcome and only 3 wins exist.
+
+Both reasons describe the **landlord**, so a closed lead is offered to nobody
+new — guarded in `get_escalation_candidates` *and* in `autoAssignLead`, because
+the daily sync's top-up branch is what would otherwise re-sell it within 24h.
+No refund; bad contact data goes to support, which is what keeps the signal
+honest.
+
+### Duplicate landlords *(0064)*
+
+Idempotency on `monday_item_id` never stopped one landlord arriving as several
+items — 28 exact groups, 32 redundant copies, 24 assignments sold. Blocks on
+name **AND** email **AND** phone, normalised (phone compared on its last 9
+digits; `0000 0000000` treated as missing). A key with any part missing is NULL
+and never matches, because management ingest writes `""` for absent fields.
+
+Strict on purpose and **fails open**: under-matching costs a duplicate,
+over-matching silently discards a real enquiry. Scoped within `lead_type`.
+
+### Admin
+
+`/admin` — live service capacity (§18.1) and churn risk; escalation settings.
+`/admin/outcomes` — wins, customer scoreboard, outcome evidence, duplicates.
+
+### §18.1 — Capacity reports four numbers, never one
+
+An earlier version reported management "114% oversubscribed" by comparing
+new-lead slots against promised allocations. It was wrong: every customer had
+received 100% of their allocation and 276 leads/month were delivered against 260
+promised. It had ignored the standing inventory of unsold leads.
+
+**Inflow and inventory are reported separately and never added.**
+`slots_per_month` is sustainable and decides the customer ceiling;
+`inventory_slots_now` is a one-off buffer that can seat customers today and never
+again. `delivered_per_month` is the check on both, and `fully_served` measures
+the guarantee per customer against **their own billing anchor**.
+
+`max_active_customers` is untouched and still gates signup — the panel shows
+both so the gap is visible.
+
+### Churn
+
+`customer_engagement_snapshots` (0058) — weekly, per customer per product,
+rolling window plus lifetime figures. **The only part that cannot be
+backfilled**, which is why it shipped ahead of anything that reads it.
+`get_customer_risk()` is stated rules, not a model: zero customers have ever
+cancelled, so there is nothing to fit. Re-engagement clears a flag by
+construction, since every band is defined on days-since-activity.
+`cancelled_at` / `gr_cancelled_at` are stamped by the Stripe webhook, first
+cancellation winning.
+
+### Deployment order — migrations BEFORE code
+
+`0056`–`0064` must be applied before the code deploys. Otherwise the nudge cron
+silently sends nothing (it reads `inactivity_escalation_stage`) and the admin
+panels render their unavailable state. `autoAssignLead`'s closed-lead check
+fails **open** specifically so this ordering mistake cannot halt all assignment.
+
+Escalation will not fire for ~7 days after apply: the cutoff is stamped at
+`now() - 3 days` and a lead must be 10 days old to qualify.
+
+### Verification
+
+There is still no test suite. All 60 migrations were applied to a scratch
+Postgres 16 from empty — which caught `"can't reach"` in 0063 quoted as an
+identifier, an error read-only validation cannot see — and the write paths were
+exercised against seeded data.
