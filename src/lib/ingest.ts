@@ -278,6 +278,27 @@ export async function autoAssignLead(
     (lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS) - (lead.assignment_count ?? 0);
   if (remaining <= 0) return 0;
 
+  // A landlord an operator has reported as done — not interested, or already
+  // sorted with somebody else — is not offered to anyone new.
+  //
+  // This check belongs here rather than only in the escalation job because THIS
+  // is the path that would undo it: the duplicate branch below runs on every
+  // daily Monday sync and tops up any lead sitting under its cap, so without
+  // this a closed lead would be re-sold within 24 hours by the ordinary sweep.
+  // Operators already holding it keep it — one report does not cancel another
+  // operator's live conversation — but the lead stops being distributed.
+  const { data: isClosed, error: closedErr } = await supabase.rpc(
+    "lead_is_closed",
+    { p_lead_id: lead.id }
+  );
+  if (closedErr) {
+    // Fail closed. Selling a landlord who has already declined is worse than
+    // delaying a placement by a day, and the next sync retries anyway.
+    console.error("lead_is_closed check failed", closedErr);
+    return 0;
+  }
+  if (isClosed) return 0;
+
   const leadType = lead.lead_type;
   const [filteredRes, unfilteredRes] = await Promise.all([
     supabase.rpc("get_filtered_candidates_for_lead", {
