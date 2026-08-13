@@ -3,6 +3,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
 import { planForAllocation, grPlanForAllocation } from "@/lib/plans";
 import { getCapacityStatus, getGrCapacityStatus } from "@/lib/capacity";
+import { getServiceHealth } from "@/lib/serviceHealth";
+import { ServiceHealthPanel } from "@/components/admin/ServiceHealthPanel";
 import { DEFAULT_MAX_ASSIGNMENTS, type Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -35,9 +37,10 @@ export default async function AdminOverviewPage() {
   // Guaranteed Rent is capped separately (0054) and read off its own columns:
   // gr_subscription_status for the population, gr_monthly_allocation for the
   // weight. account_status is management-only, so it cannot appear on this side.
-  const [capacity, grCapacity] = await Promise.all([
+  const [capacity, grCapacity, health] = await Promise.all([
     getCapacityStatus(),
     getGrCapacityStatus(),
+    getServiceHealth(),
   ]);
   // Prospects awaiting a MANAGEMENT slot. A GR-only subscriber sits at
   // account_status 'waitlisted' permanently by design (§18) — they are a paying
@@ -130,6 +133,10 @@ export default async function AdminOverviewPage() {
           System health at a glance.
         </p>
       </div>
+      {/* Derived service health first: the manual caps below are a stated
+          intention, this is what the lead supply can actually carry today. */}
+      <ServiceHealthPanel health={health} />
+
       <div className="grid gap-4 lg:grid-cols-2">
         <CapacityPanel
           product="management"
