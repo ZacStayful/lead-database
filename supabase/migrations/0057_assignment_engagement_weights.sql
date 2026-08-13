@@ -81,6 +81,7 @@ insert into public.engagement_weights (signal, weight, description) values
   ('tel_click',              0.40, 'Clicked the landlord''s phone number. The only signal trusted enough to auto-flip status to contacted (0043).'),
   ('note_added',             0.30, 'Wrote a note against the lead. Direct evidence of work and costly to fake.'),
   ('detail_opened',          0.30, 'Opened the lead. Intent to act, and the only signal with usable volume on this platform.'),
+  ('status_advanced',        0.30, 'Moved the lead''s status off new. Operators mark leads contacted to organise their own pipeline, so it reports work done off-platform.'),
   ('stage_moved',            0.20, 'Moved the pipeline off cold. Self-reported, but represents real investment in the lead.'),
   ('mailto_click',           0.20, 'Clicked the email address. Opens a mail client with no guarantee anything was sent (0043).'),
   ('notification_read',      0.05, 'Read the new-lead notification. Weak on its own; its absence is the earliest warning.'),
@@ -155,6 +156,24 @@ as $$
       exists (select 1 from public.lead_events e
                where e.assignment_id = la.id and e.event_type = 'stage_changed'
                  and e.created_at >= p_since)                                    as stage_moved,
+      -- Marking a lead contacted counts as engagement in its own right.
+      --
+      -- Most of the time an operator ticks this because they DID ring the
+      -- landlord and are keeping their own pipeline tidy — the portal is not
+      -- where the work happens, it is where the work gets recorded. Treating the
+      -- tick as worthless would punish exactly the operators who bother to
+      -- record anything, and the platform already knows contact happens
+      -- off-system: 278 lead opens against 3 contact-clicks says operators dial
+      -- the number from the alert email, not from the portal.
+      --
+      -- Weighted at 0.30, the same as opening the lead, and dated — so it buys
+      -- the operator the day-10 rung and not the day-20 one. That is the point.
+      -- If it were weighted above the day-20 threshold, one click would exempt a
+      -- lead from escalation permanently, and the moment operators learn that
+      -- ignored leads get resold, that click becomes the cheapest way to hold a
+      -- lead they are not working. Counting it and time-limiting it is what
+      -- respects the honest majority without creating the loophole.
+      (la.status <> 'new' and la.last_status_change_at >= p_since)               as status_advanced,
       exists (select 1 from public.notifications n
                where n.lead_assignment_id = la.id
                  and n.read_at >= p_since)                                       as notification_read,
@@ -180,6 +199,7 @@ as $$
         (w.signal = 'detail_opened'          and p.detail_opened) or
         (w.signal = 'note_added'             and p.note_added) or
         (w.signal = 'stage_moved'            and p.stage_moved) or
+        (w.signal = 'status_advanced'        and p.status_advanced) or
         (w.signal = 'notification_read'      and p.notification_read) or
         (w.signal = 'login_since_assignment' and p.login_since_assignment)
       ), 0)
@@ -190,6 +210,7 @@ as $$
       'detail_opened',          p.detail_opened,
       'note_added',             p.note_added,
       'stage_moved',            p.stage_moved,
+      'status_advanced',        p.status_advanced,
       'notification_read',      p.notification_read,
       'login_since_assignment', p.login_since_assignment
     )

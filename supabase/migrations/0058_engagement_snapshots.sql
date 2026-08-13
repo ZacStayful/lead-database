@@ -97,6 +97,24 @@ create table if not exists public.customer_engagement_snapshots (
   notes_added            integer not null default 0,
   notifications_read     integer not null default 0,
 
+  -- LIFETIME figures, alongside the rolling window rather than instead of it.
+  --
+  -- The 30-day window is the right lens for deciding whether a single lead has
+  -- gone quiet. It is the wrong one for churn: a customer who has used the
+  -- product properly for six months and gone quiet for three weeks is a
+  -- different proposition from one who has never engaged at all, and a rolling
+  -- window shows them as identical. Cumulative use is what separates "gone off
+  -- the boil" from "never got started", and those two need different phone
+  -- calls.
+  --
+  -- days_since_last_activity is the single most direct churn signal here:
+  -- nobody cancels a product they used yesterday.
+  lifetime_assignments     integer not null default 0,
+  lifetime_worked          integer not null default 0,
+  lifetime_worked_rate     numeric,
+  tenure_days              integer,
+  days_since_last_activity integer,
+
   -- Value, for engagement-against-revenue. Gross recorded payments to date, in
   -- pence. NOTE: the payments table is known to be incomplete (17 rows against
   -- 20 active subscribers), so this understates and must not be presented as
@@ -209,9 +227,45 @@ begin
     from (select unnest(enum_range(null::public.lead_type)) as lead_type) lt
     cross join lateral public.get_customer_engagement_scores(lt.lead_type, null) s
   ),
+  -- Lifetime, per customer per product: every assignment ever, not just the
+  -- window. Same "worked" definition as everywhere else in this feature.
+  lifetime as (
+    select
+      c.id as customer_id,
+      lt.lead_type,
+      count(la.id) filter (where l.lead_type = lt.lead_type)::integer as ever_delivered,
+      count(la.id) filter (where l.lead_type = lt.lead_type and (
+        exists (select 1 from public.lead_events e
+                 where e.assignment_id = la.id
+                   and e.event_type in ('detail_opened', 'tel_click', 'mailto_click'))
+        or exists (select 1 from public.lead_notes n where n.lead_assignment_id = la.id)
+        or exists (select 1 from public.lead_files f where f.lead_assignment_id = la.id)
+      ))::integer                                                     as ever_worked
+    from public.customers c
+    cross join (select unnest(enum_range(null::public.lead_type)) as lead_type) lt
+    left join public.lead_assignments la on la.customer_id = c.id
+    left join public.leads l on l.id = la.lead_id
+    group by c.id, lt.lead_type
+  ),
   activity as (
     select
       c.id as customer_id,
+      -- Tenure from account creation. Not from first assignment: a customer who
+      -- signed up and never received a lead has still been a customer, and that
+      -- is itself worth seeing in a churn series.
+      (current_date - c.created_at::date)::integer as tenure_days,
+      -- Most recent engagement of any kind, anywhere on the platform. Signing in
+      -- counts: it is the weakest signal but the broadest, and a customer who
+      -- has not even logged in for six weeks is the clearest warning available.
+      (current_date - greatest(
+        (select max(e.created_at)::date from public.lead_events e
+           join public.lead_assignments la on la.id = e.assignment_id
+          where la.customer_id = c.id
+            and e.event_type in ('detail_opened', 'tel_click', 'mailto_click')),
+        (select max(n.created_at)::date from public.lead_notes n where n.customer_id = c.id),
+        (select max(nt.read_at)::date from public.notifications nt where nt.customer_id = c.id),
+        (select u.last_sign_in_at::date from auth.users u where u.id = c.user_id)
+      ))::integer as days_since_last_activity,
       (select count(*) from public.lead_notes n, since s
         where n.customer_id = c.id and n.created_at >= s.t)::integer as notes_added,
       (select count(*) from public.notifications nt, since s
@@ -232,6 +286,8 @@ begin
     assignments_delivered, assignments_worked, worked_rate,
     open_rate, contact_rate, engagement_score,
     logins_in_window, notes_added, notifications_read,
+    lifetime_assignments, lifetime_worked, lifetime_worked_rate,
+    tenure_days, days_since_last_activity,
     lifetime_revenue_pence,
     monthly_allocation, account_status, subscription_status
   )
@@ -248,10 +304,16 @@ begin
     -- routing model believed about them.
     sc.score,
     a.logins_in_window, a.notes_added, a.notifications_read,
+    lf.ever_delivered, lf.ever_worked,
+    case when lf.ever_delivered > 0
+         then round(lf.ever_worked::numeric / lf.ever_delivered, 4) end,
+    a.tenure_days, a.days_since_last_activity,
     a.revenue,
     b.monthly_allocation, b.account_status, b.subscription_status
   from base b
   join activity a on a.customer_id = b.customer_id
+  join lifetime lf
+    on lf.customer_id = b.customer_id and lf.lead_type = b.lead_type
   left join scores sc
          on sc.customer_id = b.customer_id and sc.lead_type = b.lead_type
   on conflict (customer_id, lead_type, captured_on) do update set
@@ -265,6 +327,11 @@ begin
     logins_in_window       = excluded.logins_in_window,
     notes_added            = excluded.notes_added,
     notifications_read     = excluded.notifications_read,
+    lifetime_assignments     = excluded.lifetime_assignments,
+    lifetime_worked          = excluded.lifetime_worked,
+    lifetime_worked_rate     = excluded.lifetime_worked_rate,
+    tenure_days              = excluded.tenure_days,
+    days_since_last_activity = excluded.days_since_last_activity,
     lifetime_revenue_pence = excluded.lifetime_revenue_pence,
     monthly_allocation     = excluded.monthly_allocation,
     account_status         = excluded.account_status,
