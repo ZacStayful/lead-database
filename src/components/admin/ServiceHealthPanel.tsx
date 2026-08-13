@@ -140,6 +140,24 @@ function RiskRow({ r }: { r: CustomerRisk }) {
 }
 
 export function ServiceHealthPanel({ health }: { health: ServiceHealth }) {
+  // Say so plainly rather than rendering convincing zeros. An empty capacity
+  // panel reading "0 leads a month, room for 0 customers" is worse than no
+  // panel: it is a wrong answer presented in the same shape as a right one.
+  if (health.unavailable) {
+    return (
+      <Card>
+        <CardContent className="p-5">
+          <h2 className="text-base font-medium">Service health unavailable</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The capacity and churn-risk figures could not be read. This normally
+            means the database migration for this feature has not been applied to
+            this environment yet. Everything else on this page is unaffected.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   // Everyone active in the last week is hidden by default. A list that includes
   // the customers doing fine is a list nobody reads twice, and re-engagement is
   // supposed to remove somebody from view — showing them anyway would make that

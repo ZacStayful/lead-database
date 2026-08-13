@@ -333,12 +333,23 @@ export async function autoAssignLead(
     { p_lead_id: lead.id }
   );
   if (closedErr) {
-    // Fail closed. Selling a landlord who has already declined is worse than
-    // delaying a placement by a day, and the next sync retries anyway.
-    console.error("lead_is_closed check failed", closedErr);
+    // Fail OPEN, on the deployment-order argument rather than the safety one.
+    //
+    // The instinct here is to fail closed — better to delay a placement than to
+    // sell a landlord who has already declined. That is wrong, because of WHEN
+    // this call fails. The realistic failure is that the code is deployed before
+    // migration 0061 is applied, in which case the function does not exist, this
+    // errors for every lead, and failing closed would halt ALL lead assignment
+    // across the platform until somebody noticed.
+    //
+    // And in exactly that scenario there is nothing to protect: if 0061 has not
+    // been applied, no lead has ever been closed, so the check has nothing to
+    // find. A transient error is the only other case, and it costs one lead one
+    // sync cycle.
+    console.error("lead_is_closed check failed; proceeding", closedErr);
+  } else if (isClosed) {
     return 0;
   }
-  if (isClosed) return 0;
 
   const leadType = lead.lead_type;
   const [filteredRes, unfilteredRes] = await Promise.all([

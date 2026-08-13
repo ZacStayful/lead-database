@@ -58,6 +58,8 @@ export interface CustomerRisk {
 }
 
 export interface ServiceHealth {
+  /** True when the underlying functions could not be read — see getServiceHealth. */
+  unavailable?: boolean;
   capacity: ProductCapacity[];
   risk: CustomerRisk[];
   /** Monthly revenue represented by customers in the critical and high bands. */
@@ -116,8 +118,23 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
     admin.rpc("get_customer_risk"),
   ]);
 
-  if (capRes.error) throw new Error(capRes.error.message);
-  if (riskRes.error) throw new Error(riskRes.error.message);
+  // Degrade rather than throw.
+  //
+  // /admin is the page an admin opens when something is wrong, so it is the last
+  // page that should break. Throwing here 500s the whole overview — capacity
+  // panels, customer stats, everything — because two panels could not load, and
+  // the most likely reason for that is simply that this feature's migration has
+  // not been applied to the environment yet.
+  if (capRes.error || riskRes.error) {
+    console.error("[serviceHealth] unavailable", capRes.error ?? riskRes.error);
+    return {
+      capacity: [],
+      risk: [],
+      revenueAtRiskGbp: 0,
+      totalMonthlyRevenueGbp: 0,
+      unavailable: true,
+    };
+  }
 
   const capacity: ProductCapacity[] = (
     (capRes.data ?? []) as Record<string, unknown>[]
