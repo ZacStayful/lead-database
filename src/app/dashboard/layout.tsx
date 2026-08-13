@@ -57,6 +57,10 @@ export default async function DashboardLayout({
       items: [
         { href: "/dashboard/leads", label: "All leads" },
         { href: "/dashboard/leads/priority", label: "Priority" },
+        // Shown to every subscriber, not gated on holding a particular
+        // product: the page resolves which pools the customer can see and
+        // renders its own explanation when the answer is none.
+        { href: "/dashboard/leads/expired", label: "Expired leads" },
         { href: "/dashboard/filtering", label: "Lead filtering" },
         { href: "/dashboard/topup", label: "Top up leads" },
       ],

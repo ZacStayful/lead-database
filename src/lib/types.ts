@@ -104,6 +104,35 @@ export interface Customer {
   updated_at: string;
 }
 
+/**
+ * One row of a customer's expired leads pool, as returned by
+ * get_customer_pool_leads (0075).
+ *
+ * Deliberately NOT a `Lead`. It carries no assignment_count, no
+ * max_assignments and nothing about who held the lead before or what they did
+ * with it — the brief forbids surfacing that, and keeping it out of the type
+ * means no later UI change can reach for it by accident.
+ */
+export interface PoolLead {
+  lead_id: string;
+  lead_type: LeadType;
+  lead_name: string;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  lead_profile: string | null;
+  bedrooms: string | null;
+  postcode: string | null;
+  desired_rent: string | null;
+  /** Parsed enquiry date, or null where the free-text column would not parse. */
+  enquiry_date: string | null;
+  /** False when lead_age_days counts from ingest rather than the enquiry. */
+  enquiry_date_known: boolean;
+  lead_age_days: number;
+  days_in_pool: number;
+  pool_entered_at: string;
+}
+
 export interface Lead {
   id: string;
   monday_item_id: string;
