@@ -63,15 +63,24 @@ async function handle(request: NextRequest) {
   const dryRun = request.nextUrl.searchParams.get("dryRun") === "true";
   const admin = createAdminClient();
 
-  // Kill switch first, and say so rather than reporting a successful run that
-  // did nothing — the distinction 0062 exists to preserve.
+  // Kill switch. Checked explicitly and reported as "skipped" rather than
+  // returning a successful run that happened to do nothing — the distinction
+  // 0062 exists to preserve.
+  //
+  // A DRY RUN IS NOT BLOCKED BY IT. The switch exists so the first sweep can be
+  // run under supervision instead of arriving overnight, and the first thing
+  // anyone in that position wants is to see what it would do. Refusing the
+  // preview while the switch is off would make the switch impossible to turn on
+  // with any confidence. A dry run writes nothing, so there is nothing for the
+  // kill switch to protect against.
   const { data: settingRow } = await admin
     .from("system_settings")
     .select("value")
     .eq("key", "pool_enabled")
     .maybeSingle();
 
-  if ((settingRow?.value ?? "true").trim() !== "true") {
+  const enabled = (settingRow?.value ?? "true").trim() === "true";
+  if (!enabled && !dryRun) {
     return NextResponse.json({
       status: "skipped",
       reason: "pool_enabled is not true",
@@ -104,6 +113,8 @@ async function handle(request: NextRequest) {
   if (dryRun) {
     return NextResponse.json({
       status: "dry_run",
+      // Surfaced so a preview run cannot be mistaken for proof the job is armed.
+      pool_enabled: enabled,
       would_enter: summarise(entries),
       would_enter_by_basis: {
         unassigned: entries.filter((e) => e.basis === "unassigned").length,
