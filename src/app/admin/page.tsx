@@ -175,6 +175,16 @@ export default async function AdminOverviewPage() {
         <CapacityPanel
           product="management"
           title="Subscriber capacity — Management"
+          derivedCeiling={
+            health.capacity.find((c) => c.product === "management")
+              ?.sustainableCustomers
+          }
+          slotsPerMonth={
+            health.capacity.find((c) => c.product === "management")?.slotsPerMonth
+          }
+          demandPerMonth={
+            health.capacity.find((c) => c.product === "management")?.demandPerMonth
+          }
           weightedUsed={capacity.weightedUsed}
           rawActiveCount={capacity.rawActiveCount}
           activeLabel="active management customer"
@@ -184,6 +194,16 @@ export default async function AdminOverviewPage() {
         <CapacityPanel
           product="guaranteed_rent"
           title="Subscriber capacity — Guaranteed Rent"
+          derivedCeiling={
+            health.capacity.find((c) => c.product === "guaranteed_rent")
+              ?.sustainableCustomers
+          }
+          slotsPerMonth={
+            health.capacity.find((c) => c.product === "guaranteed_rent")?.slotsPerMonth
+          }
+          demandPerMonth={
+            health.capacity.find((c) => c.product === "guaranteed_rent")?.demandPerMonth
+          }
           weightedUsed={grCapacity.weightedUsed}
           rawActiveCount={grCapacity.rawActiveCount}
           activeLabel="active guaranteed rent customer"

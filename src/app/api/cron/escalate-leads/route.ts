@@ -53,7 +53,13 @@ type Candidate = {
   lead_age_days: number | null;
 };
 
-type Scored = { assignment_id: string; score: number; signals: Record<string, boolean> };
+type Scored = {
+  assignment_id: string;
+  score: number;
+  /** Nothing but looking happened — an open, a read notification, or a login. */
+  passive_only: boolean;
+  signals: Record<string, boolean>;
+};
 
 async function settings(admin: ReturnType<typeof createAdminClient>) {
   const { data } = await admin.from("system_settings").select("key, value");
@@ -176,11 +182,18 @@ async function handle(request: NextRequest) {
     for (const c of candidates) {
       const scored = scores.get(c.assignment_id);
       const score = Number(scored?.score ?? 0);
+      // Opening a lead is looking at it, not working it. Somebody can click in
+      // to see what a lead is, decide against it, and never come back — and
+      // without this that single click would buy them another ten days. The
+      // weights are set so passive signals cannot reach the threshold on their
+      // own, and this flag makes the rule survive any future weight edit from
+      // admin rather than depending on the arithmetic still adding up.
+      const lookedOnly = scored?.passive_only ?? true;
 
       // Engaged enough to keep it. The clock keeps running: if they go quiet for
       // another ten days this same rung picks the lead up again, because the
       // stage has not advanced.
-      if (score >= threshold) {
+      if (score >= threshold && !lookedOnly) {
         continue;
       }
 
@@ -243,6 +256,7 @@ async function handle(request: NextRequest) {
           lead_id: c.lead_id,
           stage: rung.stage,
           score,
+          passive_only: lookedOnly,
           signals: scored?.signals ?? null,
           from_customer: c.customer_id,
           to_customer: recipientId,

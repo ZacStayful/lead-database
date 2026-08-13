@@ -19,6 +19,9 @@ export function CapacityPanel({
   rawActiveCount,
   activeLabel = "active customer",
   initialLimit,
+  derivedCeiling,
+  slotsPerMonth,
+  demandPerMonth,
   waitlistedCount,
 }: {
   /** Which cap this panel edits. Selects the system_settings key server-side. */
@@ -33,6 +36,15 @@ export function CapacityPanel({
   activeLabel?: string;
   initialLimit: number;
   /**
+   * Customers this product's actual lead supply can carry, derived from leads
+   * ingested over the last 28 days and the caps those leads carry
+   * (get_service_capacity). Undefined when it could not be read.
+   */
+  derivedCeiling?: number;
+  /** Sustainable slots a month, and what is promised — for the shortfall line. */
+  slotsPerMonth?: number;
+  demandPerMonth?: number;
+  /**
    * Waitlisted accounts, shown only when provided. The waitlist is a management
    * concept (`account_status`), so the GR panel omits it rather than showing a
    * zero that would read as "nobody is waiting for Guaranteed Rent".
@@ -44,8 +56,21 @@ export function CapacityPanel({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const pct = limit > 0 ? Math.min(100, Math.round((weightedUsed / limit) * 100)) : 0;
-  const full = weightedUsed >= limit;
+  // The denominator is what the lead supply can actually serve, not a number
+  // somebody typed. A typed cap cannot know that volume moved last week or that
+  // escalation has opened extra slots, and it goes stale silently while still
+  // being trusted. The manual setting stays as a hard ceiling below.
+  const ceiling = derivedCeiling ?? limit;
+  const pct = ceiling > 0 ? Math.min(100, Math.round((weightedUsed / ceiling) * 100)) : 0;
+  const full = weightedUsed >= ceiling;
+
+  // Which problem does this product have? They need opposite responses: too few
+  // customers for the leads means sell more, too few leads for the customers
+  // means buy more leads. Reporting only "slots used" leaves both invisible.
+  const shortfall =
+    slotsPerMonth != null && demandPerMonth != null
+      ? Math.round(demandPerMonth - slotsPerMonth)
+      : null;
   // Unique per panel — two capacity panels render on the same page, and a
   // duplicated id would point both labels at the management input.
   const inputId = `capacity-limit-${product}`;
@@ -67,7 +92,7 @@ export function CapacityPanel({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not update capacity");
       setLimit(data.capacity ?? capacity);
-      setMessage("Capacity updated");
+      setMessage("Hard cap updated");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not update capacity");
     } finally {
@@ -81,7 +106,7 @@ export function CapacityPanel({
         <div>
           <p className="text-sm text-muted-foreground">{title}</p>
           <p className="mt-1 text-2xl font-semibold">
-            {weightedUsed} / {limit}{" "}
+            {weightedUsed} / {ceiling}{" "}
             <span className="text-lg font-normal text-muted-foreground">
               slots used
             </span>
@@ -89,8 +114,31 @@ export function CapacityPanel({
           <p className="mt-0.5 text-sm text-muted-foreground">
             {rawActiveCount} {activeLabel}
             {rawActiveCount === 1 ? "" : "s"}
+            {derivedCeiling != null && (
+              <> · ceiling derived from the last 28 days of lead volume</>
+            )}
           </p>
         </div>
+
+        {shortfall != null && (
+          <p className="text-sm">
+            {shortfall > 0 ? (
+              <span className="text-red-700">
+                <strong>Under-delivering by about {shortfall} leads a month.</strong>{" "}
+                More is promised than arrives, so this is a lead-supply problem,
+                not a sales one — the gap is being covered from unsold stock
+                until that runs out.
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                <strong className="text-foreground">
+                  About {Math.abs(shortfall)} leads a month spare.
+                </strong>{" "}
+                Room to sell to more customers before supply becomes the limit.
+              </span>
+            )}
+          </p>
+        )}
 
         <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
           <div

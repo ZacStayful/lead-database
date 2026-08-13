@@ -32,11 +32,28 @@
 -- A model that leaned on contact-clicks would mark almost every assignment
 -- inactive and escalate the entire book.
 --
--- The weights and the two thresholds are set so that an opened-but-otherwise
--- untouched lead SURVIVES the day-10 rung (0.30, not below the 0.30 threshold)
--- and FAILS the day-20 one (0.30 + a login = 0.35, below 0.45). Opening a lead
--- buys the operator ten more days; it does not buy them twenty. Changing any
--- weight without re-reading that sentence will silently break the ladder.
+-- LOOKING IS NOT WORKING, AND THE ARITHMETIC MUST SAY SO
+-- ------------------------------------------------------
+-- An earlier version weighted detail_opened at 0.30 against a day-10 threshold
+-- of 0.30, so a single click bought the lead another ten days. That is exactly
+-- the behaviour this feature exists to stop: an operator can open a lead to see
+-- what it is, decide not to bother, and never return — and the ladder would have
+-- read that as engagement.
+--
+-- The signals are therefore split in two, and the split is enforced twice over:
+--
+--   ACTIVE   tel_click, note_added, status_advanced, stage_moved, mailto_click.
+--            Each is >= 0.30 so any ONE of them alone clears the day-10
+--            threshold of 0.35 when combined with an open, and the strongest
+--            clear it unaided.
+--   PASSIVE  detail_opened (0.20), notification_read (0.05), login (0.05).
+--            All three together come to 0.30 — deliberately BELOW the threshold,
+--            so no combination of merely looking can ever protect a lead.
+--
+-- Belt and braces: get_assignment_engagement_scores also returns passive_only,
+-- and the job treats it as inactive regardless of score. The arithmetic could be
+-- broken by a future weight edit from admin; the flag cannot. A rule this
+-- important should not depend on someone remembering how the numbers add up.
 --
 -- THE SCORE IS OVER A TRAILING WINDOW, NOT THE LIFE OF THE ASSIGNMENT
 -- -------------------------------------------------------------------
@@ -78,12 +95,17 @@ alter table public.engagement_weights enable row level security;
 -- Seeded, never overwritten on re-run: a later hand-tuned value must survive a
 -- re-applied migration.
 insert into public.engagement_weights (signal, weight, description) values
-  ('tel_click',              0.40, 'Clicked the landlord''s phone number. The only signal trusted enough to auto-flip status to contacted (0043).'),
-  ('note_added',             0.30, 'Wrote a note against the lead. Direct evidence of work and costly to fake.'),
-  ('detail_opened',          0.30, 'Opened the lead. Intent to act, and the only signal with usable volume on this platform.'),
-  ('status_advanced',        0.30, 'Moved the lead''s status off new. Operators mark leads contacted to organise their own pipeline, so it reports work done off-platform.'),
-  ('stage_moved',            0.20, 'Moved the pipeline off cold. Self-reported, but represents real investment in the lead.'),
-  ('mailto_click',           0.20, 'Clicked the email address. Opens a mail client with no guarantee anything was sent (0043).'),
+  -- ACTIVE signals: each one alone clears the day-10 threshold, because each
+  -- one alone is evidence the operator did something to this lead.
+  ('tel_click',              0.50, 'Clicked the landlord''s phone number. The only signal trusted enough to auto-flip status to contacted (0043).'),
+  ('note_added',             0.40, 'Wrote a note against the lead. Direct evidence of work and costly to fake.'),
+  ('status_advanced',        0.35, 'Moved the lead''s status off new. Operators mark leads contacted to organise their own pipeline, so it reports work done off-platform.'),
+  ('stage_moved',            0.35, 'Moved the pipeline off cold. Self-reported, but represents real investment in the lead.'),
+  ('mailto_click',           0.30, 'Clicked the email address. Opens a mail client with no guarantee anything was sent (0043).'),
+  -- PASSIVE signals: these three together total 0.30, deliberately below the
+  -- day-10 threshold of 0.35. Opening a lead is looking, not working, and the
+  -- arithmetic must not let looking alone protect it. See the header note.
+  ('detail_opened',          0.20, 'Opened the lead. Looking at it — meaningful only alongside a real signal.'),
   ('notification_read',      0.05, 'Read the new-lead notification. Weak on its own; its absence is the earliest warning.'),
   ('login_since_assignment', 0.05, 'Signed in at all since the lead was assigned. Account-wide, so it says nothing about this particular lead.')
 on conflict (signal) do nothing;
@@ -95,7 +117,7 @@ on conflict (signal) do nothing;
 -- same settings panel as escalation_enabled and the freshness gate.
 -- ---------------------------------------------------------------------------
 insert into public.system_settings (key, value)
-  values ('escalation_score_threshold_day_10', '0.30')
+  values ('escalation_score_threshold_day_10', '0.35')
   on conflict (key) do nothing;
 
 insert into public.system_settings (key, value)
@@ -125,6 +147,12 @@ create or replace function public.get_assignment_engagement_scores(
 returns table (
   assignment_id uuid,
   score         numeric,
+  /**
+   * True when nothing but looking happened: an open, a read notification, a
+   * login, or nothing at all. The caller treats this as inactive whatever the
+   * score says.
+   */
+  passive_only  boolean,
   signals       jsonb
 )
 language sql
@@ -204,6 +232,10 @@ as $$
         (w.signal = 'login_since_assignment' and p.login_since_assignment)
       ), 0)
     )::numeric,
+    not (
+      p.tel_click or p.mailto_click or p.note_added
+      or p.stage_moved or p.status_advanced
+    ),
     jsonb_build_object(
       'tel_click',              p.tel_click,
       'mailto_click',           p.mailto_click,
