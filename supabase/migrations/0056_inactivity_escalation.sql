@@ -42,9 +42,22 @@
 -- cap increment the correct and simplest mechanism here, and it is why the
 -- derived-slot indirection is not reused.
 --
--- Hard ceiling of 4, matching the bound PATCH /api/admin/leads/[id] already
--- enforces (1..4). leads.max_assignments carries no CHECK constraint, so
--- nothing needs widening — the ceiling is enforced in the escalation function.
+-- CEILING OF 5, NOT THE BRIEF'S 4
+--
+-- The brief set a hard stop at 4 when the base default was 2: two rungs, 2->3
+-- and 3->4. 0055 has since raised the default to 3, so a ceiling of 4 leaves
+-- room for exactly ONE escalation and the 20-day rung could never fire on any
+-- newly ingested lead — the ladder would silently become a single step.
+--
+-- The instruction is two rungs then stop ("10 days no response, 20 days no
+-- response, then leave"), so the ceiling moves with the base that shifted under
+-- it: 3 -> 4 -> 5, and no further. Leads ingested before 0055 still carry
+-- max_assignments = 2 and simply stop a step earlier at 4.
+--
+-- PATCH /api/admin/leads/[id] still bounds MANUAL admin edits to 1..4. That is
+-- left alone deliberately: 5 is a ceiling the system may reach by escalating a
+-- lead nobody worked, not a number an admin should set by hand on a fresh lead.
+-- leads.max_assignments carries no CHECK constraint, so nothing needs widening.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -225,7 +238,7 @@ as $$
     and la.status not in ('won', 'rejected')
 
     -- Room left under the hard ceiling.
-    and l.max_assignments < 4;
+    and l.max_assignments < 5;
 $$;
 
 revoke execute on function public.get_escalation_candidates(timestamptz, integer, integer)
@@ -294,7 +307,7 @@ begin
   select * into v_lead from public.leads
     where id = v_original.lead_id for update;
 
-  if v_lead.max_assignments >= 4 then
+  if v_lead.max_assignments >= 5 then
     raise exception 'Lead % is at the escalation ceiling (max_assignments = %)',
       v_original.lead_id, v_lead.max_assignments;
   end if;
