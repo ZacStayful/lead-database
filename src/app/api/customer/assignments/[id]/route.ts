@@ -145,8 +145,30 @@ export async function PATCH(
   // Terminal positive outcome: the operator has signed / onboarded the landlord.
   // Independent of pipeline_stage — this is the conversion signal the ROI funnel
   // counts. The rejected case is refused by the settled-lead guard above.
-  if (body.signed) {
+  //
+  // `signed: false` UNDOES it. Until now this branch only ever set 'won' and
+  // nothing anywhere reverted it, which made a win a one-way door: an operator
+  // who pressed the button by mistake had no way back, and could not even close
+  // the lead afterwards because closing refuses a won assignment.
+  //
+  // That is not hypothetical. One of the three wins in production is a lead
+  // whose own note reads "NOT INTERESTED ANYMORE", written nine seconds after
+  // it was first opened — a mis-click that has been inflating the only
+  // conversion figure the system has by 50% ever since, with no way to correct
+  // it.
+  //
+  // Reverting to 'contacted' rather than 'new': real work demonstrably happened,
+  // and 'new' would make the lead look untouched to the nudge and escalation
+  // jobs. first_contacted_at is left alone — the first touch still happened, and
+  // it is stamped with coalesce everywhere else for the same reason.
+  //
+  // This is not the rejected-lead laundering route (§6A): a win carries no
+  // refund and no credit, so there is nothing to gain by toggling it, and the
+  // settled-lead guard above still refuses everything on a rejected assignment.
+  if (body.signed === true) {
     update.status = "won";
+  } else if (body.signed === false) {
+    update.status = "contacted";
   }
   if (body.pipeline_stage !== undefined) {
     update.pipeline_stage = body.pipeline_stage;
