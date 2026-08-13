@@ -112,7 +112,13 @@ create table if not exists public.customer_engagement_snapshots (
   lifetime_assignments     integer not null default 0,
   lifetime_worked          integer not null default 0,
   lifetime_worked_rate     numeric,
+  -- Two tenures, because they answer different questions and were conflated
+  -- once already. tenure_days runs from account creation, which for most
+  -- customers is an invite or a waitlist entry a week or two before they paid.
+  -- paying_days runs from the billing anchor — the date money first changed
+  -- hands — and is the one that belongs next to revenue or a churn window.
   tenure_days              integer,
+  paying_days              integer,
   days_since_last_activity integer,
 
   -- Value, for engagement-against-revenue. Gross recorded payments to date, in
@@ -254,6 +260,9 @@ begin
       -- signed up and never received a lead has still been a customer, and that
       -- is itself worth seeing in a churn series.
       (current_date - c.created_at::date)::integer as tenure_days,
+      -- Null until they have actually paid for something.
+      (current_date - coalesce(c.billing_cycle_anchor, c.gr_billing_cycle_anchor))::integer
+        as paying_days,
       -- Most recent engagement of any kind, anywhere on the platform. Signing in
       -- counts: it is the weakest signal but the broadest, and a customer who
       -- has not even logged in for six weeks is the clearest warning available.
@@ -287,7 +296,7 @@ begin
     open_rate, contact_rate, engagement_score,
     logins_in_window, notes_added, notifications_read,
     lifetime_assignments, lifetime_worked, lifetime_worked_rate,
-    tenure_days, days_since_last_activity,
+    tenure_days, paying_days, days_since_last_activity,
     lifetime_revenue_pence,
     monthly_allocation, account_status, subscription_status
   )
@@ -307,7 +316,7 @@ begin
     lf.ever_delivered, lf.ever_worked,
     case when lf.ever_delivered > 0
          then round(lf.ever_worked::numeric / lf.ever_delivered, 4) end,
-    a.tenure_days, a.days_since_last_activity,
+    a.tenure_days, a.paying_days, a.days_since_last_activity,
     a.revenue,
     b.monthly_allocation, b.account_status, b.subscription_status
   from base b
@@ -331,6 +340,7 @@ begin
     lifetime_worked          = excluded.lifetime_worked,
     lifetime_worked_rate     = excluded.lifetime_worked_rate,
     tenure_days              = excluded.tenure_days,
+    paying_days              = excluded.paying_days,
     days_since_last_activity = excluded.days_since_last_activity,
     lifetime_revenue_pence = excluded.lifetime_revenue_pence,
     monthly_allocation     = excluded.monthly_allocation,
