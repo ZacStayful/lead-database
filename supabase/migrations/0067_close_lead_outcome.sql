@@ -159,7 +159,7 @@ grant execute on function public.close_lead_assignment(uuid, uuid, text)
 -- ---------------------------------------------------------------------------
 -- 4 — Escalation skips closed leads and closed assignments.
 --
--- Definition verbatim from 0056 except the two added conditions. Rewritten in
+-- Definition verbatim from 0062 except the two added conditions. Rewritten in
 -- full rather than patched so the whole eligibility rule stays readable in one
 -- place — this query is the answer to "why did that lead escalate", and a
 -- reader should never have to diff two migrations to get it.

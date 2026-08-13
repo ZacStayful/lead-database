@@ -64,7 +64,7 @@
 -- No customer has ever cancelled, so there is nothing to train on and any
 -- "probability" would be invented. These are stated rules over observed
 -- behaviour, and they say so. When cancellations do start, the snapshot series
--- (0058) plus cancelled_at gives the material to replace the rules with
+-- (0070) plus cancelled_at gives the material to replace the rules with
 -- something fitted — and the rules stay readable in the meantime, which a
 -- fitted model would not be.
 --

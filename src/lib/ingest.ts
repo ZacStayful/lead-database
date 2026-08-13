@@ -233,7 +233,7 @@ export async function ingestLead(
   // had already contacted him.
   //
   // Matching needs all three of name, email and phone, and the key is null if
-  // any is missing (0064). The asymmetry is deliberate: under-matching costs a
+  // any is missing (0070). The asymmetry is deliberate: under-matching costs a
   // duplicate lead, over-matching silently discards a real enquiry a customer
   // would have been sold. Only the first is recoverable.
   //
@@ -338,11 +338,11 @@ export async function autoAssignLead(
     // The instinct here is to fail closed — better to delay a placement than to
     // sell a landlord who has already declined. That is wrong, because of WHEN
     // this call fails. The realistic failure is that the code is deployed before
-    // migration 0061 is applied, in which case the function does not exist, this
+    // migration 0067 is applied, in which case the function does not exist, this
     // errors for every lead, and failing closed would halt ALL lead assignment
     // across the platform until somebody noticed.
     //
-    // And in exactly that scenario there is nothing to protect: if 0061 has not
+    // And in exactly that scenario there is nothing to protect: if 0067 has not
     // been applied, no lead has ever been closed, so the check has nothing to
     // find. A transient error is the only other case, and it costs one lead one
     // sync cycle.

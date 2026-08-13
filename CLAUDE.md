@@ -629,7 +629,7 @@ event. On a genuine disagreement the webhook credits the **row** and logs a
 
 ### GR price ids are the product router
 
-### GR Payment Links and `gr_stripe_customer_id` *(0056)*
+### GR Payment Links and `gr_stripe_customer_id` *(0062)*
 
 A GR Stripe **Payment Link** mints its own Stripe customer for the payer. That
 broke the one Stripe field the two products still shared: `stripe_customer_id`.
@@ -639,7 +639,7 @@ provisioning, detaching their **management** subscription from every future
 webhook lookup — and management's own provisioning would repoint it back on its
 next renewal, the two products fighting over one column indefinitely.
 
-`gr_stripe_customer_id` (0056) is the GR half. **Reads match either column**
+`gr_stripe_customer_id` (0062) is the GR half. **Reads match either column**
 (`customerMatchFilter()` in the webhook); **only GR writers set the gr_ column**,
 and the GR path never writes `stripe_customer_id`. Nothing is backfilled: a null
 `gr_stripe_customer_id` means "GR bills against the shared customer", which is
@@ -810,7 +810,7 @@ not be in circulation at all", where `cancelled` says "this customer left".
 
 ---
 
-## 18. Inactivity escalation *(0056–0064)*
+## 18. Inactivity escalation *(0062–0070)*
 
 Replaces soft reclaim (§7). A lead nobody has engaged with for **10 days** goes
 to one further operator, and again at **20**, then stops. **Full price**
@@ -847,7 +847,7 @@ of 87 ten-day-old assignments sit at `contacted` scoring ≤0.10, and the PATCH
 route lets an operator set that by hand, so it would have been a one-click
 permanent exemption. Only `won` and `rejected` are excluded by status.
 
-### Closing a lead *(0061)*
+### Closing a lead *(0067)*
 
 `POST /api/leads/[id]/close`, reasons `not_interested` / `sorted_elsewhere`.
 Available at **any** stage — reject needs `pipeline_stage = 'cold'` and discard
@@ -860,7 +860,7 @@ the daily sync's top-up branch is what would otherwise re-sell it within 24h.
 No refund; bad contact data goes to support, which is what keeps the signal
 honest.
 
-### Duplicate landlords *(0064)*
+### Duplicate landlords *(0070)*
 
 Idempotency on `monday_item_id` never stopped one landlord arriving as several
 items — 28 exact groups, 32 redundant copies, 24 assignments sold. Blocks on
@@ -894,7 +894,7 @@ both so the gap is visible.
 
 ### Churn
 
-`customer_engagement_snapshots` (0058) — weekly, per customer per product,
+`customer_engagement_snapshots` (0070) — weekly, per customer per product,
 rolling window plus lifetime figures. **The only part that cannot be
 backfilled**, which is why it shipped ahead of anything that reads it.
 `get_customer_risk()` is stated rules, not a model: zero customers have ever
@@ -905,7 +905,7 @@ cancellation winning.
 
 ### Deployment order — migrations BEFORE code
 
-`0056`–`0064` must be applied before the code deploys. Otherwise the nudge cron
+`0062`–`0070` must be applied before the code deploys. Otherwise the nudge cron
 silently sends nothing (it reads `inactivity_escalation_stage`) and the admin
 panels render their unavailable state. `autoAssignLead`'s closed-lead check
 fails **open** specifically so this ordering mistake cannot halt all assignment.

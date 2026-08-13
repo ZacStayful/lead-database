@@ -342,6 +342,8 @@ export async function POST(request: NextRequest) {
             if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0]) {
               update.gr_monthly_allocation = grAllocation;
             }
+          }
+
           if (status === "canceled") {
             if (!existing?.gr_cancelled_at) update.gr_cancelled_at = nowIso;
           } else if (status === "active") {

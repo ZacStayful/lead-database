@@ -7,7 +7,7 @@ import type { LeadType } from "@/lib/types";
  * which of the current ones look like leaving.
  *
  * Both figures are read LIVE on every admin page load rather than from the
- * nightly snapshot. The snapshot series (0058) exists to answer "how has this
+ * nightly snapshot. The snapshot series (0070) exists to answer "how has this
  * moved over weeks", which is what churn prediction will eventually need; this
  * answers "what is true right now", which is what someone looking at the admin
  * page is asking. Deriving the live number from a table written once a day

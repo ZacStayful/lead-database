@@ -112,11 +112,11 @@ async function handle(request: NextRequest) {
 
   const cutoff = config.get("escalation_enabled_from");
   if (!cutoff) {
-    // Absent setting means migration 0056 has not been applied. Refuse rather
+    // Absent setting means migration 0062 has not been applied. Refuse rather
     // than guess: defaulting to epoch would make every historical assignment
     // eligible at once and redistribute the entire book in one run.
     return NextResponse.json(
-      { error: "escalation_enabled_from not set; migration 0056 not applied" },
+      { error: "escalation_enabled_from not set; migration 0062 not applied" },
       { status: 500 }
     );
   }

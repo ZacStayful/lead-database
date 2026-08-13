@@ -153,7 +153,7 @@ $$;
 -- 4 — Candidate finder.
 --
 -- Returns assignments eligible for the given rung. The weighted engagement
--- score is applied by the CALLER (0057 supplies it), for the same reason 0046
+-- score is applied by the CALLER (0063 supplies it), for the same reason 0046
 -- applied its business-day clock in the caller: this function is the cheap,
 -- indexable prefilter and the score is the expensive per-row test.
 --
@@ -189,7 +189,7 @@ $$;
 -- reason to offer it to somebody else, not to freeze it.
 --
 -- Notes and files are likewise NOT a hard exclusion any more. They are scored
--- signals with a date (0057), so a note written three weeks ago no longer
+-- signals with a date (0063), so a note written three weeks ago no longer
 -- protects a lead nobody has touched since.
 -- ---------------------------------------------------------------------------
 create or replace function public.get_escalation_candidates(
