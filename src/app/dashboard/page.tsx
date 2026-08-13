@@ -10,7 +10,12 @@ import { ExportButton } from "@/components/dashboard/ExportButton";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
-import { computePacing, pacingMessage } from "@/lib/pacing";
+import {
+  computeGrPacing,
+  computePacing,
+  pacingMessage,
+  poolDebitExplanation,
+} from "@/lib/pacing";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +58,15 @@ export default async function DashboardPage() {
   const hasGuaranteedRent = customer.gr_subscription_status === "active";
   const renewalDate = nextRenewalDate(customer.billing_cycle_anchor);
   const pacing = computePacing(customer);
+  // Per product, and only where a debit actually exists — poolDebitExplanation
+  // returns null at zero, which is every customer who has never claimed.
+  const managementDebitNote = isActive
+    ? poolDebitExplanation(pacing.effectiveAllocation, pacing.poolDebit)
+    : null;
+  const grPacing = computeGrPacing(customer);
+  const grDebitNote = hasGuaranteedRent
+    ? poolDebitExplanation(grPacing.effectiveAllocation, grPacing.poolDebit)
+    : null;
   const exhausted = customer.lead_balance === 0;
   const carriedForward = customer.lead_balance - customer.monthly_allocation;
   const filterActive =
@@ -213,9 +227,22 @@ export default async function DashboardPage() {
                   : "text-brand")
             }
           >
-            {pacingMessage(pacing.deficit, customer.monthly_allocation)}
+            {pacingMessage(pacing.deficit, pacing.effectiveAllocation)}
           </p>
         ))}
+
+      {/* Why this cycle's allocation is smaller than the plan. Shown alongside
+          the credit warning as well as the pacing sentence, because the
+          zero-balance branch above replaces the latter and a customer who
+          claimed their way to zero is exactly who needs the explanation. */}
+      {managementDebitNote && (
+        <p className="text-sm text-muted-foreground">{managementDebitNote}</p>
+      )}
+      {grDebitNote && (
+        <p className="text-sm text-muted-foreground">
+          Guaranteed rent: {grDebitNote}
+        </p>
+      )}
 
       {hasGuaranteedRent && <CompanyLetAgreement compact />}
 
