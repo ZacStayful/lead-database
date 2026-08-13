@@ -36,21 +36,11 @@ function gbp(n: number): string {
 /** Thin sample: a rate off this few assignments is indicative, not solid. */
 const THIN_SAMPLE = 30;
 
-/**
- * At or above this share of the physical maximum, the ceiling is assuming
- * near-total abandonment and has no margin left. Said out loud rather than
- * discounted away — the discount was considered and deliberately rejected
- * (0071), so the honest alternative is to show the exposure.
- */
-const NO_MARGIN_RATIO = 0.9;
-
 function CapacityRow({ c }: { c: ProductCapacity }) {
   const short = c.demandPerMonth - c.slotsPerMonth;
   const fromRecycling = c.sustainableCustomers - c.sustainableCustomersNewOnly;
   const thinSample = c.recyclingSample < THIN_SAMPLE;
-  const noMargin =
-    c.physicalMaxSlotsPerMonth > 0 &&
-    c.serviceableSlotsPerMonth >= c.physicalMaxSlotsPerMonth * NO_MARGIN_RATIO;
+  const estimated = c.recyclingBasis !== "observed";
 
   return (
     <div className="border-[0.5px] border-border rounded-lg p-4">
@@ -117,27 +107,28 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         {c.sustainableCustomersNewOnly}.
       </p>
 
-      {noMargin && fromRecycling > 0 && (
-        <p className="mt-2 text-sm text-amber-800">
-          This assumes almost every lead is sold the full 5 times —{" "}
-          {c.serviceableSlotsPerMonth} of a hard maximum of{" "}
-          {c.physicalMaxSlotsPerMonth}. There is no slack left in the figure, so
-          treat the top of that range as a stretch rather than a plan.
+      {c.recycledSlotsNow > 0 && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Right now {c.recycledSlotsNow}{" "}
+          {c.recycledSlotsNow === 1 ? "lead is" : "leads are"} sitting with
+          someone who is not working{" "}
+          {c.recycledSlotsNow === 1 ? "it" : "them"} and could be passed on.
+          Counted one step at a time — a lead going out for its first resale is
+          not also counted for a second, because the next operator may work it.
+        </p>
+      )}
+
+      {estimated && fromRecycling > 0 && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Recycling is an estimate from past behaviour, not a count — escalation
+          has not run yet. It switches to observed escalations once it has.
         </p>
       )}
 
       {thinSample && (
         <p className="mt-2 text-sm text-muted-foreground">
-          Recycling rate measured over just {c.recyclingSample}{" "}
+          Rate measured over just {c.recyclingSample}{" "}
           {c.recyclingSample === 1 ? "lead" : "leads"} — too few to rely on yet.
-        </p>
-      )}
-
-      {c.recyclingBacklogNow > 0 && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Plus a one-off backlog of {c.recyclingBacklogNow} ignored leads ready
-          to escalate now. Like unsold stock, that clears once and does not come
-          back, so it seats nobody permanently.
         </p>
       )}
 

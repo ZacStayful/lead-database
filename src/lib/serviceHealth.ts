@@ -31,20 +31,28 @@ export interface ProductCapacity {
    * Unlike inventory this REFILLS: a measured share of everything delivered
    * goes unworked every month and comes back to be sold again. That is what
    * earns it a place in the ceiling where inventory is excluded.
+   *
+   * Counts ONE rung ahead only. A lead going out for its first resale does not
+   * also contribute its second — the new operator may work it, which ends the
+   * ladder there. The second resale is counted when it actually happens.
    */
   recycledSlotsPerMonth: number;
   /** slotsPerMonth + recycledSlotsPerMonth. What the ceiling is built from. */
   serviceableSlotsPerMonth: number;
+  /**
+   * "observed" once escalation has actually run, "estimated" before then. An
+   * estimate must never be read as a count, so the panel says which it is.
+   */
+  recyclingBasis: string;
+  /**
+   * Live count of leads sitting with an operator who is not working them, and
+   * which could be passed on today. One per LEAD, not per assignment.
+   */
+  recycledSlotsNow: number;
   /** Share of delivered leads never worked inside their own first ten days. */
   unworkedRate: number | null;
   /** How many assignments that rate was measured over. */
   recyclingSample: number;
-  /**
-   * One-off: aged assignments that would escalate today, long-abandoned backlog
-   * included. Sits beside inventorySlotsNow and is never added to the recurring
-   * figure — this wave clears once and does not come back.
-   */
-  recyclingBacklogNow: number;
   /**
    * Slots sitting unsold in the back catalogue. Real and sellable, but a
    * ONE-OFF buffer — kept separate from slotsPerMonth and never added to it,
@@ -76,12 +84,6 @@ export interface ProductCapacity {
   roomForCustomers: number;
   /** True when more is promised each month than sustainably arrives. */
   borrowingFromInventory: boolean;
-  /**
-   * Absolute physical maximum: every lead sold the full five times. When
-   * serviceable slots approach this, the ceiling is assuming near-total
-   * abandonment and has no margin left in it.
-   */
-  physicalMaxSlotsPerMonth: number;
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -193,9 +195,10 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       slotsPerMonth: slots,
       recycledSlotsPerMonth: Number(r.recycled_slots_per_month ?? 0),
       serviceableSlotsPerMonth: Number(r.serviceable_slots_per_month ?? slots),
+      recyclingBasis: String(r.recycling_basis ?? "estimated"),
+      recycledSlotsNow: Number(r.recycled_slots_now ?? 0),
       unworkedRate: r.unworked_rate == null ? null : Number(r.unworked_rate),
       recyclingSample: Number(r.recycling_sample ?? 0),
-      recyclingBacklogNow: Number(r.recycling_backlog_now ?? 0),
       inventorySlotsNow: Number(r.inventory_slots_now ?? 0),
       unsoldLeadsNow: Number(r.unsold_leads_now ?? 0),
       demandPerMonth: demand,
@@ -212,8 +215,6 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       // would hide a genuine inflow shortfall behind our own customers'
       // inactivity.
       borrowingFromInventory: demand > slots,
-      // ESCALATION_CEILING (5, §18) — the most times one lead can ever be sold.
-      physicalMaxSlotsPerMonth: leads * 5,
     };
   });
 

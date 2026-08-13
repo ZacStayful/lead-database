@@ -40,7 +40,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/monday/sync-gr` | `0 9 * * *` | Same, guaranteed rent |
 | `/api/cron/generate-public-stats` | `0 3 * * *` | Landing-page activity figures |
 | `/api/cron/inactivity-nudge` | `0 10 * * 1` | Mondays: leads awaiting follow-up |
-| `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily snapshot (§18) |
+| `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
 
@@ -902,7 +902,7 @@ customer ceiling; supply that clears once is reported beside it and never added.
 | | Refills monthly → in the ceiling | One-off → shown separately |
 |---|---|---|
 | New leads | `slots_per_month` | |
-| Ignored leads returning | `recycled_slots_per_month` (0071) | `recycling_backlog_now` |
+| Ignored leads returning | `recycled_slots_per_month` (0072) | `recycled_slots_now` |
 | Unsold back catalogue | | `inventory_slots_now` |
 
 `serviceable_slots_per_month` is the sum of the first column and is what
@@ -915,7 +915,7 @@ guarantee per customer against **their own billing anchor**.
 
 Nothing gates on any of this (§16) — it is reporting and admin judgement.
 
-### §18.2 — Recycled supply *(0071)*
+### §18.2 — Recycled supply *(0071, corrected by 0072)*
 
 0066 counted only lead inflow, so it answered "room for 0 more customers" while
 36% of delivered leads sat untouched. A lead nobody has worked **is supply** —
@@ -939,22 +939,37 @@ match `get_assignment_engagement_scores`, and both are easy to get wrong:
   wave that clears once; asking "was this worked inside its own first ten days"
   answers **41%**, which a fresh cohort repeats monthly.
 
-Both rungs count, the second **conditional** on the first, because
-`get_escalation_candidates` only offers stage 2 to assignments already at stage 1:
+#### Count one rung ahead — never compound the ladder *(0072)*
 
-```
-slots per delivered lead = rate_10 × (1 + rate_20_given_rung_1)
-```
+0071 originally multiplied the two rungs together, `rate_10 × (1 + rate_20)`,
+having measured the conditional day-20 rate at 100% (53 of 53 management, 10 of
+10 GR). Management came out at 487.8 slots against a physical maximum of 493 —
+the model was asserting **every lead gets sold the full five times**. Wrong twice:
 
-**Abandonment is permanent.** Of management assignments quiet by day 10, 53 of 53
-were still quiet at day 20 — and 10 of 10 on GR. Nobody who ignored a lead for
-ten days ever came back. So the conditional term is ~1.0 and a recycled lead
-yields two slots, not one. Still expressed as a measured rate rather than
-hard-coded at 2, since that term is the one most likely to move once escalation
-and nudges start changing behaviour.
+1. **It counted a resale that had not happened.** When a lead goes out for its
+   first resale, the second is not capacity — the new operator may work it, which
+   ends the ladder there. The fifth allocation is only real once the fourth has
+   happened *and* that operator has also gone silent.
+2. **The 100% was measured in a world without escalation.** Every assignment in
+   that sample sat with ONE operator who ignored it; no second operator ever
+   existed to engage it. Of course it stayed quiet to day 20. That population
+   cannot predict post-intervention behaviour — projecting it forward assumed the
+   fix would never work.
 
-Bounded by `escalation_headroom` — `sum(5 − max_assignments)` over the window —
-so the estimate can never claim more than the ceiling of 5 physically permits.
+So: **one rung, always.** The second enters the figures by *observation* — once a
+lead has actually escalated and its new holder has actually gone quiet past their
+own ten days, it becomes a live candidate and is counted then, as a fact.
+
+| Column | Meaning |
+|---|---|
+| `recycled_slots_now` | A **count**: leads held by someone not working them, passable today. One per **lead**, never per assignment — `get_escalation_candidates` returns assignments and does not dedupe, but escalating raises `max_assignments` by one, so two silent co-assignees still open only one slot. |
+| `recycled_slots_per_month` | Observed escalations per month once escalation has run; before then a one-rung estimate, `delivered × unworked_rate`. |
+| `recycling_basis` | `observed` or `estimated`, so an estimate is never read as a count. |
+
+Bounded by one rung of headroom per lead (`count(*) where max_assignments < 5`),
+not the full run to the ceiling — the clamp obeys the same rule as the estimate.
+On live data that clamp binds: the raw estimate of 117.4 is capped to 98.6,
+because you cannot recycle more leads a month than you ingest when each steps once.
 
 **No safety discount, deliberately.** The obvious objection is that recycled
 supply peaks when customers are least engaged, so capacity looks best right
@@ -966,14 +981,31 @@ undelivered lead survives as an unspent credit. Under-delivering is recoverable;
 letting a lead go cold for safety is not.
 
 The exposure is therefore **shown, not discounted**: the panel prints the
-new-leads-only ceiling beside the headline, and warns when serviceable slots
-approach `leads_per_month × 5` — at which point the figure is assuming near-total
-abandonment with no slack left. On live data management reads 487.8 of a hard
-maximum 493, so that warning is active.
+new-leads-only ceiling beside the headline, and states in words that the ceiling
+falls back to it if everyone starts working their leads.
 
 Same treatment for GR, with `recycling_sample` returned per row so a rate built
 on ten assignments is labelled as too thin to rely on rather than presented as
 solid.
+
+Live at time of writing — management **26** with recycling against **18** on new
+leads alone, 95 leads passable now; GR **14** against **13**.
+
+#### The trend is the health signal *(`service_capacity_snapshots`, 0072)*
+
+Captured daily by the escalation cron, after escalation rather than before —
+escalation is what converts an ignored lead into a sold slot, so measuring first
+would record the position the run has just changed. **Cannot be backfilled**:
+`get_service_capacity` reads live state, so a missed day is gone. Best-effort and
+separately fallible from the engagement snapshot, so one failing never costs the
+other its reading.
+
+What to watch: as customers who actually use the platform replace those who do
+not, `unworked_rate` should fall and recycled supply with it, while
+`slots_per_month` rises with lead volume — so the **two ceilings converge**. A
+closing gap means the business is getting healthier. A widening one means
+headroom is increasingly borrowed from customers ignoring their leads, which is
+capacity that evaporates the moment they engage or leave.
 
 ### Churn
 

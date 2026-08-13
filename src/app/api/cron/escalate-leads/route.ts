@@ -354,6 +354,33 @@ async function handle(request: NextRequest) {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Daily capacity snapshot (0072).
+  //
+  // Same reasoning as above, and separately fallible for the same reason: the
+  // two series are independent, so one failing must not cost the other its
+  // reading for the day.
+  //
+  // Taken AFTER escalation deliberately. Escalation is what converts an ignored
+  // lead into a sold slot, so measuring first would record the position the run
+  // has just changed — and the whole value of the series is watching that gap
+  // close as customers engage.
+  //
+  // Cannot be backfilled: get_service_capacity reads live state, so a missed day
+  // is gone. Hence best-effort here rather than gated on the run succeeding.
+  // ---------------------------------------------------------------------
+  let capacityRows: number | null = null;
+  let capacityError: string | null = null;
+  if (!dryRun) {
+    const { data, error } = await admin.rpc("capture_service_capacity");
+    if (error) {
+      capacityError = error.message;
+      console.error("[escalate] capacity snapshot failed", error);
+    } else {
+      capacityRows = data as number;
+    }
+  }
+
   return NextResponse.json({
     status: "ok",
     dry_run: dryRun,
@@ -366,6 +393,8 @@ async function handle(request: NextRequest) {
     skipped,
     snapshot_rows: snapshotRows,
     snapshot_error: snapshotError,
+    capacity_snapshot_rows: capacityRows,
+    capacity_snapshot_error: capacityError,
   });
 }
 
