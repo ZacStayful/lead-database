@@ -1,20 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { CLOSE_REASONS, isCloseReason } from "@/lib/closeReasons";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/**
- * The two outcomes an operator can report, and the copy the dashboard shows.
- * Exported so the UI and the validation cannot describe them differently.
- */
-export const CLOSE_REASONS = {
-  not_interested: "Not actually interested",
-  sorted_elsewhere: "Already sorted with someone else",
-} as const;
-
-export type CloseReason = keyof typeof CLOSE_REASONS;
 
 /**
  * POST /api/leads/[id]/close
@@ -56,7 +46,7 @@ export async function POST(req: NextRequest) {
   if (!assignment_id) {
     return NextResponse.json({ error: "assignment_id required" }, { status: 400 });
   }
-  if (!reason || !(reason in CLOSE_REASONS)) {
+  if (!isCloseReason(reason)) {
     return NextResponse.json(
       { error: `reason must be one of: ${Object.keys(CLOSE_REASONS).join(", ")}` },
       { status: 400 }
