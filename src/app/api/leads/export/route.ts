@@ -63,6 +63,11 @@ export async function GET() {
       ? new Date(a.assigned_at).toLocaleDateString("en-GB")
       : "",
     Status: statusBadge(a.status).label,
+    // Where the lead came from. "Allocated" covers ordinary routing, the
+    // inactivity ladder and admin force-assign alike — from the customer's side
+    // those are the same event, a lead arriving. A claim is the one they chose
+    // and paid for themselves, which is the distinction worth exporting.
+    Source: a.claimed_from_pool_at ? "Claimed from expired leads" : "Allocated",
     Notes: (notesByAssignment.get(a.id) ?? [])
       .map((n) => `[${formatDateTime(n.created_at)}] ${n.body}`)
       .join("\n"),
@@ -79,6 +84,7 @@ export async function GET() {
     { wch: 40 }, // Lead profile
     { wch: 14 }, // Received on
     { wch: 14 }, // Status
+    { wch: 26 }, // Source
     { wch: 50 }, // Notes
     { wch: 12 }, // Price paid
   ];

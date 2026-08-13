@@ -51,6 +51,8 @@ type AnalyticsAssignment = {
   pipeline_stage: string;
   viewed_at: string | null;
   income_estimate: number | null;
+  // Set only on leads the customer took out of the expired pool themselves.
+  claimed_from_pool_at: string | null;
   lead: { lead_type: LeadType } | null;
 };
 
@@ -66,7 +68,7 @@ export default async function AnalyticsPage() {
   const { data: rows } = await admin
     .from("lead_assignments")
     .select(
-      "status, pipeline_stage, viewed_at, income_estimate, lead:leads(lead_type)"
+      "status, pipeline_stage, viewed_at, income_estimate, claimed_from_pool_at, lead:leads(lead_type)"
     )
     .eq("customer_id", customer.id);
 
@@ -217,6 +219,23 @@ function ProductAnalytics({
     { label: "Win rate", value: `${winRate}%` },
   ];
 
+  // Expired-pool leads, broken out.
+  //
+  // They are INCLUDED in every figure above — a claimed lead is a lead, it was
+  // paid for out of the same allocation and its win counts the same. But they
+  // are self-selected: the operator rang the landlord before deciding to keep
+  // it, where an allocated lead arrives unscreened. Those two populations
+  // should not convert alike, and rolling them into one win rate hides the one
+  // comparison that says whether the pool is worth working.
+  const claimed = assignments.filter((a) => a.claimed_from_pool_at !== null);
+  const allocated = assignments.filter((a) => a.claimed_from_pool_at === null);
+  const rate = (rows: AnalyticsAssignment[]) =>
+    rows.length
+      ? Math.round(
+          (rows.filter((a) => a.status === "won").length / rows.length) * 100
+        )
+      : 0;
+
   return (
     <section className="space-y-4">
       {showLabel && (
@@ -242,6 +261,45 @@ function ProductAnalytics({
               </Card>
             ))}
           </div>
+
+          {claimed.length > 0 && (
+            <Card>
+              <CardContent className="pt-6">
+                <h3 className="mb-1 text-base font-semibold">
+                  Expired leads you claimed
+                </h3>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Counted in the figures above. Shown separately because you rang
+                  these before keeping them, so they are worth judging against
+                  the leads that simply arrived.
+                </p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      Claimed from the pool
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold">
+                      {claimed.length}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {rate(claimed)}% won
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      Allocated to you
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold">
+                      {allocated.length}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {rate(allocated)}% won
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardContent className="pt-6">

@@ -93,8 +93,44 @@ export interface Customer {
   // (leads_received_this_month resets on the anchor day) and NOT an allocation
   // gate (lead_balance is spent and topped up) — it only ever counts up.
   management_lifetime_leads_received: number;
+  // Leads claimed from the expired pool while the matching balance was zero
+  // (0073/0074). NOT a negative balance — lead_balance stays at zero and the
+  // customer keeps their place in routing (invariant 1). Settled against the
+  // next renewal grant, remainder carrying, and subtracted from expected
+  // pacing: a debited customer has already had those leads.
+  pool_debit: number;
+  gr_pool_debit: number;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * One row of a customer's expired leads pool, as returned by
+ * get_customer_pool_leads (0075).
+ *
+ * Deliberately NOT a `Lead`. It carries no assignment_count, no
+ * max_assignments and nothing about who held the lead before or what they did
+ * with it — the brief forbids surfacing that, and keeping it out of the type
+ * means no later UI change can reach for it by accident.
+ */
+export interface PoolLead {
+  lead_id: string;
+  lead_type: LeadType;
+  lead_name: string;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  lead_profile: string | null;
+  bedrooms: string | null;
+  postcode: string | null;
+  desired_rent: string | null;
+  /** Parsed enquiry date, or null where the free-text column would not parse. */
+  enquiry_date: string | null;
+  /** False when lead_age_days counts from ingest rather than the enquiry. */
+  enquiry_date_known: boolean;
+  lead_age_days: number;
+  days_in_pool: number;
+  pool_entered_at: string;
 }
 
 export interface Lead {
@@ -119,6 +155,15 @@ export interface Lead {
    */
   max_assignments: number;
   created_at: string;
+  // Expired leads pool (0073). pool_entered_at is the CURRENT tenancy and is
+  // cleared on exit; pool_first_entered_at is stamped once and anchors the
+  // 90-day life cap, so leaving and re-entering cannot extend a lead's life.
+  // pool_entry_basis decides whether pooling retired the lead from ordinary
+  // allocation: 'ignored' did, 'unassigned' did not.
+  pool_entered_at: string | null;
+  pool_first_entered_at: string | null;
+  pool_expired_at: string | null;
+  pool_entry_basis: "unassigned" | "ignored" | null;
   // GR-specific fields (null for management leads).
   last_contact: string | null;
   desired_rent: string | null;
@@ -166,6 +211,16 @@ export interface LeadAssignment {
   // True only on the SECOND (discounted) assignment of a reclaimed lead, never
   // on the original.
   is_reclaimed: boolean;
+  // Set when this assignment was created by a claim from the expired leads pool
+  // (0074). Null on every ordinary, escalated or admin-forced assignment. A
+  // lead carrying one is permanently out of ordinary allocation (invariant 7).
+  claimed_from_pool_at: string | null;
+  // When due_to_call_date / income_estimate were last written (0073).
+  // Trigger-maintained. Null on rows that predate 0073 even where the value
+  // itself is set — which is why the pool bars those leads rather than dating
+  // them.
+  due_to_call_date_set_at: string | null;
+  income_estimate_set_at: string | null;
 }
 
 /**
