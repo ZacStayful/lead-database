@@ -66,7 +66,7 @@ insert into public.outcome_contradiction_phrases (phrase) values
   ('not answering'),
   ('unreachable'),
   ('cannot reach'),
-  ("can't reach"),
+  ('can''t reach'),
   ('sold the property'),
   ('sold it'),
   ('pulled out'),
