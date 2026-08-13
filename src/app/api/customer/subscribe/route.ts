@@ -119,32 +119,13 @@ export async function POST(req: NextRequest) {
       );
     }
   } else {
-    // Management capacity gate. Mirrors /api/signup exactly — a headcount of
-    // active accounts against max_active_customers — so the cap means the same
-    // thing however a customer arrives. GR has no equivalent gate by design
-    // (CLAUDE.md §16), which is why this branch is management-only.
-    const { data: setting } = await admin
-      .from("system_settings")
-      .select("value")
-      .eq("key", "max_active_customers")
-      .maybeSingle();
-    const maxActive = parseInt(setting?.value ?? "10", 10);
-    const { count: activeCount } = await admin
-      .from("customers")
-      .select("*", { count: "exact", head: true })
-      .eq("account_status", "active");
-
-    if ((activeCount ?? 0) >= maxActive) {
-      return NextResponse.json(
-        {
-          error:
-            "Management leads are at capacity right now. Contact support and we'll add you to the list for the next opening.",
-          atCapacity: true,
-        },
-        { status: 409 }
-      );
-    }
-
+    // No capacity gate. Mirrors /api/signup, which also stopped refusing.
+    //
+    // This customer already holds the other product and is asking to buy the
+    // second — the least appropriate person in the system to turn away over a
+    // typed number. Being short on leads is a supply problem to solve by
+    // sourcing more, and /admin now says so in as many words when a product is
+    // under-delivering.
     allocation = PLANS[toPlanKey(body.plan)].leads;
     try {
       priceId = stripePriceIdFor(allocation);

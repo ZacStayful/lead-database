@@ -549,14 +549,21 @@ rows and still reports success.
 
 ### What the GR cap does and does not do
 
-It is **reporting and admin judgement only**. Nothing gates on it yet. Signup
-deliberately does not capacity-check GR (`/api/signup`: "no capacity gate — GR
-has its own allocation"), so a GR sale can still take the panel past its limit
-and the panel will show that honestly, in red. Management is unchanged: it still
-gates signup and warns on invite.
+It is **reporting and admin judgement only**, for BOTH products now. Nothing
+anywhere refuses a sale on capacity.
 
-Making GR waitlist at the cap is a real behaviour change — a paid product would
-start refusing checkout — and is a separate decision. See §12.
+Management used to: `/api/signup` waitlisted anybody arriving once active
+customers reached `max_active_customers`, and `/api/customer/subscribe` returned
+a 409. Both were removed — a typed cap cannot know that lead volume moved or
+that escalation opened extra slots, so it turned away paying customers on a
+figure that was probably stale. Running short on leads is a supply problem to
+solve by sourcing more, not by refusing revenue. Both paths now log when they go
+over and carry on; §18.1 surfaces the real position.
+
+The invite route has always warned rather than blocked, and still does.
+
+Neither product waitlists at the cap. That was settled deliberately: never
+refuse a sale.
 
 ---
 

@@ -54,10 +54,12 @@
 -- reassignment capacity is not a separate reserve to hold back; it is a
 -- consequence of having enough customers on staggered dates.
 --
--- The typed setting is deliberately left in place and untouched. It still gates
--- signup and the invite warning, and switching a live gate onto a derived
--- number is a behaviour change that belongs in its own decision — the panel
--- shows both, so the gap between them is visible rather than assumed away.
+-- The typed setting is deliberately left in place as a hard ceiling for the
+-- admin panels and the invite warning. It no longer gates anything: signup and
+-- self-serve checkout both stopped refusing on capacity, because a stale number
+-- turning away a paying customer is a worse failure than being briefly short of
+-- leads — which is a supply problem, solved by sourcing more. The panel shows
+-- the typed and the derived figure side by side so the gap stays visible.
 --
 -- WHY RISK IS RULES, NOT A MODEL
 -- ------------------------------

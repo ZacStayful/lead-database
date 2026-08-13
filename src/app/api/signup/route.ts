@@ -365,7 +365,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Capacity check: how many customers are currently active vs the cap?
+    // CAPACITY NEVER REFUSES A SALE.
+    //
+    // This used to waitlist anybody arriving once active customers reached
+    // max_active_customers. It no longer does, and the reasoning is worth
+    // recording because the old behaviour looks prudent:
+    //
+    // The cap was a typed number. It could not know that lead volume had moved
+    // or that escalation had opened extra slots, so it turned away paying
+    // customers on the strength of a figure that was probably stale — and being
+    // over on leads is a supply problem, solved by getting more leads, not by
+    // refusing revenue. The admin overview now derives real capacity from
+    // ingested volume and states plainly when a product is under-delivering, so
+    // the gap is visible without a gate standing in front of the checkout.
+    //
+    // The count is still taken, purely so the over-capacity signup is recorded
+    // where somebody will see it.
     const { data: setting } = await admin
       .from("system_settings")
       .select("value")
@@ -378,12 +393,12 @@ export async function POST(request: NextRequest) {
       .eq("account_status", "active");
 
     if ((activeCount ?? 0) >= maxActive) {
-      // No capacity — leave account_status as 'waitlisted', create no Stripe
-      // session. The client redirects to the waitlist confirmation page.
-      return NextResponse.json({ mode: "waitlisted", redirect: "/waitlisted" });
+      console.warn(
+        `[signup] over the management cap (${activeCount} active vs ${maxActive}) — proceeding anyway; check lead supply on /admin`
+      );
     }
 
-    // Capacity available — provision Stripe, mark invited, and open Checkout.
+    // Provision Stripe, mark invited, and open Checkout.
     const stripe = getStripe();
     const stripeCustomer = await stripe.customers.create({
       email,
