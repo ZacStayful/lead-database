@@ -40,6 +40,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/monday/sync-gr` | `0 9 * * *` | Same, guaranteed rent |
 | `/api/cron/generate-public-stats` | `0 3 * * *` | Landing-page activity figures |
 | `/api/cron/inactivity-nudge` | `0 10 * * 1` | Mondays: leads awaiting follow-up |
+| `/api/cron/sweep-lead-pool` | `30 10 * * *` | Expired leads pool: enter, exit, expire (§19) |
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
@@ -74,7 +75,8 @@ on a GR cancellation, so they must never gate GR behaviour.
 
 Also: `notification_preferences` (jsonb, 0034), `sms_alerts_enabled`,
 `last_nudge_sent_at`, `last_report_sent_at`, lead-filtering columns (0026),
-pause columns (0038), goal columns (0051 — see §13).
+pause columns (0038), goal columns (0051 — see §13), `pool_debit` /
+`gr_pool_debit` (0073 — see §19).
 
 ### `leads`
 `assignment_count` / `max_assignments` (**default 3** since 0055, was 2) cap
@@ -84,10 +86,22 @@ whatever its own row says, never a global constant. `DEFAULT_MAX_ASSIGNMENTS`
 in `types.ts` mirrors the DB default and is only a null fallback.
 `lead_type` selects the product. Idempotent on `monday_item_id`.
 
+Pool columns (0073, 0076): `pool_entered_at` is the **current** tenancy and is
+cleared on exit; `pool_first_entered_at` is stamped once and never cleared,
+anchoring the 90-day life cap; `pool_expired_at` and `pool_excluded_at` are the
+two permanent exits; `pool_entry_basis` ∈ `unassigned, ignored` decides whether
+pooling retired the lead from allocation (§19).
+
 ### `lead_assignments`
 One row per (lead, customer). Carries `price_paid`, `status`, `pipeline_stage`,
 `viewed_at`, `first_contacted_at` (0033), `last_status_change_at` (0035),
 `reclaimed_at` + `is_reclaimed` (0043).
+
+Also `claimed_from_pool_at` (0073 — non-null marks a pool claim and retires the
+lead permanently, invariant 11) and `due_to_call_date_set_at` /
+`income_estimate_set_at` (0073 — trigger-maintained; null on pre-0073 rows even
+where the value is set, which is why the pool bars those leads rather than
+dating them).
 
 `status` ∈ `new, contacted, in_discussion, won, not_relevant, rejected`.
 `pipeline_stage` ∈ 10 values (0010/0015/0050). Independent of status in general,
@@ -258,7 +272,8 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/files`, `/api/customer/settings`,
 `/api/customer/settings/notifications`, `/api/customer/goal` (§13),
 `/api/customer/subscribe` (§17), `/api/leads/[id]/reject`,
-`/api/leads/[id]/discard`, `/api/leads/export`, `/api/billing/portal`.
+`/api/leads/[id]/discard`, `/api/leads/[id]/close`,
+`/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`.
 
 `/api/customer/goal` is the **only** customer route with no admin client at
 all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
@@ -270,6 +285,7 @@ session by definition; see §15 for why it exists at all.
 **Admin:** `/api/admin/assign`, `/api/admin/assign/bulk`,
 `/api/admin/leads/[id]`, `/api/admin/leads/assign-pending`,
 `/api/admin/customers/[id]/*`, `/api/admin/settings/capacity`,
+`/api/admin/settings/escalation`, `/api/admin/pool` (§19),
 `/api/admin/post-call-offer`.
 
 **Webhooks / cron:** `/api/webhook/stripe`, `/api/webhook/n8n`,
@@ -284,7 +300,10 @@ session by definition; see §15 for why it exists at all.
 2. Credits carry forward; monthly counters reset on the anchor day.
 3. A lead reaches at most `max_assignments` customers **through ordinary
    routing**. Escalation raises that column directly, ceiling 5 (§18); soft
-   reclaim's derived slot (§7) is retired but its functions remain.
+   reclaim's derived slot (§7) is retired but its functions remain. A **pool
+   claim bypasses the cap entirely** (§19), so `assignment_count` may exceed
+   `max_assignments` — nothing enforces the comparison, and the two queries that
+   subtract them clamp with `greatest(…, 0)`.
 4. Every delivered lead is chargeable. Reject does not refund.
 5. Ingest is idempotent on `monday_item_id`; Stripe on `stripe_events`.
 6. Management and GR are fully parallel. Every balance/counter/pacing/eligibility
@@ -304,6 +323,15 @@ session by definition; see §15 for why it exists at all.
    the allocation gate nor a pacing counter (§13).
 10. **No code path may ask Supabase to send an email.** Links are minted with
     `generateLink` and delivered through Resend (§15).
+11. A lead that has been **claimed from the expired pool**, or that pooled on the
+    `ignored` basis, is never re-allocated by ordinary routing (§19).
+    `lead_retired_from_allocation()` is the single expression of this and is
+    asserted in all three candidate functions, in `get_escalation_candidates`,
+    and inside `assign_lead_to_customer` under its row lock. A lead pooled on
+    the `unassigned` basis is deliberately **not** retired.
+12. `(gr_)pool_debit` is never negative and is settled only inside
+    `credit_invoice()`, behind the same idempotency claim as the credit (§19).
+    Never decrement it from application code.
 
 ---
 
@@ -368,7 +396,13 @@ for being new with no way to earn out of it.
   a schema rebuilt from `supabase/migrations/` will not have them.
 - **`supabase/schema.sql`** is stale. Migrations are the source of truth.
 - **Admin shows "3 / 2 assigned"** on a reclaimed lead. Truthful, looks odd; the
-  Reclaim history block on the lead detail page explains it.
+  Reclaim history block on the lead detail page explains it. A **claimed pool
+  lead does the same** and can read "4 / 3" — claiming bypasses the cap by
+  design (§19, invariant 3). Nothing enforces `assignment_count <=
+  max_assignments`: there is no CHECK and no trigger, and the two capacity
+  queries that subtract the pair clamp with `greatest(…, 0)`. What a claim does
+  skew is `sum(max_assignments)` in `get_service_capacity`, which will
+  understate delivered slots by one per claim.
 - No ESLint config (`next lint` prompts interactively) and **no test suite**.
 
 ---
@@ -855,6 +889,17 @@ only signal with usable volume — 278 opens against 3 contact-clicks in the fir
 tuned so **opening a lead buys ten more days and not twenty**. Changing a weight
 without re-reading that sentence breaks the ladder.
 
+**The freshness gate moved onto the allocation clock (0073).**
+`escalation_max_lead_age_days` is set to **25** in production — the same number
+as pool entry (§19), and clearly meant as a handoff: escalate up to day 25, pool
+after. It could not work as built, because the gate counted from
+`safe_enquiry_date(l.enquiry_date)` — free text from Monday that does not always
+parse — while allocation, pacing and the pool all count from
+`lead_assignments.assigned_at`. `get_escalation_candidates.lead_age_days` is now
+days since **this assignment**, so the ladder reads as one sequence: assigned →
+day 10 rung → day 20 rung → day 25 pool. The route's null-tolerant branch is
+left in place and simply never fires now, because `assigned_at` is NOT NULL.
+
 Candidates are **not** gated on `status = 'new'` despite the brief saying so: 31
 of 87 ten-day-old assignments sit at `contacted` scoring ≤0.10, and the PATCH
 route lets an operator set that by hand, so it would have been a one-click
@@ -1034,3 +1079,197 @@ There is still no test suite. All 60 migrations were applied to a scratch
 Postgres 16 from empty — which caught `"can't reach"` in 0063 quoted as an
 identifier, an error read-only validation cannot see — and the write paths were
 exercised against seeded data.
+
+---
+
+## 19. The expired leads pool *(0073–0076)*
+
+The third and final rung of the distribution ladder. Initial allocation places a
+lead with up to `max_assignments` operators; inactivity escalation adds one at
+day 10 and again at day 20 (§18); at **day 25** the lead opens to *every*
+subscriber of its product, who may ring the landlord for free and **claim** it
+if they are still interested.
+
+`/dashboard/leads/expired` · `/admin/pool` · `/api/cron/sweep-lead-pool` at 10:30.
+
+### 19.1 — Two bases for entry, and only one is terminal
+
+The brief's rule was "a pooled lead can never be re-allocated". That is right
+for a lead that went round its operators and was ignored. It is wrong for a lead
+**never sent to anybody**: at build time 211 of 230 GR leads had never been
+assigned — not ignored, just unsold, because GR has two subscribers and cannot
+absorb the volume. Retiring those on their 25th day would have handed the next
+GR subscriber an allocation with an empty book behind it.
+
+| `pool_entry_basis` | Meaning | Retired from allocation? |
+|---|---|---|
+| `ignored` | Was assigned; nobody worked it | **Yes** — invariant 11 in full |
+| `unassigned` | Never sent to anyone | **No** — sits in the pool *and* stays in stock |
+
+Whichever happens first wins. An `unassigned` lead that is allocated leaves the
+pool **in the same transaction** as the assignment — not on the next sweep,
+because a 24-hour window in which a lead is both assigned and claimable sells
+one operator's paid lead to somebody else. If its new holder then ignores it, it
+re-enters 25 days later as `ignored`, terminal like any other.
+
+### 19.2 — The clocks
+
+Entry: 25 days (`pool_entry_days`) of silence, measured from
+`lead_last_activity_at()` — the later of the most recent assignment and the most
+recent engagement on any assignment. Never assigned: from `leads.created_at`.
+
+**`nudge_sent` is excluded** from the event scan for the usual reason (§3):
+counting it would let our own reminders reset the clock on exactly the leads
+nobody is touching.
+
+Death: 90 days (`pool_life_days`) from `pool_first_entered_at`, which is stamped
+once and **never cleared**. Leaving the pool on engagement and re-entering does
+not restart it, or a lead alternately touched and abandoned would live forever.
+
+### 19.3 — Permanent bars
+
+Never poolable at any age: a note exists on any assignment · any assignee
+reached `in_discussion` or `won` · any assignee **closed** it (0067 — not in the
+brief, but selling a landlord who has already said no is the exact outcome close
+exists to prevent) · the lead was **withdrawn** on a swap (0059) · it has
+expired or been **excluded by an admin** (0076) · a `due_to_call_date` or
+`income_estimate` is set with **no timestamp**.
+
+That last one is the pre-0073 backlog. Both columns stored a value and no date,
+so they could say "somebody touched this" but not when — and a clock needs a
+when. 0073 added `due_to_call_date_set_at` / `income_estimate_set_at`, stamped
+by **trigger** rather than in the PATCH route because the route is not the only
+writer. Existing rows get null, and null-with-a-value is barred rather than
+guessed at. Live cost of that bluntness: **3 leads**, and it shrinks to zero as
+leads turn over.
+
+### 19.4 — Claiming
+
+`claim_pool_lead()` mirrors `assign_lead_to_customer` — lock lead, lock customer
+(same order, so the two cannot deadlock), validate, insert, bump counters — and
+differs in three ways:
+
+1. **No capacity check.** Claiming bypasses `max_assignments` (invariant 3).
+2. **Balance or debit.** At zero balance the claim still succeeds and increments
+   `(gr_)pool_debit`. This is the only path that delivers a lead with no credit
+   behind it.
+3. **It returns a status, not an exception.** Losing the race is ordinary — two
+   operators ringing the same landlord and one claiming first is the mechanism
+   working — so the loser gets `already_claimed` and a 200.
+
+**First claim wins, and the row lock is what makes it true.** The winner clears
+`pool_entered_at` and commits; the loser's `for update` then returns the updated
+row and reports `already_claimed`. The check and the clear are never separated.
+
+Visibility (`customer_can_see_pool_lead`) is **one definition** shared by the
+listing and the claim, so a lead can never be listed but unclaimable: in the
+pool and unexpired · active subscription **for that product** · never assigned
+to this customer · matches their lead filter · not paused.
+
+**Filters are the allocation filters** — same columns, same semantics, including
+`pending_lift` counting as filtered and a lead with an unparseable postcode or
+bedroom count matching no filtered customer.
+
+### 19.5 — The debit
+
+Balance must never go negative (invariant 1): every routing query tests
+`lead_balance > 0`, so a negative balance would read as "no credit" and quietly
+drop the customer out of allocation as a side effect of using a feature we
+invited them to use. The debt sits in its own column instead.
+
+**Settled inside `credit_invoice()`, never in application code.** That function
+is idempotent by INSERT — it claims the invoice with a payments row and returns
+false on a redelivery. A debit decrement written beside it in TypeScript has no
+such guard, so a redelivered Stripe event would correctly skip the credit and
+**wipe the debt a second time**, silently. Stripe redelivers. The signature is
+unchanged and the webhook still passes the plan allocation, knowing nothing
+about the debit.
+
+10-lead plan, debit 12: cycle 1 grants 0 and leaves debit 2; cycle 2 grants 8
+and clears it; cycle 3 grants 10. `credits_added` records what was **actually**
+credited, so the payments table cannot disagree with `lead_balance`.
+
+**Top-ups are exempt** — they credit through `record_lead_topup_success` (0041),
+and taking them to settle a pool claim would charge for leads and deliver none.
+
+**Pacing subtracts the debit.** `effective_allocation(allocation, debit)`,
+floored at zero, in all three candidate functions *and* in `src/lib/pacing.ts` —
+they duplicate each other by design and must change together. Without it a
+customer who claimed 3 shows a deficit of 3 all month, gets named on the
+supply-problem banner (§18C), and is pushed leads ahead of customers who are
+genuinely short. `poolDebitExplanation()` puts the reason on their dashboard.
+
+### 19.6 — Discard, and the one thing it must not do
+
+A claimed lead may be discarded, but the slot **does not reopen**: decrementing
+`assignment_count` would put the lead back under its cap while the claim marker
+died with the deleted row, so ordinary routing would re-sell a lead the pool had
+retired — invariant 11 breached by the one path that destroys the evidence.
+`discard_lead_assignment` therefore sets `pool_expired_at` instead, which carries
+both the bar and the retirement in one column. No refund either way.
+
+### 19.7 — Copy is part of the mechanism
+
+Contact details are visible **before** claiming, so nothing technically stops an
+operator working a pool lead to signature without ever claiming it. The only
+thing that makes claiming rational is that somebody else can take it first — so
+the scarcity line gets its own block and is not folded into a paragraph:
+
+> First claim wins. This lead is removed from every other subscriber's pool the
+> moment someone claims it.
+
+The confirmation states the real price both ways, including the zero-credit
+case. An empty pool is written as the **good** outcome it is. Nothing about
+previous holders is shown — not the count, not their activity; it is absent from
+the row set and from the `PoolLead` type, so no later UI change can reach for
+it. "Three operators passed on this" is an argument against ringing, and the
+premise is that they never rang.
+
+Lead age falls back honestly: the parsed enquiry date where it parses, ingest
+date where it does not, labelled as such (see §11 on `enquiry_date`).
+
+### 19.8 — Admin
+
+`/admin/pool` — both pools read-only, per-product summary, force in/out, claim
+log. It reports what the customer view hides (holders, basis) because that is
+what tells an admin whether the pool is behaving. `barred` is given equal
+billing with `in pool`: a management pool of six against 151 leads reads as
+broken until you see that 77 are barred for having been genuinely worked.
+
+**Forcing a lead out needs `pool_excluded_at`.** Clearing `pool_entered_at`
+alone is undone by the next morning's sweep, and a control that silently reverts
+is worse than none because the admin believes it worked. Forcing a lead in
+clears the marker, so the pair are true opposites. A **claimed** lead can never
+be forced back in — it belongs to whoever claimed it.
+
+Claim history reports the customer's **current** debit rather than inventing a
+per-claim "paid with credit / paid with debit". `price_paid` is the full price
+either way (invariant 4) and nothing records which balance moved; per-claim
+attribution would need a column written at claim time, and is not worth one
+while the claim count is zero.
+
+### 19.9 — Analytics and export
+
+Claimed leads are **counted in every figure** and broken out beside them, with
+their own win rate against allocated leads. They are self-selected — the
+operator rang before keeping — so the two populations should not convert alike,
+and one blended win rate hides the comparison that says whether the pool is
+worth working. The XLSX export carries a **Source** column: "Claimed from
+expired leads" or "Allocated".
+
+### 19.10 — What this does to the recycled-supply model
+
+§18.2 measures unworked leads as *recurring supply recovered by escalation*.
+The pool now harvests the same leads by a different route, so
+`recycled_slots_per_month` and pool throughput are **two counts of one supply**.
+Nothing has been changed there yet; treat the capacity panel as over-counting
+until it is reworked.
+
+### 19.11 — Deployment state at time of writing
+
+**0073 is applied to production. 0074, 0075 and 0076 are not.** 0075 depends on
+0074 (`customer_can_see_pool_lead`) and fails outright without it. With every
+debit at zero, 0074's `credit_invoice` is arithmetically identical to the one it
+replaces (`granted = amount − 0`), so it is inert until the first claim.
+
+Nothing pools until the code deploys: the sweep route does not exist on `main`.
