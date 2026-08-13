@@ -424,8 +424,20 @@ export async function sendInactivityNudgeEmail(params: {
    * bury the ones still worth a call today.
    */
   coldCount?: number;
+  /**
+   * Leads that reached a meeting and then went quiet. Asked about by name,
+   * because "did this one sign?" is only answerable if we say which one.
+   */
+  awaitingOutcome?: string[];
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to, contactName, count, leads, coldCount = 0 } = params;
+  const {
+    to,
+    contactName,
+    count,
+    leads,
+    coldCount = 0,
+    awaitingOutcome = [],
+  } = params;
   const firstName = contactName.trim().split(/\s+/)[0] || contactName;
   const noun = count === 1 ? "lead" : "leads";
   const subject = `You have ${count} ${noun} waiting for follow-up`;
@@ -450,6 +462,22 @@ export async function sendInactivityNudgeEmail(params: {
   // occasionally one of them lands — but they are past the point where chasing
   // them is the best use of the next hour, and saying so is more useful than
   // silently dropping them off the list.
+  // Asking beats hoping. Three wins are recorded against 298 delivered leads,
+  // and 93% of assignments have never moved off the default pipeline stage —
+  // the field is not wrong, it is simply never filled in, because nothing has
+  // ever prompted anybody. Named individually so the question is answerable.
+  const outcomeAsk =
+    awaitingOutcome.length > 0
+      ? `<div style="margin:0 0 18px;padding:14px 16px;border:1px solid #d8dcd4;border-radius:8px">
+           <p style="margin:0 0 6px;font-size:14px;font-weight:600">Did any of these sign?</p>
+           <p style="margin:0 0 10px;color:#6b706a;font-size:13px">You had a meeting and things have gone quiet. Marking the outcome takes a second and keeps your conversion rate honest.</p>
+           <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.7">${awaitingOutcome
+             .slice(0, 5)
+             .map((name) => `<li>${esc(name)}</li>`)
+             .join("")}</ul>
+         </div>`
+      : "";
+
   const coldNote =
     coldCount > 0
       ? `<p style="margin:0 0 18px;color:#6b706a;font-size:13px">You also have <strong>${coldCount}</strong> older ${coldCount === 1 ? "lead" : "leads"} that ${coldCount === 1 ? "has" : "have"} had no activity for some time and ${coldCount === 1 ? "has" : "have"} likely gone cold. ${coldCount === 1 ? "It is" : "They are"} still in your dashboard if you want ${coldCount === 1 ? "it" : "them"}, but the ${count === 1 ? "lead" : "leads"} above ${count === 1 ? "is" : "are"} where a call will count for most today.</p>`
@@ -459,6 +487,7 @@ export async function sendInactivityNudgeEmail(params: {
     <h1 style="margin:0 0 4px;font-size:18px">A quick nudge, ${esc(firstName)}</h1>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">You have <strong>${count}</strong> ${noun} that haven't moved in over 48 hours and are waiting for their next step. A quick follow-up is often what turns an enquiry into a signed landlord.</p>
     ${list}
+    ${outcomeAsk}
     ${coldNote}
     <p style="margin:0 0 18px;color:#6b706a;font-size:13px">If a lead sits untouched for ten days we offer it to another operator, and again at twenty. Opening it or getting in touch resets that clock and keeps it yours.</p>
     ${button(`${APP_URL}/dashboard/leads`, "Follow up now")}

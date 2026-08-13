@@ -116,6 +116,7 @@ async function handle(request: NextRequest) {
     management_leads: number;
     gr_leads: number;
     cold_count: number;
+    awaiting_outcome: number;
     leads: string[];
   }[] = [];
 
@@ -282,6 +283,26 @@ async function handle(request: NextRequest) {
       continue;
     }
 
+    // Leads that reached a meeting or viewing and then went quiet.
+    //
+    // The other half of the outcome problem. Closing captures the two ways a
+    // landlord says no; this asks about the ones where the answer is most likely
+    // YES and nobody has recorded it. 93% of assignments have never moved off
+    // the default pipeline stage and three wins are recorded against 298
+    // deliveries — not because operators are not signing landlords, but because
+    // nobody has ever been asked.
+    //
+    // Deliberately not every quiet lead: a lead still at 'cold' has no meeting
+    // to have an outcome from, and asking about it would just be the nudge
+    // again.
+    const { data: awaitingRows } = await admin.rpc(
+      "get_assignments_awaiting_outcome",
+      { p_quiet_days: 7 }
+    );
+    const awaitingOutcome = (
+      (awaitingRows ?? []) as { customer_id: string; lead_name: string }[]
+    ).filter((a) => a.customer_id === customer.id);
+
     const count = waiting.length;
     // Only the leads actually NAMED in the email are marked as nudged.
     //
@@ -315,6 +336,7 @@ async function handle(request: NextRequest) {
           (a) => oneLead(a.leads)?.lead_type === "guaranteed_rent"
         ).length,
         cold_count: coldCount,
+        awaiting_outcome: awaitingOutcome.length,
         leads: leadsForEmail.map((l) => l.name),
       });
       nudged += 1;
@@ -336,6 +358,7 @@ async function handle(request: NextRequest) {
       count,
       leads: leadsForEmail,
       coldCount,
+      awaitingOutcome: awaitingOutcome.map((a) => a.lead_name),
     });
     if (emailError) {
       console.error("[inactivity-nudge] email failed", {

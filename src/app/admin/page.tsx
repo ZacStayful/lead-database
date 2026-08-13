@@ -5,6 +5,7 @@ import { planForAllocation, grPlanForAllocation } from "@/lib/plans";
 import { getCapacityStatus, getGrCapacityStatus } from "@/lib/capacity";
 import { getServiceHealth } from "@/lib/serviceHealth";
 import { ServiceHealthPanel } from "@/components/admin/ServiceHealthPanel";
+import { EscalationSettingsPanel } from "@/components/admin/EscalationSettingsPanel";
 import { DEFAULT_MAX_ASSIGNMENTS, type Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -37,10 +38,36 @@ export default async function AdminOverviewPage() {
   // Guaranteed Rent is capped separately (0054) and read off its own columns:
   // gr_subscription_status for the population, gr_monthly_allocation for the
   // weight. account_status is management-only, so it cannot appear on this side.
-  const [capacity, grCapacity, health] = await Promise.all([
+  const [capacity, grCapacity, health, escalationSettings] = await Promise.all([
     getCapacityStatus(),
     getGrCapacityStatus(),
     getServiceHealth(),
+    // Read straight rather than through a helper: four keys, one table, and a
+    // helper would only be indirection. Missing keys fall back to the values the
+    // migration seeds, so the panel renders before it has ever been saved.
+    createAdminClient()
+      .from("system_settings")
+      .select("key, value")
+      .in("key", [
+        "escalation_enabled",
+        "escalation_max_lead_age_days",
+        "escalation_score_threshold_day_10",
+        "escalation_score_threshold_day_20",
+      ])
+      .then(({ data }) => {
+        const m = new Map(
+          ((data ?? []) as { key: string; value: string }[]).map((r) => [
+            r.key,
+            r.value,
+          ])
+        );
+        return {
+          enabled: m.get("escalation_enabled") === "true",
+          maxLeadAgeDays: m.get("escalation_max_lead_age_days") ?? "",
+          thresholdDay10: Number(m.get("escalation_score_threshold_day_10") ?? 0.3),
+          thresholdDay20: Number(m.get("escalation_score_threshold_day_20") ?? 0.45),
+        };
+      }),
   ]);
   // Prospects awaiting a MANAGEMENT slot. A GR-only subscriber sits at
   // account_status 'waitlisted' permanently by design (§18) — they are a paying
@@ -136,6 +163,13 @@ export default async function AdminOverviewPage() {
       {/* Derived service health first: the manual caps below are a stated
           intention, this is what the lead supply can actually carry today. */}
       <ServiceHealthPanel health={health} />
+
+      <EscalationSettingsPanel
+        enabled={escalationSettings.enabled}
+        maxLeadAgeDays={escalationSettings.maxLeadAgeDays}
+        thresholdDay10={escalationSettings.thresholdDay10}
+        thresholdDay20={escalationSettings.thresholdDay20}
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <CapacityPanel
