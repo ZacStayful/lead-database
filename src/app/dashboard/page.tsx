@@ -2,16 +2,10 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
-import {
-  OperatorProof,
-  type ProofRow,
-  type AnonymisedWin,
-} from "@/components/dashboard/OperatorProof";
 import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
 import { computeWorkSummary } from "@/lib/workSummary";
 import { ExportButton } from "@/components/dashboard/ExportButton";
@@ -121,20 +115,6 @@ export default async function DashboardPage() {
   // Unfinished work: overdue callbacks and leads that stalled after contact.
   // Pure arithmetic on the assignments already loaded above — no extra query.
   const workSummary = computeWorkSummary(assignments);
-
-  // Social proof: what the operators who have signed a landlord did, and the
-  // anonymised wins feed. Called through the customer's OWN session rather than
-  // the admin client — both functions derive identity from auth.uid() and
-  // return aggregates only, so the service role would gain nothing and calling
-  // them as the user keeps the security boundary where it belongs (same
-  // reasoning as the benchmarks on the analytics page).
-  const userClient = createClient();
-  const [{ data: proofRaw }, { data: winsRaw }] = await Promise.all([
-    userClient.rpc("get_operator_proof"),
-    userClient.rpc("get_recent_wins_anonymised", { p_limit: 5 }),
-  ]);
-  const proofRows = (proofRaw ?? []) as ProofRow[];
-  const anonymisedWins = (winsRaw ?? []) as AnonymisedWin[];
 
   // Which products this customer actually holds (active sub or leads received).
   const hasManagement = isActive || managementReceived > 0;
@@ -283,12 +263,6 @@ export default async function DashboardPage() {
           outranks any comparative block. Renders nothing when nothing is
           outstanding. */}
       <NeedsAttention summary={workSummary} />
-
-      {/* Below the customer's own funnel and above their leads: it is the
-          answer to "is this working for anyone?", which is the question the
-          funnel provokes and the lead feed is the response to. Renders nothing
-          until enough operators have signed to describe as a group. */}
-      <OperatorProof rows={proofRows} wins={anonymisedWins} />
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>

@@ -69,6 +69,10 @@ export default async function DashboardLayout({
       label: "Insights",
       items: [
         { href: "/dashboard/analytics", label: "Analytics" },
+        // Ungated: it reports on the platform rather than on this customer's
+        // own product holdings, and it renders its own explanation when there
+        // are too few recorded signings to describe a group.
+        { href: "/dashboard/leaderboard", label: "Leaderboard" },
         ...(holdsManagement
           ? [{ href: "/dashboard/goals", label: "Goals" }]
           : []),
