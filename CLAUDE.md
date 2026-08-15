@@ -1308,10 +1308,15 @@ until it is reworked.
 
 ### 19.11 — Deployment state at time of writing
 
-**0073 is applied to production. 0074, 0075 and 0076 are not.** 0075 depends on
-0074 (`customer_can_see_pool_lead`) and fails outright without it. With every
-debit at zero, 0074's `credit_invoice` is arithmetically identical to the one it
-replaces (`granted = amount − 0`), so it is inert until the first claim.
+~~**0073 is applied to production. 0074, 0075 and 0076 are not.**~~ **Out of
+date — all four are applied.** Verified against the live schema while preparing
+0077: `claim_pool_lead`, `customer_can_see_pool_lead`, `get_customer_pool_leads`
+and `leads.pool_excluded_at` are all present. The note is kept rather than
+deleted because the ordering constraint it records still holds for any rebuild:
+0075 depends on 0074 (`customer_can_see_pool_lead`) and fails outright without
+it. With every debit at zero, 0074's `credit_invoice` is arithmetically identical
+to the one it replaces (`granted = amount − 0`), so it was inert until the first
+claim.
 
 Nothing pools until the code deploys: the sweep route does not exist on `main`.
 

@@ -390,7 +390,7 @@ export async function POST(request: NextRequest) {
         // Resume detection (management only). If the management subscription is
         // NOT paused in Stripe but our record still marks it paused, the customer
         // has resumed collection out-of-band (e.g. they chose to continue paying
-        // rather than wait out the 3 months). Clear the pause so lead routing
+        // rather than wait out the pause). Clear the pause so lead routing
         // restarts. The guarded update (`paused_at is not null`) means only the
         // ONE writer that actually flips paused_at → null sends the "you're
         // back" email, so this never double-emails with the resume cron.

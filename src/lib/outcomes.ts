@@ -190,3 +190,130 @@ export async function getOutcomeOverview(): Promise<OutcomeOverview> {
 
   return { unavailable: false, wins, scoreboard, needsReview, duplicates };
 }
+
+/**
+ * Why customers pause, and what happened next (0077).
+ *
+ * FETCHED SEPARATELY from getOutcomeOverview, deliberately. That function makes
+ * every panel unavailable if any one of its RPCs errors, which is right when the
+ * four ship as one release — but this one ships later, so bundling it would take
+ * the whole outcomes page dark on any environment where 0077 has not been
+ * applied yet. Here a missing function costs only this block.
+ */
+export interface PauseInsight {
+  unavailable: boolean;
+  /** Every pause ever recorded. */
+  total: number;
+  /** Pauses that have finished with an observable outcome. */
+  completed: number;
+  /**
+   * reason -> how many pauses cited it. A pause citing two reasons counts once
+   * under each, so these deliberately sum to more than `total`.
+   */
+  reasonCounts: { reason: string; count: number }[];
+  outcomeCounts: { outcome: string; count: number }[];
+  /** reason by outcome, suppressed until the sample can carry it. */
+  crossTab: { reason: string; outcome: string; count: number }[];
+  crossTabSuppressed: boolean;
+  /** Stripe's own cancellation reason, for customers who left outright. */
+  cancellationFeedback: { feedback: string; count: number }[];
+  cancellationComments: { businessName: string; comment: string }[];
+}
+
+/**
+ * Completed pauses needed before the reason-by-outcome breakdown is shown.
+ *
+ * Below this one customer moves a whole cell, and the block would read as "100%
+ * of lead-quality pauses churn" off a single person. Plain counts are shown at
+ * any size — a count with its N attached is honest, where a breakdown implies a
+ * rate. Same instinct as the cohort suppression in section 10.
+ */
+const CROSS_TAB_MIN_COMPLETED = 10;
+
+export async function getPauseInsight(): Promise<PauseInsight> {
+  const admin = createAdminClient();
+  const empty: PauseInsight = {
+    unavailable: true,
+    total: 0,
+    completed: 0,
+    reasonCounts: [],
+    outcomeCounts: [],
+    crossTab: [],
+    crossTabSuppressed: true,
+    cancellationFeedback: [],
+    cancellationComments: [],
+  };
+
+  const [outcomesRes, cancelRes] = await Promise.all([
+    admin.rpc("get_pause_outcomes"),
+    admin
+      .from("customers")
+      .select("business_name, cancellation_feedback, cancellation_comment")
+      .not("cancellation_feedback", "is", null),
+  ]);
+
+  if (outcomesRes.error) {
+    console.error("[outcomes] pause insight unavailable", outcomesRes.error);
+    return empty;
+  }
+
+  const rows = (outcomesRes.data ?? []) as Record<string, unknown>[];
+  const total = rows.length;
+  // "Completed" excludes pauses still running AND those whose end was never
+  // stamped: an outcome we could not observe is not evidence either way.
+  const finished = rows.filter(
+    (r) => r.outcome !== "active" && r.outcome !== "ended_untracked"
+  );
+  const completed = finished.length;
+
+  const tally = (keys: string[]): { key: string; count: number }[] => {
+    const m = new Map<string, number>();
+    for (const k of keys) m.set(k, (m.get(k) ?? 0) + 1);
+    // Array.from rather than spreading the iterator: this project's tsconfig
+    // target does not enable downlevelIteration, so [...map.entries()] fails to
+    // compile even though it type-checks fine in isolation.
+    return Array.from(m.entries())
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count);
+  };
+
+  const crossTabSuppressed = completed < CROSS_TAB_MIN_COMPLETED;
+
+  const cancelRows = (cancelRes.data ?? []) as {
+    business_name: string;
+    cancellation_feedback: string | null;
+    cancellation_comment: string | null;
+  }[];
+
+  return {
+    unavailable: false,
+    total,
+    completed,
+    reasonCounts: tally(
+      rows.flatMap((r) => ((r.reasons ?? []) as string[]).map(String))
+    ).map(({ key, count }) => ({ reason: key, count })),
+    outcomeCounts: tally(rows.map((r) => String(r.outcome))).map(
+      ({ key, count }) => ({ outcome: key, count })
+    ),
+    crossTab: crossTabSuppressed
+      ? []
+      : tally(
+          finished.flatMap((r) =>
+            ((r.reasons ?? []) as string[]).map((x) => `${x}|${r.outcome}`)
+          )
+        ).map(({ key, count }) => {
+          const [reason, outcome] = key.split("|");
+          return { reason, outcome, count };
+        }),
+    crossTabSuppressed,
+    cancellationFeedback: tally(
+      cancelRows.map((r) => r.cancellation_feedback ?? "unknown")
+    ).map(({ key, count }) => ({ feedback: key, count })),
+    cancellationComments: cancelRows
+      .filter((r) => r.cancellation_comment)
+      .map((r) => ({
+        businessName: r.business_name,
+        comment: r.cancellation_comment as string,
+      })),
+  };
+}
