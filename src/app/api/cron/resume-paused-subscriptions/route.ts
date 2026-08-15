@@ -116,6 +116,24 @@ async function handle(request: NextRequest) {
       continue;
     }
 
+    // Close the pause episode (0077). Best-effort and deliberately not retried:
+    // this stamp is REPORTING ONLY. Nothing reads ended_at to decide whether a
+    // customer is paused — customers.paused_at is the authority, and it has just
+    // been cleared above — so a missed stamp is a gap in the churn history, not
+    // a stuck pause. Placed inside the `cleared` branch so it fires exactly once
+    // per pause, for the same reason the email does.
+    const { error: episodeError } = await admin
+      .from("subscription_pauses")
+      .update({ ended_at: new Date().toISOString() })
+      .eq("customer_id", customer.id)
+      .is("ended_at", null);
+    if (episodeError) {
+      console.error("[resume-paused-subscriptions] episode stamp failed", {
+        customer: customer.id,
+        error: episodeError.message,
+      });
+    }
+
     const { error: emailError } = await sendSubscriptionResumedEmail({
       to: customer.email,
       contactName: customer.contact_name ?? customer.email,

@@ -63,6 +63,8 @@ const CAPACITY_PRODUCTS = {
     activeColumn: "account_status",
     slotAllocation: SLOT_ALLOCATION,
     label: "Management",
+    // Pause is management-only (0038). See the note in getProductCapacityStatus.
+    excludesPaused: true,
   },
   guaranteed_rent: {
     settingKey: "gr_max_active_customers",
@@ -70,6 +72,9 @@ const CAPACITY_PRODUCTS = {
     activeColumn: "gr_subscription_status",
     slotAllocation: GR_SLOT_ALLOCATION,
     label: "Guaranteed Rent",
+    // Never. A paused management customer who also holds GR keeps receiving GR
+    // leads (0038 header), so their GR allocation is still committed volume.
+    excludesPaused: false,
   },
 } as const satisfies Record<LeadType, unknown>;
 
@@ -106,12 +111,24 @@ function round2(n: number): number {
 export interface CapacityStatus {
   /** Which product this figure describes. */
   product: LeadType;
-  /** Sum of per-customer weights across all active accounts. */
+  /** Sum of per-customer weights across all active accounts, EXCLUDING paused. */
   weightedUsed: number;
   /** The product's cap from system_settings (unchanged in meaning). */
   limit: number;
-  /** Unweighted count of active accounts — for display context. */
+  /** Unweighted count of active accounts, excluding paused. */
   rawActiveCount: number;
+  /**
+   * Paused management customers, reported beside the headline and NEVER added to
+   * it.
+   *
+   * Excluding them without reporting them would show headroom that a returning
+   * customer silently reclaims, and selling into it over-commits us. This is the
+   * demand-side version of the rule §18.1 applies to supply: the figure that
+   * refills decides the ceiling, the one that comes back later is shown next to
+   * it. Always zero for GR, which has no pause.
+   */
+  pausedCount: number;
+  pausedWeight: number;
   /** True when weighted usage is already over the limit. */
   exceedsLimit: boolean;
   /** Human-readable warning when over the limit, else null. */
@@ -145,27 +162,56 @@ export async function getProductCapacityStatus(
   // a capacity slot. The admin demo account is the case in point — it holds an
   // allocation for demonstration but is switched off, and counting it would
   // reserve a full slot against a customer who will never be sent a lead.
+  //
+  // A PAUSED management customer is the same argument (0077). 0038 leaves
+  // account_status = 'active' during a pause so the routing slot is reserved,
+  // which is right for routing and wrong here: they receive no leads and are
+  // owed none, so their allocation is not committed volume this month. The admin
+  // supply-problem banner already excludes them on exactly this reasoning.
+  //
+  // They are reported back as pausedCount/pausedWeight rather than simply
+  // deleted from the figure — see the CapacityStatus doc comment.
   const { data: rows } = await admin
     .from("customers")
-    .select(cfg.allocationColumn)
+    .select(`${cfg.allocationColumn}, paused_at`)
     .eq(cfg.activeColumn, "active")
     .eq("is_active", true);
 
-  const active = (rows ?? []) as unknown as Array<Record<string, number | null>>;
+  const all = (rows ?? []) as unknown as Array<Record<string, number | string | null>>;
+  const isPaused = (c: Record<string, number | string | null>) =>
+    cfg.excludesPaused && c.paused_at != null;
+
+  const active = all.filter((c) => !isPaused(c));
+  const paused = all.filter(isPaused);
+
+  const weigh = (list: typeof all) =>
+    round2(
+      list.reduce(
+        (sum, c) => sum + ((c[cfg.allocationColumn] as number | null) ?? 0) / cfg.slotAllocation,
+        0
+      )
+    );
+
   const rawActiveCount = active.length;
-  const weightedUsed = round2(
-    active.reduce(
-      (sum, c) => sum + (c[cfg.allocationColumn] ?? 0) / cfg.slotAllocation,
-      0
-    )
-  );
+  const weightedUsed = weigh(active);
+  const pausedCount = paused.length;
+  const pausedWeight = weigh(paused);
 
   const exceedsLimit = weightedUsed > limit;
   const warningMessage = exceedsLimit
     ? `${cfg.label} weighted capacity is at ${weightedUsed} of ${limit} slots — over the limit.`
     : null;
 
-  return { product, weightedUsed, limit, rawActiveCount, exceedsLimit, warningMessage };
+  return {
+    product,
+    weightedUsed,
+    limit,
+    rawActiveCount,
+    pausedCount,
+    pausedWeight,
+    exceedsLimit,
+    warningMessage,
+  };
 }
 
 /**

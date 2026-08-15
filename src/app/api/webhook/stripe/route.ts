@@ -358,8 +358,25 @@ export async function POST(request: NextRequest) {
           if (status === "canceled") {
             update.account_status = "cancelled";
             if (!existing?.cancelled_at) update.cancelled_at = nowIso;
+
+            // Why they left (0077). Pause records a reason; until now the real
+            // departure recorded only a date. Stripe collects this in the
+            // billing portal when the cancellation-reason feature is enabled on
+            // the portal configuration — without that it simply arrives null,
+            // which is why nothing here depends on it being present.
+            //
+            // First cancellation wins, matching cancelled_at above: a customer
+            // who leaves, returns and leaves again keeps the original reason
+            // rather than having their history quietly rewritten.
+            if (!existing?.cancelled_at) {
+              const details = sub.cancellation_details;
+              update.cancellation_feedback = details?.feedback ?? null;
+              update.cancellation_comment = details?.comment ?? null;
+            }
           } else if (status === "active") {
             update.cancelled_at = null;
+            update.cancellation_feedback = null;
+            update.cancellation_comment = null;
           }
           if (anchor) update.billing_cycle_anchor = anchor;
         }
@@ -393,8 +410,30 @@ export async function POST(request: NextRequest) {
             })
             .eq("stripe_customer_id", customerId)
             .not("paused_at", "is", null)
-            .select("email, contact_name")
+            .select("id, email, contact_name")
             .maybeSingle();
+
+          // Close the pause episode (0077). Runs whatever the status is,
+          // deliberately: this block also fires on a CANCELLATION (a cancelled
+          // subscription reports no pause_collection), and a pause that ended
+          // because the customer left is exactly the history we most want kept.
+          // The episode row is what preserves it — the clear above erases
+          // paused_at either way.
+          //
+          // Best-effort and reporting-only, like the cron's stamp.
+          if (resumedRow?.id) {
+            const { error: episodeError } = await admin
+              .from("subscription_pauses")
+              .update({ ended_at: new Date().toISOString() })
+              .eq("customer_id", resumedRow.id)
+              .is("ended_at", null);
+            if (episodeError) {
+              console.error("[stripe] pause episode stamp failed", {
+                customer: resumedRow.id,
+                error: episodeError.message,
+              });
+            }
+          }
 
           // Only notify on a genuine resume — never when the subscription is
           // being cancelled/deleted (that path also has a null pause_collection).

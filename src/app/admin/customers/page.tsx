@@ -1,7 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AdminCustomersTable } from "@/components/admin/AdminCustomersTable";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
-import type { Customer, LeadType } from "@/lib/types";
+import { getStripe } from "@/lib/stripe";
+import type { Customer, LeadType, PauseEpisode } from "@/lib/types";
+import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +34,87 @@ export default async function AdminCustomersPage() {
   const lastActive: Record<string, string | null> = {};
   for (const c of customers) {
     if (c.user_id) lastActive[c.id] = lastSignInByUser.get(c.user_id) ?? null;
+  }
+
+  // ---- Paused-customer detail (0077) -------------------------------------
+  //
+  // Three lookups, all scoped to paused customers only and all skipped entirely
+  // when nobody is paused. Each is independently fallible and none of them may
+  // stop the page rendering: an admin needs the customers table far more than
+  // they need the pause column.
+  const pausedCustomers = customers.filter((c) => c.paused_at != null);
+  const pausedIds = pausedCustomers.map((c) => c.id);
+
+  const pauseDetail: Record<string, PauseEpisode> = {};
+  const pauseFacts: Record<string, PauseFacts> = {};
+  const billingHealth: Record<string, BillingHealth> = {};
+
+  if (pausedIds.length > 0) {
+    const [{ data: episodes }, { data: facts }] = await Promise.all([
+      admin
+        .from("subscription_pauses")
+        .select("*")
+        .in("customer_id", pausedIds)
+        .order("paused_at", { ascending: false }),
+      admin.rpc("get_paused_customer_facts"),
+    ]);
+
+    // Latest episode per customer. Episodes are only written at pause time, so
+    // the newest row is the current pause.
+    for (const e of (episodes ?? []) as PauseEpisode[]) {
+      if (!pauseDetail[e.customer_id]) pauseDetail[e.customer_id] = e;
+    }
+    for (const f of (facts ?? []) as PauseFacts[]) {
+      pauseFacts[f.customer_id] = f;
+    }
+
+    // Live Stripe read: "will this subscription actually bill again?"
+    //
+    // Deliberately not answered from our own columns. A customer who schedules a
+    // cancellation in the billing portal keeps status "active" in Stripe, so the
+    // webhook writes subscription_status = 'active' and even NULLS cancelled_at —
+    // the row moves away from the truth, and cancel_at_period_end is stored
+    // nowhere. The only honest source is Stripe itself.
+    //
+    // allSettled so one failing lookup cannot blank the others, and any failure
+    // renders as "couldn't check" rather than as a healthy default.
+    const stripe = getStripe();
+    const results = await Promise.allSettled(
+      pausedCustomers.map(async (c) => {
+        if (!c.stripe_subscription_id) {
+          throw new Error("No Stripe subscription on file");
+        }
+        const sub = await stripe.subscriptions.retrieve(c.stripe_subscription_id);
+        const cancelled = sub.status === "canceled" || sub.status === "incomplete_expired";
+        const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
+        return {
+          id: c.id,
+          health: {
+            willBill: !cancelled && !cancelAtPeriodEnd,
+            cancelAtPeriodEnd,
+            cancelled,
+            nextChargeAt: sub.current_period_end
+              ? new Date(sub.current_period_end * 1000).toISOString()
+              : null,
+          } satisfies BillingHealth,
+        };
+      })
+    );
+    results.forEach((r, i) => {
+      const customerId = pausedCustomers[i].id;
+      if (r.status === "fulfilled") {
+        billingHealth[customerId] = r.value.health;
+      } else {
+        billingHealth[customerId] = {
+          willBill: null,
+          cancelAtPeriodEnd: false,
+          cancelled: false,
+          nextChargeAt: null,
+          error:
+            r.reason instanceof Error ? r.reason.message : "Could not reach Stripe",
+        };
+      }
+    });
   }
 
   // Supply-problem alerts: behind by 5+, fewer than 10 days left, on a product
@@ -121,7 +204,13 @@ export default async function AdminCustomersPage() {
         </div>
       )}
 
-      <AdminCustomersTable customers={customers} lastActive={lastActive} />
+      <AdminCustomersTable
+        customers={customers}
+        lastActive={lastActive}
+        pauseDetail={pauseDetail}
+        pauseFacts={pauseFacts}
+        billingHealth={billingHealth}
+      />
     </div>
   );
 }

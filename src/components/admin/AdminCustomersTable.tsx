@@ -20,11 +20,21 @@ import {
   filterTooltip,
   hasLeadFilter,
 } from "@/lib/leadFilter";
-import type { Customer } from "@/lib/types";
+import type { Customer, PauseEpisode } from "@/lib/types";
+import {
+  PAUSE_BANDS,
+  PAUSE_BAND_LABEL,
+  pauseOutlook,
+  type BillingHealth,
+  type PauseBand,
+  type PauseFacts,
+} from "@/lib/pauseOutlook";
+import { pauseMonthsLabel, pauseReasonLabel } from "@/lib/pauseOptions";
 
 type Tab =
   | "all"
   | "active"
+  | "paused"
   | "waitlisted"
   | "invited"
   | "cancelled"
@@ -33,11 +43,20 @@ type Tab =
 const TABS: { key: Tab; label: string }[] = [
   { key: "all", label: "All" },
   { key: "active", label: "Active" },
+  { key: "paused", label: "Paused" },
   { key: "waitlisted", label: "Waitlisted" },
   { key: "invited", label: "Invited" },
   { key: "cancelled", label: "Cancelled" },
   { key: "archived", label: "Archived" },
 ];
+
+/**
+ * Secondary filter on the Paused tab: is this customer coming back?
+ *
+ * Mirrors the PRODUCT_TABS pattern below. "all" first so the tab opens showing
+ * everyone rather than a pre-filtered view.
+ */
+type BandFilter = "all" | PauseBand;
 
 /**
  * `is_active = false` means archived: a row kept for its history but taken out
@@ -91,12 +110,37 @@ const showsGr = (c: Customer) =>
 const effectiveStatus = (c: Customer, accountStatus: string) =>
   hasGuaranteedRent(c) ? "active" : accountStatus;
 
-// A management subscriber whose subscription is currently paused (account_status
-// stays 'active', so they still appear under the Active tab).
+// A management subscriber whose subscription is currently paused.
+//
+// account_status stays 'active' during a pause (0038), so these customers still
+// appear under the Active tab — they ARE active customers whose routing slot is
+// reserved. The Paused tab added in 0077 is an additional lens on the same rows,
+// not a relocation, so no existing tab changes meaning.
 const isPaused = (c: Customer) => Boolean(c.paused_at);
 
 // A customer with an active or pending-lift filter on either product.
 const hasFilter = hasLeadFilter;
+
+/** Band a paused customer from whatever detail we managed to load. */
+function outlookFor(
+  c: Customer,
+  pauseDetail: Record<string, PauseEpisode>,
+  pauseFacts: Record<string, PauseFacts>,
+  billingHealth: Record<string, BillingHealth>
+) {
+  return pauseOutlook(
+    pauseDetail[c.id]?.reasons ?? [],
+    pauseFacts[c.id],
+    billingHealth[c.id]
+  );
+}
+
+const BAND_BADGE: Record<PauseBand, string> = {
+  likely: "border-transparent bg-green-100 text-green-700",
+  unlikely: "border-transparent bg-amber-100 text-amber-700",
+  not_returning: "border-transparent bg-red-100 text-red-700",
+  unclear: "border-transparent bg-gray-100 text-gray-600",
+};
 
 const ACCOUNT_BADGE: Record<string, string> = {
   active: "border-transparent bg-green-100 text-green-700",
@@ -108,13 +152,23 @@ const ACCOUNT_BADGE: Record<string, string> = {
 export function AdminCustomersTable({
   customers,
   lastActive = {},
+  pauseDetail = {},
+  pauseFacts = {},
+  billingHealth = {},
 }: {
   customers: Customer[];
   /** customer.id → last sign-in timestamp (null = has login, never signed in). */
   lastActive?: Record<string, string | null>;
+  /** customer.id → their current pause episode (0077). Paused customers only. */
+  pauseDetail?: Record<string, PauseEpisode>;
+  /** customer.id → the facts behind their return-likelihood band. */
+  pauseFacts?: Record<string, PauseFacts>;
+  /** customer.id → what Stripe says about whether they will bill again. */
+  billingHealth?: Record<string, BillingHealth>;
 }) {
   const [tab, setTab] = useState<Tab>("all");
   const [product, setProduct] = useState<ProductTab>("all");
+  const [band, setBand] = useState<BandFilter>("all");
   // Local overrides so a row's badge updates after invite without a reload.
   const [statusOverride, setStatusOverride] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -130,7 +184,21 @@ export function AdminCustomersTable({
     let list = customers.filter((c) =>
       tab === "archived" ? isArchived(c) : !isArchived(c)
     );
-    list = list.filter((c) => tab === "all" || tab === "archived" || accountStatus(c) === tab);
+    // "paused" is not an account_status, so it can never match the comparison
+    // below — it joins "all" and "archived" as a pass-through and filters itself.
+    list = list.filter((c) =>
+      tab === "all" || tab === "archived"
+        ? true
+        : tab === "paused"
+          ? isPaused(c)
+          : accountStatus(c) === tab
+    );
+    if (tab === "paused" && band !== "all") {
+      list = list.filter(
+        (c) =>
+          outlookFor(c, pauseDetail, pauseFacts, billingHealth).band === band
+      );
+    }
     list = list.filter((c) => {
       if (product === "management") return hasManagement(c);
       if (product === "guaranteed_rent") return hasGuaranteedRent(c);
@@ -145,7 +213,7 @@ export function AdminCustomersTable({
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, tab, product, statusOverride]);
+  }, [customers, tab, product, band, statusOverride, pauseDetail, pauseFacts, billingHealth]);
 
   /**
    * Invite a customer to subscribe to ONE product.
@@ -254,6 +322,28 @@ export function AdminCustomersTable({
         </div>
       </div>
 
+      {tab === "paused" && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="mr-2 text-xs font-medium text-muted-foreground">
+            Coming back?
+          </span>
+          {(["all", ...PAUSE_BANDS] as BandFilter[]).map((b) => (
+            <button
+              key={b}
+              onClick={() => setBand(b)}
+              className={
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+                (band === b
+                  ? "bg-brand text-brand-foreground"
+                  : "text-muted-foreground hover:bg-accent")
+              }
+            >
+              {b === "all" ? "All" : PAUSE_BAND_LABEL[b]}
+            </button>
+          ))}
+        </div>
+      )}
+
       {toast && (
         <div className="rounded-md border-[0.5px] border-border bg-muted/50 px-4 py-2 text-sm">
           {toast}
@@ -273,6 +363,8 @@ export function AdminCustomersTable({
               <TableHead>Pacing</TableHead>
               <TableHead>Last lead</TableHead>
               <TableHead>Last active</TableHead>
+              {tab === "paused" && <TableHead>Pause detail</TableHead>}
+              {tab === "paused" && <TableHead>Will it re-bill?</TableHead>}
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -441,6 +533,25 @@ export function AdminCustomersTable({
                       lastSignInAt={lastActive[c.id] ?? null}
                     />
                   </TableCell>
+                  {tab === "paused" && (
+                    <TableCell className="max-w-[22rem] align-top">
+                      <PauseDetailCell
+                        customer={c}
+                        episode={pauseDetail[c.id]}
+                        outlook={outlookFor(
+                          c,
+                          pauseDetail,
+                          pauseFacts,
+                          billingHealth
+                        )}
+                      />
+                    </TableCell>
+                  )}
+                  {tab === "paused" && (
+                    <TableCell className="max-w-[14rem] align-top">
+                      <BillingHealthCell health={billingHealth[c.id]} />
+                    </TableCell>
+                  )}
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-3">
                       {status === "waitlisted" && (
@@ -494,7 +605,7 @@ export function AdminCustomersTable({
             {rows.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={10}
+                  colSpan={tab === "paused" ? 12 : 10}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No customers in this view.
@@ -592,5 +703,118 @@ function PacingBadge({ status }: { status: PacingStatus }) {
     <span className="inline-flex items-center rounded-full bg-brand/10 px-2.5 py-0.5 text-xs font-medium text-brand">
       On track
     </span>
+  );
+}
+
+/**
+ * Why this customer paused, and whether we think they are coming back.
+ *
+ * The band ALWAYS renders with its supporting reason. A rules-based verdict the
+ * admin cannot audit is indistinguishable from a guess, and these rules are
+ * stated guesses — there is no cancellation history to fit them to.
+ */
+function PauseDetailCell({
+  customer,
+  episode,
+  outlook,
+}: {
+  customer: Customer;
+  episode: PauseEpisode | undefined;
+  outlook: { band: PauseBand; reason: string };
+}) {
+  return (
+    <div className="space-y-1.5 py-1">
+      <span
+        className={
+          "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium " +
+          BAND_BADGE[outlook.band]
+        }
+      >
+        {PAUSE_BAND_LABEL[outlook.band]}
+      </span>
+      <p className="text-xs text-muted-foreground">{outlook.reason}</p>
+
+      {episode ? (
+        <>
+          <p className="text-xs">
+            {episode.reasons.map(pauseReasonLabel).join(" · ")}
+          </p>
+          {episode.note && (
+            <p className="whitespace-pre-wrap text-xs italic text-muted-foreground">
+              “{episode.note}”
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {pauseMonthsLabel(episode.months)} from{" "}
+            {formatDate(episode.paused_at)} · resumes{" "}
+            {formatDate(episode.resumes_at)} · pause #{customer.pause_count}
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No pause record{" "}
+          {customer.pause_resumes_at
+            ? `· resumes ${formatDate(customer.pause_resumes_at)}`
+            : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Whether Stripe will actually bill this subscription again when the pause ends.
+ *
+ * Read live from Stripe rather than from our own columns: a scheduled
+ * cancellation leaves the subscription "active" in Stripe, so our
+ * subscription_status says active and cancel_at_period_end is stored nowhere.
+ * An unreachable Stripe renders as "couldn't check" and never as healthy.
+ */
+function BillingHealthCell({ health }: { health: BillingHealth | undefined }) {
+  if (!health) {
+    return <span className="text-xs text-muted-foreground">—</span>;
+  }
+  if (health.willBill === null) {
+    return (
+      <div className="py-1">
+        <span className="inline-flex items-center rounded-full border border-transparent bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+          Couldn&apos;t check
+        </span>
+        {health.error && (
+          <p className="mt-1 text-xs text-muted-foreground">{health.error}</p>
+        )}
+      </div>
+    );
+  }
+  if (health.cancelled) {
+    return (
+      <span className="inline-flex items-center rounded-full border border-transparent bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+        Subscription cancelled
+      </span>
+    );
+  }
+  if (health.cancelAtPeriodEnd) {
+    return (
+      <div className="py-1">
+        <span className="inline-flex items-center rounded-full border border-transparent bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+          Cancels at period end
+        </span>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Will not re-bill when the pause ends.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="py-1">
+      <span className="inline-flex items-center rounded-full border border-transparent bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+        Will re-bill
+      </span>
+      {health.nextChargeAt && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Next charge {formatDate(health.nextChargeAt)}
+        </p>
+      )}
+    </div>
   );
 }
