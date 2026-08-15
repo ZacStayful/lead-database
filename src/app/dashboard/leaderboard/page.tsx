@@ -52,8 +52,9 @@ export default async function LeaderboardPage() {
       <div>
         <h1 className="text-2xl font-bold">Leaderboard</h1>
         <p className="text-sm text-muted-foreground">
-          How operators on the platform are working their leads — and what the
-          ones who have signed a landlord did differently.
+          Some subscribers here have already signed landlords onto management
+          contracts from the leads they were sent. This page tracks what those
+          operators do differently from everyone else — so you can copy it.
         </p>
       </div>
 
@@ -63,23 +64,25 @@ export default async function LeaderboardPage() {
         <Card>
           <CardContent className="pt-6">
             <h2 className="mb-1 text-lg font-semibold">
-              Not enough signed leads to show this yet
+              Not enough signed management clients to show this yet
             </h2>
             <p className="text-sm text-muted-foreground">
-              This page compares how operators who have signed a landlord work
-              their leads against everyone else. Until at least three operators
-              have recorded a signing there is no group to describe — only
+              This page compares the operators who have signed a landlord onto a
+              management contract against everyone else, so you can see which
+              habits are behind it. Until at least three subscribers have
+              recorded a signing there is no group to describe — only
               individuals, and reporting on those would tell you more about
-              specific businesses than about what works. It will fill in as more
-              outcomes are recorded.
+              specific businesses than about what works. It fills in on its own
+              as more outcomes are recorded.
             </p>
           </CardContent>
         </Card>
       )}
 
       <p className="text-xs text-muted-foreground">
-        Every figure here is an average across a group of operators. Nobody is
-        named, nobody is ranked, and no one else can see your figures.
+        Figures cover management leads only, and every one is an average across
+        a group of subscribers. Nobody is named, nobody is ranked, and no one
+        else can see your figures.
       </p>
     </div>
   );

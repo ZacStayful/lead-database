@@ -92,26 +92,25 @@ export function OperatorProof({
     format: (r: ProofRow | undefined) => string;
   }[] = [
     {
-      label: "Open the leads they're sent",
-      help: "Everyone does this. It's the next row that separates them.",
+      label: "They open every lead they're sent",
+      help: "Of the management leads delivered to them, the share they looked at. Almost everyone does this — it's the rows below that separate them.",
       format: (r) => pct(r?.open_rate ?? null),
     },
     {
-      label: "Actually go after them",
-      help: "Called, emailed, or logged what happened.",
+      label: "They ring every one of them",
+      help: "The share they actually went after — called, emailed, or recorded what happened. This is the biggest gap in the table.",
       format: (r) => pct(r?.contact_rate ?? null),
     },
     {
-      // The row the other two are for. It is also where the funnel actually
-      // breaks — more than half of leads get chased and well under a tenth
-      // reach a diary — so it is the one worth leading somebody towards.
-      label: "Get a web meeting booked",
-      help: "Booked counts even if the landlord didn't turn up — that part isn't yours.",
+      // The row the other two are for, and where the funnel actually breaks —
+      // over half of leads get chased and well under a tenth reach a diary.
+      label: "They get the web meeting booked",
+      help: "The share that reached a booked web meeting. A no-show still counts: getting it in the diary is the part you control.",
       format: (r) => pct(r?.meeting_rate ?? null),
     },
     {
-      label: "Notes written",
-      help: "Keeping a record of each conversation.",
+      label: "They write it down",
+      help: "Notes logged against their leads, so nothing is dropped between calls.",
       format: (r) => num(r?.avg_notes ?? null),
     },
   ];
@@ -120,30 +119,40 @@ export function OperatorProof({
     <Card>
       <CardContent className="pt-6">
         <h2 className="mb-1 text-lg font-semibold">
-          What's working for other operators
+          What the operators winning management clients do differently
         </h2>
-        <p className="mb-4 text-sm text-muted-foreground">
-          {winners.operators} operator
-          {winners.operators === 1 ? " has" : "s have"} signed a landlord from a
-          marketplace lead
+        <p className="mb-2 text-sm text-muted-foreground">
+          Everyone in this table is a subscriber here, buying the same
+          management leads you are.{" "}
+          <span className="font-medium text-foreground">
+            {winners.operators} of them
+            {winners.operators === 1 ? " has" : " have"} signed a landlord onto
+            a management contract
+          </span>
           {fastest !== null && Number.isFinite(fastest)
             ? fastest <= 1
-              ? " — the quickest inside a day of receiving it."
-              : ` — the quickest ${fastest} days after receiving it.`
+              ? " — the quickest inside a day of the lead arriving."
+              : ` — the quickest ${fastest} days after the lead arrived.`
             : "."}{" "}
-          Here's how they worked their leads. Nobody is named, and nobody can see
-          your figures.
+          These are the four things they do that the {others?.operators ?? 0}{" "}
+          who haven&rsquo;t signed anyone yet mostly don&rsquo;t.
+        </p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Every one of them is copyable this afternoon. Nobody is named, nobody
+          is ranked, and nobody else can see your figures.
         </p>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[30rem] border-collapse text-sm">
+          <table className="w-full min-w-[32rem] border-collapse text-sm">
             <thead>
               <tr className="border-b-[0.5px] border-border text-left">
-                <th className="pb-2 font-medium">Habit</th>
+                <th className="pb-2 font-medium">What they do</th>
                 <th className="pb-2 text-right font-medium">
-                  Operators who've signed
+                  Signed a management client
                 </th>
-                <th className="pb-2 text-right font-medium">Everyone else</th>
+                <th className="pb-2 text-right font-medium">
+                  Not signed one yet
+                </th>
                 {you && <th className="pb-2 text-right font-medium">You</th>}
               </tr>
             </thead>
@@ -179,15 +188,23 @@ export function OperatorProof({
         {/* State the size of the evidence plainly rather than letting three
             operators read as a law of nature. */}
         <p className="mt-3 text-xs text-muted-foreground">
-          Based on {winners.operators} operator
-          {winners.operators === 1 ? "" : "s"} who have signed a landlord so far,
-          against {others?.operators ?? 0} who haven't yet. That's a small group
-          — it's what they did, not a guarantee of what will happen.
+          Measured across management leads delivered to every subscriber on the
+          platform. Based on {winners.operators} operator
+          {winners.operators === 1 ? "" : "s"} who have signed a management
+          client so far against {others?.operators ?? 0} who haven&rsquo;t — a
+          small group, so read it as what they did rather than a guarantee of
+          what will happen.
         </p>
 
         {wins.length > 0 && (
           <div className="mt-6">
-            <h3 className="mb-2 text-sm font-medium">Recently signed</h3>
+            <h3 className="mb-1 text-sm font-medium">
+              Management clients signed from these leads
+            </h3>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Each one is a landlord another subscriber signed onto a management
+              contract, from a lead the marketplace sent them.
+            </p>
             <ul className="space-y-1.5">
               {wins.map((w, i) => (
                 <li
@@ -197,7 +214,7 @@ export function OperatorProof({
                   <span>{winDescription(w)}</span>
                   <span className="text-xs text-muted-foreground">
                     {w.days_to_win <= 1
-                      ? "signed within a day"
+                      ? "signed within a day of the lead arriving"
                       : `signed ${w.days_to_win} days after the lead arrived`}
                   </span>
                 </li>
