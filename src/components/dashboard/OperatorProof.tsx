@@ -32,6 +32,15 @@ export type ProofRow = {
   operators_no_notes: number;
   median_hours_to_open: number | null;
   suppressed: boolean;
+  // Null on the 'you' row, which is always live, and on the cohort rows before
+  // the first weekly capture has run (0082 falls back to live state).
+  as_of: string | null;
+  // Null until a second week has been captured — the honest state for the first
+  // week after launch, and the one the UI has to handle rather than assume away.
+  prev_as_of: string | null;
+  prev_open_rate: number | null;
+  prev_contact_rate: number | null;
+  prev_meeting_rate: number | null;
 };
 
 export type AnonymisedWin = {
@@ -85,6 +94,33 @@ export function OperatorProof({
   const fastest = wins.length
     ? wins.reduce((min, w) => Math.min(min, w.days_to_win), Infinity)
     : null;
+
+  // The cohort figures are captured weekly (0081); the "you" row stays live, so
+  // take the date off a cohort row. Null before the first capture, in which
+  // case the page simply omits the date rather than inventing one.
+  const asOfLabel = winners.as_of
+    ? new Date(winners.as_of).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "long",
+      })
+    : null;
+
+  // Week-on-week movement in the meeting rate among operators who have NOT
+  // signed anyone. That is the group the reader is most likely in, and the one
+  // whose improvement means the page is working.
+  const movement = (() => {
+    if (!others?.prev_as_of) return null;
+    const now = others.meeting_rate;
+    const before = others.prev_meeting_rate;
+    if (now === null || before === null) return null;
+    const deltaPts = Math.round((Number(now) - Number(before)) * 1000) / 10;
+    if (Math.abs(deltaPts) < 0.1) {
+      return "Meeting rate across everyone else held steady this week.";
+    }
+    return deltaPts > 0
+      ? `Meeting rate across everyone else is up ${deltaPts} points on last week.`
+      : `Meeting rate across everyone else is down ${Math.abs(deltaPts)} points on last week.`;
+  })();
 
   const measures: {
     label: string;
@@ -185,9 +221,21 @@ export function OperatorProof({
           </table>
         </div>
 
+        {/* Movement, once there are two readings to compare. Shown for the
+            group that has not signed anyone: the whole point of the page is
+            that the gap is closable, so the number worth watching is theirs.
+            Silent until a second week exists — a trend line drawn through one
+            point is a decoration. */}
+        {movement && (
+          <p className="mt-3 text-sm">
+            <span className="font-medium">{movement}</span>
+          </p>
+        )}
+
         {/* State the size of the evidence plainly rather than letting three
             operators read as a law of nature. */}
         <p className="mt-3 text-xs text-muted-foreground">
+          {asOfLabel ? `Updated ${asOfLabel}. ` : ""}
           Measured across management leads delivered to every subscriber on the
           platform. Based on {winners.operators} operator
           {winners.operators === 1 ? "" : "s"} who have signed a management

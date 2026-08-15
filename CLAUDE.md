@@ -39,6 +39,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/monday/sync` | `0 9 * * *` | Pull + ingest management leads |
 | `/api/monday/sync-gr` | `0 9 * * *` | Same, guaranteed rent |
 | `/api/cron/generate-public-stats` | `0 3 * * *` | Landing-page activity figures |
+| `/api/cron/capture-leaderboard` | `0 7 * * 1` | Mondays: weekly operator-proof snapshot (§20) |
 | `/api/cron/inactivity-nudge` | `0 10 * * 1` | Mondays: leads awaiting follow-up |
 | `/api/cron/sweep-lead-pool` | `30 10 * * *` | Expired leads pool: enter, exit, expire (§19) |
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
@@ -1273,3 +1274,99 @@ debit at zero, 0074's `credit_invoice` is arithmetically identical to the one it
 replaces (`granted = amount − 0`), so it is inert until the first claim.
 
 Nothing pools until the code deploys: the sweep route does not exist on `main`.
+
+---
+
+## 20. Insights → Leaderboard *(0077–0082)*
+
+`/dashboard/leaderboard`. Social proof for existing subscribers: what the
+operators who have signed a management client do differently from everyone who
+has not, with the reader's own figures beside them.
+
+**It does not rank anybody, and the name is the only thing about it that
+suggests otherwise.** With ~21 active operators a ranked table means fourteen of
+them open the page to learn they are in the bottom half, and the operators most
+likely to drift are exactly the ones a ranking punishes. `get_customer_scoreboard`
+(0068) already existed and deliberately left ordering to the caller for this
+reason; nothing here sorts it.
+
+### The four rows, and why those four
+
+| Row | Source | Signed (3) | Not yet (18) |
+|---|---|---|---|
+| Open every lead | `viewed_at` OR `detail_opened` | 100% | 81% |
+| Ring every one | `first_contacted_at` | 100% | 56% |
+| Get the meeting booked | management meeting stages | 20.0% | 6.9% |
+| Write it down | `lead_notes` count | 10.7 | 5.8 |
+
+All rates share one denominator — management leads **delivered** — so the three
+percentages read as a funnel rather than as three bases. The meeting row is the
+one that matters: it is the last step the operator fully controls, it is where
+the funnel actually breaks (56% chased → 7% in a diary), and it has ~7× the
+volume of wins across 3× the operators. A no-show still counts as booked.
+
+**Speed of opening is deliberately absent.** Both groups open a new lead within
+about six hours; the median gap is 6.1 vs 6.0. An earlier read put winners at
+14.8 hours against 29.9, but that was a mean of per-operator means pooled across
+both products. The difference is entirely in what happens after opening.
+
+### Weekly snapshots *(0081, 0082)*
+
+`operator_proof_snapshots`, captured Mondays 07:00 by
+`/api/cron/capture-leaderboard`, ahead of the 10:00 nudge so the reading
+measures the week that ended rather than the nudge's own effect.
+
+The page was never stale — `get_operator_proof` reads live state. The snapshot
+buys a date the reader can see, figures that hold still mid-conversation, and a
+previous week to compare against. **It cannot be backfilled**, same as 0064 and
+0072: the capture reads current state, so a missed Monday is a permanent hole.
+
+- **Cohort rows come from the latest snapshot; the `you` row is always live.**
+  The cohort is a weekly reference point, but nobody should see a stale version
+  of their own work.
+- **Falls back to live** with `as_of = null` when no snapshot exists, so a cron
+  that never fires degrades to the old behaviour rather than an empty page.
+- `prev_*` columns carry the capture before last and are null until a second
+  week exists. The movement line stays hidden until then.
+- Idempotent on `(captured_on, group_key)` — a retry or manual re-run refreshes
+  that week rather than duplicating it.
+- `capture_operator_proof` **duplicates** the aggregate arithmetic in
+  `get_operator_proof` rather than calling it, because that function resolves
+  identity from `auth.uid()` and returns nothing to a service-role caller. The
+  two must change together.
+
+### Privacy
+
+`get_operator_proof` and `get_recent_wins_anonymised` are the second and third
+`SECURITY DEFINER` functions `authenticated` may call (invariant 7). Both take
+no customer id, resolve identity from `auth.uid()`, and return aggregates only.
+
+- Hidden entirely below **3** signed operators — fewer is a report on named
+  individuals with the names removed.
+- The wins feed withholds `postcode_area` below **5** wins: a lead reaches at
+  most three operators, so area plus month would let a competitor who held the
+  same lead work out that somebody else signed it. `won_at` is truncated to the
+  month for the same reason.
+- `operator_proof_snapshots` has RLS on with **no policy** — deny-all to the
+  browser. The aggregates are reachable only through the guarded function.
+
+### Related, shipped alongside
+
+- **0077** re-bases `contact_rate` / `hours_to_first_attempt` in
+  `get_engagement_benchmarks` onto `first_contacted_at`. Both were computed from
+  `tel_click`/`mailto_click`, which had fired on **3 assignments in six weeks**
+  against 290 `detail_opened`, so two of the three benchmarks a customer is
+  shown had been blank since launch. Management goes 0.010 → 0.621, and
+  operators able to see their own speed figure 0 → 14.
+  **`get_customer_engagement_scores` is deliberately untouched** — it weights
+  `contact_rate` at 0.65 and drives reclaim/escalation recipient selection, so
+  changing it moves leads between operators and needs its own dry run.
+- **0079** stamps `contact_gate_from`. The lead feed card no longer shows the
+  landlord's phone and email, so getting a number means opening the lead. That
+  changes what `detail_opened` MEANS partway through the series: 114 of 308
+  assignments were expanded in the feed and never opened, and the 129 with prior
+  opens cannot be read as contact attempts. Nothing reads the marker yet — on
+  the day it was applied there were zero qualifying events.
+- **"Picked up and left"** on the dashboard home (`workSummary.ts`): overdue
+  callbacks (16 of the 17 ever set) and leads stalled at `contacted` for 14+
+  days (70, across 9 operators). Both name a specific lead rather than a rate.
