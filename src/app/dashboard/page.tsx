@@ -6,6 +6,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
+import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
+import { computeWorkSummary } from "@/lib/workSummary";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
@@ -109,6 +111,10 @@ export default async function DashboardPage() {
         : (responseMins[responseMins.length / 2 - 1] +
             responseMins[responseMins.length / 2]) /
           2;
+
+  // Unfinished work: overdue callbacks and leads that stalled after contact.
+  // Pure arithmetic on the assignments already loaded above — no extra query.
+  const workSummary = computeWorkSummary(assignments);
 
   // Which products this customer actually holds (active sub or leads received).
   const hasManagement = isActive || managementReceived > 0;
@@ -252,6 +258,11 @@ export default async function DashboardPage() {
         signed={signedCount}
         medianResponseMinutes={medianResponseMinutes}
       />
+
+      {/* Unfinished work first: it names specific leads to pick up, so it
+          outranks any comparative block. Renders nothing when nothing is
+          outstanding. */}
+      <NeedsAttention summary={workSummary} />
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>

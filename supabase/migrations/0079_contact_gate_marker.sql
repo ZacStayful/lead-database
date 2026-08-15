@@ -1,0 +1,54 @@
+-- ============================================================================
+-- Mark the date the contact gate went in.
+--
+-- WHAT CHANGED IN THE APP
+-- -----------------------
+-- The lead feed card used to render the landlord's phone and email as
+-- tel:/mailto: links. It no longer does — contact details live on the lead
+-- detail page only, so getting a number requires opening the lead, and that
+-- open is recorded as a detail_opened event.
+--
+-- WHY THAT NEEDS A DATE
+-- ---------------------
+-- It changes what a detail_opened event MEANS, and it does so partway through
+-- the series.
+--
+-- Before the gate, contact details were available without leaving the feed, so
+-- opening the detail page was one of several things an operator might do —
+-- often to write a note, move a stage or set a callback, none of which are an
+-- intent to ring anybody. 129 assignments carry opens from that period, 46 of
+-- them three or more, and those counts cannot be read as contact attempts.
+--
+-- After the gate, an open is the only route to the number. That is what makes
+-- it a usable proxy: nobody opens a lead they have no intention of ringing.
+--
+-- So any metric of the form "times this operator went for the contact details"
+-- must count only events at or after this timestamp. Counting the whole series
+-- would silently mix two different meanings and flatter every operator who was
+-- active before the change — exactly the kind of number that looks fine and is
+-- wrong.
+--
+-- Same pattern and same purpose as telemetry_from (0047), which lets the
+-- benchmarks say "measured from <date>" instead of implying they cover a
+-- customer's whole history.
+--
+-- NOT YET READ BY ANYTHING. There is deliberately no attempt metric in this
+-- migration: at the moment it is applied there are zero qualifying events, and
+-- a dashboard that tells all 22 operators they have made no contact attempts
+-- would be worse than no dashboard. The marker ships now because it cannot be
+-- reconstructed later; the metric follows once the data behind it exists.
+--
+-- WHAT THIS PROXY STILL CANNOT DO
+-- -------------------------------
+-- An open is intent, not contact. It records that an operator went for the
+-- number, never that they dialled it, and it carries no outcome — so connect
+-- rate and best-time-to-call remain out of reach without explicit attempt
+-- logging. It also stays confounded to a degree, because the detail page holds
+-- the notes, stage, callback and income controls too, and an operator returning
+-- to write a note still registers an open. Treat the count as "went for the
+-- details", which is what it is, rather than as a call count.
+-- ============================================================================
+
+insert into public.system_settings (key, value)
+  values ('contact_gate_from', now()::text)
+  on conflict (key) do nothing;

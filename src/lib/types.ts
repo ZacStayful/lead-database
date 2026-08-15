@@ -1,3 +1,7 @@
+// closeReasons.ts owns the reason vocabulary and imports nothing from here, so
+// this direction is safe.
+import type { CloseReason } from "@/lib/closeReasons";
+
 export type SubscriptionStatus =
   | "active"
   | "inactive"
@@ -221,6 +225,13 @@ export interface LeadAssignment {
   // them.
   due_to_call_date_set_at: string | null;
   income_estimate_set_at: string | null;
+  // Explicit outcome capture (0067): the operator reached a conclusion and said
+  // so. Both columns have existed since that migration but were never added
+  // here, so nothing in the app could read them. Distinct from `rejected`
+  // (passed on before any work) and from `won` — this records a landlord who
+  // said no, and the reason is theirs, not the operator's.
+  closed_at: string | null;
+  closed_reason: CloseReason | null;
 }
 
 /**

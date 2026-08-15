@@ -30,6 +30,23 @@ export function stagesForLeadType(
   return leadType === "guaranteed_rent" ? GR_PIPELINE_STAGES : PIPELINE_STAGES;
 }
 
+/**
+ * The stages that mean "this operator got in front of the landlord".
+ *
+ * The two pipelines converge on different things, so this is not the same
+ * stage set in each. Defined once here because the analytics page and the
+ * dashboard both report on it, and this codebase has already been bitten by
+ * two customer-facing surfaces computing the same figure differently (see the
+ * header of dashboard/analytics/page.tsx on the Won figure).
+ */
+export function meetingStagesForLeadType(
+  leadType: LeadType | string | undefined
+): string[] {
+  return leadType === "guaranteed_rent"
+    ? ["viewing_booked", "contract_sent", "contract_signed"]
+    : ["web_meeting_booked", "web_meeting_no_show", "web_meeting_attended"];
+}
+
 const LABELS: Record<string, string> = Object.fromEntries(
   [...PIPELINE_STAGES, ...GR_PIPELINE_STAGES].map((s) => [s.value, s.label])
 );

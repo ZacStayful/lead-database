@@ -11,7 +11,6 @@ import type { AssignmentWithLead } from "@/lib/types";
 import {
   BarChart3,
   Check,
-  Mail,
   Phone,
   MapPin,
   Calendar,
@@ -155,8 +154,39 @@ export function LeadCard({
       {open && (
         <div className="border-t-[0.5px] border-border px-4 py-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Detail icon={Mail} label="Email" value={lead.email} isEmail />
-            <Detail icon={Phone} label="Phone" value={lead.phone} isPhone />
+            {/* Contact details live on the lead detail page only.
+
+                This card used to render the landlord's phone and email as
+                tel:/mailto: links, so an operator could take the number
+                straight from the feed. 114 of 308 assignments were expanded
+                here and never opened on the detail page — roughly half of all
+                engagement leaving no usable trace of whether anyone went after
+                the lead.
+
+                Putting the details one click away makes that click mean
+                something: nobody opens a lead they have no intention of
+                ringing. The open is recorded as detail_opened, so "went for
+                the contact details, and how many times" becomes measurable
+                where before it was invisible.
+
+                Everything else about the lead stays here. The gate is on the
+                two fields that represent intent to make contact, not on the
+                information an operator needs to decide whether the lead is
+                worth their time. */}
+            <div className="sm:col-span-2 flex items-start gap-2">
+              <Phone className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">
+                  Phone and email
+                </p>
+                <Link
+                  href={`/dashboard/leads/${lead.id}?from=${from}`}
+                  className="text-sm text-brand hover:underline"
+                >
+                  Open the lead to see contact details
+                </Link>
+              </div>
+            </div>
             <Detail icon={MapPin} label="Full address" value={lead.address} />
             <Detail
               icon={Calendar}
@@ -220,32 +250,20 @@ function Detail({
   icon: Icon,
   label,
   value,
-  isEmail,
-  isPhone,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value?: string | null;
-  isEmail?: boolean;
-  isPhone?: boolean;
 }) {
-  const display = value || "—";
+  // No link branches: the only fields on this card that warranted one were the
+  // landlord's phone and email, and those now live on the lead detail page.
+  const display = value || "\u2014";
   return (
     <div className="flex items-start gap-2">
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
-        {isEmail && value ? (
-          <a href={`mailto:${value}`} className="text-sm text-brand hover:underline">
-            {value}
-          </a>
-        ) : isPhone && value ? (
-          <a href={`tel:${value}`} className="text-sm text-brand hover:underline">
-            {value}
-          </a>
-        ) : (
-          <p className="truncate text-sm">{display}</p>
-        )}
+        <p className="truncate text-sm">{display}</p>
       </div>
     </div>
   );

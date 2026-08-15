@@ -32,10 +32,15 @@ const METRIC_LABEL: Record<BenchmarkRow["metric"], string> = {
   hours_to_first_attempt: "Typical time to first attempt",
 };
 
+// contact_rate and hours_to_first_attempt count the first sign that you went
+// after a lead — calling or emailing from here, writing a note, or moving it off
+// cold (0077). They used to count only a click on the phone or email link, which
+// almost nobody does: operators read the number and dial from a handset, so both
+// rows rendered blank for every operator on the platform.
 const METRIC_HELP: Record<BenchmarkRow["metric"], string> = {
   open_rate: "How often you open a lead you've been sent.",
   contact_rate:
-    "How often you click through to call or email the landlord.",
+    "How often you go after a lead — calling, emailing, or logging what happened.",
   hours_to_first_attempt:
     "How long a lead usually waits before you first try to reach them.",
 };
