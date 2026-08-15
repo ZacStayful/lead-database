@@ -11,7 +11,9 @@ import { PrintButton } from "@/components/dashboard/PrintButton";
 import {
   stagesForLeadType,
   pipelineBadgeClass,
+  meetingStagesForLeadType,
 } from "@/components/dashboard/pipelineStage";
+import { MIN_ATTEMPTED_FOR_RATE } from "@/lib/workSummary";
 import { formatDate, formatGBP } from "@/lib/utils";
 import type { LeadType } from "@/lib/types";
 
@@ -50,6 +52,9 @@ type AnalyticsAssignment = {
   status: string;
   pipeline_stage: string;
   viewed_at: string | null;
+  // The denominator for the meeting rate: leads actually gone after, not
+  // merely delivered.
+  first_contacted_at: string | null;
   income_estimate: number | null;
   // Set only on leads the customer took out of the expired pool themselves.
   claimed_from_pool_at: string | null;
@@ -68,7 +73,7 @@ export default async function AnalyticsPage() {
   const { data: rows } = await admin
     .from("lead_assignments")
     .select(
-      "status, pipeline_stage, viewed_at, income_estimate, claimed_from_pool_at, lead:leads(lead_type)"
+      "status, pipeline_stage, viewed_at, first_contacted_at, income_estimate, claimed_from_pool_at, lead:leads(lead_type)"
     )
     .eq("customer_id", customer.id);
 
@@ -191,14 +196,24 @@ function ProductAnalytics({
   const contacted = assignments.filter((a) => a.status !== "new").length;
 
   // The two pipelines converge on different things, so the "did they get in
-  // front of the landlord" metric is not the same stage in each.
-  const meetingStages =
-    product === "guaranteed_rent"
-      ? ["viewing_booked", "contract_sent", "contract_signed"]
-      : ["web_meeting_booked", "web_meeting_no_show", "web_meeting_attended"];
+  // front of the landlord" metric is not the same stage in each. The stage set
+  // lives in pipelineStage.ts so this page and the dashboard cannot drift.
+  const meetingStages = meetingStagesForLeadType(product);
   const meetingsBooked = assignments.filter((a) =>
     meetingStages.includes(a.pipeline_stage)
   ).length;
+
+  // Meeting rate over leads actually gone after — the mid-funnel figure that
+  // win rate cannot be yet. Across the platform there are ~7x as many meetings
+  // as wins and they are spread over 3x as many operators, so this is a number
+  // an operator can be measured against this month. Denominator is attempted,
+  // not delivered, for the reason 0067 gives: a rate over everything delivered
+  // mostly measures whether they bothered, which "Leads actioned" already says.
+  const attemptedCount = assignments.filter((a) => a.first_contacted_at).length;
+  const meetingRate =
+    attemptedCount >= MIN_ATTEMPTED_FOR_RATE
+      ? Math.round((meetingsBooked / attemptedCount) * 100)
+      : null;
   const attendedStage =
     product === "guaranteed_rent" ? "contract_signed" : "web_meeting_attended";
   const meetingsAttended = pipelineCounts.get(attendedStage) ?? 0;
@@ -364,8 +379,19 @@ function ProductAnalytics({
           <Card>
             <CardContent className="pt-6">
               <h3 className="mb-4 text-base font-semibold">Your activity</h3>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <Metric label="Leads actioned" value={contacted} />
+                {/* Null below the sample floor rather than a flattering or
+                    brutal number off three leads. */}
+                <Metric
+                  label={
+                    product === "guaranteed_rent"
+                      ? "Reach a viewing"
+                      : "Reach a meeting"
+                  }
+                  value={meetingRate === null ? "—" : `${meetingRate}%`}
+                  hint="Of the leads you went after"
+                />
                 <Metric
                   label={
                     product === "guaranteed_rent"
@@ -428,21 +454,31 @@ function FunnelRow({
   );
 }
 
+/**
+ * `value` accepts a string so a rate can render "—" when it is below its sample
+ * floor. A dash is a statement that the figure is not worth showing yet; a 0%
+ * would be a claim about the operator, and a wrong one.
+ */
 function Metric({
   label,
   value,
   money = false,
+  hint,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   money?: boolean;
+  hint?: string;
 }) {
   return (
     <div className="rounded-lg border-[0.5px] border-border p-4">
       <p className="text-2xl font-semibold">
-        {money ? formatGBP(value) : value}
+        {money && typeof value === "number" ? formatGBP(value) : value}
       </p>
       <p className="mt-1 text-xs text-muted-foreground">{label}</p>
+      {hint && (
+        <p className="mt-0.5 text-[0.7rem] text-muted-foreground">{hint}</p>
+      )}
     </div>
   );
 }

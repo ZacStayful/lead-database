@@ -12,6 +12,8 @@ import {
   type ProofRow,
   type AnonymisedWin,
 } from "@/components/dashboard/OperatorProof";
+import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
+import { computeWorkSummary } from "@/lib/workSummary";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
@@ -115,6 +117,10 @@ export default async function DashboardPage() {
         : (responseMins[responseMins.length / 2 - 1] +
             responseMins[responseMins.length / 2]) /
           2;
+
+  // Unfinished work: overdue callbacks and leads that stalled after contact.
+  // Pure arithmetic on the assignments already loaded above — no extra query.
+  const workSummary = computeWorkSummary(assignments);
 
   // Social proof: what the operators who have signed a landlord did, and the
   // anonymised wins feed. Called through the customer's OWN session rather than
@@ -272,6 +278,11 @@ export default async function DashboardPage() {
         signed={signedCount}
         medianResponseMinutes={medianResponseMinutes}
       />
+
+      {/* Unfinished work first: it names specific leads to pick up, so it
+          outranks any comparative block. Renders nothing when nothing is
+          outstanding. */}
+      <NeedsAttention summary={workSummary} />
 
       {/* Below the customer's own funnel and above their leads: it is the
           answer to "is this working for anyone?", which is the question the
