@@ -27,6 +27,7 @@ export type ProofRow = {
   operators: number;
   open_rate: number | null;
   contact_rate: number | null;
+  meeting_rate: number | null;
   avg_notes: number | null;
   operators_no_notes: number;
   median_hours_to_open: number | null;
@@ -99,6 +100,14 @@ export function OperatorProof({
       label: "Actually go after them",
       help: "Called, emailed, or logged what happened.",
       format: (r) => pct(r?.contact_rate ?? null),
+    },
+    {
+      // The row the other two are for. It is also where the funnel actually
+      // breaks — more than half of leads get chased and well under a tenth
+      // reach a diary — so it is the one worth leading somebody towards.
+      label: "Get a web meeting booked",
+      help: "Booked counts even if the landlord didn't turn up — that part isn't yours.",
+      format: (r) => pct(r?.meeting_rate ?? null),
     },
     {
       label: "Notes written",
