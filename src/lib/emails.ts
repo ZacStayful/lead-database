@@ -723,3 +723,91 @@ export async function sendCreditsExhaustedEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * Monthly insights — the Leaderboard, sent.
+ *
+ * Same four rows the customer would see at /dashboard/leaderboard, with their
+ * own figures beside the two cohorts, plus ONE thing to do next chosen from
+ * their own numbers (see composeInsight in lib/monthlyInsights.ts).
+ *
+ * The comparison table sits BELOW the ask, deliberately. Leading with a table
+ * in which the reader is behind makes the rest of the email an argument they
+ * have already lost; leading with a specific, achievable next step makes the
+ * table the evidence for it. Same figures, opposite message.
+ *
+ * There is no "you are underperforming" sentence anywhere in here and there
+ * should never be one. The gap speaks for itself to anyone who wants to look,
+ * and saying it out loud converts a useful nudge into a rebuke from a supplier.
+ */
+export async function sendMonthlyInsightsEmail(params: {
+  to: string;
+  heading: string;
+  subject: string;
+  ask: string;
+  evidence: string | null;
+  buttonLabel: string;
+  rows: {
+    label: string;
+    you: string;
+    signed: string;
+    others: string;
+  }[];
+  asOf: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, heading, subject, ask, evidence, buttonLabel, rows, asOf } = params;
+
+  const headerCell =
+    "padding:8px 6px;font-size:11px;color:#6b706a;font-weight:600;text-align:right";
+  const bodyCell = "padding:10px 6px;font-size:13px;text-align:right";
+
+  const table = `
+    <table style="width:100%;border-collapse:collapse;margin:20px 0 8px">
+      <tr>
+        <th style="padding:8px 6px;font-size:11px;color:#6b706a;font-weight:600;text-align:left">&nbsp;</th>
+        <th style="${headerCell}">You</th>
+        <th style="${headerCell}">Signed a client</th>
+        <th style="${headerCell}">Not yet</th>
+      </tr>
+      ${rows
+        .map(
+          (r) => `<tr style="border-top:0.5px solid #e3e5e2">
+        <td style="padding:10px 6px;font-size:13px">${esc(r.label)}</td>
+        <td style="${bodyCell};font-weight:700;color:${BRAND}">${esc(r.you)}</td>
+        <td style="${bodyCell};color:#6b706a">${esc(r.signed)}</td>
+        <td style="${bodyCell};color:#6b706a">${esc(r.others)}</td>
+      </tr>`
+        )
+        .join("")}
+    </table>`;
+
+  const inner = `
+    <h1 style="margin:0 0 10px;font-size:18px">${esc(heading)}</h1>
+    <p style="margin:0 0 14px;font-size:14px;line-height:1.5">${esc(ask)}</p>
+    ${
+      evidence
+        ? `<p style="margin:0 0 4px;color:#6b706a;font-size:13px;line-height:1.5">${esc(evidence)}</p>`
+        : ""
+    }
+    ${table}
+    <p style="margin:0 0 18px;color:#8a8f88;font-size:11px">
+      Management leads only${asOf ? `, as of ${esc(asOf)}` : ""}. Figures are averages across operators on the platform — nobody is named or ranked, and no one else can see yours.
+    </p>
+    ${button(`${APP_URL}/dashboard/leaderboard`, buttonLabel)}
+    <p style="margin:18px 0 0;color:#8a8f88;font-size:11px">
+      You can turn these monthly summaries off under Notifications in your dashboard.
+    </p>
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}

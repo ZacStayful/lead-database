@@ -23,6 +23,9 @@ export interface NotificationPreferences {
   credit_warnings: boolean;
   inactivity_nudge: boolean;
   progress_report: boolean;
+  // Monthly leaderboard summary: the customer's own figures against the two
+  // cohorts, plus one thing to do next. Opt-out only — a missing key is true.
+  monthly_insights: boolean;
 }
 
 export interface Customer {

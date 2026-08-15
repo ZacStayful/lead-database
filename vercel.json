@@ -20,6 +20,10 @@
       "schedule": "0 7 * * 1"
     },
     {
+      "path": "/api/cron/monthly-insights",
+      "schedule": "0 9 2 * *"
+    },
+    {
       "path": "/api/cron/inactivity-nudge",
       "schedule": "0 10 * * 1"
     },

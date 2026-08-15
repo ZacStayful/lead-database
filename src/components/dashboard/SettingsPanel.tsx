@@ -43,6 +43,12 @@ const PREFERENCE_ROWS: {
     description:
       "A Friday summary of the leads you've worked through this week.",
   },
+  {
+    key: "monthly_insights",
+    label: "Monthly lead summary",
+    description:
+      "Once a month: how your leads are going, alongside what the operators signing clients do. Your figures stay private.",
+  },
 ];
 
 /** Format an ISO timestamp as e.g. "23 October 2026". */
@@ -68,6 +74,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     credit_warnings: prefOn(customer.notification_preferences, "credit_warnings"),
     inactivity_nudge: prefOn(customer.notification_preferences, "inactivity_nudge"),
     progress_report: prefOn(customer.notification_preferences, "progress_report"),
+    monthly_insights: prefOn(customer.notification_preferences, "monthly_insights"),
   });
   const [prefSaving, setPrefSaving] = useState<keyof NotificationPreferences | null>(
     null

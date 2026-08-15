@@ -6,12 +6,13 @@ import type { NotificationPreferences } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** The four notification streams a customer can opt in/out of. */
+/** The notification streams a customer can opt in/out of. */
 const PREFERENCE_KEYS: (keyof NotificationPreferences)[] = [
   "new_lead",
   "credit_warnings",
   "inactivity_nudge",
   "progress_report",
+  "monthly_insights",
 ];
 
 /** Full-true default — used to fill any key missing from a customer's jsonb. */
@@ -20,12 +21,13 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   credit_warnings: true,
   inactivity_nudge: true,
   progress_report: true,
+  monthly_insights: true,
 };
 
 /**
  * Update the authenticated customer's own notification_preferences.
  *
- * Accepts a PARTIAL update to the four boolean keys and merges it onto the
+ * Accepts a PARTIAL update to the boolean keys and merges it onto the
  * current stored value (itself merged onto an all-true default so a missing key
  * reads as true). Writes go through the service role after an auth + ownership
  * check, mirroring /api/customer/settings, so the column stays non-writable via
