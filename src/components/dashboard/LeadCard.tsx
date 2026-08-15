@@ -7,11 +7,10 @@ import { Button } from "@/components/ui/button";
 import { cn, initials, formatDate, formatGBP, formatLeadAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
-import type { AssignmentWithLead, ClientLeadEventType } from "@/lib/types";
+import type { AssignmentWithLead } from "@/lib/types";
 import {
   BarChart3,
   Check,
-  Mail,
   Phone,
   MapPin,
   Calendar,
@@ -50,33 +49,6 @@ export function LeadCard({
     } catch {
       /* non-blocking */
     }
-  }
-
-  /**
-   * Passive engagement telemetry, same contract as LeadDetail: fire-and-forget,
-   * response never read, failures swallowed, so a slow write can never sit
-   * between an operator and a phone call. Repeats are collapsed server-side.
-   *
-   * This card was emitting NOTHING, while rendering the landlord's phone and
-   * email as tel:/mailto: links — so an operator could expand a lead, take the
-   * number and ring it without a single event being recorded. 114 of 308
-   * assignments were expanded here and never opened on the detail page, which
-   * is roughly half of all engagement landing on the one surface that was not
-   * instrumented. tel_click/mailto_click firing on three assignments in six
-   * weeks was substantially a measurement artefact, not operator behaviour.
-   */
-  function recordEvent(eventType: ClientLeadEventType) {
-    void fetch("/api/customer/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        assignment_id: assignment.id,
-        event_type: eventType,
-      }),
-      keepalive: true,
-    }).catch(() => {
-      /* telemetry is best-effort */
-    });
   }
 
   function toggle() {
@@ -182,23 +154,39 @@ export function LeadCard({
       {open && (
         <div className="border-t-[0.5px] border-border px-4 py-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Detail
-              icon={Mail}
-              label="Email"
-              value={lead.email}
-              isEmail
-              onActivate={() => recordEvent("mailto_click")}
-            />
-            {/* A tel_click also auto-flips status to 'contacted' via the 0043
-                trigger. That is the same thing a click on the detail page has
-                always done — this card was simply invisible to it. */}
-            <Detail
-              icon={Phone}
-              label="Phone"
-              value={lead.phone}
-              isPhone
-              onActivate={() => recordEvent("tel_click")}
-            />
+            {/* Contact details live on the lead detail page only.
+
+                This card used to render the landlord's phone and email as
+                tel:/mailto: links, so an operator could take the number
+                straight from the feed. 114 of 308 assignments were expanded
+                here and never opened on the detail page — roughly half of all
+                engagement leaving no usable trace of whether anyone went after
+                the lead.
+
+                Putting the details one click away makes that click mean
+                something: nobody opens a lead they have no intention of
+                ringing. The open is recorded as detail_opened, so "went for
+                the contact details, and how many times" becomes measurable
+                where before it was invisible.
+
+                Everything else about the lead stays here. The gate is on the
+                two fields that represent intent to make contact, not on the
+                information an operator needs to decide whether the lead is
+                worth their time. */}
+            <div className="sm:col-span-2 flex items-start gap-2">
+              <Phone className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">
+                  Phone and email
+                </p>
+                <Link
+                  href={`/dashboard/leads/${lead.id}?from=${from}`}
+                  className="text-sm text-brand hover:underline"
+                >
+                  Open the lead to see contact details
+                </Link>
+              </div>
+            </div>
             <Detail icon={MapPin} label="Full address" value={lead.address} />
             <Detail
               icon={Calendar}
@@ -262,42 +250,20 @@ function Detail({
   icon: Icon,
   label,
   value,
-  isEmail,
-  isPhone,
-  onActivate,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value?: string | null;
-  isEmail?: boolean;
-  isPhone?: boolean;
-  onActivate?: () => void;
 }) {
-  const display = value || "—";
+  // No link branches: the only fields on this card that warranted one were the
+  // landlord's phone and email, and those now live on the lead detail page.
+  const display = value || "\u2014";
   return (
     <div className="flex items-start gap-2">
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
-        {isEmail && value ? (
-          <a
-            href={`mailto:${value}`}
-            onClick={onActivate}
-            className="text-sm text-brand hover:underline"
-          >
-            {value}
-          </a>
-        ) : isPhone && value ? (
-          <a
-            href={`tel:${value}`}
-            onClick={onActivate}
-            className="text-sm text-brand hover:underline"
-          >
-            {value}
-          </a>
-        ) : (
-          <p className="truncate text-sm">{display}</p>
-        )}
+        <p className="truncate text-sm">{display}</p>
       </div>
     </div>
   );
