@@ -98,9 +98,16 @@ export function computeWorkSummary(
       }
     }
 
+    // 'in_discussion' counts as well as 'contacted'. isSettled deliberately
+    // leaves it unsettled on the grounds that an active conversation still goes
+    // stale — but the filter here originally required 'contacted', so an
+    // in_discussion lead could never be counted however long it sat. The
+    // comment promised behaviour the code did not implement. No live rows carry
+    // that status today, so nothing was miscounted; it would have gone wrong
+    // silently the first time somebody used it.
     if (
       !settled &&
-      a.status === "contacted" &&
+      (a.status === "contacted" || a.status === "in_discussion") &&
       new Date(a.last_status_change_at) < stalledBefore
     ) {
       stalledLeads += 1;
