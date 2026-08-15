@@ -15,6 +15,7 @@ import {
   sendSubscriptionResumedEmail,
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
+import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -422,17 +423,7 @@ export async function POST(request: NextRequest) {
           //
           // Best-effort and reporting-only, like the cron's stamp.
           if (resumedRow?.id) {
-            const { error: episodeError } = await admin
-              .from("subscription_pauses")
-              .update({ ended_at: new Date().toISOString() })
-              .eq("customer_id", resumedRow.id)
-              .is("ended_at", null);
-            if (episodeError) {
-              console.error("[stripe] pause episode stamp failed", {
-                customer: resumedRow.id,
-                error: episodeError.message,
-              });
-            }
+            await stampEpisodeEnded(admin, resumedRow.id, "stripe");
           }
 
           // Only notify on a genuine resume — never when the subscription is

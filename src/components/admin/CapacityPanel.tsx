@@ -17,6 +17,8 @@ export function CapacityPanel({
   title = "Subscriber capacity",
   weightedUsed,
   rawActiveCount,
+  pausedCount = 0,
+  pausedWeight = 0,
   activeLabel = "active customer",
   initialLimit,
   derivedCeiling,
@@ -30,8 +32,16 @@ export function CapacityPanel({
   title?: string;
   /** Weighted slots consumed by active customers (20-lead = 1, 10-lead = 0.5). */
   weightedUsed: number;
-  /** Unweighted count of active customers, shown for context. */
+  /** Unweighted count of active customers, shown for context. Excludes paused. */
   rawActiveCount: number;
+  /**
+   * Paused customers and the slots they will reclaim (0077). Reported beside the
+   * usage figure and never added to it — the slots are genuinely free today, but
+   * they are spoken for, and selling all of them over-commits us the month those
+   * customers return. Always zero for guaranteed rent, which has no pause.
+   */
+  pausedCount?: number;
+  pausedWeight?: number;
   /** Singular noun for the count line; pluralised with a trailing "s". */
   activeLabel?: string;
   initialLimit: number;
@@ -126,6 +136,13 @@ export function CapacityPanel({
               <> · manual cap</>
             )}
           </p>
+          {pausedCount > 0 && (
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Excludes {pausedCount} paused customer
+              {pausedCount === 1 ? "" : "s"} holding {pausedWeight} slot
+              {pausedWeight === 1 ? "" : "s"} on their return.
+            </p>
+          )}
         </div>
 
         {!derivedAvailable && (

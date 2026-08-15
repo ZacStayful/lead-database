@@ -78,28 +78,70 @@ export default async function AdminCustomersPage() {
     //
     // allSettled so one failing lookup cannot blank the others, and any failure
     // renders as "couldn't check" rather than as a healthy default.
-    const stripe = getStripe();
-    const results = await Promise.allSettled(
-      pausedCustomers.map(async (c) => {
-        if (!c.stripe_subscription_id) {
-          throw new Error("No Stripe subscription on file");
-        }
-        const sub = await stripe.subscriptions.retrieve(c.stripe_subscription_id);
-        const cancelled = sub.status === "canceled" || sub.status === "incomplete_expired";
-        const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
-        return {
-          id: c.id,
-          health: {
-            willBill: !cancelled && !cancelAtPeriodEnd,
-            cancelAtPeriodEnd,
-            cancelled,
-            nextChargeAt: sub.current_period_end
-              ? new Date(sub.current_period_end * 1000).toISOString()
-              : null,
-          } satisfies BillingHealth,
-        };
-      })
-    );
+    //
+    // getStripe() is INSIDE the try: it constructs the client eagerly and throws
+    // synchronously when STRIPE_SECRET_KEY is unset, which outside a catch would
+    // take down the whole customers page — the table, the supply-problem banner,
+    // everything — over an optional column.
+    let results: PromiseSettledResult<{ id: string; health: BillingHealth }>[] = [];
+    try {
+      const stripe = getStripe();
+      results = await Promise.allSettled(
+        pausedCustomers.map(async (c) => {
+          if (!c.stripe_subscription_id) {
+            // Not an unknown: with no subscription on file there is nothing for
+            // the resume cron to un-pause, so this customer definitively will not
+            // be billed again.
+            return {
+              id: c.id,
+              health: {
+                willBill: false,
+                cancelAtPeriodEnd: false,
+                cancelled: true,
+                nextChargeAt: null,
+                noSubscription: true,
+              } satisfies BillingHealth,
+            };
+          }
+          const sub = await stripe.subscriptions.retrieve(c.stripe_subscription_id);
+          const cancelled =
+            sub.status === "canceled" || sub.status === "incomplete_expired";
+          const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
+          // current_period_end moved from the subscription onto its items in the
+          // newer API version, and no apiVersion is pinned in getStripe(), so the
+          // account default decides which shape arrives. Read both — the same
+          // belt-and-braces the webhook uses for current_period_start.
+          const periodEnd =
+            sub.current_period_end ??
+            (sub.items?.data?.[0] as unknown as { current_period_end?: number })
+              ?.current_period_end ??
+            null;
+          return {
+            id: c.id,
+            health: {
+              willBill: !cancelled && !cancelAtPeriodEnd,
+              cancelAtPeriodEnd,
+              cancelled,
+              nextChargeAt: periodEnd
+                ? new Date(periodEnd * 1000).toISOString()
+                : null,
+            } satisfies BillingHealth,
+          };
+        })
+      );
+    } catch (err) {
+      console.error("[admin/customers] Stripe client unavailable", err);
+    }
+
+    for (const c of pausedCustomers) {
+      billingHealth[c.id] = {
+        willBill: null,
+        cancelAtPeriodEnd: false,
+        cancelled: false,
+        nextChargeAt: null,
+        error: "Could not reach Stripe",
+      };
+    }
     results.forEach((r, i) => {
       const customerId = pausedCustomers[i].id;
       if (r.status === "fulfilled") {

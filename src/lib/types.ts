@@ -141,9 +141,16 @@ export interface PauseEpisode {
   created_at: string;
 }
 
-/** What happened after a pause, derived live by get_pause_outcomes() (0077). */
+/**
+ * What happened after a pause, derived live by get_pause_outcomes() (0077).
+ *
+ * `ended_untracked` means the episode's best-effort ended_at stamp was missed,
+ * so we know the pause is over but not when — it is kept out of the other three
+ * because each of those is decided by comparing cancelled_at against ended_at.
+ */
 export type PauseOutcome =
   | "active"
+  | "ended_untracked"
   | "resumed_retained"
   | "resumed_then_left"
   | "left_during_pause";

@@ -786,6 +786,18 @@ function BillingHealthCell({ health }: { health: BillingHealth | undefined }) {
       </div>
     );
   }
+  if (health.noSubscription) {
+    return (
+      <div className="py-1">
+        <span className="inline-flex items-center rounded-full border border-transparent bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+          No subscription on file
+        </span>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Nothing for the resume cron to un-pause.
+        </p>
+      </div>
+    );
+  }
   if (health.cancelled) {
     return (
       <span className="inline-flex items-center rounded-full border border-transparent bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">

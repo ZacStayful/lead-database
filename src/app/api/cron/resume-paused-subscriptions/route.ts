@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendSubscriptionResumedEmail } from "@/lib/emails";
+import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,17 +123,12 @@ async function handle(request: NextRequest) {
     // been cleared above — so a missed stamp is a gap in the churn history, not
     // a stuck pause. Placed inside the `cleared` branch so it fires exactly once
     // per pause, for the same reason the email does.
-    const { error: episodeError } = await admin
-      .from("subscription_pauses")
-      .update({ ended_at: new Date().toISOString() })
-      .eq("customer_id", customer.id)
-      .is("ended_at", null);
-    if (episodeError) {
-      console.error("[resume-paused-subscriptions] episode stamp failed", {
-        customer: customer.id,
-        error: episodeError.message,
-      });
-    }
+    //
+    // Stamps the LATEST open episode by id rather than every open one. Because
+    // the stamp is allowed to fail, a customer can carry an older un-stamped
+    // episode from a previous pause; a blanket update would then close it with
+    // today's date and give get_pause_outcomes a window that never happened.
+    await stampEpisodeEnded(admin, customer.id, "resume-paused-subscriptions");
 
     const { error: emailError } = await sendSubscriptionResumedEmail({
       to: customer.email,

@@ -75,6 +75,8 @@ export interface BillingHealth {
   cancelAtPeriodEnd: boolean;
   cancelled: boolean;
   nextChargeAt: string | null;
+  /** No stripe_subscription_id on file: nothing exists for the cron to resume. */
+  noSubscription?: boolean;
   error?: string;
 }
 
@@ -108,6 +110,12 @@ export function pauseOutlook(
   facts: PauseFacts | undefined,
   health: BillingHealth | undefined
 ): PauseOutlook {
+  if (health?.noSubscription) {
+    return {
+      band: "not_returning",
+      reason: "No Stripe subscription on file — nothing to resume billing on",
+    };
+  }
   if (health?.cancelled) {
     return {
       band: "not_returning",

@@ -219,6 +219,8 @@ export default async function AdminOverviewPage() {
           }
           weightedUsed={capacity.weightedUsed}
           rawActiveCount={capacity.rawActiveCount}
+          pausedCount={capacity.pausedCount}
+          pausedWeight={capacity.pausedWeight}
           activeLabel="active management customer"
           initialLimit={capacity.limit}
           waitlistedCount={waitlistedAccounts}

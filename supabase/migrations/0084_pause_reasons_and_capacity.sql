@@ -198,10 +198,32 @@ as $$
     sp.reasons, sp.note, sp.months,
     sp.paused_at, sp.resumes_at, sp.ended_at,
     case
-      -- Still running. customers.paused_at is the authority on "paused now", so
-      -- an episode whose ended_at stamp was missed still reads correctly here.
-      when c.paused_at is not null and sp.ended_at is null then 'active'
-      when sp.ended_at is null                             then 'active'
+      -- Still running: the customer IS paused, and this is their most recent
+      -- episode.
+      --
+      -- Not keyed on "ended_at is null" alone, because that stamp is
+      -- best-effort: a customer who pauses again after a missed stamp carries
+      -- two open episodes, and the older one would read as still running
+      -- forever. Not keyed on sp.paused_at = c.paused_at either — the two are
+      -- written from one value today, but that is an invisible coupling a
+      -- future writer could break with a fresh now(), and the failure mode is a
+      -- LIVE pause silently reporting as ended.
+      when c.paused_at is not null
+       and sp.ended_at is null
+       and sp.paused_at = (
+             select max(sp2.paused_at) from public.subscription_pauses sp2
+             where sp2.customer_id = sp.customer_id
+           )
+      then 'active'
+
+      -- Ended, but we do not know when: the stamp was missed. Given its own
+      -- outcome rather than being guessed into one of the three below, all of
+      -- which are decided by comparing cancelled_at against ended_at. Reporting
+      -- it as 'active' would inflate the paused count with pauses that are long
+      -- over; reporting it as 'resumed_retained' would silently claim a
+      -- retention we never observed.
+      when sp.ended_at is null then 'ended_untracked'
+
       when c.cancelled_at is not null
        and c.cancelled_at between sp.paused_at and sp.ended_at
                                                            then 'left_during_pause'

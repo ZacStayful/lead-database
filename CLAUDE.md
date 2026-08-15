@@ -1438,8 +1438,18 @@ comment rather than changing behaviour. `pause_count` gates nothing.
    is gone, i.e. the customer resumed early through the billing portal.
 
 Both are guarded on `.not("paused_at","is",null)` so only the writer that
-actually flips the column sends the email, and both stamp `ended_at` on the open
-episode.
+actually flips the column sends the email, and both close the episode through
+`stampEpisodeEnded()`.
+
+That helper stamps the **latest** open episode by id, not every open one.
+Because the stamp is best-effort and allowed to fail, a customer can carry an
+un-stamped episode from an earlier pause, and a blanket
+`is("ended_at", null)` update would close it too with today's date — inventing a
+pause window that never happened. For the same reason `get_pause_outcomes()`
+decides `active` from "the customer is paused **and** this is their most recent
+episode" rather than from `ended_at is null`, and gives a missed stamp its own
+outcome, `ended_untracked`, instead of guessing it into one of the three that are
+decided by comparing `cancelled_at` against `ended_at`.
 
 **The third case is a cancellation.** A cancelled subscription reports no
 `pause_collection`, so path 2 fires for it too — and only the *email* there is
