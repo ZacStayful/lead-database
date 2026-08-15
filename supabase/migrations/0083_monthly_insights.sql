@@ -34,6 +34,30 @@ alter table public.customers
   add column if not exists last_insights_sent_at timestamptz;
 
 -- ---------------------------------------------------------------------------
+-- monthly_insights joins the notification preferences.
+--
+-- Every reader already treats a missing key as true (prefOn in SettingsPanel,
+-- wantsInsights here, the merge onto DEFAULT_PREFERENCES in the settings
+-- route), so this is not what makes the feature work. It is what stops the
+-- column drifting from the TypeScript type that now declares the key required:
+-- without it every new customer row is created missing a key the type says is
+-- there, and the only thing hiding that is defensive code at each read.
+--
+-- Same shape as 0034, which established the column: update the DEFAULT for new
+-- rows, then merge the key into existing ones. `||` is a merge, not a replace,
+-- so an existing explicit false on any other stream survives untouched.
+-- ---------------------------------------------------------------------------
+alter table public.customers
+  alter column notification_preferences set default
+    '{"new_lead": true, "credit_warnings": true, "inactivity_nudge": true,
+      "progress_report": true, "monthly_insights": true}'::jsonb;
+
+update public.customers
+   set notification_preferences =
+       notification_preferences || '{"monthly_insights": true}'::jsonb
+ where not (notification_preferences ? 'monthly_insights');
+
+-- ---------------------------------------------------------------------------
 -- One row per management subscriber who has actually been sent leads.
 --
 -- Customers with nothing delivered are excluded at source rather than filtered

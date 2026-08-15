@@ -16,7 +16,20 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+/**
+ * 300, not the 60 the other crons use.
+ *
+ * This route is the only one that makes a per-customer OUTBOUND call on two
+ * vendors in sequence. sendSms carries an 8-second timeout, so a Twilio outage
+ * costs 8s per customer with a phone number: 15 of them is 120 seconds before
+ * a single email is counted, and the run would be killed part-way through with
+ * some customers emailed and the rest silently skipped.
+ *
+ * Failing that way is not catastrophic — an unstamped customer is re-sent next
+ * month rather than never — but it would look like the job working while half
+ * the list never heard anything.
+ */
+export const maxDuration = 300;
 
 /**
  * Monthly lead summary — the Leaderboard, sent to each management subscriber.
