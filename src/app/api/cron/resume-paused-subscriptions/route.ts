@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendSubscriptionResumedEmail } from "@/lib/emails";
+import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +16,9 @@ type PausedCustomer = {
 };
 
 /**
- * Daily cron: resume management subscriptions whose 3-month pause has elapsed.
+ * Daily cron: resume management subscriptions whose pause has elapsed. The
+ * duration is chosen by the customer (1, 2 or 3 months, 0077), so this reads
+ * pause_resumes_at rather than assuming any particular length.
  * Auth: CRON_SECRET bearer only (a pure scheduled job, matching the
  * inactivity-nudge cron — no admin-session path).
  *
@@ -82,7 +85,7 @@ async function handle(request: NextRequest) {
     //
     // Re-baseline pacing on resume (anchor = today, monthly counter = 0), the
     // same reset execute_filter_lift does when a customer re-enters the
-    // guarantee system. Without it, the stale (3-month-old) billing_cycle_anchor
+    // guarantee system. Without it, the stale (months-old) billing_cycle_anchor
     // plus a zeroed monthly counter would read as a maximal deficit and dump a
     // flood of leads on the customer the instant they resume. lead_balance is
     // deliberately NOT touched — credits carry forward.
@@ -115,6 +118,19 @@ async function handle(request: NextRequest) {
       alreadyResumed += 1;
       continue;
     }
+
+    // Close the pause episode (0077). Best-effort and deliberately not retried:
+    // this stamp is REPORTING ONLY. Nothing reads ended_at to decide whether a
+    // customer is paused — customers.paused_at is the authority, and it has just
+    // been cleared above — so a missed stamp is a gap in the churn history, not
+    // a stuck pause. Placed inside the `cleared` branch so it fires exactly once
+    // per pause, for the same reason the email does.
+    //
+    // Stamps the LATEST open episode by id rather than every open one. Because
+    // the stamp is allowed to fail, a customer can carry an older un-stamped
+    // episode from a previous pause; a blanket update would then close it with
+    // today's date and give get_pause_outcomes a window that never happened.
+    await stampEpisodeEnded(admin, customer.id, "resume-paused-subscriptions");
 
     const { error: emailError } = await sendSubscriptionResumedEmail({
       to: customer.email,

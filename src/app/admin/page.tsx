@@ -19,8 +19,18 @@ export default async function AdminOverviewPage() {
   // "Active" spans BOTH products. subscription_status is management-only, so a
   // GR-only subscriber — whose management columns stay inactive by design
   // (CLAUDE.md §18) — was counted nowhere on this page despite paying monthly.
+  //
+  // Paused management subscribers are excluded from the management side (0077).
+  // They keep account_status = 'active' so their routing slot is reserved, but
+  // Stripe collection is paused with invoices VOIDED — so counting them here
+  // billed £0 while contributing their full plan price to reported MRR below.
+  // Pause is management-only, so the GR side never applies this.
+  const isPausedMgmt = (c: Customer) => c.paused_at != null;
   const activeManagement = customers.filter(
-    (c) => c.subscription_status === "active" && c.is_active
+    (c) => c.subscription_status === "active" && c.is_active && !isPausedMgmt(c)
+  );
+  const pausedManagement = customers.filter(
+    (c) => c.subscription_status === "active" && c.is_active && isPausedMgmt(c)
   );
   const activeGr = customers.filter(
     (c) => c.gr_subscription_status === "active" && c.is_active
@@ -28,7 +38,8 @@ export default async function AdminOverviewPage() {
   const activeCustomers = customers.filter(
     (c) =>
       c.is_active &&
-      (c.subscription_status === "active" || c.gr_subscription_status === "active")
+      ((c.subscription_status === "active" && !isPausedMgmt(c)) ||
+        c.gr_subscription_status === "active")
   );
 
   // Capacity management uses account_status (admin approval), independent of
@@ -87,7 +98,10 @@ export default async function AdminOverviewPage() {
   const isFiltered = (s: string | null | undefined) =>
     s === "active" || s === "pending_lift";
   const mgmtHolders = customers.filter(
-    (c) => c.subscription_status === "active" && c.account_status === "active"
+    (c) =>
+      c.subscription_status === "active" &&
+      c.account_status === "active" &&
+      !isPausedMgmt(c)
   );
   const grHolders = customers.filter(
     (c) => c.gr_subscription_status === "active"
@@ -122,6 +136,15 @@ export default async function AdminOverviewPage() {
       (sum, c) => sum + grPlanForAllocation(c.gr_monthly_allocation).priceGbp,
       0
     );
+  // Revenue that comes back when the current pauses end. Reported beside MRR,
+  // never added to it: a paused subscription is billing nothing today, and
+  // folding it into MRR is what made the figure wrong before 0077.
+  const pausedMrr = pausedManagement
+    .filter((c) => c.stripe_subscription_id)
+    .reduce(
+      (sum, c) => sum + planForAllocation(c.monthly_allocation).priceGbp,
+      0
+    );
   const mrr = mgmtMrr + grMrr;
   const leadsThisMonth = customers.reduce(
     (sum, c) => sum + (c.leads_received_this_month ?? 0),
@@ -141,12 +164,21 @@ export default async function AdminOverviewPage() {
     {
       label: "Monthly recurring revenue",
       value: `£${mrr.toLocaleString()}`,
-      hint: `Management £${mgmtMrr.toLocaleString()} · Guaranteed Rent £${grMrr.toLocaleString()}`,
+      hint:
+        `Management £${mgmtMrr.toLocaleString()} · Guaranteed Rent £${grMrr.toLocaleString()}` +
+        // Shown, never added: this money is not being collected today.
+        (pausedMrr > 0
+          ? ` · £${pausedMrr.toLocaleString()} paused, returning`
+          : ""),
     },
     {
       label: "Active customers",
       value: String(activeCustomers.length),
-      hint: `Management ${activeManagement.length} · Guaranteed Rent ${activeGr.length}`,
+      hint:
+        `Management ${activeManagement.length} · Guaranteed Rent ${activeGr.length}` +
+        (pausedManagement.length > 0
+          ? ` · ${pausedManagement.length} paused`
+          : ""),
     },
     { label: "Leads sent this month", value: String(leadsThisMonth) },
     { label: "Leads awaiting assignment", value: String(notFullyAssigned) },
@@ -187,6 +219,8 @@ export default async function AdminOverviewPage() {
           }
           weightedUsed={capacity.weightedUsed}
           rawActiveCount={capacity.rawActiveCount}
+          pausedCount={capacity.pausedCount}
+          pausedWeight={capacity.pausedWeight}
           activeLabel="active management customer"
           initialLimit={capacity.limit}
           waitlistedCount={waitlistedAccounts}

@@ -1,7 +1,16 @@
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
-import { getOutcomeOverview } from "@/lib/outcomes";
+import { getOutcomeOverview, getPauseInsight } from "@/lib/outcomes";
 import { formatDate, formatGBP } from "@/lib/utils";
+import { pauseReasonLabel } from "@/lib/pauseOptions";
+
+const PAUSE_OUTCOME_LABEL: Record<string, string> = {
+  active: "Still paused",
+  resumed_retained: "Came back and stayed",
+  resumed_then_left: "Came back, then left",
+  left_during_pause: "Left during the pause",
+  ended_untracked: "Ended (date not recorded)",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -28,8 +37,10 @@ function pct(v: number | null): string {
 }
 
 export default async function AdminOutcomesPage() {
-  const { unavailable, wins, scoreboard, needsReview, duplicates } =
-    await getOutcomeOverview();
+  // Fetched independently: an unapplied 0077 must cost this one block, not the
+  // whole page. See getPauseInsight.
+  const [{ unavailable, wins, scoreboard, needsReview, duplicates }, pauses] =
+    await Promise.all([getOutcomeOverview(), getPauseInsight()]);
 
   if (unavailable) {
     return (
@@ -56,6 +67,129 @@ export default async function AdminOutcomesPage() {
           What happened to the leads after they were sold.
         </p>
       </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {!pauses.unavailable && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-medium">Why customers pause and leave</h2>
+            <p className="text-sm text-muted-foreground">
+              {pauses.total} pause{pauses.total === 1 ? "" : "s"} recorded ·{" "}
+              {pauses.completed} finished
+            </p>
+          </div>
+
+          {pauses.total === 0 ? (
+            <Card>
+              <CardContent className="p-5 text-sm text-muted-foreground">
+                Nobody has paused yet. Reasons are captured from the moment
+                someone does.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card>
+                <CardContent className="space-y-2 p-5">
+                  <p className="text-sm font-medium">Reasons given</p>
+                  {/* Counts, not rates. A pause citing two reasons appears under
+                      both, so these sum to more than the pause count. */}
+                  <dl className="space-y-1 text-sm">
+                    {pauses.reasonCounts.map((r) => (
+                      <div key={r.reason} className="flex justify-between gap-4">
+                        <dt className="text-muted-foreground">
+                          {pauseReasonLabel(r.reason)}
+                        </dt>
+                        <dd className="tabular-nums">{r.count}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className="pt-1 text-xs text-muted-foreground">
+                    A pause citing two reasons is counted under each, so these add
+                    up to more than {pauses.total}.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="space-y-2 p-5">
+                  <p className="text-sm font-medium">What happened next</p>
+                  <dl className="space-y-1 text-sm">
+                    {pauses.outcomeCounts.map((o) => (
+                      <div key={o.outcome} className="flex justify-between gap-4">
+                        <dt className="text-muted-foreground">
+                          {PAUSE_OUTCOME_LABEL[o.outcome] ?? o.outcome}
+                        </dt>
+                        <dd className="tabular-nums">{o.count}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </CardContent>
+              </Card>
+
+              <Card className="md:col-span-2">
+                <CardContent className="space-y-2 p-5">
+                  <p className="text-sm font-medium">
+                    Which reasons come back, and which do not
+                  </p>
+                  {pauses.crossTabSuppressed ? (
+                    // Withheld rather than shown thin: below the threshold one
+                    // customer moves a whole cell, and this block would read as a
+                    // rate drawn from a handful of people.
+                    <p className="text-sm text-muted-foreground">
+                      Held back until more pauses have finished —{" "}
+                      {pauses.completed} so far. Until then a single customer
+                      would swing the whole picture, and this would read as a
+                      pattern rather than an anecdote.
+                    </p>
+                  ) : (
+                    <dl className="space-y-1 text-sm">
+                      {pauses.crossTab.map((x) => (
+                        <div
+                          key={`${x.reason}-${x.outcome}`}
+                          className="flex justify-between gap-4"
+                        >
+                          <dt className="text-muted-foreground">
+                            {pauseReasonLabel(x.reason)} —{" "}
+                            {PAUSE_OUTCOME_LABEL[x.outcome] ?? x.outcome}
+                          </dt>
+                          <dd className="tabular-nums">{x.count}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                </CardContent>
+              </Card>
+
+              {(pauses.cancellationFeedback.length > 0 ||
+                pauses.cancellationComments.length > 0) && (
+                <Card className="md:col-span-2">
+                  <CardContent className="space-y-2 p-5">
+                    <p className="text-sm font-medium">
+                      Reasons given when cancelling outright
+                    </p>
+                    <dl className="space-y-1 text-sm">
+                      {pauses.cancellationFeedback.map((f) => (
+                        <div key={f.feedback} className="flex justify-between gap-4">
+                          <dt className="text-muted-foreground">{f.feedback}</dt>
+                          <dd className="tabular-nums">{f.count}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {pauses.cancellationComments.map((c) => (
+                      <p
+                        key={c.businessName}
+                        className="whitespace-pre-wrap text-sm italic text-muted-foreground"
+                      >
+                        {c.businessName}: {c.comment}
+                      </p>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ---------------------------------------------------------------- */}
       <section className="space-y-3">

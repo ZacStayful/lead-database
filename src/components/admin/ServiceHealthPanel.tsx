@@ -90,6 +90,19 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         )}
       </p>
 
+      {/* Paused customers are excluded from every figure above, because they
+          receive no leads and are owed none. Saying so matters: some of the
+          headroom just quoted is owed to customers who are coming back, and
+          selling all of it would over-commit us the month they return. Shown,
+          never added — the same rule the recycling split below obeys. */}
+      {c.pausedCustomers > 0 && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          Excludes {c.pausedCustomers} paused customer
+          {c.pausedCustomers === 1 ? "" : "s"} — {c.pausedDemand} leads a month
+          returning when their pauses end.
+        </p>
+      )}
+
       {/* The split. Never let the combined number stand on its own — the gap is
           exactly how much headroom depends on customers staying inactive. */}
       <p className="mt-1 text-sm text-muted-foreground">

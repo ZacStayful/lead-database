@@ -6,6 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import type { Customer, NotificationPreferences } from "@/lib/types";
 import { planForAllocation } from "@/lib/plans";
+import {
+  PAUSE_MONTHS_OPTIONS,
+  PAUSE_NOTE_MAX_LENGTH,
+  PAUSE_REASONS,
+  pauseMonthsLabel,
+  type PauseMonths,
+  type PauseReason,
+} from "@/lib/pauseOptions";
 
 /** Missing / unset keys default to true — an opt-out is only an explicit false. */
 function prefOn(
@@ -73,6 +81,14 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
   const [pauseResumesAt, setPauseResumesAt] = useState<string | null>(
     customer.pause_resumes_at
   );
+  const [showPauseForm, setShowPauseForm] = useState(false);
+  // Defaults to 3, which is what every pause was before the choice existed.
+  const [selectedMonths, setSelectedMonths] = useState<PauseMonths>(3);
+  const [selectedReasons, setSelectedReasons] = useState<Set<PauseReason>>(
+    new Set()
+  );
+  const [pauseNote, setPauseNote] = useState("");
+  const [pauseError, setPauseError] = useState<string | null>(null);
   const [smsEnabled, setSmsEnabled] = useState(customer.sms_alerts_enabled);
   const [smsSaving, setSmsSaving] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPreferences>({
@@ -142,25 +158,44 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     }
   }
 
+  function toggleReason(value: PauseReason) {
+    setPauseError(null);
+    setSelectedReasons((current) => {
+      const next = new Set(current);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }
+
   async function pauseSubscription() {
-    const confirmed = window.confirm(
-      "Pause your subscription for 3 months? You won't be billed and won't " +
-        "receive leads during the pause, but your current lead balance is kept. " +
-        "It resumes automatically after 3 months, or sooner if you choose to " +
-        "start paying again."
-    );
-    if (!confirmed) return;
+    if (selectedReasons.size === 0) {
+      setPauseError("Please tell us why you are pausing.");
+      return;
+    }
+    if (selectedReasons.has("other") && pauseNote.trim().length === 0) {
+      setPauseError("Please tell us a little more.");
+      return;
+    }
+    setPauseError(null);
     setPauseLoading(true);
     try {
       const res = await fetch("/api/customer/subscription/pause", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          months: selectedMonths,
+          reasons: Array.from(selectedReasons),
+          note: pauseNote.trim() || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Could not pause.");
       setPausedAt(data.paused_at);
       setPauseResumesAt(data.pause_resumes_at);
+      setShowPauseForm(false);
     } catch (err) {
-      alert(
+      setPauseError(
         err instanceof Error
           ? err.message
           : "Could not pause your subscription. Please try again."
@@ -177,6 +212,15 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     customer.account_status === "active" &&
     customer.subscription_status === "active";
   const isPaused = Boolean(pausedAt);
+
+  // Mirrors the route's date maths exactly (new Date(now).setMonth(+months)),
+  // including its roll-over on short months, so the date shown here is the date
+  // the server will actually store rather than an optimistic approximation.
+  const resumeDatePreview = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + selectedMonths);
+    return d;
+  })();
 
   return (
     <div className="space-y-6">
@@ -234,25 +278,133 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
             ) : (
               <>
                 <p className="text-sm text-muted-foreground">
-                  Need a break? You can pause your subscription for 3 months
-                  instead of cancelling. During the pause you are not billed and
-                  you do not receive new leads, but your current lead balance is
-                  kept and will be waiting when you return. Your subscription
-                  resumes automatically after 3 months — or sooner if you decide
+                  Need a break? You can pause your subscription instead of
+                  cancelling. During the pause you are not billed and you do not
+                  receive new leads, but any lead credits you have left are kept
+                  and will be waiting when you return. Your subscription resumes
+                  automatically at the end of the pause — or sooner if you decide
                   to start paying again.
                 </p>
-                <div className="pt-2">
-                  <Button
-                    variant="outline"
-                    onClick={pauseSubscription}
-                    disabled={pauseLoading}
-                  >
-                    {pauseLoading ? "Pausing…" : "Pause for 3 months"}
-                  </Button>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    To cancel entirely, use Manage billing above.
-                  </p>
-                </div>
+
+                {!showPauseForm ? (
+                  <div className="pt-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowPauseForm(true)}
+                    >
+                      Pause subscription
+                    </Button>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      To cancel entirely, use Manage billing above.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-5 rounded-lg border p-4">
+                    <div>
+                      <p className="text-sm font-medium">How long for?</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {PAUSE_MONTHS_OPTIONS.map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            aria-pressed={selectedMonths === m}
+                            onClick={() => setSelectedMonths(m)}
+                            className={`rounded-md border px-3 py-1.5 text-sm transition ${
+                              selectedMonths === m
+                                ? "border-transparent bg-brand text-brand-foreground"
+                                : "hover:bg-muted"
+                            }`}
+                          >
+                            {pauseMonthsLabel(m)}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Billing and leads restart on{" "}
+                        <span className="font-medium">
+                          {formatLongDate(resumeDatePreview.toISOString())}
+                        </span>
+                        .
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-medium">
+                        Why are you pausing?{" "}
+                        <span className="font-normal text-muted-foreground">
+                          (required — pick as many as apply)
+                        </span>
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(
+                          Object.entries(PAUSE_REASONS) as [PauseReason, string][]
+                        ).map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={selectedReasons.has(value)}
+                            onClick={() => toggleReason(value)}
+                            className={`rounded-md border px-3 py-1.5 text-sm transition ${
+                              selectedReasons.has(value)
+                                ? "border-transparent bg-brand text-brand-foreground"
+                                : "hover:bg-muted"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="pause-note"
+                        className="text-sm font-medium"
+                      >
+                        {selectedReasons.has("other")
+                          ? "Please tell us more (required)"
+                          : "Anything else you'd like us to know? (optional)"}
+                      </label>
+                      <textarea
+                        id="pause-note"
+                        value={pauseNote}
+                        onChange={(e) => {
+                          setPauseNote(e.target.value);
+                          setPauseError(null);
+                        }}
+                        maxLength={PAUSE_NOTE_MAX_LENGTH}
+                        rows={3}
+                        className="mt-2 w-full rounded-md border bg-background p-2 text-sm"
+                        placeholder="This goes straight to us and helps us improve the service."
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {pauseNote.length} / {PAUSE_NOTE_MAX_LENGTH}
+                      </p>
+                    </div>
+
+                    {pauseError && (
+                      <p className="text-sm text-red-600">{pauseError}</p>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={pauseSubscription} disabled={pauseLoading}>
+                        {pauseLoading
+                          ? "Pausing…"
+                          : `Pause for ${pauseMonthsLabel(selectedMonths)}`}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setShowPauseForm(false);
+                          setPauseError(null);
+                        }}
+                        disabled={pauseLoading}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </CardContent>

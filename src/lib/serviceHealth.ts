@@ -84,6 +84,17 @@ export interface ProductCapacity {
   roomForCustomers: number;
   /** True when more is promised each month than sustainably arrives. */
   borrowingFromInventory: boolean;
+  /**
+   * Paused customers and the monthly volume that comes back with them (0077).
+   *
+   * Excluded from every figure above — a paused customer receives no leads and
+   * is owed none — and reported here so the exclusion is visible. NEVER add
+   * these to demandPerMonth or subtract them from roomForCustomers: the point is
+   * that some of the headroom above is owed to customers who are coming back.
+   * Always zero for guaranteed rent, which has no pause.
+   */
+  pausedCustomers: number;
+  pausedDemand: number;
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -209,6 +220,8 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       sustainableCustomers: Number(r.sustainable_customers ?? 0),
       sustainableCustomersNewOnly: Number(r.sustainable_customers_new_only ?? 0),
       roomForCustomers: Number(r.room_for_customers ?? 0),
+      pausedCustomers: Number(r.paused_customers ?? 0),
+      pausedDemand: Number(r.paused_demand ?? 0),
       // Still measured against NEW-lead slots, not serviceable ones. The
       // question this answers is "are we promising more than arrives", and
       // recycled supply is a recovery from what already went out — folding it in

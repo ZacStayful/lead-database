@@ -76,8 +76,16 @@ on a GR cancellation, so they must never gate GR behaviour.
 
 Also: `notification_preferences` (jsonb, 0034), `sms_alerts_enabled`,
 `last_nudge_sent_at`, `last_report_sent_at`, lead-filtering columns (0026),
-pause columns (0038), goal columns (0051 — see §13), `pool_debit` /
-`gr_pool_debit` (0073 — see §19).
+pause columns (0038 — see §21), goal columns (0051 — see §13), `pool_debit` /
+`gr_pool_debit` (0073 — see §19), `cancellation_feedback` /
+`cancellation_comment` (0084 — Stripe's cancellation reason, management-only,
+first cancellation wins like `cancelled_at`).
+
+### `subscription_pauses` *(0084)*
+One row per pause episode: `reasons` (text[]), `note`, `months`, `paused_at`,
+`resumes_at`, `ended_at`. **Live pause state is `customers.paused_at`, never this
+table** — `ended_at` is a best-effort stamp that nothing reads to decide whether
+a customer is paused. Management-only. See §21.
 
 ### `leads`
 `assignment_count` / `max_assignments` (**default 3** since 0055, was 2) cap
@@ -404,6 +412,28 @@ for being new with no way to earn out of it.
   queries that subtract the pair clamp with `greatest(…, 0)`. What a claim does
   skew is `sum(max_assignments)` in `get_service_capacity`, which will
   understate delivered slots by one per claim.
+- **Stripe's billing cycle keeps running underneath a pause.** `pause_collection:
+  { behavior: "void" }` generates invoices and voids them; resuming does not
+  create a charge, it stops voiding future ones. So the first real charge after a
+  resume lands at the **next natural cycle boundary**, not on the resume date —
+  a gap that is a fixed fraction of a cycle and therefore proportionally larger
+  the shorter the pause. A customer anchored to the 1st who pauses on the 5th for
+  one month is not charged until the 1st of the *following* month. Not yet
+  measured against a real subscription. If it needs fixing, the fix is aligning
+  `pause_resumes_at` to the Stripe period boundary — **not** setting
+  `billing_cycle_anchor: "now"` on resume (forces proration, can invoice
+  immediately, collides with the re-anchoring both resume paths already do) and
+  **not** setting Stripe's own `pause_collection.resumes_at` (two resume
+  authorities is how a subscription unpauses without the DB knowing).
+- **`fully_served` for a paused customer is a stale reading, in an unverified
+  direction.** `got` counts assignments since `coalesce(billing_cycle_anchor,
+  created_at)`. Both customers paused at the time of writing had taken their full
+  10 of 10 first, so they read as *fully served*, not un-served. Whether that
+  freezes or flips depends on whether `billing_cycle_anchor` advances during a
+  pause: `invoice.paid` cannot move it (invoices are voided, so the event never
+  fires) but `customer.subscription.updated` sets it from `current_period_start`
+  and the Stripe period keeps rolling. Neither had reached their next anchor date
+  when 0084 shipped. Excluding them from the metric (§21) sidesteps it either way.
 - No ESLint config (`next lint` prompts interactively) and **no test suite**.
 
 ---
@@ -418,6 +448,19 @@ for being new with no way to earn out of it.
 - Backfill accuracy: `management_lifetime_leads_received` cannot count leads
   that were delivered and later **discarded**, because discard deletes the row
   (§13). Only fixable by recording deliveries somewhere discard does not touch.
+- Decide whether repeat pausing should be capped (§21). It is currently
+  unlimited, and 0084 made the duration customer-chosen, so a customer could in
+  principle pause a month at a time indefinitely. `subscription_pauses` makes
+  "total paused months in a rolling 12" a five-line query if wanted.
+- **Review the return-likelihood thresholds once ~20 pauses have completed.**
+  They are stated guesses (§21) and `get_pause_outcomes()` is what will let them
+  be checked against what actually happened.
+- ~~Enable cancellation-reason collection on the Stripe billing portal.~~
+  **Already enabled** — verified on the live configuration
+  (`bpc_1Tz1VxCpQPIFzv4r`): `subscription_cancel.cancellation_reason.enabled` is
+  true with options `too_expensive`, `switched_service`, `unused`, `other`. The
+  `feedback_options` list is empty, so those four are what a leaving customer
+  sees. Nothing to do; noted because it is easy to assume the opposite.
 
 ---
 
@@ -886,7 +929,9 @@ because they are provisional and must be tunable from admin without a deploy.
 Trailing window, not lifetime: a note written on day 1 must not shield a lead on
 day 40. `detail_opened` is weighted 0.30, as heavily as a note, because it is the
 only signal with usable volume — 278 opens against 3 contact-clicks in the first
-16 days. Thresholds (`system_settings`) are 0.30 at day 10 and 0.45 at day 20,
+16 days. Thresholds (`system_settings`) are **0.35** at day 10 and 0.45 at day 20
+(this said 0.30; production reads 0.35, which is also what §18.2's "a lone
+`mailto_click` (0.30) sits just under the threshold" already assumed),
 tuned so **opening a lead buys ten more days and not twenty**. Changing a weight
 without re-reading that sentence breaks the ladder.
 
@@ -1268,10 +1313,15 @@ until it is reworked.
 
 ### 19.11 — Deployment state at time of writing
 
-**0073 is applied to production. 0074, 0075 and 0076 are not.** 0075 depends on
-0074 (`customer_can_see_pool_lead`) and fails outright without it. With every
-debit at zero, 0074's `credit_invoice` is arithmetically identical to the one it
-replaces (`granted = amount − 0`), so it is inert until the first claim.
+~~**0073 is applied to production. 0074, 0075 and 0076 are not.**~~ **Out of
+date — all four are applied.** Verified against the live schema while preparing
+0077: `claim_pool_lead`, `customer_can_see_pool_lead`, `get_customer_pool_leads`
+and `leads.pool_excluded_at` are all present. The note is kept rather than
+deleted because the ordering constraint it records still holds for any rebuild:
+0075 depends on 0074 (`customer_can_see_pool_lead`) and fails outright without
+it. With every debit at zero, 0074's `credit_invoice` is arithmetically identical
+to the one it replaces (`granted = amount − 0`), so it was inert until the first
+claim.
 
 Nothing pools until the code deploys: the sweep route does not exist on `main`.
 
@@ -1370,10 +1420,151 @@ no customer id, resolve identity from `auth.uid()`, and return aggregates only.
 - **"Picked up and left"** on the dashboard home (`workSummary.ts`): overdue
   callbacks (16 of the 17 ever set) and leads stalled at `contacted` for 14+
   days (70, across 9 operators). Both name a specific lead rather than a rate.
+---
+
+## 21. Pause, and understanding why customers leave *(0038, 0084)*
+
+Pause is the off-ramp offered instead of cancellation, so it is the best churn
+signal the business has. Until 0084 it collected nothing.
+
+### What a pause is
+
+Management-only. The customer picks **1, 2 or 3 months** and must give at least
+one reason (`/dashboard/settings`, `POST /api/customer/subscription/pause`).
+Stripe collection is paused with `behavior: "void"` — not cancelled — so nothing
+is billed. `account_status` deliberately stays `'active'` so the **routing** slot
+is reserved, and `lead_balance` is untouched so credits carry forward.
+
+Pausing is **repeatable**. 0038's header claims a one-time allowance is enforced
+in the app; it never has been, the route has no such check, and 0084 corrects the
+comment rather than changing behaviour. `pause_count` gates nothing.
+
+### The two resume paths, and the third thing that clears a pause
+
+1. `/api/cron/resume-paused-subscriptions`, daily 08:00 — picks up
+   `pause_resumes_at <= now`, unpauses Stripe **first**, then clears the DB and
+   re-baselines pacing (`billing_cycle_anchor` = today,
+   `leads_received_this_month` = 0) so a stale anchor does not read as a maximal
+   deficit and flood them on return.
+2. The Stripe webhook's resume-detection block — fires when `pause_collection`
+   is gone, i.e. the customer resumed early through the billing portal.
+
+Both are guarded on `.not("paused_at","is",null)` so only the writer that
+actually flips the column sends the email, and both close the episode through
+`stampEpisodeEnded()`.
+
+That helper stamps the **latest** open episode by id, not every open one.
+Because the stamp is best-effort and allowed to fail, a customer can carry an
+un-stamped episode from an earlier pause, and a blanket
+`is("ended_at", null)` update would close it too with today's date — inventing a
+pause window that never happened. For the same reason `get_pause_outcomes()`
+decides `active` from "the customer is paused **and** this is their most recent
+episode" rather than from `ended_at is null`, and gives a missed stamp its own
+outcome, `ended_untracked`, instead of guessing it into one of the three that are
+decided by comparing `cancelled_at` against `ended_at`.
+
+**The third case is a cancellation.** A cancelled subscription reports no
+`pause_collection`, so path 2 fires for it too — and only the *email* there is
+status-guarded, not the write. So cancelling during a pause clears `paused_at`.
+That is deliberate and must stay: gating the write would strand the row paused
+forever with the cron retrying a dead subscription every morning. The episode row
+is what preserves the history the clear would otherwise erase.
+
+### Paused customers are excluded from every allocation metric
+
+A paused customer receives no leads and is owed none, so their allocation is not
+committed volume. Excluded in four places, **management branch only** (invariant
+6 — GR keeps flowing to a paused management customer):
+
+| Surface | What was wrong |
+|---|---|
+| `capacity.ts` weighted slots | counted their full allocation |
+| `get_service_capacity` `served` CTE | fed `active_customers`, `demand_per_month`, `avg_allocation`, `fully_served`, and transitively `sustainable_customers` / `room_for_customers` |
+| `get_customer_risk` | every band is days-since-activity, so a paused customer inevitably reached `high` and appeared on "Customers who may leave" with their plan price in revenue-at-risk, while billing £0 |
+| Admin overview MRR + active counts | invoices are voided, so MRR counted money not being collected |
+
+The precedent is already in the codebase twice: `capacity.ts` excludes
+`is_active = false` because such an account "commits no monthly volume", and the
+supply-problem banner excludes paused because "delivery is stopped deliberately,
+which is not a supply problem".
+
+**Always two numbers, never one.** `paused_customers` / `paused_demand`,
+`pausedCount` / `pausedWeight` and the paused MRR figure are reported **beside**
+the headline and never added to it. Excluding without reporting would show
+headroom that a returning customer silently reclaims, and selling into it
+over-commits us — the demand-side version of the §18.1 rule.
+
+**Deliberately not excluded:** `unworked_rate`, `recycled_slots_now` and
+`recycled_slots_per_month`. Leads sitting with a paused operator genuinely are
+passable — escalation and the pool will recover them — so filtering them would
+understate real supply. Nor `delivered_per_month` (a record of what happened) or
+the waitlist count (paused customers are `account_status = 'active'`, so already
+excluded; a predicate there would be a misleading no-op).
+
+`service_capacity_snapshots` rows written before 0084 carry the old
+paused-inclusive definition and **cannot be recomputed** (0072's header). The
+series has a definition change at that date; a step change there is not a
+business event.
+
+### Return-likelihood is stated rules, not a model
+
+`src/lib/pauseOutlook.ts`. Facts come from `get_paused_customer_facts()`; the
+rules live in TypeScript where they can be read and argued with — the same split
+`serviceHealth.ts` uses, and the same position `get_customer_risk()` took, for
+the same reason: **zero customers have ever cancelled, so there is nothing to
+fit.**
+
+| Band | Rule |
+|---|---|
+| **Not returning** | Stripe reports `cancel_at_period_end` or already cancelled. A **fact**, and it outranks everything below. |
+| **Unlikely** | A verdict-on-the-product reason **and** no wins **and** weak pre-pause engagement. |
+| **Likely** | Has wins, **or** strong engagement, **or** a temporary reason. |
+| **Unclear** | Everything else, including every `unknown_pre_0077` backfill row. |
+
+Three refusals, all load-bearing: no numeric score (a percentage implies a fitted
+model); a reason alone never lands anyone in "unlikely" (someone who signed
+clients and cited lead quality is telling us about the leads, not their intent);
+and "unclear" is never collapsed into "likely" to make the tab look decisive.
+Every band renders **with its supporting reason** — an unauditable rules-based
+verdict is indistinguishable from a guess, and these will be wrong sometimes.
+
+**Engagement is measured from events and notes, never `status = 'contacted'`.**
+The PATCH route lets an operator set that by hand (§18): both customers paused at
+the time of writing had all 10 assignments marked contacted, while one had 31
+engagement events and 15 notes and the other had 3 and 1. It measures
+record-keeping, not work — the same trap §10 flags for win rate.
+
+### Can they actually be re-billed?
+
+The Paused tab reads this **live from Stripe**, not from our columns. The billing
+portal is configured `subscription_cancel.mode = "at_period_end"`, so a
+cancellation is **never** a cancelled subscription at the moment it happens: it
+arrives as `customer.subscription.updated` with `status` still `"active"` and
+`cancel_at_period_end` true. The webhook therefore writes `subscription_status =
+'active'`, and `cancel_at_period_end` is stored nowhere. A stored flag would also
+be wrong for everyone already paused. Unreachable Stripe renders as "couldn't
+check", never as healthy.
+
+**That same mode is why cancellation reasons are captured outside the
+`status = 'canceled'` branch.** `cancellation_details` is populated on the
+*updated* event, at the moment the customer gives it — reading it only on
+cancellation would discard it then and recover it a billing period later, having
+nulled it in between. The columns are cleared only when a subscription is active
+**and** no longer scheduled to cancel, which is the only genuine change of mind;
+`cancelled_at` now follows the same rule, so a pending cancellation no longer
+wipes the date of a previous one.
+
+### Backfill
+
+0084 writes one episode per already-paused customer with
+`reasons = '{unknown_pre_0077}'` — a distinct sentinel, never a plausible-looking
+reason, so "we never asked" stays countable separately from "they told us". It is
+`insert…select…where not exists`, so it is idempotent and picks up whoever is
+genuinely paused at apply time.
 
 ---
 
-## 21. Announcements *(0084)*
+## 22. Announcements *(0085)*
 
 `/admin/announcements`. An admin writes a message, chooses who it goes to, sends
 a test, confirms, and it is emailed through Resend and shown as a dismissible
@@ -1523,7 +1714,7 @@ migration's default plus `||` backfill.
 
 ### Verification
 
-All 84 migrations applied to a scratch Postgres 16 from empty; every CHECK and
+All 85 migrations applied to a scratch Postgres 16 from empty; every CHECK and
 the delivery unique index exercised against seeded rows, including confirming the
 `||` backfill preserves an existing explicit `false` on another stream. The
 audience rule, the both-holder dedupe and the validator were unit-checked, and
@@ -1533,6 +1724,6 @@ read-only against production: 21 emailable, 20 management, 1 GR.
 
 ### Deployment order — migration BEFORE code
 
-0084 must be applied before the code deploys, or the admin page renders against
+0085 must be applied before the code deploys, or the admin page renders against
 missing tables and the dashboard banner query fails. Nothing else in the app
 reads these tables, so a lagging migration cannot affect lead allocation.

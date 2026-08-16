@@ -47,12 +47,21 @@ export interface Customer {
   lead_balance: number;
   account_status: "waitlisted" | "invited" | "active" | "cancelled" | string;
   is_active: boolean;
-  // Pause subscription (management-only, 3-month, one-time). When paused_at is
-  // set the customer is not billed and receives no new management leads, but
-  // account_status stays 'active' so their capacity slot is reserved.
+  // Pause subscription (management-only). The customer chooses 1, 2 or 3 months
+  // and gives a reason; pausing is REPEATABLE and pause_count is a reporting
+  // counter that gates nothing. When paused_at is set the customer is not billed
+  // and receives no new management leads, but account_status stays 'active' so
+  // their routing slot is reserved — which is why every capacity and churn
+  // figure has to exclude them explicitly (0077).
+  //
+  // Per-episode detail (reasons, note, outcome) lives in subscription_pauses.
   paused_at: string | null;
   pause_resumes_at: string | null;
   pause_count: number;
+  // Stripe cancellation_details, captured at cancellation (0077). First
+  // cancellation wins, matching cancelled_at. Management-only.
+  cancellation_feedback: string | null;
+  cancellation_comment: string | null;
   first_login_at: string | null;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;
@@ -114,6 +123,41 @@ export interface Customer {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * One pause episode (0077).
+ *
+ * The customers table holds the LIVE state (paused_at / pause_resumes_at); this
+ * is the permanent record of a single pause, and survives the resume that clears
+ * those columns. `ended_at` is a best-effort stamp — nothing reads it to decide
+ * whether a customer is paused right now.
+ */
+export interface PauseEpisode {
+  id: string;
+  customer_id: string;
+  paused_at: string;
+  resumes_at: string;
+  months: number;
+  /** One or more values from PAUSE_REASONS, or the backfill sentinel. */
+  reasons: string[];
+  note: string | null;
+  ended_at: string | null;
+  created_at: string;
+}
+
+/**
+ * What happened after a pause, derived live by get_pause_outcomes() (0077).
+ *
+ * `ended_untracked` means the episode's best-effort ended_at stamp was missed,
+ * so we know the pause is over but not when — it is kept out of the other three
+ * because each of those is decided by comparing cancelled_at against ended_at.
+ */
+export type PauseOutcome =
+  | "active"
+  | "ended_untracked"
+  | "resumed_retained"
+  | "resumed_then_left"
+  | "left_during_pause";
 
 /**
  * One row of a customer's expired leads pool, as returned by

@@ -15,6 +15,7 @@ import {
   sendSubscriptionResumedEmail,
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
+import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -275,9 +276,13 @@ export async function POST(request: NextRequest) {
         // reading an empty row and overwriting the date on every event.
         const { data: existing } = await admin
           .from("customers")
-          .select("cancelled_at, gr_cancelled_at")
+          .select("cancelled_at, gr_cancelled_at, cancellation_feedback")
           .or(customerMatchFilter(customerId, isGuaranteedRent))
-          .maybeSingle<{ cancelled_at: string | null; gr_cancelled_at: string | null }>();
+          .maybeSingle<{
+            cancelled_at: string | null;
+            gr_cancelled_at: string | null;
+            cancellation_feedback: string | null;
+          }>();
 
         const update: Record<string, unknown> = {
           updated_at: new Date().toISOString(),
@@ -358,8 +363,40 @@ export async function POST(request: NextRequest) {
           if (status === "canceled") {
             update.account_status = "cancelled";
             if (!existing?.cancelled_at) update.cancelled_at = nowIso;
-          } else if (status === "active") {
+          } else if (status === "active" && !sub.cancel_at_period_end) {
             update.cancelled_at = null;
+          }
+
+          // Why they left (0077), captured WHENEVER Stripe gives it to us rather
+          // than only on the canceled event.
+          //
+          // This account's portal is configured mode: "at_period_end", so a
+          // cancellation is not a canceled subscription — it arrives as
+          // customer.subscription.updated with status STILL "active",
+          // cancel_at_period_end true, and cancellation_details already
+          // populated. Reading it only under `status === "canceled"` would have
+          // discarded the reason at the moment it was given and recovered it a
+          // whole billing period later, on the deletion — and the branch above
+          // would have actively nulled it in the meantime. That is the entire
+          // window in which knowing why someone is leaving is worth anything.
+          //
+          // First reason wins, matching cancelled_at: a customer who leaves,
+          // returns and leaves again keeps the original rather than having their
+          // history quietly rewritten.
+          const details = sub.cancellation_details;
+          const feedback = details?.feedback ?? null;
+          const comment = details?.comment ?? null;
+          if (!existing?.cancellation_feedback && (feedback || comment)) {
+            update.cancellation_feedback = feedback;
+            update.cancellation_comment = comment;
+          }
+          // Cleared only on a genuine change of mind — active AND no longer
+          // scheduled to cancel. Clearing on any active event would wipe the
+          // reason on the customer's next renewal, which is the same trap the
+          // status-only check above fell into.
+          if (status === "active" && !sub.cancel_at_period_end) {
+            update.cancellation_feedback = null;
+            update.cancellation_comment = null;
           }
           if (anchor) update.billing_cycle_anchor = anchor;
         }
@@ -372,7 +409,7 @@ export async function POST(request: NextRequest) {
         // Resume detection (management only). If the management subscription is
         // NOT paused in Stripe but our record still marks it paused, the customer
         // has resumed collection out-of-band (e.g. they chose to continue paying
-        // rather than wait out the 3 months). Clear the pause so lead routing
+        // rather than wait out the pause). Clear the pause so lead routing
         // restarts. The guarded update (`paused_at is not null`) means only the
         // ONE writer that actually flips paused_at → null sends the "you're
         // back" email, so this never double-emails with the resume cron.
@@ -393,8 +430,20 @@ export async function POST(request: NextRequest) {
             })
             .eq("stripe_customer_id", customerId)
             .not("paused_at", "is", null)
-            .select("email, contact_name")
+            .select("id, email, contact_name")
             .maybeSingle();
+
+          // Close the pause episode (0077). Runs whatever the status is,
+          // deliberately: this block also fires on a CANCELLATION (a cancelled
+          // subscription reports no pause_collection), and a pause that ended
+          // because the customer left is exactly the history we most want kept.
+          // The episode row is what preserves it — the clear above erases
+          // paused_at either way.
+          //
+          // Best-effort and reporting-only, like the cron's stamp.
+          if (resumedRow?.id) {
+            await stampEpisodeEnded(admin, resumedRow.id, "stripe");
+          }
 
           // Only notify on a genuine resume — never when the subscription is
           // being cancelled/deleted (that path also has a null pause_collection).

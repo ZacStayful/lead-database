@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { APP_URL, LOGIN_URL } from "@/lib/env";
 import { extractCity } from "@/lib/utils";
+import { pauseMonthsWords } from "@/lib/pauseOptions";
 import type { Lead } from "@/lib/types";
 
 const BRAND = "#5D8156";
@@ -524,19 +525,21 @@ export async function sendSubscriptionPausedEmail(params: {
   to: string;
   contactName: string;
   resumeDateIso: string;
+  /** The duration the customer chose, so the prose matches the date below it. */
+  months: number;
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to, contactName, resumeDateIso } = params;
+  const { to, contactName, resumeDateIso, months } = params;
   const firstName = contactName.trim().split(/\s+/)[0] || contactName;
   const resumeDate = ukLongDate(resumeDateIso);
   const subject = "Your Stayful subscription is paused";
 
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Your subscription is paused, ${esc(firstName)}</h1>
-    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your Stayful subscription is now paused for three months. Here is what that means:</p>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your Stayful subscription is now paused for ${esc(pauseMonthsWords(months))}. Here is what that means:</p>
     <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
       <li>You will not be billed during the pause.</li>
       <li>You will not receive new leads during the pause.</li>
-      <li>Your current lead balance is preserved and will be waiting for you.</li>
+      <li>Any lead credits you have left are preserved and will be waiting for you.</li>
       <li>Your subscription resumes automatically on <strong style="color:#1a1a1a">${esc(resumeDate)}</strong>, when billing and leads restart.</li>
     </ul>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">There is nothing you need to do. We will email you again when your subscription resumes.</p>
@@ -569,7 +572,7 @@ export async function sendSubscriptionResumedEmail(params: {
 
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">You're back, ${esc(firstName)}</h1>
-    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your three-month pause has ended and your Stayful subscription is active again. Billing has restarted and you are back in line to receive leads, with your preserved balance ready to spend.</p>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your pause has ended and your Stayful subscription is active again. Billing has restarted and you are back in line to receive leads, with any preserved credits ready to spend.</p>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">New leads will start arriving as they are matched to you. A quick call is often what turns an enquiry into a signed landlord, so it is worth being ready to follow up.</p>
     ${button(`${APP_URL}/dashboard/leads`, "View your leads")}
   `;
