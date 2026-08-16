@@ -9,6 +9,8 @@ import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
 import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
 import { computeWorkSummary } from "@/lib/workSummary";
 import { ExportButton } from "@/components/dashboard/ExportButton";
+import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
+import { fetchBannerAnnouncement, paragraphs } from "@/lib/announcements";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
@@ -55,6 +57,10 @@ export default async function DashboardPage() {
 
   const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
   const unreadLeads = assignments.filter((a) => !a.viewed_at).length;
+
+  // Shown on the audience rule alone, so a customer who turned announcement
+  // emails off still reads the notice here. See lib/announcements.
+  const banner = await fetchBannerAnnouncement(admin, customer);
 
   const isActive = customer.subscription_status === "active";
   const hasGuaranteedRent = customer.gr_subscription_status === "active";
@@ -170,6 +176,16 @@ export default async function DashboardPage() {
         </div>
         <ExportButton />
       </div>
+
+      {banner && (
+        <AnnouncementBanner
+          id={banner.id}
+          title={banner.title}
+          paragraphs={paragraphs(banner.body_text)}
+          linkUrl={banner.link_url}
+          linkLabel={banner.link_label}
+        />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (

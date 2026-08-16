@@ -1420,6 +1420,8 @@ no customer id, resolve identity from `auth.uid()`, and return aggregates only.
 - **"Picked up and left"** on the dashboard home (`workSummary.ts`): overdue
   callbacks (16 of the 17 ever set) and leads stalled at `contacted` for 14+
   days (70, across 9 operators). Both name a specific lead rather than a rate.
+---
+
 ## 21. Pause, and understanding why customers leave *(0038, 0084)*
 
 Pause is the off-ramp offered instead of cancellation, so it is the best churn
@@ -1559,3 +1561,169 @@ wipes the date of a previous one.
 reason, so "we never asked" stays countable separately from "they told us". It is
 `insert…select…where not exists`, so it is idempotent and picks up whoever is
 genuinely paused at apply time.
+
+---
+
+## 22. Announcements *(0085)*
+
+`/admin/announcements`. An admin writes a message, chooses who it goes to, sends
+a test, confirms, and it is emailed through Resend and shown as a dismissible
+banner on the customer dashboard.
+
+The first thing this system sends that is not about a lead. Everything else is
+machine-generated and lead-shaped, so a price change or a planned outage had no
+channel at all — in practice, addresses pasted into a mail client by hand.
+
+Three tables, all RLS-enabled with **no policies** (deny-all to the browser, as
+`operator_proof_snapshots`): `announcements`, `announcement_deliveries`,
+`announcement_dismissals`. Entirely additive; nothing here touches a balance,
+counter, pacing or capacity column.
+
+### 21.1 — Audience decides the email; audience alone decides the banner
+
+`announcement_deliveries` records who was **emailed**. The dashboard banner is
+governed by the audience rule **only**, so a customer who turned announcement
+emails off still reads the notice in the app, and so does one whose email
+bounced. The opt-out is a preference about their inbox, not a request to be kept
+uninformed.
+
+`announcementTargetsCustomer()` in `src/lib/announcements.ts` is the single
+definition, shared by the send route and the banner — the same discipline as
+`customer_can_see_pool_lead` (§19.4). Two readings of "management customer"
+would eventually disagree, and the failure is silent both ways.
+
+| `audience` | Test |
+|---|---|
+| `management` | `account_status = 'active'` **and** `subscription_status = 'active'` |
+| `guaranteed_rent` | `gr_subscription_status = 'active'`, and **nothing else** |
+| `all` | either of the above, **one email per customer** |
+
+The GR branch must never read `account_status` (invariant 6). Measured on live
+data at build time: **1 of 1** GR subscribers would have been skipped if it did —
+a GR-only account sits at `account_status = 'waitlisted'` forever (§18A).
+
+`all` dedupes by **customer**, not by product, so somebody holding both gets one
+email. This is the opposite of the MRR figures in §18A, which count per product
+deliberately.
+
+**Paused management customers are included**, following §18B's asymmetry: the
+nudge skips them because it asks for work, the progress report does not because
+it describes work already done. An announcement is a notice, so it follows the
+report — somebody paused for three months still needs to hear about a price
+change. Two customers are paused today.
+
+The candidate query is the crons' verbatim (`is_active = true` plus the
+`subscription_status`/`gr_subscription_status` union). `is_active` is
+load-bearing: one archived-but-subscribed row exists today (§18D), and without
+the filter that person would be emailed twice.
+
+### 21.2 — Idempotency is the unique index, not the status column
+
+`announcement_deliveries` is unique on `(announcement_id, customer_id)`. The send
+**claims a recipient by INSERT and only then calls Resend**, so a double-clicked
+button, a browser retry, or a second run after a timeout all collide on `23505`
+and skip. Same guard `credit_invoice()` uses against Stripe redelivery (§19.5),
+and for the same reason: checking whether we already sent, then sending, leaves a
+window. Claiming by write does not.
+
+This is also why a run left at `status = 'sending'` by a killed function is
+**re-enterable** rather than jammed. `status` is presentation; the index is what
+makes a second attempt safe. `recipient_count` is read back from the delivery log
+rather than counted in the loop, so a resumed run does not record only its half.
+
+**A failed delivery keeps its row and is not retried.** The row is the record
+that we tried, which is a different fact from never having tried, and deleting it
+would let a retry double-send a message Resend may have accepted before erroring.
+The admin page surfaces failures with the address; chasing one by hand at this
+list size is trivial, and a sent announcement refuses a second send outright.
+
+### 21.3 — Pacing and the recipient ceiling
+
+Sends are sequential with **600ms between them**. Resend's default limit is 2
+requests a second; the existing crons ignore it because they trickle out on a
+schedule, but this fires the whole book on a button press, which is exactly the
+shape that trips a rate limiter. With `maxDuration = 300` that puts the ceiling at
+**~450 recipients**. Today's book is 21. If it ever approaches the ceiling the fix
+is Resend's batch endpoint (100 per call), not a longer timeout — `resend.batch`
+is not used anywhere in the repo today.
+
+### 21.4 — Draft, test, confirm
+
+Sending is in `AnnouncementSendPanel`, deliberately **not** in the compose form.
+A form whose submit button sometimes saves and sometimes mails the entire
+customer book is one mis-click from something that cannot be undone.
+
+- `POST .../[id]/test` sends one copy, defaulting to the signed-in admin's own
+  address, prefixed `[TEST]`. Writes no delivery row and does not touch status.
+- `?dryRun=true` on the send route reports the exact recipient list and sends
+  nothing, matching `monthly-insights` and `inactivity-nudge`. `GET` serves the
+  dry run **only** and refuses anything else with a 405, so no GET can send.
+- The confirmation is an expanded inline panel naming the count and the audience
+  in words, following the reject confirmation in `LeadDetail` rather than a
+  two-button swap — a swap asks "are you sure" with no new information, and the
+  count and the audience are exactly the two things an admin can have wrong
+  without noticing.
+- Recipient counts for all three audiences are computed **server-side** from one
+  query and passed into the form, so the number on each audience button is the
+  number that would actually be emailed and no endpoint exists to poll.
+
+**A sent announcement is read-only.** PATCH and DELETE both refuse it with a 409.
+It is already in inboxes: editing would leave the banner saying something nobody
+was emailed and the delivery log describing the delivery of different words. The
+way to correct a sent announcement is another announcement.
+
+### 21.5 — The body is plain text, and escaping is load-bearing
+
+No markdown renderer is installed, so `body_text` is split on blank lines into
+paragraphs — the same treatment `/dashboard/training/[slug]` gives
+`body_markdown`, extracted as `paragraphs()` so the email and the banner break
+the text in identical places.
+
+Every paragraph, the title and the **link label** go through `esc()` before
+reaching the HTML email. The label matters: `button()` drops it into the anchor
+unescaped, and every other caller in `emails.ts` passes a hard-coded string where
+this one passes whatever an admin typed. `link_url` needs no escaping because the
+write route runs it through `new URL().toString()`, which percent-encodes the
+quote that would otherwise break out of the `href` — and rejects anything that is
+not `https:`.
+
+### 21.6 — The banner
+
+Newest undismissed announcement addressed to that customer, `show_banner = true`,
+within `BANNER_MAX_AGE_DAYS` (30). **One banner, never a stack** — two notices
+competing for the top of the dashboard is how both get ignored. The 30-day
+cut-off is what stops an undismissed banner living there forever.
+
+Dismissal is optimistic and per customer, through
+`POST /api/customer/announcements/[id]/dismiss` — the §8 pattern, identity from
+the session and never the body, upserted so a double click is not an error.
+
+**The `notifications` table was deliberately not reused.** It was the obvious
+reuse and it is wrong: `NotificationsCentre` marks every row read the moment the
+bell is opened, and its click handler navigates to a lead, falling back to the
+leads list. An announcement in there would be marked read without being seen and
+would send the reader to a page about something else.
+
+### 21.7 — Opt-out
+
+`announcements` joins `notification_preferences`, opt-out only, a missing key
+reading as true. A new key touches four places, all following `monthly_insights`:
+the type, `PREFERENCE_KEYS`/`DEFAULT_PREFERENCES` in the settings route,
+`PREFERENCE_ROWS` **and** the `useState` initialiser in `SettingsPanel`, and the
+migration's default plus `||` backfill.
+
+### Verification
+
+All 85 migrations applied to a scratch Postgres 16 from empty; every CHECK and
+the delivery unique index exercised against seeded rows, including confirming the
+`||` backfill preserves an existing explicit `false` on another stream. The
+audience rule, the both-holder dedupe and the validator were unit-checked, and
+the email template was rendered with a hostile body (`<script>`, `<img onerror>`,
+`&`, quotes) to confirm nothing escapes into markup. The candidate query was run
+read-only against production: 21 emailable, 20 management, 1 GR.
+
+### Deployment order — migration BEFORE code
+
+0085 must be applied before the code deploys, or the admin page renders against
+missing tables and the dashboard banner query fails. Nothing else in the app
+reads these tables, so a lagging migration cannot affect lead allocation.

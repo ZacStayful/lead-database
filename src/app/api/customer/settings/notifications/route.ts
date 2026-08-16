@@ -13,6 +13,7 @@ const PREFERENCE_KEYS: (keyof NotificationPreferences)[] = [
   "inactivity_nudge",
   "progress_report",
   "monthly_insights",
+  "announcements",
 ];
 
 /** Full-true default — used to fill any key missing from a customer's jsonb. */
@@ -22,6 +23,7 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   inactivity_nudge: true,
   progress_report: true,
   monthly_insights: true,
+  announcements: true,
 };
 
 /**
