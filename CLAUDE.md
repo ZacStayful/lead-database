@@ -929,7 +929,9 @@ because they are provisional and must be tunable from admin without a deploy.
 Trailing window, not lifetime: a note written on day 1 must not shield a lead on
 day 40. `detail_opened` is weighted 0.30, as heavily as a note, because it is the
 only signal with usable volume — 278 opens against 3 contact-clicks in the first
-16 days. Thresholds (`system_settings`) are 0.30 at day 10 and 0.45 at day 20,
+16 days. Thresholds (`system_settings`) are **0.35** at day 10 and 0.45 at day 20
+(this said 0.30; production reads 0.35, which is also what §18.2's "a lone
+`mailto_click` (0.30) sits just under the threshold" already assumed),
 tuned so **opening a lead buys ten more days and not twenty**. Changing a weight
 without re-reading that sentence breaks the ladder.
 
