@@ -455,9 +455,12 @@ for being new with no way to earn out of it.
 - **Review the return-likelihood thresholds once ~20 pauses have completed.**
   They are stated guesses (§21) and `get_pause_outcomes()` is what will let them
   be checked against what actually happened.
-- Enable cancellation-reason collection on the Stripe billing portal
-  configuration. The webhook already stores what it sends (0084); without the
-  portal setting the columns simply stay null.
+- ~~Enable cancellation-reason collection on the Stripe billing portal.~~
+  **Already enabled** — verified on the live configuration
+  (`bpc_1Tz1VxCpQPIFzv4r`): `subscription_cancel.cancellation_reason.enabled` is
+  true with options `too_expensive`, `switched_service`, `unused`, `other`. The
+  `feedback_options` list is empty, so those four are what a leaving customer
+  sees. Nothing to do; noted because it is easy to assume the opposite.
 
 ---
 
@@ -1529,12 +1532,23 @@ record-keeping, not work — the same trap §10 flags for win rate.
 
 ### Can they actually be re-billed?
 
-The Paused tab reads this **live from Stripe**, not from our columns. A customer
-who schedules a cancellation in the portal keeps `status: "active"`, so the
-webhook writes `subscription_status = 'active'` and *nulls* `cancelled_at` — the
-row moves away from the truth, and `cancel_at_period_end` is stored nowhere. A
-stored flag would also be wrong for everyone already paused. Unreachable Stripe
-renders as "couldn't check", never as healthy.
+The Paused tab reads this **live from Stripe**, not from our columns. The billing
+portal is configured `subscription_cancel.mode = "at_period_end"`, so a
+cancellation is **never** a cancelled subscription at the moment it happens: it
+arrives as `customer.subscription.updated` with `status` still `"active"` and
+`cancel_at_period_end` true. The webhook therefore writes `subscription_status =
+'active'`, and `cancel_at_period_end` is stored nowhere. A stored flag would also
+be wrong for everyone already paused. Unreachable Stripe renders as "couldn't
+check", never as healthy.
+
+**That same mode is why cancellation reasons are captured outside the
+`status = 'canceled'` branch.** `cancellation_details` is populated on the
+*updated* event, at the moment the customer gives it — reading it only on
+cancellation would discard it then and recover it a billing period later, having
+nulled it in between. The columns are cleared only when a subscription is active
+**and** no longer scheduled to cancel, which is the only genuine change of mind;
+`cancelled_at` now follows the same rule, so a pending cancellation no longer
+wipes the date of a previous one.
 
 ### Backfill
 
