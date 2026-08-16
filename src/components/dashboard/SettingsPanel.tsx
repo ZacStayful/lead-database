@@ -49,6 +49,12 @@ const PREFERENCE_ROWS: {
     description:
       "Once a month: how your leads are going, alongside what the operators signing clients do. Your figures stay private.",
   },
+  {
+    key: "announcements",
+    label: "Announcements",
+    description:
+      "Occasional news and service notices from Stayful. Turning this off stops the email only — announcements still appear on your dashboard.",
+  },
 ];
 
 /** Format an ISO timestamp as e.g. "23 October 2026". */
@@ -75,6 +81,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     inactivity_nudge: prefOn(customer.notification_preferences, "inactivity_nudge"),
     progress_report: prefOn(customer.notification_preferences, "progress_report"),
     monthly_insights: prefOn(customer.notification_preferences, "monthly_insights"),
+    announcements: prefOn(customer.notification_preferences, "announcements"),
   });
   const [prefSaving, setPrefSaving] = useState<keyof NotificationPreferences | null>(
     null

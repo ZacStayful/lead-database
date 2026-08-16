@@ -811,3 +811,86 @@ export async function sendMonthlyInsightsEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * An admin-written announcement, sent to a customer.
+ *
+ * The first email in this file that carries content nobody computed. Everything
+ * else here is assembled from figures; this is a person writing to the customer
+ * book, so the template's whole job is to stay out of the way: the heading, the
+ * words, an optional button, and nothing else.
+ *
+ * ESCAPING IS LOAD-BEARING. The body arrives as free text typed into an admin
+ * form and is dropped into an HTML email, so every paragraph goes through esc()
+ * — the same treatment the training article page gives its body, and for the
+ * same reason: no markdown renderer is installed and nothing should be able to
+ * turn stored content into markup. Paragraphs are split by lib/announcements'
+ * `paragraphs()` before they get here, so the email and the dashboard banner
+ * break the text in exactly the same places.
+ *
+ * The opt-out line is not decoration. This is unsolicited mail to a paying
+ * customer; shell()'s footer already says why they received it, and this says
+ * how to stop it. An announcement channel without a visible way out is how a
+ * sending domain gets itself marked as spam.
+ */
+export async function sendAnnouncementEmail(params: {
+  to: string;
+  contactName: string | null;
+  subject: string;
+  title: string;
+  paragraphs: string[];
+  linkUrl: string | null;
+  linkLabel: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, subject, title, paragraphs, linkUrl, linkLabel } =
+    params;
+
+  const greeting = contactName?.trim()
+    ? `<p style="margin:0 0 14px;font-size:14px;line-height:1.6">Hi ${esc(
+        contactName.trim().split(/\s+/)[0]
+      )},</p>`
+    : "";
+
+  const bodyHtml = paragraphs
+    .map(
+      (p) =>
+        `<p style="margin:0 0 14px;font-size:14px;line-height:1.6;white-space:pre-line">${esc(
+          p
+        )}</p>`
+    )
+    .join("");
+
+  // esc() on the label because button() drops it into the anchor unescaped, and
+  // every other caller in this file passes a hard-coded string where this one
+  // passes whatever an admin typed. The URL needs no escaping here: the write
+  // route runs it through new URL().toString(), which percent-encodes the quote
+  // that would otherwise break out of the href attribute.
+  const cta =
+    linkUrl && linkLabel
+      ? `<div style="margin-top:4px">${button(linkUrl, esc(linkLabel))}</div>`
+      : "";
+
+  const inner = `
+    <h1 style="margin:0 0 14px;font-size:18px">${esc(title)}</h1>
+    ${greeting}
+    ${bodyHtml}
+    ${cta}
+    <p style="margin:22px 0 0;color:#8a8f88;font-size:11px">
+      You can turn announcements off under Notifications in your
+      <a href="${APP_URL}/dashboard/settings" style="color:#8a8f88">dashboard settings</a>.
+      Billing and account emails will still reach you.
+    </p>
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}

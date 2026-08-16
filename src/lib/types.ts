@@ -26,6 +26,10 @@ export interface NotificationPreferences {
   // Monthly leaderboard summary: the customer's own figures against the two
   // cohorts, plus one thing to do next. Opt-out only — a missing key is true.
   monthly_insights: boolean;
+  // Admin-written announcements: service notices, pricing and product news.
+  // Governs the EMAIL only. The dashboard banner is decided by audience, so
+  // turning this off stops the inbox copy and leaves the in-app one.
+  announcements: boolean;
 }
 
 export interface Customer {
@@ -455,6 +459,42 @@ export interface Notification {
   read_at: string | null;
   email_sent: boolean;
   created_at: string;
+}
+
+/**
+ * Who an announcement is addressed to. Resolved per product from that product's
+ * own status columns — see announcementTargetsCustomer in lib/announcements.
+ */
+export type AnnouncementAudience = "all" | "management" | "guaranteed_rent";
+
+export type AnnouncementStatus = "draft" | "sending" | "sent";
+
+export interface Announcement {
+  id: string;
+  subject: string;
+  title: string;
+  /** Plain text. Blank lines split paragraphs; nothing renders it as markup. */
+  body_text: string;
+  audience: AnnouncementAudience;
+  link_url: string | null;
+  link_label: string | null;
+  show_banner: boolean;
+  status: AnnouncementStatus;
+  sent_at: string | null;
+  recipient_count: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One row per customer actually emailed. Unique on (announcement, customer). */
+export interface AnnouncementDelivery {
+  id: string;
+  announcement_id: string;
+  customer_id: string;
+  email: string;
+  sent_at: string;
+  resend_id: string | null;
+  error: string | null;
 }
 
 export interface Payment {
