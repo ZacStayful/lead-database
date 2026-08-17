@@ -905,6 +905,57 @@ which selected `is_active` but never filtered on it.
 Archiving is **not** a substitute for `account_status`. It says "this row should
 not be in circulation at all", where `cancelled` says "this customer left".
 
+### 18E — A cancelled customer can be invited back *(no migration)*
+
+The management branch of `POST /api/admin/customers/[id]/invite` accepts
+`account_status` of **`waitlisted` or `cancelled`**. It used to accept only
+`waitlisted`, which meant a customer who left had no in-app route back at all:
+this route refused them, `/api/customer/subscribe` requires already holding the
+other product (a cancelled management-only customer holds neither), and
+`/api/signup` is retired for non-owners. The only way to take their money was a
+hand-made Payment Link, and the admin got "Customer is not waitlisted", which reads
+like a defect rather than a policy.
+
+Safe because **an invite is not a grant**: the route only emails an activation link
+and creates a Checkout session. Nothing about their product state moves until they
+pay, and `invoice.paid` is what promotes `account_status` — a promotion that now
+includes `'cancelled'` (§23.9) precisely so this path cannot leave somebody paying
+and lead-less. The two changes are complements; neither is safe alone.
+
+Still refused, for different reasons, so the error names the state:
+`active` (they already hold management — inviting would sell it twice) and
+`invited` (they have a live link; `resend-invite` is that route, and swallowing it
+here would hide a working feature).
+
+**The button reads the RAW `account_status`, not `effectiveStatus()`.** That helper
+reports any GR holder as `active` (§18A), which is right for the badge and the tabs
+and wrong for "can management be sold to them" — a management-only question
+(invariant 6). Keying on the raw column also un-hid the button for a GR-only
+subscriber still `waitlisted` for management: the route had always accepted them,
+only the UI was hiding it. `canInviteManagement()` in `AdminCustomersTable` mirrors
+the route's gate deliberately — a hidden button looks like a missing feature and an
+offered one that 400s looks like a bug.
+
+Two knock-ons left alone, both judgement calls rather than oversights:
+
+- **A returning customer keeps their unused credits.** Nothing zeroes
+  `lead_balance` on cancellation, so they come back with the old balance plus the
+  fresh grant. Invariant 2 says credits carry forward and they paid for those
+  leads; confiscating them on return would be the surprising behaviour.
+- **Cancel and return inside one billing cycle leaves the pacing counter stale.**
+  `reset_monthly_counts()` filters on anchor day only, not status (0018), so a
+  cancelled customer's counter is still zeroed monthly and anyone returning after
+  more than a cycle is clean. Only the same-cycle case carries a stale count, and
+  since `invoice.paid` re-anchors to today, pacing reads those leads as already
+  delivered and under-prioritises them for up to a month. It self-corrects at their
+  next anchor day and errs toward delivering **fewer** leads, which is the safe
+  direction. Re-baselining as the resume-from-pause path does (§21) would mean
+  changing `invoice.paid` for every customer on every renewal.
+
+This adds an admin action, not self-serve re-subscription: `/api/customer/subscribe`
+still requires holding the other product, which is the §17 guard keeping self-serve
+acquisition retired.
+
 ---
 
 ## 18. Inactivity escalation *(0062–0070)*
@@ -1980,12 +2031,15 @@ keys on `subscription_status` — making it the one place that looked healthy.
 on a **paid invoice**. The label rule still keys on `subscription_status` anyway, so
 it does not depend on the fix having run.
 
-**Still open:** there is no in-app route back for a cancelled customer.
-`invite/route.ts` refuses any `account_status` other than `waitlisted`,
-`/api/customer/subscribe` requires holding the other product, and `/api/signup` is
-retired for non-owners. The only working route is a hand-made Payment Link, which
-heals the row incidentally (a new Stripe customer misses the lookup, so
-provisioning's by-email branch applies `account_status: 'active'`).
+~~**Still open:** there is no in-app route back for a cancelled customer.~~
+**Closed** — `invite/route.ts` now accepts `cancelled` as well as `waitlisted`
+(§18E). Before that the only working route was a hand-made Payment Link, which
+healed the row incidentally: a new Stripe customer misses the lookup, so
+provisioning's by-email branch applied `account_status: 'active'`. The promotion
+fix above is what makes the in-app route safe, because an admin re-invite reuses
+the customer's EXISTING `stripe_customer_id`, so the webhook lookup succeeds,
+`provisionPaidSubscriber` short-circuits, and the promotion is the only thing that
+reactivates them.
 
 ### Verification
 

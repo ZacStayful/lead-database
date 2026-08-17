@@ -177,6 +177,37 @@ export function AdminCustomersTable({
   const accountStatus = (c: Customer) =>
     effectiveStatus(c, statusOverride[c.id] ?? c.account_status);
 
+  /**
+   * The RAW management account_status, honouring an optimistic override.
+   *
+   * Distinct from accountStatus() above, which runs it through effectiveStatus()
+   * and reports any GR holder as 'active'. That is right for the badge and the
+   * tabs — a GR-only subscriber is a live customer, not a prospect — and wrong for
+   * deciding whether MANAGEMENT can be sold to them, which is a management-only
+   * question (invariant 6).
+   */
+  const managementStatus = (c: Customer) =>
+    statusOverride[c.id] ?? c.account_status;
+
+  /**
+   * Can the management invite be offered?
+   *
+   * Deliberately mirrors the eligibility gate in
+   * /api/admin/customers/[id]/invite: 'waitlisted' or 'cancelled'. Two readings of
+   * "can this customer be invited" would drift, and both failures are bad — a
+   * hidden button looks like a missing feature, an offered one that 400s looks
+   * like a bug.
+   *
+   * Reading the raw status also un-hides the button for a GR-only subscriber who
+   * is still 'waitlisted' for management. The route has always accepted them
+   * (§18 — a GR customer adding management is a normal cross-sell); only the UI
+   * was hiding it, because effectiveStatus reported them as 'active'.
+   */
+  const canInviteManagement = (c: Customer) => {
+    const s = managementStatus(c);
+    return s === "waitlisted" || s === "cancelled";
+  };
+
   const rows = useMemo(() => {
     // Archived rows appear under their own tab and nowhere else — including
     // "All", which otherwise put a dead duplicate right beside the live account
@@ -558,7 +589,13 @@ export function AdminCustomersTable({
                   )}
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-3">
-                      {status === "waitlisted" && (
+                      {/*
+                        Keyed on canInviteManagement (raw account_status), not the
+                        effective status — see its definition. The label changes for
+                        a returning customer so an admin can tell winning somebody
+                        back from onboarding them the first time.
+                      */}
+                      {canInviteManagement(c) && (
                         <button
                           onClick={() =>
                             handleInvite(c.id, c.email, "management")
@@ -566,7 +603,9 @@ export function AdminCustomersTable({
                           disabled={busyId === c.id}
                           className="text-sm font-medium text-[#5D8156] hover:underline disabled:opacity-50"
                         >
-                          Invite: Management
+                          {managementStatus(c) === "cancelled"
+                            ? "Re-invite: Management"
+                            : "Invite: Management"}
                         </button>
                       )}
                       {/*
