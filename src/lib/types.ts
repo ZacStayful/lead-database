@@ -41,8 +41,18 @@ export interface Customer {
   phone: string | null;
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
+  /** Price the management subscription is billed on (0086). Observability
+   *  only — unlike gr_stripe_price_id it drives no allocation re-size. */
+  stripe_price_id: string | null;
   subscription_status: SubscriptionStatus | string;
   monthly_allocation: number;
+  // Self-serve tier change (0086). Stripe applies a price swap immediately, but
+  // the customer keeps the cycle they have already paid for — so the new
+  // allocation waits here and the webhook applies it at the next paid invoice.
+  // NULL means nothing is pending. See §23.
+  pending_monthly_allocation: number | null;
+  /** Billing date the pending change is expected to land on. Display only. */
+  pending_plan_change_at: string | null;
   leads_received_this_month: number;
   lead_balance: number;
   account_status: "waitlisted" | "invited" | "active" | "cancelled" | string;
@@ -74,6 +84,9 @@ export interface Customer {
    *  GR shares the management Stripe customer. */
   gr_stripe_customer_id: string | null;
   gr_monthly_allocation: number;
+  /** gr_ mirror of pending_monthly_allocation (0086). */
+  gr_pending_monthly_allocation: number | null;
+  gr_pending_plan_change_at: string | null;
   gr_leads_received_this_month: number;
   gr_billing_cycle_anchor: string | null;
   gr_last_assignment_at: string | null;

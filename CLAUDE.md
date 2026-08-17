@@ -448,6 +448,13 @@ for being new with no way to earn out of it.
 - Backfill accuracy: `management_lifetime_leads_received` cannot count leads
   that were delivered and later **discarded**, because discard deletes the row
   (§13). Only fixable by recording deliveries somewhere discard does not touch.
+- Rehearse the §23 tier swap in Stripe **test mode** before relying on it. The
+  build session could only reach the live account, so `subscriptions.update` with
+  `proration_behavior: "none"` has not been exercised end to end.
+- The 20-lead prices (management and GR) are `tax_behavior: "inclusive"` while
+  both 10-lead prices are `"unspecified"`. A §23 tier switch is the first thing
+  that will move a customer between the two treatments. Pre-existing in Stripe,
+  not introduced by code.
 - Decide whether repeat pausing should be capped (§21). It is currently
   unlimited, and 0084 made the duration customer-chosen, so a customer could in
   principle pause a month at a time indefinitely. `subscription_pauses` makes
@@ -713,10 +720,18 @@ with its price, so it was left alone.
 defaults to **10**, so a £300/20 GR buyer left on the default is credited *half*
 what they pay for. Both GR checkout paths (`/api/customer/subscribe` and the GR
 branch of `/api/signup`) now write it before creating the session, and
-`customer.subscription.created` sets it from the price id as a backstop —
-creation only, so it can never undo an admin's hand-edit on a later `updated`
-event. On a genuine disagreement the webhook credits the **row** and logs a
-"GR allocation drift" error; the row stays the source of truth.
+the subscription lifecycle handler sets it from the price id as a backstop. On a
+genuine disagreement the webhook credits the **row** and logs a "GR allocation
+drift" error; the row stays the source of truth.
+
+⚠️ **This paragraph used to say "creation only, so it can never undo an admin's
+hand-edit on a later `updated` event". That was never what the code did.** The
+block is keyed on `gr_stripe_price_id !== subPriceIds[0]` — "the price is not the
+one we last recorded" — not on the event type, so it fires on `updated` too. What
+protects a hand-edit is narrower than the old wording claimed: an allocation
+edited while the **price stayed put** is untouched, but an allocation edited to
+disagree with a price that then changes is overwritten. It has a second exception
+since 0086 — see §23.
 
 ### GR price ids are the product router
 
@@ -1727,3 +1742,127 @@ read-only against production: 21 emailable, 20 management, 1 GR.
 0085 must be applied before the code deploys, or the admin page renders against
 missing tables and the dashboard banner query fails. Nothing else in the app
 reads these tables, so a lagging migration cannot affect lead allocation.
+
+---
+
+## 23. Self-serve tier changes *(0086)*
+
+A subscriber can move between the 10-lead and 20-lead tier of a product they
+already hold, from `/dashboard/packages` and `/dashboard/settings`.
+`POST /api/customer/subscription/plan`.
+
+**Choosing a tier when BUYING the other product already worked** and is
+untouched here: `PackageUpsellCard` has rendered a 10/20 selector for any
+two-plan product since the £300/20 GR plan shipped, and `/api/customer/subscribe`
+has always accepted `plan`. What did not exist was resizing a live subscription —
+there was no `subscriptions.update` price swap anywhere in the repo, only
+pause/resume, so a tier change meant an admin editing Stripe by hand.
+
+### The change lands at the next billing date, and that is the whole design
+
+`proration_behavior: "none"`. Nothing is charged or refunded on the day; the
+customer keeps the cycle they have paid for at the tier they paid for, and the
+new price arrives on their natural next invoice. A customer who needs leads
+sooner already has Top up.
+
+**The route does not write the allocation.** `invoice.paid` credits
+`(gr_)monthly_allocation` (§17) and the same column drives deficit-first pacing
+and weighted capacity — but Stripe applies a price swap **immediately**, even
+with no proration; only the billing waits. Writing the allocation at swap time
+would therefore pace a customer at 20 leads through a month they paid £150 for,
+or starve one who has already paid £300 down to 10. So the new figure is parked
+in `(gr_)pending_monthly_allocation` and the **webhook applies it at the next
+paid invoice** — the same moment `credit_invoice()` grants the leads it sizes.
+
+`applyPendingPlanChange()` in `src/lib/planChanges.ts` is the single expression
+of that, called from both halves of `invoice.paid`.
+
+**It applies only when the invoice's own price agrees with the pending figure.**
+That equality test is the safety: a stray, replayed or out-of-order invoice can
+never promote a change early, and an allocation an admin has hand-edited is
+still never silently re-sized from an invoice — the line §17 drew when it
+declined to switch crediting onto `allocationFromPrices` wholesale. That broader
+change has **not** been made. If the apply write fails, the **old** tier is
+credited: under-crediting by a tier is recoverable because the balance carries
+forward (invariant 2) and the next invoice applies the change, where crediting a
+tier the row does not record is not.
+
+### The GR auto-resize has to stand down for these
+
+The GR backstop (§17) re-sizes `gr_monthly_allocation` whenever the
+subscription's price stops matching `gr_stripe_price_id`. Our swap changes that
+price instantly, so without a guard the backstop would undo the deferral within
+seconds and re-size the customer a month early. It now skips when the row
+carries a `gr_pending_monthly_allocation` equal to the price's allocation. A GR
+plan switch made in the Stripe portal or by an admin has no pending row and
+still re-sizes at once, exactly as before.
+
+### Live state on `customers`, history in the table
+
+The §21 split. `(gr_)pending_monthly_allocation` is the **only** authority on
+whether a change is outstanding; `subscription_plan_changes` is a best-effort
+audit trail and every write to it logs rather than throws. A missing history row
+is a reporting gap; a failed plan change is a customer's money.
+
+`customers` is read by `getCurrentCustomer()` on the **service role** with
+`select("*")`, so the dashboard sees the pending columns with no RLS work.
+`subscription_plan_changes` therefore has RLS on with **no policy** — deny-all
+to the browser, as `subscription_pauses` and `operator_proof_snapshots`.
+
+### Reverting is the same request
+
+Asking for the tier you are currently on, while a change is pending, swaps the
+price back and clears the pending columns. One code path, so the undo can never
+diverge from the do. A second change before the first has billed supersedes it,
+closing the earlier history row as `cancelled_at`.
+
+### Guards
+
+- **Must hold the product** (`holdsProduct`) — 403 otherwise.
+- **Paused blocks the management side only** (invariant 6): under a pause Stripe
+  is voiding invoices and a price change would land at an unpredictable moment.
+  GR keeps flowing to a paused management customer, so `paused_at` must not gate
+  it. A pending **cancellation** is deliberately allowed — somebody weighing up
+  leaving is exactly who should be able to drop a tier instead.
+- **No subscription id → 409 with a support message.** Comped and hand-provisioned
+  accounts genuinely have nothing to resize.
+- **A subscription with more than one item is refused.** This route swaps one
+  item's price and must never guess which.
+
+Stripe is called **first**, then the database; a failed DB write swaps the price
+back. A row that disagrees with Stripe is worse than a failed request. Same
+concern as the pause route's rollback, in the opposite order — there the DB
+write is the thing that can be undone safely, here it is the price.
+
+`current_period_end` is read from `items.data[0]` before the subscription-level
+field: it moved onto the item in the basil-era API versions this account is on,
+the same shape change `subscriptionIdFromInvoice` already works around.
+
+### `customers.stripe_price_id`
+
+Added for symmetry with `gr_stripe_price_id` and because which price a
+management customer is actually billed on was otherwise invisible to admin.
+**Observability only — nothing gates on it**, and deliberately no allocation
+re-size follows it.
+
+### Verification
+
+All 82 migrations applied to a scratch Postgres 16 from empty. Both CHECKs were
+exercised (zero and negative rejected), the `lead_type` CHECK rejected an
+invalid product, the FK cascade was confirmed on customer delete, and the
+partial index was confirmed to serve the open-change lookup. `credit_invoice`
+was run against a seeded row after an applied change to confirm it credits the
+**new** tier, and replayed to confirm the idempotency claim still short-circuits.
+`applyPendingPlanChange` was unit-checked over six cases: nothing pending, price
+matches, price disagrees, unrecognised price, GR downgrade writing only `gr_`
+columns, and a failed write falling back to the old tier.
+
+**Not rehearsed against Stripe.** The only account reachable from the build
+session is livemode, so the price swap itself has not been exercised end to end
+— do that in test mode before relying on it (see §12).
+
+### Deployment order — migration BEFORE code
+
+0086 must be applied before the code deploys. The webhook selects the pending
+columns on **every** `invoice.paid`, so a lagging migration would break
+crediting for everybody, not just for customers using this feature.
