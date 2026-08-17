@@ -38,6 +38,16 @@ function textFor(item: MondayItem, columnId: string): string {
   return item.column_values.find((c) => c.id === columnId)?.text ?? "";
 }
 
+/** One page of a cursor-paginated board read. */
+interface MondayItemsPage {
+  cursor: string | null;
+  items: MondayItem[];
+}
+interface MondayPageData {
+  next_items_page?: MondayItemsPage;
+  boards?: { items_page: MondayItemsPage }[];
+}
+
 /** Board 18396542480 "Guaranteed rent leads". */
 function grBoardId(): string {
   return process.env.MONDAY_GR_LEAD_BOARD_ID ?? "18396542480";
@@ -69,13 +79,17 @@ function grSellableStatus(): string | null {
   return process.env.MONDAY_GR_SELLABLE_STATUS ?? null;
 }
 
-/** Board 18420649520 "Stayful Lead database enquiries" (landing-page form). */
-function enquiryBoardId(): string {
+/**
+ * Board 18420649520 "Stayful Lead database enquiries" (landing-page form).
+ * Exported because the customer link columns (0086) store which board an item
+ * lives on, and only this one carries the Status column.
+ */
+export function enquiryBoardId(): string {
   return process.env.MONDAY_ENQUIRY_BOARD_ID ?? "18420649520";
 }
 
 /** Board 18420913271 "Stayful Guaranteed rent database enquiries". */
-function grEnquiryBoardId(): string {
+export function grEnquiryBoardId(): string {
   return process.env.MONDAY_GR_ENQUIRY_BOARD_ID ?? "18420913271";
 }
 
@@ -105,6 +119,378 @@ const GR_ENQUIRY_COLUMN_MAP = {
   current_lead_source: "text_mm515b3c", // "How do you currently get guaranteed rent leads"
   date_added: "date_mm50brxt", // "Date added"
 } as const;
+
+/**
+ * Status column on the management enquiries board (18420649520).
+ *
+ * The board is organised BY this column: every item sits in the group matching
+ * its label, maintained by ten "when status changes to X, move item to group Y"
+ * automations. So setting the label is all the code ever needs to do — the group
+ * follows. Verified against the live board: an API-driven change to this column
+ * does fire those automations.
+ */
+const ENQUIRY_STATUS_COLUMN = "color_mm5eda07";
+
+/** "Customer start date" — stamped once, on first becoming a customer. */
+const ENQUIRY_START_DATE_COLUMN = "date_mm5ft19y";
+/** "Customer end date" — the real end of service, not the cancellation click. */
+const ENQUIRY_END_DATE_COLUMN = "date_mm5fxrbn";
+
+/**
+ * The five Status labels this system owns.
+ *
+ * CASING IS EXACT AND INCONSISTENT between the two customer labels: capital C in
+ * "Management Customer", lower-case r and c in "Guaranteed rent customer". A
+ * mismatch is a hard ColumnValueException, which is the behaviour we want —
+ * see setEnquiryStatus.
+ *
+ * The indexes in the comments are for reference only and must NEVER be used to
+ * derive a value by position: index 5 is a deleted label and does not exist, so
+ * position and index disagree. The remaining five labels on this column
+ * (Web meeting sat/booked/no show, In the future, In the future due to call) are
+ * the sales pipeline's and are never written from here.
+ */
+export const ENQUIRY_STATUS = {
+  cancelled: "Cancelled", //                        index 0
+  management_customer: "Management Customer", //     index 1  — capital C
+  card_declined: "Wants to pay card declined", //    index 3
+  guaranteed_rent_customer: "Guaranteed rent customer", // index 9 — lower r, c
+  paused: "Paused", //                               index 10
+} as const;
+
+export type EnquiryStatusLabel =
+  (typeof ENQUIRY_STATUS)[keyof typeof ENQUIRY_STATUS];
+
+/**
+ * Timeout for the status write. The two board-sync fetchers below deliberately
+ * do NOT get this in the same change — giving the daily crons a timeout they
+ * have never had is a behaviour change that belongs in its own commit. Matches
+ * the 8s used by sms.ts and businessTime.ts.
+ */
+const MONDAY_TIMEOUT_MS = 8000;
+
+/**
+ * Low-level GraphQL call with a timeout. Used by the status write only; the
+ * pre-existing callers keep their own inline fetches (see MONDAY_TIMEOUT_MS).
+ *
+ * Throws on transport failure, non-200 and GraphQL errors — the callers in this
+ * file decide whether that becomes an exception or a result object.
+ */
+async function mondayGraphql<T>(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MONDAY_TIMEOUT_MS);
+  try {
+    const res = await fetch(MONDAY_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: token,
+        "API-Version": "2024-10",
+      },
+      body: JSON.stringify({ query, variables }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok) throw new Error(`Monday API HTTP ${res.status}`);
+
+    const json: { data?: T; errors?: { message: string }[] } = await res.json();
+    if (json.errors?.length) {
+      throw new Error(
+        `Monday API error: ${json.errors.map((e) => e.message).join("; ")}`
+      );
+    }
+    if (!json.data) throw new Error("Monday API returned no data");
+    return json.data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export interface MondayStatusWriteResult {
+  written: boolean;
+  skipped?: "not_configured" | "not_status_board";
+  error?: string;
+}
+
+/**
+ * Set the Status cell — and optionally the two customer date cells — on one item
+ * of the management enquiries board.
+ *
+ * NEVER THROWS. Returns a result object, the same contract as sendNewLeadSms and
+ * the sendEmail wrappers, because every caller is a non-critical side effect
+ * running beside money-moving work. This matters most in the Stripe webhook: that
+ * handler deletes its stripe_events idempotency claim on any throw so Stripe
+ * retries, meaning an exception escaping from here would make Stripe redeliver an
+ * invoice that has already been credited.
+ *
+ * Inert until configured — a missing MONDAY_API_TOKEN returns
+ * skipped: "not_configured" rather than throwing (the sms.ts precedent). Note
+ * createBoardContact below does the opposite; that is safe only because its
+ * callers are an admin-triggered sync and a try/catch-wrapped form post.
+ *
+ * The dates are a three-way choice, which is why endDate is
+ * `string | null | undefined`:
+ *   - a date string sets the cell
+ *   - null CLEARS it (Monday takes `{}` for an empty date)
+ *   - undefined leaves it untouched
+ *
+ * Both dates are code-owned rather than automation-owned, deliberately. The
+ * board's own automations used to stamp them, but "set Customer start date = Now"
+ * fires on EVERY entry into Management Customer — verified live — so once the
+ * label is written by code it would reset the start date of every customer who
+ * resumes from a pause, recovers a failed payment or re-subscribes. Those two
+ * automation actions are removed; the group moves stay.
+ */
+export async function setEnquiryStatus(params: {
+  itemId: string;
+  label: EnquiryStatusLabel;
+  boardId?: string | null;
+  /** Only pass when the item's cell is empty — first write wins. */
+  startDate?: string | null;
+  /** Date to set, null to clear, undefined to leave alone. */
+  endDate?: string | null;
+}): Promise<MondayStatusWriteResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { written: false, skipped: "not_configured" };
+
+  // Only the management enquiries board has this column. The GR enquiries board
+  // (18420913271) has no status column at all, so an item that lives there can
+  // never carry a label — refuse rather than erroring at Monday.
+  const targetBoard = params.boardId ?? enquiryBoardId();
+  if (targetBoard !== enquiryBoardId()) {
+    return { written: false, skipped: "not_status_board" };
+  }
+
+  const values: Record<string, unknown> = {
+    [ENQUIRY_STATUS_COLUMN]: { label: params.label },
+  };
+  if (params.startDate) {
+    values[ENQUIRY_START_DATE_COLUMN] = { date: params.startDate };
+  }
+  if (params.endDate !== undefined) {
+    values[ENQUIRY_END_DATE_COLUMN] = params.endDate
+      ? { date: params.endDate }
+      : {};
+  }
+
+  // One request for the label and both dates, so they can never be half applied.
+  //
+  // create_labels_if_missing stays FALSE on purpose: an unknown or mis-cased
+  // label then fails loudly (ColumnValueException / missingLabel) instead of
+  // silently adding an eleventh label to a column the board's grouping depends
+  // on. Verified: "Guaranteed Rent Customer" is rejected and creates nothing.
+  const query = `mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+    change_multiple_column_values(
+      board_id: $boardId
+      item_id: $itemId
+      column_values: $values
+      create_labels_if_missing: false
+    ) { id }
+  }`;
+
+  try {
+    await mondayGraphql<{ change_multiple_column_values?: { id: string } }>(
+      token,
+      query,
+      {
+        boardId: targetBoard,
+        itemId: params.itemId,
+        values: JSON.stringify(values),
+      }
+    );
+    return { written: true };
+  } catch (err) {
+    return {
+      written: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** One row of the enquiries board, reduced to what customer matching needs. */
+export interface EnquiryBoardItem {
+  id: string;
+  name: string;
+  /**
+   * Every address found in the Email cell, lowercased. The cell is free text and
+   * at least one live item holds TWO addresses separated by a space, so this is
+   * a list rather than a string.
+   */
+  emails: string[];
+  /**
+   * Last 9 digits of the Mobile cell, or "". Same comparison rule as the
+   * duplicate-lead detection in 0070, and "0000 0000000" is treated as missing.
+   */
+  phoneKey: string;
+  /** Current Status label text, or "" when unset. */
+  statusLabel: string;
+  /** Customer start date cell, or "" — drives the first-write-wins rule. */
+  startDate: string;
+  /**
+   * Customer end date cell, or "". Needed so "clear the end date" can be
+   * recognised as a no-op when the cell is already empty — otherwise every
+   * customer.subscription.updated event would issue a pointless write.
+   */
+  endDate: string;
+}
+
+/**
+ * Split a free-text email cell into the addresses it actually contains.
+ *
+ * Exported so the matching rule can be exercised against real board data without
+ * calling Monday. The cell is hand-typed: at least one live item holds two
+ * addresses separated by a space, and one differs from the customer row only by
+ * capitalisation.
+ */
+export function emailsFromCell(cell: string): string[] {
+  return cell
+    .toLowerCase()
+    .split(/[\s,;]+/)
+    .filter((part) => part.includes("@"));
+}
+
+/**
+ * Reduce a phone number to its last 9 digits for comparison, or "" when there is
+ * nothing usable. Mirrors 0070's normalisation so the two never disagree about
+ * whether a number matches.
+ */
+export function phoneMatchKey(raw: string | null | undefined): string {
+  const digits = (raw ?? "").replace(/\D/g, "");
+  // The placeholder Monday sometimes carries for "no number given".
+  if (!digits || /^0+$/.test(digits)) return "";
+  if (digits.length < 9) return "";
+  return digits.slice(-9);
+}
+
+/**
+ * Read the whole enquiries board, reduced to the fields customer matching and
+ * drift reporting need. NEVER THROWS — returns a result object, for the same
+ * reason setEnquiryStatus does.
+ *
+ * One request today (34 items), but paginated because that is the pattern the
+ * two lead syncs already use and the board only grows.
+ */
+export async function fetchEnquiryBoardIndex(): Promise<
+  { ok: true; items: EnquiryBoardItem[] } | { ok: false; error: string }
+> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { ok: false, error: "not_configured" };
+
+  const columnIds = [
+    ENQUIRY_COLUMN_MAP.email,
+    ENQUIRY_COLUMN_MAP.mobile,
+    ENQUIRY_STATUS_COLUMN,
+    ENQUIRY_START_DATE_COLUMN,
+    ENQUIRY_END_DATE_COLUMN,
+  ];
+
+  const items: EnquiryBoardItem[] = [];
+  let cursor: string | null = null;
+
+  try {
+    do {
+      const query: string = cursor
+        ? `query ($cursor: String!) { next_items_page(limit: 100, cursor: $cursor) { cursor items { id name column_values(ids: ${JSON.stringify(
+            columnIds
+          )}) { id text } } } }`
+        : `query { boards(ids: ${enquiryBoardId()}) { items_page(limit: 100) { cursor items { id name column_values(ids: ${JSON.stringify(
+            columnIds
+          )}) { id text } } } } }`;
+
+      // Both of these are annotated rather than inferred: `cursor` is assigned
+      // from `page.cursor`, `page` is picked using `cursor`, and `data` is fetched
+      // with `cursor` in its variables — which TypeScript reads as a circular
+      // initializer (TS7022). Annotating breaks the cycle; fetchMondayLeads
+      // annotates its own page for the same reason.
+      const variables: Record<string, unknown> = cursor ? { cursor } : {};
+      const data: MondayPageData = await mondayGraphql<MondayPageData>(
+        token,
+        query,
+        variables
+      );
+
+      const page: MondayItemsPage | undefined = cursor
+        ? data.next_items_page
+        : data.boards?.[0]?.items_page;
+      cursor = page?.cursor ?? null;
+
+      for (const item of page?.items ?? []) {
+        items.push({
+          id: item.id,
+          name: item.name,
+          emails: emailsFromCell(textFor(item, ENQUIRY_COLUMN_MAP.email)),
+          phoneKey: phoneMatchKey(textFor(item, ENQUIRY_COLUMN_MAP.mobile)),
+          statusLabel: textFor(item, ENQUIRY_STATUS_COLUMN),
+          startDate: textFor(item, ENQUIRY_START_DATE_COLUMN),
+          endDate: textFor(item, ENQUIRY_END_DATE_COLUMN),
+        });
+      }
+    } while (cursor);
+
+    return { ok: true, items };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Read one item's status and start date, for the case where the customer already
+ * has a stored monday_item_id and a whole-board read would be waste.
+ * NEVER THROWS.
+ */
+export async function fetchEnquiryItem(
+  itemId: string
+): Promise<
+  { ok: true; item: EnquiryBoardItem | null } | { ok: false; error: string }
+> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { ok: false, error: "not_configured" };
+
+  const columnIds = [
+    ENQUIRY_COLUMN_MAP.email,
+    ENQUIRY_COLUMN_MAP.mobile,
+    ENQUIRY_STATUS_COLUMN,
+    ENQUIRY_START_DATE_COLUMN,
+    ENQUIRY_END_DATE_COLUMN,
+  ];
+
+  try {
+    const data = await mondayGraphql<{ items?: MondayItem[] }>(
+      token,
+      `query ($ids: [ID!]) { items(ids: $ids) { id name column_values(ids: ${JSON.stringify(
+        columnIds
+      )}) { id text } } }`,
+      { ids: [itemId] }
+    );
+    const item = data.items?.[0];
+    if (!item) return { ok: true, item: null };
+    return {
+      ok: true,
+      item: {
+        id: item.id,
+        name: item.name,
+        emails: emailsFromCell(textFor(item, ENQUIRY_COLUMN_MAP.email)),
+        phoneKey: phoneMatchKey(textFor(item, ENQUIRY_COLUMN_MAP.mobile)),
+        statusLabel: textFor(item, ENQUIRY_STATUS_COLUMN),
+        startDate: textFor(item, ENQUIRY_START_DATE_COLUMN),
+        endDate: textFor(item, ENQUIRY_END_DATE_COLUMN),
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 /**
  * Low-level: create a contact item on a given enquiries board. Returns the new

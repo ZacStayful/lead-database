@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   createEnquiryContact,
   createGuaranteedRentEnquiryContact,
+  enquiryBoardId,
+  grEnquiryBoardId,
 } from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
 
@@ -85,17 +87,30 @@ export async function POST(request: NextRequest) {
   // 1. Push to Monday. Non-fatal — we still create the account if this fails.
   //    Guaranteed Rent enquiries go to their own board (no website/plan columns);
   //    management enquiries go to the management enquiries board.
+  //
+  //    Both creators return the new item id, and it is KEPT (0086) rather than
+  //    discarded: it is the customer -> Monday item link the subscription-status
+  //    sync needs. Capturing it here is what stops every future customer having to
+  //    be matched by email, phone or name later, which is guesswork by comparison.
+  let mondayItemId: string | null = null;
+  let mondayBoardId: string | null = null;
   try {
     if (isGuaranteedRent) {
-      await createGuaranteedRentEnquiryContact({
+      mondayItemId = await createGuaranteedRentEnquiryContact({
         name,
         email,
         mobile,
         propertiesManaged,
         currentLeadSource,
       });
+      // The GR enquiries board has no Status column, so this link can never carry
+      // a label. Stored honestly anyway: the status writer refuses a non-status
+      // board outright, and the admin check tool reports these as needing an item
+      // on the management board — which is how the one existing GR customer was
+      // handled by hand.
+      mondayBoardId = grEnquiryBoardId();
     } else {
-      await createEnquiryContact({
+      mondayItemId = await createEnquiryContact({
         name,
         email,
         mobile,
@@ -104,10 +119,23 @@ export async function POST(request: NextRequest) {
         preferredPlan,
         currentLeadSource,
       });
+      mondayBoardId = enquiryBoardId();
     }
   } catch (err) {
     console.error("Monday enquiry push failed", err);
   }
+
+  // Only set when we actually got an id — a failed Monday push must not blank an
+  // existing link.
+  const mondayLink =
+    mondayItemId && mondayBoardId
+      ? {
+          monday_item_id: mondayItemId,
+          monday_board_id: mondayBoardId,
+          monday_link_state: "linked",
+          monday_link_matched_by: "created",
+        }
+      : {};
 
   // 2. Create (or update) the inactive account.
   try {
@@ -132,6 +160,10 @@ export async function POST(request: NextRequest) {
             monthly_allocation: monthlyAllocation,
             website_url: websiteUrl || null,
             properties_managed: propertiesManaged || null,
+            // Only on this branch, never on an invited/active/cancelled account —
+            // the same rule the rest of this block follows about not letting a
+            // public form touch a live account.
+            ...mondayLink,
             updated_at: new Date().toISOString(),
           })
           .eq("id", existing.id);
@@ -151,6 +183,7 @@ export async function POST(request: NextRequest) {
         account_status: "waitlisted",
         website_url: websiteUrl || null,
         properties_managed: propertiesManaged || null,
+        ...mondayLink,
       });
       if (customerError) {
         console.error("Enquiry customer insert failed", customerError);

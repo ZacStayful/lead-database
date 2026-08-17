@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import {
   GR_PLANS,
   grAllocationForPriceIds,
@@ -25,6 +26,38 @@ export const dynamic = "force-dynamic";
 function toDateString(unixSeconds: number | null | undefined): string | null {
   if (!unixSeconds) return null;
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Push a customer's state to the Monday sales board, swallowing everything.
+ *
+ * The try/catch is not defensive habit — it is load-bearing. This handler DELETES
+ * its stripe_events idempotency claim on any throw so that Stripe retries, so an
+ * exception escaping a Monday failure would make Stripe redeliver an invoice that
+ * has already been credited. syncCustomerMondayStatus already returns a result
+ * object rather than throwing; this is the second stop.
+ *
+ * Used by the branches that need no cancellation context. The
+ * customer.subscription.* branch calls syncCustomerMondayStatus directly, because
+ * only it knows cancel_at_period_end and the real end-of-service date.
+ */
+async function pushMondayStatus(
+  admin: ReturnType<typeof createAdminClient>,
+  customerId: string,
+  reason: string
+): Promise<void> {
+  try {
+    const push = await syncCustomerMondayStatus(admin, customerId, { reason });
+    if (push.error) {
+      console.error("[monday-status] push failed", {
+        customer: customerId,
+        reason,
+        error: push.error,
+      });
+    }
+  } catch (err) {
+    console.error("[monday-status] push threw", { reason, err });
+  }
 }
 
 /** Map a Stripe subscription status onto our customers.subscription_status. */
@@ -274,11 +307,16 @@ export async function POST(request: NextRequest) {
         // stripe_customer_id, and a plain .eq on the management column would
         // find nothing for them — leaving the "first cancellation wins" guard
         // reading an empty row and overwriting the date on every event.
+        // `id` is selected purely so the Monday status push at the end of this
+        // branch has a customer to sync. This branch matches by
+        // customerMatchFilter and never by id, so without it there would be no
+        // handle on the row — and adding the column here costs no extra query.
         const { data: existing } = await admin
           .from("customers")
-          .select("cancelled_at, gr_cancelled_at, cancellation_feedback")
+          .select("id, cancelled_at, gr_cancelled_at, cancellation_feedback")
           .or(customerMatchFilter(customerId, isGuaranteedRent))
           .maybeSingle<{
+            id: string;
             cancelled_at: string | null;
             gr_cancelled_at: string | null;
             cancellation_feedback: string | null;
@@ -454,6 +492,69 @@ export async function POST(request: NextRequest) {
             });
           }
         }
+
+        // Push the resulting state to the Monday sales board.
+        //
+        // Placed AFTER the resume-detection block, not before: that block can
+        // clear paused_at — including on a cancellation, §21's "third case" — so
+        // a push from earlier in this branch would label somebody who has just
+        // left as Paused.
+        //
+        // This one call covers every subscription transition: management cancelled
+        // -> Cancelled; GR cancelled on a management holder -> still Management
+        // Customer; GR-only cancelled -> Cancelled; re-subscribed -> back to
+        // Management Customer; resumed early through the portal -> Management
+        // Customer.
+        if (existing?.id) {
+          // cancel_at_period_end is stored nowhere on purpose (§21), so this is
+          // the only place it can be known. The portal cancels at period end, so
+          // a customer clicking cancel arrives here with status still "active" —
+          // without this flag the board would not show the cancellation until the
+          // period actually ended, weeks later.
+          const cancellationPending =
+            !isGuaranteedRent && sub.cancel_at_period_end === true;
+
+          // The REAL end of service, not the date they asked. cancel_at is what
+          // Stripe sets when a cancellation is scheduled; ended_at is set once it
+          // has actually happened. Passing null CLEARS the cell, which is the
+          // change-of-mind case — gated on exactly the condition the
+          // cancellation-reason clearing above uses, so the two never disagree.
+          let endDate: string | null | undefined;
+          if (!isGuaranteedRent) {
+            if (cancellationPending) {
+              endDate =
+                toDateString(sub.cancel_at) ??
+                toDateString(subscriptionPeriodEnd(sub));
+            } else if (status === "canceled") {
+              endDate =
+                toDateString(sub.ended_at) ??
+                toDateString(sub.canceled_at) ??
+                new Date().toISOString().slice(0, 10);
+            } else if (status === "active") {
+              // Active and no longer scheduled to cancel — they changed their mind.
+              endDate = null;
+            }
+          }
+
+          try {
+            const push = await syncCustomerMondayStatus(admin, existing.id, {
+              managementCancellationPending: cancellationPending,
+              endDate,
+              reason: event.type,
+            });
+            if (push.error) {
+              console.error("[monday-status] push failed", {
+                customer: existing.id,
+                event: event.type,
+                error: push.error,
+              });
+            }
+          } catch (err) {
+            // Must never reach the outer catch: that deletes the stripe_events
+            // claim and Stripe would redeliver an already-processed event.
+            console.error("[monday-status] push threw", err);
+          }
+        }
         break;
       }
 
@@ -599,6 +700,11 @@ export async function POST(request: NextRequest) {
 
             // Execute a scheduled GR filter lift at this genuine renewal.
             await maybeExecuteFilterLift(admin, customer.id, "guaranteed_rent");
+
+            // Board push, after the status write above so the fresh re-read sees
+            // gr_subscription_status = 'active'. A no-op on renewals: the cached
+            // label already matches, so this costs one SELECT and no Monday call.
+            await pushMondayStatus(admin, customer.id, "invoice.paid/gr");
             break;
           }
 
@@ -706,9 +812,27 @@ export async function POST(request: NextRequest) {
           // should be active regardless of how they got here — the previous
           // 'invited'-only guard left customers who paid while still
           // 'waitlisted' stuck as inactive (and therefore ineligible for
-          // auto-assignment). Restrict to the pre-active states so this is a
-          // no-op on renewals (already 'active') and never resurrects a
-          // deliberately 'cancelled' account.
+          // auto-assignment).
+          //
+          // 'cancelled' is included, and that is a deliberate reversal of the
+          // earlier rule that excluded it. A returning customer pays, so
+          // `subscription_status` goes back to 'active', but nothing here or in
+          // the customer.subscription.* branch ever moved `account_status` off
+          // 'cancelled' — and `provisionPaidSubscriber` short-circuits on a
+          // known stripe_customer_id before its activation object is applied
+          // (provisioning.ts:60-62). The row was therefore left billing normally
+          // while BOTH candidate functions require account_status = 'active'
+          // (0073), so it received no leads at all — and `credit_invoice` still
+          // topped up lead_balance every month, banking credits that could never
+          // be spent. It also silently dropped out of the nudge, the weekly
+          // report, announcements, pause, top-ups, capacity and the admin active
+          // count.
+          //
+          // Restricting to the three pre-active states still keeps this a no-op
+          // on renewals (already 'active'). What makes resurrecting 'cancelled'
+          // safe is the gate this sits behind: a PAID invoice. The row is only
+          // promoted because money arrived.
+          //
           // Key on the RESOLVED customer.id, not the event's stripe_customer_id:
           // a payer who signed up (Stripe customer A) then paid via a Payment
           // Link (Stripe customer B) is credited by email-match, but their row
@@ -720,7 +844,7 @@ export async function POST(request: NextRequest) {
             .from("customers")
             .update({ account_status: "active" })
             .eq("id", customer.id)
-            .in("account_status", ["invited", "waitlisted"]);
+            .in("account_status", ["invited", "waitlisted", "cancelled"]);
 
           // Keep the subscription marked active and re-anchor the billing cycle
           // to the start of the period this invoice covers.
@@ -738,6 +862,13 @@ export async function POST(request: NextRequest) {
 
           // Execute a scheduled management filter lift at this genuine renewal.
           await maybeExecuteFilterLift(admin, customer.id, "management");
+
+          // Board push, last so the fresh re-read sees both the account_status
+          // promotion and subscription_status = 'active'. This is also the hook
+          // that recovers a customer from "Wants to pay card declined" — a
+          // successful payment clears past_due, so the label rule returns
+          // Management Customer again with no special handling.
+          await pushMondayStatus(admin, customer.id, "invoice.paid/management");
         }
         break;
       }
@@ -792,6 +923,12 @@ export async function POST(request: NextRequest) {
                   }
             )
             .eq("id", customer.id);
+
+          // Board push -> "Wants to pay card declined". Reverted automatically on
+          // recovery: invoice.paid sets the status back to 'active' and pushes
+          // again. Note past_due is tested BEFORE the held-product rules in the
+          // label rule, because holdsProduct() counts past_due as still held.
+          await pushMondayStatus(admin, customer.id, "invoice.payment_failed");
         }
         break;
       }
