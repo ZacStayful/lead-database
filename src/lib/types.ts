@@ -120,6 +120,34 @@ export interface Customer {
   // pacing: a debited customer has already had those leads.
   pool_debit: number;
   gr_pool_debit: number;
+  // Subscription is scheduled to cancel at the end of the current period (0087).
+  // The billing portal cancels at period end, so this is true for the whole of a
+  // leaving customer's last paid period, while subscription_status is still
+  // 'active'. Read by the Monday label rule (§23) so a cancellation shows on the
+  // sales board at the moment it is requested; gates nothing else.
+  cancel_at_period_end: boolean;
+  gr_cancel_at_period_end: boolean;
+  // Link to the item on the Monday enquiries board representing this CUSTOMER
+  // (0086) — not a lead, so unrelated to leads.monday_item_id. Best-effort and
+  // deliberately not unique; monday_link_state records a collision rather than
+  // rejecting it.
+  monday_item_id: string | null;
+  monday_board_id: string | null;
+  monday_link_state: "unlinked" | "linked" | "not_found" | "ambiguous" | string;
+  monday_link_matched_by:
+    | "created"
+    | "email"
+    | "phone"
+    | "name"
+    | "manual"
+    | null;
+  // The Status label WE last wrote to the board — the idempotency key, NOT the
+  // board's current value. Nothing reads it to decide business state; it exists
+  // so a monthly renewal costs zero Monday HTTP, and so a manual board edit
+  // survives until the customer's next genuine lifecycle change.
+  monday_status_label: string | null;
+  monday_status_synced_at: string | null;
+  monday_status_error: string | null;
   created_at: string;
   updated_at: string;
 }

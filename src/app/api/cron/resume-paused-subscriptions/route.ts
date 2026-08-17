@@ -3,6 +3,7 @@ import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendSubscriptionResumedEmail } from "@/lib/emails";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
+import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,6 +142,33 @@ async function handle(request: NextRequest) {
         customer: customer.id,
         error: emailError,
       });
+    }
+
+    // Take the customer back off "Paused" on the Monday sales board. Inside the
+    // `cleared` branch so it fires exactly once per pause, like the email and the
+    // episode stamp — the webhook's early-resume path pushes from its own hook.
+    //
+    // Their Customer start date is NOT re-stamped by this: the sync only writes
+    // that cell when it is empty. The board automation that used to set it on
+    // every entry into Management Customer is what made that rule necessary.
+    try {
+      const push = await syncCustomerMondayStatus(admin, customer.id, {
+        reason: "resume-paused-subscriptions",
+      });
+      // Skip codes are logged too — see the same note in the pause route.
+      if (
+        push.error ||
+        push.skipped === "board_unreadable" ||
+        push.skipped === "unlinked"
+      ) {
+        console.error("[resume-paused-subscriptions] Monday push did not land", {
+          customer: customer.id,
+          skipped: push.skipped,
+          error: push.error,
+        });
+      }
+    } catch (err) {
+      console.error("[resume-paused-subscriptions] Monday push threw", err);
     }
 
     resumed += 1;

@@ -39,6 +39,10 @@ async function isAdminRequest(req: NextRequest): Promise<boolean> {
  *
  * `product` defaults to 'management', so every existing caller is unaffected.
  *
+ * Also serves as the RE-INVITE for a customer who cancelled — see the eligibility
+ * branch below. Management accepts `waitlisted` and `cancelled`; GR only asks
+ * whether they already hold GR.
+ *
  * WHY THIS TAKES A PRODUCT
  * ------------------------
  * This route used to be hard-coded to management: it always billed
@@ -88,8 +92,34 @@ export async function POST(
         { status: 400 }
       );
     }
-  } else if (customer.account_status !== "waitlisted") {
-    return NextResponse.json({ error: "Customer is not waitlisted" }, { status: 400 });
+  } else if (
+    customer.account_status !== "waitlisted" &&
+    customer.account_status !== "cancelled"
+  ) {
+    // 'cancelled' is admitted, and that is the whole point of this branch being
+    // two states rather than one.
+    //
+    // A customer who leaves and wants to come back had NO in-app route at all:
+    // this route refused them, /api/customer/subscribe requires already holding
+    // the other product (so a cancelled management-only customer holds neither),
+    // and /api/signup is retired for non-owners. The only way to take their money
+    // was a hand-made Stripe Payment Link — undiscoverable, and easy to get wrong.
+    //
+    // It is safe here because an invite is not a grant: this route only ever
+    // emails an activation link and creates a Checkout session. Nothing about the
+    // customer's product state changes until they pay, and the invoice.paid
+    // handler is what promotes account_status back to 'active' — a promotion that
+    // now includes 'cancelled' precisely so this path cannot leave somebody paying
+    // and lead-less.
+    //
+    // 'active' and 'invited' stay refused, for different reasons, so the message
+    // names the state rather than repeating "not waitlisted" — which is what made
+    // a deliberate policy read like a defect.
+    const reason =
+      customer.account_status === "invited"
+        ? "Customer has already been invited — use Resend invite to send the link again"
+        : `Customer already holds a management subscription (account status: ${customer.account_status})`;
+    return NextResponse.json({ error: reason }, { status: 400 });
   }
 
   // Capacity is a non-blocking warning, never a hard block: the invite always
@@ -255,6 +285,11 @@ export async function POST(
     // payment sets gr_subscription_status = 'active'; that is the only state
     // that makes them a GR customer, and it is the one the GR routing and
     // capacity queries read.
+    //
+    // For a RE-INVITE this moves the row off 'cancelled', which is correct — they
+    // are back in the funnel — and loses nothing, because `cancelled_at` is what
+    // records that they once left and it is left alone here. (The Stripe webhook
+    // clears `cancelled_at` only when a subscription is genuinely active again.)
     if (!isGr) {
       await admin
         .from("customers")

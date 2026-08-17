@@ -177,6 +177,37 @@ export function AdminCustomersTable({
   const accountStatus = (c: Customer) =>
     effectiveStatus(c, statusOverride[c.id] ?? c.account_status);
 
+  /**
+   * The RAW management account_status, honouring an optimistic override.
+   *
+   * Distinct from accountStatus() above, which runs it through effectiveStatus()
+   * and reports any GR holder as 'active'. That is right for the badge and the
+   * tabs — a GR-only subscriber is a live customer, not a prospect — and wrong for
+   * deciding whether MANAGEMENT can be sold to them, which is a management-only
+   * question (invariant 6).
+   */
+  const managementStatus = (c: Customer) =>
+    statusOverride[c.id] ?? c.account_status;
+
+  /**
+   * Can the management invite be offered?
+   *
+   * Deliberately mirrors the eligibility gate in
+   * /api/admin/customers/[id]/invite: 'waitlisted' or 'cancelled'. Two readings of
+   * "can this customer be invited" would drift, and both failures are bad — a
+   * hidden button looks like a missing feature, an offered one that 400s looks
+   * like a bug.
+   *
+   * Reading the raw status also un-hides the button for a GR-only subscriber who
+   * is still 'waitlisted' for management. The route has always accepted them
+   * (§18 — a GR customer adding management is a normal cross-sell); only the UI
+   * was hiding it, because effectiveStatus reported them as 'active'.
+   */
+  const canInviteManagement = (c: Customer) => {
+    const s = managementStatus(c);
+    return s === "waitlisted" || s === "cancelled";
+  };
+
   const rows = useMemo(() => {
     // Archived rows appear under their own tab and nowhere else — including
     // "All", which otherwise put a dead duplicate right beside the live account
@@ -363,6 +394,7 @@ export function AdminCustomersTable({
               <TableHead>Pacing</TableHead>
               <TableHead>Last lead</TableHead>
               <TableHead>Last active</TableHead>
+              <TableHead>Monday</TableHead>
               {tab === "paused" && <TableHead>Pause detail</TableHead>}
               {tab === "paused" && <TableHead>Will it re-bill?</TableHead>}
               <TableHead className="text-right">Actions</TableHead>
@@ -533,6 +565,9 @@ export function AdminCustomersTable({
                       lastSignInAt={lastActive[c.id] ?? null}
                     />
                   </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <MondayStatusCell customer={c} />
+                  </TableCell>
                   {tab === "paused" && (
                     <TableCell className="max-w-[22rem] align-top">
                       <PauseDetailCell
@@ -554,7 +589,13 @@ export function AdminCustomersTable({
                   )}
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-3">
-                      {status === "waitlisted" && (
+                      {/*
+                        Keyed on canInviteManagement (raw account_status), not the
+                        effective status — see its definition. The label changes for
+                        a returning customer so an admin can tell winning somebody
+                        back from onboarding them the first time.
+                      */}
+                      {canInviteManagement(c) && (
                         <button
                           onClick={() =>
                             handleInvite(c.id, c.email, "management")
@@ -562,7 +603,9 @@ export function AdminCustomersTable({
                           disabled={busyId === c.id}
                           className="text-sm font-medium text-[#5D8156] hover:underline disabled:opacity-50"
                         >
-                          Invite: Management
+                          {managementStatus(c) === "cancelled"
+                            ? "Re-invite: Management"
+                            : "Invite: Management"}
                         </button>
                       )}
                       {/*
@@ -605,7 +648,7 @@ export function AdminCustomersTable({
             {rows.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={tab === "paused" ? 12 : 10}
+                  colSpan={tab === "paused" ? 13 : 11}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No customers in this view.
@@ -681,6 +724,79 @@ function CreditLine({
         · {received}/{allocation} this cycle
       </span>
     </div>
+  );
+}
+
+/**
+ * What the Monday sales board says about this customer, and whether we can reach
+ * their item at all.
+ *
+ * Shows the label WE last wrote, which is not necessarily the board's current
+ * value — the sync writes on transitions, so somebody's manual edit to the Status
+ * cell persists until that customer's next lifecycle change. That is deliberate,
+ * and it is why this cell is worded "we set" rather than "board says".
+ *
+ * The states worth acting on are the two failures: `not_found` means no board item
+ * could be matched by email, mobile or name (so nothing will ever be written for
+ * them), and a stored error means a write was attempted and refused.
+ */
+function MondayStatusCell({ customer }: { customer: Customer }) {
+  const state = customer.monday_link_state;
+  const error = customer.monday_status_error;
+  const label = customer.monday_status_label;
+  // Built from the stored board id, not a hard-coded one: a GR-form enquirer's item
+  // lives on the GR enquiries board, and a link that always pointed at the
+  // management board would open the wrong item (or nothing).
+  const itemUrl =
+    customer.monday_item_id && customer.monday_board_id
+      ? `https://stayful.monday.com/boards/${customer.monday_board_id}/pulses/${customer.monday_item_id}`
+      : null;
+
+  if (error) {
+    return (
+      <span
+        title={error}
+        className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700"
+      >
+        Push failed
+      </span>
+    );
+  }
+
+  if (state === "not_found") {
+    return (
+      <span
+        title="No board item matched this customer by email, mobile or name. Link it by hand, or add them to the board."
+        className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+      >
+        No board item
+      </span>
+    );
+  }
+
+  if (state === "ambiguous") {
+    return (
+      <span
+        title="More than one board item matched this customer. Link the right one by hand."
+        className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+      >
+        Ambiguous match
+      </span>
+    );
+  }
+
+  if (!itemUrl) return <span className="text-xs">—</span>;
+
+  return (
+    <a
+      href={itemUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={label ? `We set: ${label}` : "Linked, nothing written yet"}
+      className="text-xs hover:underline"
+    >
+      {label ?? "Linked"}
+    </a>
   );
 }
 
