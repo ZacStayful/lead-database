@@ -4,8 +4,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import type { Customer, NotificationPreferences } from "@/lib/types";
+import type { Customer, LeadType, NotificationPreferences } from "@/lib/types";
 import { planForAllocation } from "@/lib/plans";
+import { PRODUCT_COPY, holdsProduct } from "@/lib/products";
+import { PlanChangeCard } from "@/components/dashboard/PlanChangeCard";
 import {
   PAUSE_MONTHS_OPTIONS,
   PAUSE_NOTE_MAX_LENGTH,
@@ -250,6 +252,47 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
               {portalLoading ? "Opening…" : "Manage billing"}
             </Button>
           </div>
+
+          {/* One tier switcher per product actually held. The rows above are
+              management-only, so a GR-only subscriber saw nothing about their
+              own plan on this page at all before this. */}
+          {(["management", "guaranteed_rent"] as LeadType[])
+            .filter((leadType) => holdsProduct(customer, leadType))
+            .map((leadType) => (
+              <div key={leadType}>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {PRODUCT_COPY[leadType].name}
+                </p>
+                <PlanChangeCard
+                  leadType={leadType}
+                  currentAllocation={
+                    leadType === "guaranteed_rent"
+                      ? customer.gr_monthly_allocation
+                      : customer.monthly_allocation
+                  }
+                  pendingAllocation={
+                    leadType === "guaranteed_rent"
+                      ? customer.gr_pending_monthly_allocation
+                      : customer.pending_monthly_allocation
+                  }
+                  pendingEffectiveAt={
+                    leadType === "guaranteed_rent"
+                      ? customer.gr_pending_plan_change_at
+                      : customer.pending_plan_change_at
+                  }
+                  hasSubscription={Boolean(
+                    leadType === "guaranteed_rent"
+                      ? customer.gr_stripe_subscription_id
+                      : customer.stripe_subscription_id
+                  )}
+                  blockedReason={
+                    leadType === "management" && pausedAt
+                      ? "Your subscription is paused. Resume it below to change plan."
+                      : null
+                  }
+                />
+              </div>
+            ))}
         </CardContent>
       </Card>
 

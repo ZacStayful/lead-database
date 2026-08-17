@@ -4,6 +4,7 @@ import { getCurrentCustomer } from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PackageUpsellCard } from "@/components/dashboard/PackageUpsellCard";
+import { PlanChangeCard } from "@/components/dashboard/PlanChangeCard";
 import { PRODUCT_COPY, holdsProduct } from "@/lib/products";
 import type { LeadType } from "@/lib/types";
 
@@ -113,6 +114,38 @@ export default async function PackagesPage({
                       Manage billing
                     </Link>
                   </div>
+
+                  {/* Tier change. Paused blocks the management side only:
+                      paused_at is a management column and GR keeps flowing to a
+                      paused management customer (invariant 6). */}
+                  <PlanChangeCard
+                    leadType={leadType}
+                    currentAllocation={
+                      leadType === "guaranteed_rent"
+                        ? customer.gr_monthly_allocation
+                        : customer.monthly_allocation
+                    }
+                    pendingAllocation={
+                      leadType === "guaranteed_rent"
+                        ? customer.gr_pending_monthly_allocation
+                        : customer.pending_monthly_allocation
+                    }
+                    pendingEffectiveAt={
+                      leadType === "guaranteed_rent"
+                        ? customer.gr_pending_plan_change_at
+                        : customer.pending_plan_change_at
+                    }
+                    hasSubscription={Boolean(
+                      leadType === "guaranteed_rent"
+                        ? customer.gr_stripe_subscription_id
+                        : customer.stripe_subscription_id
+                    )}
+                    blockedReason={
+                      leadType === "management" && customer.paused_at
+                        ? "Your subscription is paused. Resume it from Settings to change plan."
+                        : null
+                    }
+                  />
                 </CardContent>
               </Card>
             );

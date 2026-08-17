@@ -17,6 +17,7 @@ import {
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
+import { applyPendingPlanChange } from "@/lib/planChanges";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -400,14 +401,26 @@ export async function POST(request: NextRequest) {
           // has hand-edited while the price stayed put is never touched, which
           // is the silent re-sizing §17 declined to introduce on the management
           // side. An unrecognised price id changes nothing.
+          //
+          // ONE EXCEPTION, ADDED IN 0088: a self-serve tier change made from the
+          // dashboard. That route swaps the price with proration_behavior:'none'
+          // precisely so the customer keeps the cycle they have already paid
+          // for, and parks the new figure in gr_pending_monthly_allocation for
+          // the invoice to apply. Stripe reports the swap immediately, so
+          // without this guard the backstop would undo the deferral within
+          // seconds and re-size them a month early. A GR plan switch made in the
+          // Stripe portal or by an admin has no pending row and still re-sizes
+          // at once, exactly as before.
           const grAllocation = grAllocationForPriceIds(subPriceIds);
           if (grAllocation) {
             const { data: grRow } = await admin
               .from("customers")
-              .select("gr_stripe_price_id")
+              .select("gr_stripe_price_id, gr_pending_monthly_allocation")
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
-            if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0]) {
+            const deferred =
+              grRow?.gr_pending_monthly_allocation === grAllocation;
+            if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0] && !deferred) {
               update.gr_monthly_allocation = grAllocation;
             }
           }
@@ -428,6 +441,13 @@ export async function POST(request: NextRequest) {
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
+          // Recorded for symmetry with gr_stripe_price_id, and because which
+          // price a management customer is actually billed on was otherwise
+          // invisible to admin (0088). OBSERVABILITY ONLY: deliberately no
+          // allocation re-size follows it. §17 declined to introduce silent
+          // re-sizing on the management side, and a self-serve tier change
+          // carries its own pending column rather than being inferred here.
+          update.stripe_price_id = subPriceIds[0] ?? null;
           // A cancelled management subscription must release its capacity slot —
           // capacity is counted by account_status = 'active'. GR cancellations
           // must NOT touch account_status.
@@ -625,7 +645,7 @@ export async function POST(request: NextRequest) {
             // Payment Link (0056). Match on either.
             let { data: customer } = await admin
               .from("customers")
-              .select("id, gr_monthly_allocation")
+              .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
 
@@ -666,7 +686,7 @@ export async function POST(request: NextRequest) {
                   }
                   const { data: linked } = await admin
                     .from("customers")
-                    .select("id, gr_monthly_allocation")
+                    .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
                     .eq("id", result.customerId)
                     .maybeSingle();
                   customer = linked ?? null;
@@ -689,16 +709,36 @@ export async function POST(request: NextRequest) {
             // (CLAUDE.md §17). This was a bare `10` while GR had one plan; left
             // as a literal it would credit a £300/20 subscriber 10 leads a
             // month, for ever, with nothing in the UI to show it.
-            const grCredits = grPlanForAllocation(
-              customer.gr_monthly_allocation ?? 10
-            ).leads;
+            //
+            // A self-serve tier change lands HERE, not when the customer asked
+            // for it (0088). The dashboard route swaps the Stripe price with no
+            // proration and parks the new figure in
+            // gr_pending_monthly_allocation; this is the invoice that bills it,
+            // so this is where the allocation moves — the same moment the leads
+            // it sizes are granted. Applied only when the invoice's own price
+            // agrees with the pending figure, so nothing can promote a change
+            // early. See src/lib/planChanges.ts.
+            const grInvoiceAllocation = grAllocationForPriceIds(priceIds);
+            const grAllocationNow = await applyPendingPlanChange(
+              admin,
+              {
+                customerId: customer.id,
+                leadType: "guaranteed_rent",
+                currentAllocation: customer.gr_monthly_allocation ?? 10,
+                pendingAllocation: customer.gr_pending_monthly_allocation ?? null,
+                invoiceAllocation: grInvoiceAllocation,
+              },
+              "invoice.paid"
+            );
+
+            const grCredits = grPlanForAllocation(grAllocationNow).leads;
 
             // The row is the source of truth, but if it disagrees with the
             // price actually being billed, somebody is being over- or
             // under-credited every month. Log it loudly rather than papering
             // over it — this is the one signal that a GR checkout was created
-            // without its allocation being set first.
-            const grInvoiceAllocation = grAllocationForPriceIds(priceIds);
+            // without its allocation being set first. A pending tier change is
+            // not drift — it has just been applied above, so the two agree.
             if (grInvoiceAllocation && grInvoiceAllocation !== grCredits) {
               console.error(
                 `GR allocation drift for customer ${customer.id}: invoice price implies ${grInvoiceAllocation} leads but gr_monthly_allocation credits ${grCredits}. Crediting ${grCredits} — correct gr_monthly_allocation in admin.`
@@ -759,7 +799,7 @@ export async function POST(request: NextRequest) {
           // size the credit and detect a mismatched Stripe id.
           let { data: customer } = await admin
             .from("customers")
-            .select("id, monthly_allocation")
+            .select("id, monthly_allocation, pending_monthly_allocation")
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
 
@@ -815,7 +855,7 @@ export async function POST(request: NextRequest) {
                 }
                 const { data: linked } = await admin
                   .from("customers")
-                  .select("id, monthly_allocation")
+                  .select("id, monthly_allocation, pending_monthly_allocation")
                   .eq("id", result.customerId)
                   .maybeSingle();
                 customer = linked ?? null;
@@ -831,9 +871,25 @@ export async function POST(request: NextRequest) {
             break;
           }
 
-          const credits = planForAllocation(
-            customer.monthly_allocation ?? 20
-          ).leads;
+          // A self-serve tier change lands HERE (0088), for the reason the GR
+          // branch above sets out: the dashboard route swapped the price with no
+          // proration, and this is the first invoice that actually bills it.
+          // Applied only when the invoice's own price agrees with the pending
+          // figure — so an allocation an admin has hand-edited is still never
+          // silently re-sized from an invoice, which is the line §17 drew.
+          const allocationNow = await applyPendingPlanChange(
+            admin,
+            {
+              customerId: customer.id,
+              leadType: "management",
+              currentAllocation: customer.monthly_allocation ?? 20,
+              pendingAllocation: customer.pending_monthly_allocation ?? null,
+              invoiceAllocation: allocationFromPrices(priceIds, invoice.subtotal),
+            },
+            "invoice.paid"
+          );
+
+          const credits = planForAllocation(allocationNow).leads;
 
           // Idempotent, invoice-keyed credit: records the paid invoice and moves
           // lead_balance in a single transaction. A replayed delivery of an
