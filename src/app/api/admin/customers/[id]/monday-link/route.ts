@@ -87,7 +87,21 @@ export async function POST(
   }
   if (!found.item) {
     return NextResponse.json(
-      { error: `No item ${itemId} on the enquiries board.` },
+      { error: `No Monday item with id ${itemId}.` },
+      { status: 400 }
+    );
+  }
+
+  // `items(ids:)` is not board-scoped — Monday resolves an id against the whole
+  // account — so "the item exists" is not "the item is on the enquiries board".
+  // Without this an id copied from any other board stores happily and then fails on
+  // every push with not_status_board, which reads as a broken sync rather than a
+  // mistyped id.
+  if (found.item.boardId !== enquiryBoardId()) {
+    return NextResponse.json(
+      {
+        error: `Item ${itemId} ("${found.item.name}") is on board ${found.item.boardId}, not the enquiries board ${enquiryBoardId()}. Only items on that board carry a Status column.`,
+      },
       { status: 400 }
     );
   }

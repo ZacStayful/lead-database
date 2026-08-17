@@ -417,6 +417,19 @@ export async function fetchEnquiryBoardIndex(): Promise<
       const page: MondayItemsPage | undefined = cursor
         ? data.next_items_page
         : data.boards?.[0]?.items_page;
+
+      // A missing board is NOT an empty board, and conflating them is dangerous
+      // here. Monday returns `boards: []` for an id that does not exist or that the
+      // token cannot see, which without this check yields ok:true with zero items —
+      // so a mistyped MONDAY_ENQUIRY_BOARD_ID would report that no customer has a
+      // board item, and the check tool would mark the entire book `not_found`.
+      if (!cursor && !page) {
+        return {
+          ok: false,
+          error: `Board ${enquiryBoardId()} returned no data — check the board id and the token's access to it`,
+        };
+      }
+
       cursor = page?.cursor ?? null;
 
       for (const item of page?.items ?? []) {
@@ -442,14 +455,20 @@ export async function fetchEnquiryBoardIndex(): Promise<
 }
 
 /**
- * Read one item's status and start date, for the case where the customer already
- * has a stored monday_item_id and a whole-board read would be waste.
- * NEVER THROWS.
+ * Read one item's status and dates, for the case where the customer already has a
+ * stored monday_item_id and a whole-board read would be waste. NEVER THROWS.
+ *
+ * `boardId` comes back because `items(ids:)` is NOT board-scoped — Monday resolves
+ * an item id against the whole account. So "this id exists" says nothing about it
+ * being on the enquiries board, and a caller storing a link must check. Without it
+ * a mistyped id belonging to some other board validates happily and then fails on
+ * every push.
  */
 export async function fetchEnquiryItem(
   itemId: string
 ): Promise<
-  { ok: true; item: EnquiryBoardItem | null } | { ok: false; error: string }
+  | { ok: true; item: (EnquiryBoardItem & { boardId: string }) | null }
+  | { ok: false; error: string }
 > {
   const token = process.env.MONDAY_API_TOKEN;
   if (!token) return { ok: false, error: "not_configured" };
@@ -463,9 +482,11 @@ export async function fetchEnquiryItem(
   ];
 
   try {
-    const data = await mondayGraphql<{ items?: MondayItem[] }>(
+    const data = await mondayGraphql<{
+      items?: (MondayItem & { board?: { id: string } })[];
+    }>(
       token,
-      `query ($ids: [ID!]) { items(ids: $ids) { id name column_values(ids: ${JSON.stringify(
+      `query ($ids: [ID!]) { items(ids: $ids) { id name board { id } column_values(ids: ${JSON.stringify(
         columnIds
       )}) { id text } } }`,
       { ids: [itemId] }
@@ -477,6 +498,7 @@ export async function fetchEnquiryItem(
       item: {
         id: item.id,
         name: item.name,
+        boardId: item.board?.id ?? "",
         emails: emailsFromCell(textFor(item, ENQUIRY_COLUMN_MAP.email)),
         phoneKey: phoneMatchKey(textFor(item, ENQUIRY_COLUMN_MAP.mobile)),
         statusLabel: textFor(item, ENQUIRY_STATUS_COLUMN),

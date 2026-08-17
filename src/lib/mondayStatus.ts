@@ -40,7 +40,10 @@ import type { Customer } from "@/lib/types";
  * unrelated column quietly start mattering.
  */
 export type MondayStatusCandidate = ProductCustomerFields &
-  Pick<Customer, "is_active" | "paused_at">;
+  Pick<
+    Customer,
+    "is_active" | "paused_at" | "cancel_at_period_end" | "gr_cancel_at_period_end"
+  >;
 
 /** Everything the orchestrator needs off the customer row. */
 type MondayStatusRow = MondayStatusCandidate &
@@ -60,32 +63,25 @@ type MondayStatusRow = MondayStatusCandidate &
 const ROW_COLUMNS =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
+  "cancel_at_period_end, gr_cancel_at_period_end, " +
   "monday_item_id, monday_board_id, monday_link_state, monday_status_label";
-
-export interface MondayLabelOptions {
-  /**
-   * The customer has asked to cancel management but the subscription is still
-   * active until period end.
-   *
-   * MUST be passed in, never read from the row. `cancel_at_period_end` is
-   * deliberately stored nowhere (§21) — the Paused tab reads it live from Stripe
-   * for exactly that reason — so the only place it is known is inside the webhook
-   * handler holding the event object. Everywhere else it defaults to false, which
-   * is correct: outside the webhook there is no reason to believe a cancellation
-   * is pending.
-   */
-  managementCancellationPending?: boolean;
-}
 
 /**
  * The label for this customer, or null for "leave the cell alone".
+ *
+ * A PURE FUNCTION OF THE ROW, and that is load-bearing rather than tidy. The
+ * pending-cancellation flag used to be a parameter, because Stripe's
+ * `cancel_at_period_end` was stored nowhere and only the webhook branch holding the
+ * event could see it. Every other hook — a GR renewal, a failed payment, a pause, a
+ * resume — then recomputed the label without it, decided the customer was simply
+ * active, and wrote `Management Customer` back over `Cancelled`. 0087 stores the
+ * flag so no caller can get this wrong by omission.
  *
  * ORDER IS THE RULE, not an implementation detail. Read the numbered comments
  * before reordering anything.
  */
 export function mondayStatusLabelFor(
-  c: MondayStatusCandidate,
-  opts?: MondayLabelOptions
+  c: MondayStatusCandidate
 ): EnquiryStatusLabel | null {
   // 0. An archived row never drives the board. §18D: `is_active = false` means a
   //    superseded duplicate signup, and it is precisely that row which carries the
@@ -108,18 +104,30 @@ export function mondayStatusLabelFor(
   // subscription_status means a customer who is paying reads as a customer
   // whatever account_status says.
   const managementCancelling =
-    opts?.managementCancellationPending === true ||
+    c.cancel_at_period_end === true ||
     c.subscription_status === "canceled" ||
     (c.account_status === "cancelled" &&
       c.subscription_status !== "active" &&
       c.subscription_status !== "past_due");
 
+  // The GR equivalents. Symmetric on purpose (invariant 6): without
+  // gr_cancel_at_period_end a departing GR customer would keep reading as a
+  // customer for their whole last paid period, while a departing management
+  // customer showed as Cancelled immediately — the same fact reported a billing
+  // period apart for no reason a reader of the board could discover.
+  const grCancelling =
+    c.gr_cancel_at_period_end === true ||
+    c.gr_subscription_status === "canceled";
+  // "Still a GR relationship": active OR past_due (a billing problem is not a
+  // departure) and not on the way out.
+  const grStillThere = grHeld && !grCancelling;
+
   // 1. Cancellation outranks being active — the board is read as "who is leaving"
-  //    and a pending cancellation is the thing worth seeing — but GR outranks the
-  //    cancellation. Somebody who cancels management and keeps GR is still a
-  //    paying customer and must not read as Cancelled. Management-wins applies
-  //    only between two LIVE products.
-  if (managementCancelling && !grHeld) return ENQUIRY_STATUS.cancelled;
+  //    and a pending cancellation is the thing worth seeing — but a LIVE GR
+  //    subscription outranks the cancellation. Somebody who cancels management and
+  //    keeps GR is still a paying customer and must not read as Cancelled.
+  //    Management-wins applies only between two live products.
+  if (managementCancelling && !grStillThere) return ENQUIRY_STATUS.cancelled;
 
   // 2. Before 'Management Customer', because a paused customer is
   //    account_status = 'active' AND subscription_status = 'active' — §21 keeps the
@@ -136,22 +144,22 @@ export function mondayStatusLabelFor(
   if (managementHeld && !managementCancelling) {
     return ENQUIRY_STATUS.management_customer;
   }
-  if (c.gr_subscription_status === "active") {
+  if (c.gr_subscription_status === "active" && !grCancelling) {
     return ENQUIRY_STATUS.guaranteed_rent_customer;
   }
-  if (c.gr_subscription_status === "past_due") {
+  if (c.gr_subscription_status === "past_due" && !grCancelling) {
     return ENQUIRY_STATUS.card_declined;
   }
 
-  // 6. A GR-only customer who has left. Reached only when management is not held,
-  //    so it cannot fire on somebody who still has the other product.
+  // 6. A GR customer who has left, or asked to. Reached only when management is not
+  //    held, so it cannot fire on somebody who still has the other product.
   //
-  //    Keyed on gr_subscription_status alone, never gr_cancelled_at as well.
-  //    Invariant 6 is explicit that the GR population is gr_subscription_status
-  //    "full stop", and mapStatus() already writes 'canceled' there on the
-  //    cancellation event, so a second signal would add no information and one
+  //    Keyed on gr_subscription_status and gr_cancel_at_period_end, never
+  //    gr_cancelled_at: invariant 6 is explicit that the GR population is
+  //    gr_subscription_status, and mapStatus() already writes 'canceled' there on
+  //    the cancellation event, so gr_cancelled_at would add no information and one
   //    more column whose staleness could disagree.
-  if (!managementHeld && c.gr_subscription_status === "canceled") {
+  if (!managementHeld && grCancelling) {
     return ENQUIRY_STATUS.cancelled;
   }
 
@@ -178,7 +186,7 @@ export interface MondayStatusSyncOutcome {
   error?: string;
 }
 
-export interface MondayStatusSyncOptions extends MondayLabelOptions {
+export interface MondayStatusSyncOptions {
   /**
    * Real end of service, for the Customer end date cell. A date sets it, null
    * CLEARS it (the customer changed their mind), undefined leaves it untouched.
@@ -215,7 +223,7 @@ export async function syncCustomerMondayStatus(
 
     if (!row) return { written: false, skipped: "missing_customer" };
 
-    const label = mondayStatusLabelFor(row, opts);
+    const label = mondayStatusLabelFor(row);
     if (!label) {
       return {
         written: false,
@@ -246,7 +254,27 @@ export async function syncCustomerMondayStatus(
     }
 
     const resolved = await resolveItem(admin, row);
-    if (!resolved.item) return { written: false, skipped: resolved.skipped, label };
+    if (!resolved.item) {
+      // Record a genuine Monday failure on the row as well as returning it, so a
+      // revoked token or an unreachable board shows up in admin instead of the sync
+      // simply going quiet. A customer who merely has no item is not an error and
+      // gets no stamp — resolveItem has already recorded that as a link state.
+      if (resolved.error) {
+        await admin
+          .from("customers")
+          .update({
+            monday_status_error: resolved.error.slice(0, 300),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", row.id);
+      }
+      return {
+        written: false,
+        skipped: resolved.skipped,
+        label,
+        error: resolved.error,
+      };
+    }
 
     // A date instruction costs one item read, but it must not cost a WRITE when
     // the cell already says what we want. customer.subscription.updated fires on
@@ -449,20 +477,33 @@ async function resolveItem(
 ): Promise<{
   item: EnquiryBoardItem | null;
   skipped?: MondayStatusSyncOutcome["skipped"];
+  /**
+   * Set on a genuine failure to reach Monday, as opposed to an ordinary "this
+   * customer has no item". Callers log on `error`, so without it a revoked token or
+   * a board outage disabled the whole sync in complete silence.
+   */
+  error?: string;
 }> {
-  // Already linked: read the one item rather than the whole board.
-  if (row.monday_item_id) {
+  // Already linked: read the one item rather than the whole board. Only trust the
+  // stored link when it is on the board that actually HAS a status column — a GR
+  // enquiry stores its item on the status-less GR board (§23.7), and short-circuiting
+  // on that would strand the customer for ever: the write refuses the board, and a
+  // resolution that could have found them a management-board item never runs.
+  if (row.monday_item_id && row.monday_board_id === enquiryBoardId()) {
     const one = await fetchEnquiryItem(row.monday_item_id);
     if (!one.ok) {
       return {
         item: null,
         skipped:
           one.error === "not_configured" ? "not_configured" : "board_unreadable",
+        error: one.error === "not_configured" ? undefined : one.error,
       };
     }
-    // A deleted item falls through to a fresh resolution rather than failing —
-    // the stored id is a cache, not a fact.
-    if (one.item) return { item: one.item };
+    // A deleted item, or one that has been moved off this board, falls through to a
+    // fresh resolution rather than failing — the stored id is a cache, not a fact.
+    if (one.item && one.item.boardId === enquiryBoardId()) {
+      return { item: one.item };
+    }
   }
 
   const index = await fetchEnquiryBoardIndex();
@@ -471,6 +512,7 @@ async function resolveItem(
       item: null,
       skipped:
         index.error === "not_configured" ? "not_configured" : "board_unreadable",
+      error: index.error === "not_configured" ? undefined : index.error,
     };
   }
 

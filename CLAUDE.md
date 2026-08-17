@@ -1598,9 +1598,19 @@ portal is configured `subscription_cancel.mode = "at_period_end"`, so a
 cancellation is **never** a cancelled subscription at the moment it happens: it
 arrives as `customer.subscription.updated` with `status` still `"active"` and
 `cancel_at_period_end` true. The webhook therefore writes `subscription_status =
-'active'`, and `cancel_at_period_end` is stored nowhere. A stored flag would also
-be wrong for everyone already paused. Unreachable Stripe renders as "couldn't
-check", never as healthy.
+'active'`. Unreachable Stripe renders as "couldn't check", never as healthy.
+
+⚠️ This section used to add "and `cancel_at_period_end` is stored nowhere. A stored
+flag would also be wrong for everyone already paused." **0087 stores it**, as
+`cancel_at_period_end` / `gr_cancel_at_period_end`, because the Monday label rule
+had to be a pure function of the row (§23.2). The objection above was specifically
+about back-filling a flag for customers who were *already* paused, where the true
+value was unknowable — there was nothing to backfill at apply time, since no
+customer had ever cancelled.
+
+**The Paused tab should still read Stripe live.** It answers "can we actually
+re-bill this person right now", which wants the live truth rather than our cache of
+it. The stored flags gate nothing and are read only by the label rule.
 
 **That same mode is why cancellation reasons are captured outside the
 `status = 'canceled'` branch.** `cancellation_details` is populated on the
@@ -1836,13 +1846,13 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
 | # | Condition | Label |
 |---|---|---|
 | 0 | `is_active = false` | **`null`** |
-| 1 | management cancelling-or-cancelled **and GR not active** | `Cancelled` |
+| 1 | management cancelling-or-cancelled **and GR not still there** | `Cancelled` |
 | 2 | `paused_at is not null` | `Paused` |
 | 3 | management `subscription_status = 'past_due'` | `Wants to pay card declined` |
 | 4 | holds management, not cancelling | `Management Customer` |
-| 5 | `gr_subscription_status = 'active'` | `Guaranteed rent customer` |
-| 6 | `gr_subscription_status = 'past_due'` | `Wants to pay card declined` |
-| 7 | GR cancelled, management not held | `Cancelled` |
+| 5 | GR active and not cancelling | `Guaranteed rent customer` |
+| 6 | GR `past_due` and not cancelling | `Wants to pay card declined` |
+| 7 | GR cancelling-or-cancelled, management not held | `Cancelled` |
 | 8 | otherwise | **`null`** |
 
 - **`null` means "do not write", and rules 0 and 8 are the safety mechanism for
@@ -1980,11 +1990,23 @@ block, because that block can clear `paused_at` including on a cancellation
 `Paused`. The pause hook goes **after** the Stripe call and its rollback window,
 for the reason that file already gives about phantom state.
 
-**`cancel_at_period_end` is passed in, never read.** It is stored nowhere on
-purpose (§21), so the webhook's event object is the only place it is known — which
-is also why there is **no reconciliation cron**: a write-mode scheduled job would
-recompute a just-cancelled customer as `Management Customer` and flip them back.
-Adding one needs a stored flag or a live Stripe read first.
+**`cancel_at_period_end` is STORED, and the label rule reads it (0087).** It was
+briefly a parameter passed in from the webhook, on the grounds that §21 kept it out
+of the schema — and that was a bug, not a design. Only the subscription branch could
+supply it, so every other hook (a GR renewal, a failed payment, a pause, a resume)
+recomputed the label without it, decided the customer was simply active, and wrote
+`Management Customer` back over `Cancelled`. A cancellation could therefore be
+silently undone on the board for the rest of the customer's paid period.
+
+A rule that must not vary by caller cannot take a parameter every caller has to
+remember. `mondayStatusLabelFor()` is now a pure function of the row, so all hooks
+necessarily agree. Both products have the flag, so a GR cancellation shows at the
+moment it is requested rather than a billing period later.
+
+This also removes the blocker on a **reconciliation cron** — the reason there was
+none is that a scheduled job could not see a pending cancellation and would have
+flipped a leaving customer back. It could now be written safely. Still not built,
+because event-driven writes plus the check tool have covered everything so far.
 
 ### 23.7 — GR customers and the status-less board
 
@@ -2041,21 +2063,56 @@ the customer's EXISTING `stripe_customer_id`, so the webhook lookup succeeds,
 `provisionPaidSubscriber` short-circuits, and the promotion is the only thing that
 reactivates them.
 
+### 23.10 — What a review caught, and why it clustered where it did
+
+The first cut of this feature passed a thorough label-rule and matcher test suite and
+still shipped several real defects. Every one of them was on a **failure path** —
+which is exactly what those suites did not touch. Recorded because the pattern is
+more useful than the individual fixes:
+
+| Defect | Why it mattered |
+|---|---|
+| Pending cancellation was a parameter, not a column | Any other hook recomputed a leaving customer as `Management Customer` and wrote it over `Cancelled` — see §23.6. Fixed by 0087. |
+| A missing board read as an **empty** board | Monday returns `boards: []` for an id it cannot see, which yielded `ok:true` with zero items — so a mistyped board id would have marked the whole book `not_found`. Now an explicit failure. |
+| `board_unreadable` / `not_configured` were never logged | Call sites logged only on `error`, so a revoked token would have stopped the sync silently. Skip codes are now logged and recorded on the row. |
+| `?link=1` re-derived every link | Overwrote a hand-made link — the one repair available for a customer matching cannot reach. It now never overwrites an existing status-board link. |
+| `monday-link` did not check the board | `items(ids:)` is not board-scoped, so an id from any other board validated and then failed on every push. |
+| A repeat enquiry repointed the link | This route creates a new item per submission, so status writes would land on the duplicate while sales worked the original. First item wins. |
+| A GR-board link was terminal | `resolveItem` short-circuited on any stored id, so a GR-form enquirer could never later be matched to a management-board item. A stored link is now trusted only when it is on the status board. |
+| End date was management-only | The automation being deleted stamped it for **both** products, so a departing GR customer would have silently lost their end date. |
+
+The lesson worth keeping: a suite that only exercises the happy path will report
+"verified" on code whose failure modes are all silent. The label rule and matcher
+were tested hard; the things around them were not tested at all.
+
 ### Verification
 
-No test suite, so: all **82 migrations applied to a scratch Postgres 16 from
-empty**, both CHECK constraints exercised, non-uniqueness confirmed, and 0086
-re-applied to prove idempotency. The label rule was driven through **18 cases**
-covering every ordered branch, and the matcher through **21** — including the phone
-tier, which resolves nobody on today's data and would otherwise ship unexercised.
-The matcher and label rule were then run against the real board and the real 31
-active customer rows, read-only. On the live board a throwaway item confirmed the
-automations fire on API writes, that `{}` clears a date cell, and that a mis-cased
-label is rejected; it was deleted afterwards and the board is back to 34 items.
+No test suite, so: all **83 migrations applied to a scratch Postgres 16 from
+empty**; 0086's two CHECK constraints exercised and its non-uniqueness confirmed;
+0087's NOT NULL and defaults exercised; both re-applied to prove idempotency.
+
+The label rule was driven through **26 cases** covering every ordered branch —
+including the GR pending-cancellation symmetry 0087 added, both products cancelling
+at once, and the distinction between a GR customer who is leaving and one who is
+merely `past_due`. The matcher and `endDateNeedsWrite` went through **21**, among
+them the phone tier, which resolves nobody on today's data and would otherwise ship
+unexercised, and the two-items-share-a-number ambiguity case that exists on the live
+board.
+
+Both were then run against the real board and the real 31 active customer rows,
+read-only: **30 resolve — 28 by email, 2 by name — no item claimed twice, and the
+first run would change no label**, because the hand-maintained board already agrees
+with the rule. The one unresolved customer is the GR-form enquirer of §23.7.
+
+On the live board a throwaway item confirmed the automations fire on API writes,
+that the start-date automation re-stamps on **every** entry into `Management
+Customer` (the finding §23.3 rests on), that `{}` clears a date cell, and that a
+mis-cased label is rejected. It was deleted afterwards and the board is back to 34
+items.
 
 ### Deployment order
 
-Migration 0086 first, then the library code (inert on its own), then the check tool
+Migrations 0086 and 0087 first, then the library code (inert on its own), then the check tool
 run with `?link=1`, **then the two Monday automation edits (23.3)**, and only then
 the hooks. Everything before that step changes no board data, so there is no window
 where the code is live and fighting the automations.

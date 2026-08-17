@@ -744,9 +744,13 @@ function MondayStatusCell({ customer }: { customer: Customer }) {
   const state = customer.monday_link_state;
   const error = customer.monday_status_error;
   const label = customer.monday_status_label;
-  const itemUrl = customer.monday_item_id
-    ? `https://stayful.monday.com/boards/18420649520/pulses/${customer.monday_item_id}`
-    : null;
+  // Built from the stored board id, not a hard-coded one: a GR-form enquirer's item
+  // lives on the GR enquiries board, and a link that always pointed at the
+  // management board would open the wrong item (or nothing).
+  const itemUrl =
+    customer.monday_item_id && customer.monday_board_id
+      ? `https://stayful.monday.com/boards/${customer.monday_board_id}/pulses/${customer.monday_item_id}`
+      : null;
 
   if (error) {
     return (

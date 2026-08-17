@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
     // the existing prospect rather than erroring on a duplicate submission.
     const { data: existing } = await admin
       .from("customers")
-      .select("id, account_status")
+      .select("id, account_status, monday_item_id")
       .eq("email", email)
       .maybeSingle();
 
@@ -163,7 +163,13 @@ export async function POST(request: NextRequest) {
             // Only on this branch, never on an invited/active/cancelled account —
             // the same rule the rest of this block follows about not letting a
             // public form touch a live account.
-            ...mondayLink,
+            //
+            // And only when the row has no link yet. This route creates a NEW board
+            // item on every submission, so a prospect who enquires twice produces a
+            // duplicate; repointing the link at the newer one would send status
+            // writes to the duplicate while sales works the original. First item
+            // wins, matching how the rest of the system treats first-touch data.
+            ...(existing.monday_item_id ? {} : mondayLink),
             updated_at: new Date().toISOString(),
           })
           .eq("id", existing.id);

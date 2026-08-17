@@ -270,9 +270,13 @@ export async function POST(req: NextRequest) {
     const push = await syncCustomerMondayStatus(admin, customer.id, {
       reason: "subscription/pause",
     });
-    if (push.error) {
-      console.error("[subscription/pause] Monday status push failed", {
+    // Logged on a skip code as well as an error: a revoked token or an unreachable
+    // board comes back as `skipped`, and logging only on `error` would let the sync
+    // stop working with nothing to show for it.
+    if (push.error || push.skipped === "board_unreadable" || push.skipped === "unlinked") {
+      console.error("[subscription/pause] Monday status push did not land", {
         customer: customer.id,
+        skipped: push.skipped,
         error: push.error,
       });
     }

@@ -48,15 +48,40 @@ async function pushMondayStatus(
 ): Promise<void> {
   try {
     const push = await syncCustomerMondayStatus(admin, customerId, { reason });
-    if (push.error) {
-      console.error("[monday-status] push failed", {
-        customer: customerId,
-        reason,
-        error: push.error,
-      });
-    }
+    logMondayPush(customerId, reason, push);
   } catch (err) {
     console.error("[monday-status] push threw", { reason, err });
+  }
+}
+
+/**
+ * Log a push outcome that deserves attention.
+ *
+ * `error` alone is not enough: a revoked token or an unreachable board comes back as
+ * a `skipped` code, and logging only on `error` meant the entire sync could stop
+ * working with nothing in the logs at all. The ordinary outcomes — unchanged, no
+ * label, archived — stay silent, and so does not_configured, which is the expected
+ * steady state before the token is set rather than a fault.
+ */
+function logMondayPush(
+  customerId: string,
+  reason: string,
+  push: { error?: string; skipped?: string }
+): void {
+  const noteworthy: (string | undefined)[] = [
+    "board_unreadable",
+    "unlinked",
+    "ambiguous",
+    "not_status_board",
+    "missing_customer",
+  ];
+  if (push.error || noteworthy.includes(push.skipped)) {
+    console.error("[monday-status] push did not land", {
+      customer: customerId,
+      reason,
+      skipped: push.skipped,
+      error: push.error,
+    });
   }
 }
 
@@ -392,6 +417,14 @@ export async function POST(request: NextRequest) {
           } else if (status === "active") {
             update.gr_cancelled_at = null;
           }
+
+          // Pending cancellation (0087). Stored so the Monday label rule is a pure
+          // function of the row rather than depending on this branch passing it
+          // along — see the migration header. Cleared on the same condition the
+          // management side clears cancellation_feedback: active AND no longer
+          // scheduled to cancel, which is the only genuine change of mind.
+          update.gr_cancel_at_period_end =
+            status !== "canceled" && sub.cancel_at_period_end === true;
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
@@ -436,6 +469,23 @@ export async function POST(request: NextRequest) {
             update.cancellation_feedback = null;
             update.cancellation_comment = null;
           }
+
+          // Pending cancellation (0087), stored beside the reason it is captured
+          // with and cleared by the same rule.
+          //
+          // This is what lets the Monday board say `Cancelled` from the moment the
+          // customer asks, rather than a billing period later. It is a COLUMN and
+          // not a parameter because the label rule must not vary by which hook
+          // happens to fire: before this, a GR renewal or a pause could recompute
+          // the label without knowing a cancellation was pending and quietly write
+          // `Management Customer` back over `Cancelled`.
+          //
+          // False once the cancellation has actually happened — status 'canceled'
+          // is the stronger signal at that point and the flag would just be a
+          // second thing to keep true.
+          update.cancel_at_period_end =
+            status !== "canceled" && sub.cancel_at_period_end === true;
+
           if (anchor) update.billing_cycle_anchor = anchor;
         }
 
@@ -506,49 +556,45 @@ export async function POST(request: NextRequest) {
         // Management Customer; resumed early through the portal -> Management
         // Customer.
         if (existing?.id) {
-          // cancel_at_period_end is stored nowhere on purpose (§21), so this is
-          // the only place it can be known. The portal cancels at period end, so
-          // a customer clicking cancel arrives here with status still "active" —
-          // without this flag the board would not show the cancellation until the
-          // period actually ended, weeks later.
-          const cancellationPending =
-            !isGuaranteedRent && sub.cancel_at_period_end === true;
+          // The pending-cancellation flag is NOT passed here — it was written to
+          // the customer row above (0087), and syncCustomerMondayStatus re-reads
+          // the row, so the label rule sees it without any caller having to
+          // remember. That is deliberate: while it was a parameter, every hook that
+          // did not pass it recomputed a leaving customer as `Management Customer`
+          // and wrote it back over `Cancelled`.
+          const cancellationPending = sub.cancel_at_period_end === true;
 
           // The REAL end of service, not the date they asked. cancel_at is what
           // Stripe sets when a cancellation is scheduled; ended_at is set once it
           // has actually happened. Passing null CLEARS the cell, which is the
           // change-of-mind case — gated on exactly the condition the
           // cancellation-reason clearing above uses, so the two never disagree.
+          //
+          // Computed for BOTH products. The board automation that used to stamp
+          // this fired on the `Cancelled` label whichever product caused it, so
+          // deriving it for management only would have quietly dropped the end date
+          // for a departing GR customer the moment that automation was deleted.
           let endDate: string | null | undefined;
-          if (!isGuaranteedRent) {
-            if (cancellationPending) {
-              endDate =
-                toDateString(sub.cancel_at) ??
-                toDateString(subscriptionPeriodEnd(sub));
-            } else if (status === "canceled") {
-              endDate =
-                toDateString(sub.ended_at) ??
-                toDateString(sub.canceled_at) ??
-                new Date().toISOString().slice(0, 10);
-            } else if (status === "active") {
-              // Active and no longer scheduled to cancel — they changed their mind.
-              endDate = null;
-            }
+          if (status === "canceled") {
+            endDate =
+              toDateString(sub.ended_at) ??
+              toDateString(sub.canceled_at) ??
+              new Date().toISOString().slice(0, 10);
+          } else if (cancellationPending) {
+            endDate =
+              toDateString(sub.cancel_at) ??
+              toDateString(subscriptionPeriodEnd(sub));
+          } else if (status === "active") {
+            // Active and no longer scheduled to cancel — they changed their mind.
+            endDate = null;
           }
 
           try {
             const push = await syncCustomerMondayStatus(admin, existing.id, {
-              managementCancellationPending: cancellationPending,
               endDate,
               reason: event.type,
             });
-            if (push.error) {
-              console.error("[monday-status] push failed", {
-                customer: existing.id,
-                event: event.type,
-                error: push.error,
-              });
-            }
+            logMondayPush(existing.id, event.type, push);
           } catch (err) {
             // Must never reach the outer catch: that deletes the stripe_events
             // claim and Stripe would redeliver an already-processed event.

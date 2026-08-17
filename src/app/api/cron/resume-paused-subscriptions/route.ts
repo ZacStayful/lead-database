@@ -155,9 +155,15 @@ async function handle(request: NextRequest) {
       const push = await syncCustomerMondayStatus(admin, customer.id, {
         reason: "resume-paused-subscriptions",
       });
-      if (push.error) {
-        console.error("[resume-paused-subscriptions] Monday status push failed", {
+      // Skip codes are logged too — see the same note in the pause route.
+      if (
+        push.error ||
+        push.skipped === "board_unreadable" ||
+        push.skipped === "unlinked"
+      ) {
+        console.error("[resume-paused-subscriptions] Monday push did not land", {
           customer: customer.id,
+          skipped: push.skipped,
           error: push.error,
         });
       }

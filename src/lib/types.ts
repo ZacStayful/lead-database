@@ -120,6 +120,13 @@ export interface Customer {
   // pacing: a debited customer has already had those leads.
   pool_debit: number;
   gr_pool_debit: number;
+  // Subscription is scheduled to cancel at the end of the current period (0087).
+  // The billing portal cancels at period end, so this is true for the whole of a
+  // leaving customer's last paid period, while subscription_status is still
+  // 'active'. Read by the Monday label rule (§23) so a cancellation shows on the
+  // sales board at the moment it is requested; gates nothing else.
+  cancel_at_period_end: boolean;
+  gr_cancel_at_period_end: boolean;
   // Link to the item on the Monday enquiries board representing this CUSTOMER
   // (0086) — not a lead, so unrelated to leads.monday_item_id. Best-effort and
   // deliberately not unique; monday_link_state records a collision rather than

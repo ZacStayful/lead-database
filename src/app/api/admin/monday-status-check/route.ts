@@ -57,13 +57,15 @@ type CheckRow = MondayStatusCandidate &
     | "business_name"
     | "phone"
     | "monday_item_id"
+    | "monday_board_id"
     | "monday_status_label"
   >;
 
 const SELECT =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
-  "monday_item_id, monday_status_label";
+  "cancel_at_period_end, gr_cancel_at_period_end, " +
+  "monday_item_id, monday_board_id, monday_status_label";
 
 /** The labels this system owns — anything else on an item is the sales team's. */
 const OWNED_LABELS: string[] = Object.values(ENQUIRY_STATUS);
@@ -181,13 +183,26 @@ async function handle(req: NextRequest) {
     if (!persist) continue;
 
     const update: Record<string, unknown> = {
-      monday_item_id: item.id,
-      monday_board_id: enquiryBoardId(),
-      monday_link_state: "linked",
-      monday_link_matched_by: match.matchedBy,
       updated_at: new Date().toISOString(),
     };
-    linksStored += 1;
+
+    // NEVER overwrite a link this customer already has on the status board.
+    //
+    // A hand-made link (matched_by 'manual') is the only repair available for a
+    // customer automatic matching cannot reach, so a tool that re-derives the link
+    // from scratch would undo the very fix it exists to support — and could
+    // downgrade a deliberate choice to a name-tier guess. An existing automatic
+    // link is left alone for a weaker but still good reason: it is already right,
+    // and rewriting it churns updated_at across the whole book on every run.
+    const alreadyLinked =
+      row.monday_item_id !== null && row.monday_board_id === enquiryBoardId();
+    if (!alreadyLinked) {
+      update.monday_item_id = item.id;
+      update.monday_board_id = enquiryBoardId();
+      update.monday_link_state = "linked";
+      update.monday_link_matched_by = match.matchedBy;
+      linksStored += 1;
+    }
 
     // The board already says what the rule would write, so record it as ours and
     // the next renewal short-circuits before touching Monday. Only when they
