@@ -363,6 +363,7 @@ export function AdminCustomersTable({
               <TableHead>Pacing</TableHead>
               <TableHead>Last lead</TableHead>
               <TableHead>Last active</TableHead>
+              <TableHead>Monday</TableHead>
               {tab === "paused" && <TableHead>Pause detail</TableHead>}
               {tab === "paused" && <TableHead>Will it re-bill?</TableHead>}
               <TableHead className="text-right">Actions</TableHead>
@@ -533,6 +534,9 @@ export function AdminCustomersTable({
                       lastSignInAt={lastActive[c.id] ?? null}
                     />
                   </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <MondayStatusCell customer={c} />
+                  </TableCell>
                   {tab === "paused" && (
                     <TableCell className="max-w-[22rem] align-top">
                       <PauseDetailCell
@@ -605,7 +609,7 @@ export function AdminCustomersTable({
             {rows.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={tab === "paused" ? 12 : 10}
+                  colSpan={tab === "paused" ? 13 : 11}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No customers in this view.
@@ -681,6 +685,75 @@ function CreditLine({
         · {received}/{allocation} this cycle
       </span>
     </div>
+  );
+}
+
+/**
+ * What the Monday sales board says about this customer, and whether we can reach
+ * their item at all.
+ *
+ * Shows the label WE last wrote, which is not necessarily the board's current
+ * value — the sync writes on transitions, so somebody's manual edit to the Status
+ * cell persists until that customer's next lifecycle change. That is deliberate,
+ * and it is why this cell is worded "we set" rather than "board says".
+ *
+ * The states worth acting on are the two failures: `not_found` means no board item
+ * could be matched by email, mobile or name (so nothing will ever be written for
+ * them), and a stored error means a write was attempted and refused.
+ */
+function MondayStatusCell({ customer }: { customer: Customer }) {
+  const state = customer.monday_link_state;
+  const error = customer.monday_status_error;
+  const label = customer.monday_status_label;
+  const itemUrl = customer.monday_item_id
+    ? `https://stayful.monday.com/boards/18420649520/pulses/${customer.monday_item_id}`
+    : null;
+
+  if (error) {
+    return (
+      <span
+        title={error}
+        className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700"
+      >
+        Push failed
+      </span>
+    );
+  }
+
+  if (state === "not_found") {
+    return (
+      <span
+        title="No board item matched this customer by email, mobile or name. Link it by hand, or add them to the board."
+        className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+      >
+        No board item
+      </span>
+    );
+  }
+
+  if (state === "ambiguous") {
+    return (
+      <span
+        title="More than one board item matched this customer. Link the right one by hand."
+        className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+      >
+        Ambiguous match
+      </span>
+    );
+  }
+
+  if (!itemUrl) return <span className="text-xs">—</span>;
+
+  return (
+    <a
+      href={itemUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={label ? `We set: ${label}` : "Linked, nothing written yet"}
+      className="text-xs hover:underline"
+    >
+      {label ?? "Linked"}
+    </a>
   );
 }
 
