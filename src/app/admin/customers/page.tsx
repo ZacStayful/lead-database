@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AdminCustomersTable } from "@/components/admin/AdminCustomersTable";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
 import type { Customer, LeadType, PauseEpisode } from "@/lib/types";
 import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
@@ -107,15 +107,9 @@ export default async function AdminCustomersPage() {
           const cancelled =
             sub.status === "canceled" || sub.status === "incomplete_expired";
           const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
-          // current_period_end moved from the subscription onto its items in the
-          // newer API version, and no apiVersion is pinned in getStripe(), so the
-          // account default decides which shape arrives. Read both — the same
-          // belt-and-braces the webhook uses for current_period_start.
-          const periodEnd =
-            sub.current_period_end ??
-            (sub.items?.data?.[0] as unknown as { current_period_end?: number })
-              ?.current_period_end ??
-            null;
+          // Shared with the Monday status sync, which needs the same answer when
+          // writing a cancelling customer's real end-of-service date.
+          const periodEnd = subscriptionPeriodEnd(sub);
           return {
             id: c.id,
             health: {

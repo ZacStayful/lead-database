@@ -41,15 +41,15 @@ export interface Customer {
   phone: string | null;
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
-  /** Price the management subscription is billed on (0086). Observability
+  /** Price the management subscription is billed on (0088). Observability
    *  only — unlike gr_stripe_price_id it drives no allocation re-size. */
   stripe_price_id: string | null;
   subscription_status: SubscriptionStatus | string;
   monthly_allocation: number;
-  // Self-serve tier change (0086). Stripe applies a price swap immediately, but
+  // Self-serve tier change (0088). Stripe applies a price swap immediately, but
   // the customer keeps the cycle they have already paid for — so the new
   // allocation waits here and the webhook applies it at the next paid invoice.
-  // NULL means nothing is pending. See §23.
+  // NULL means nothing is pending. See §24.
   pending_monthly_allocation: number | null;
   /** Billing date the pending change is expected to land on. Display only. */
   pending_plan_change_at: string | null;
@@ -84,7 +84,7 @@ export interface Customer {
    *  GR shares the management Stripe customer. */
   gr_stripe_customer_id: string | null;
   gr_monthly_allocation: number;
-  /** gr_ mirror of pending_monthly_allocation (0086). */
+  /** gr_ mirror of pending_monthly_allocation (0088). */
   gr_pending_monthly_allocation: number | null;
   gr_pending_plan_change_at: string | null;
   gr_leads_received_this_month: number;
@@ -133,6 +133,34 @@ export interface Customer {
   // pacing: a debited customer has already had those leads.
   pool_debit: number;
   gr_pool_debit: number;
+  // Subscription is scheduled to cancel at the end of the current period (0087).
+  // The billing portal cancels at period end, so this is true for the whole of a
+  // leaving customer's last paid period, while subscription_status is still
+  // 'active'. Read by the Monday label rule (§23) so a cancellation shows on the
+  // sales board at the moment it is requested; gates nothing else.
+  cancel_at_period_end: boolean;
+  gr_cancel_at_period_end: boolean;
+  // Link to the item on the Monday enquiries board representing this CUSTOMER
+  // (0086) — not a lead, so unrelated to leads.monday_item_id. Best-effort and
+  // deliberately not unique; monday_link_state records a collision rather than
+  // rejecting it.
+  monday_item_id: string | null;
+  monday_board_id: string | null;
+  monday_link_state: "unlinked" | "linked" | "not_found" | "ambiguous" | string;
+  monday_link_matched_by:
+    | "created"
+    | "email"
+    | "phone"
+    | "name"
+    | "manual"
+    | null;
+  // The Status label WE last wrote to the board — the idempotency key, NOT the
+  // board's current value. Nothing reads it to decide business state; it exists
+  // so a monthly renewal costs zero Monday HTTP, and so a manual board edit
+  // survives until the customer's next genuine lifecycle change.
+  monday_status_label: string | null;
+  monday_status_synced_at: string | null;
+  monday_status_error: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -3,6 +3,7 @@ import { getStripe } from "@/lib/stripe";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendSubscriptionPausedEmail } from "@/lib/emails";
+import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import {
   PAUSE_MONTHS_OPTIONS,
   PAUSE_NOTE_MAX_LENGTH,
@@ -256,6 +257,31 @@ export async function POST(req: NextRequest) {
       customer: customer.id,
       error: emailError,
     });
+  }
+
+  // Mark the customer Paused on the Monday sales board (best effort — the pause
+  // has already succeeded in both systems).
+  //
+  // Deliberately AFTER the Stripe call and its DB-rollback window above. The same
+  // reasoning this file already gives for the episode insert: a phantom "Paused"
+  // on the board for somebody who was never actually paused is silently wrong,
+  // where a missing one is visible and can be put back by hand.
+  try {
+    const push = await syncCustomerMondayStatus(admin, customer.id, {
+      reason: "subscription/pause",
+    });
+    // Logged on a skip code as well as an error: a revoked token or an unreachable
+    // board comes back as `skipped`, and logging only on `error` would let the sync
+    // stop working with nothing to show for it.
+    if (push.error || push.skipped === "board_unreadable" || push.skipped === "unlinked") {
+      console.error("[subscription/pause] Monday status push did not land", {
+        customer: customer.id,
+        skipped: push.skipped,
+        error: push.error,
+      });
+    }
+  } catch (err) {
+    console.error("[subscription/pause] Monday status push threw", err);
   }
 
   return NextResponse.json({

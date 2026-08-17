@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
 import {
   GR_PLANS,
   PLANS,
@@ -63,7 +63,7 @@ interface PlanChangeRow {
  * weighted capacity — so moving it now would pace a customer at 20 leads
  * through a cycle they paid £150 for. The new figure is parked in
  * `(gr_)pending_monthly_allocation` and the webhook applies it when the invoice
- * that bills it is paid. See §23 and `src/lib/planChanges.ts`.
+ * that bills it is paid. See §24 and `src/lib/planChanges.ts`.
  *
  * REVERTING IS THE SAME REQUEST
  * -----------------------------
@@ -215,14 +215,11 @@ export async function POST(req: NextRequest) {
   const item = items[0];
   const previousPriceId = item.price?.id ?? null;
 
-  // `current_period_end` moved from the subscription onto its items in the
-  // basil-era API versions this account is on — the same shape change the
-  // webhook's `subscriptionIdFromInvoice` already works around. Read the item
-  // first and keep the legacy field as the fallback.
-  const periodEnd =
-    (item as unknown as { current_period_end?: number }).current_period_end ??
-    (subscription as unknown as { current_period_end?: number }).current_period_end ??
-    null;
+  // `current_period_end` sits on the subscription or on its items depending on
+  // the account's API version. `subscriptionPeriodEnd` is the one reading of
+  // that, shared with the admin billing panel and the Monday sync — two answers
+  // to "when does this subscription actually end" would eventually disagree.
+  const periodEnd = subscriptionPeriodEnd(subscription);
   const effectiveAt = periodEnd ? new Date(periodEnd * 1000).toISOString() : null;
 
   // Stripe first. If the price swap fails nothing has been promised, and the

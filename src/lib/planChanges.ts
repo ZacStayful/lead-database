@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadType } from "@/lib/types";
 
 /**
- * Self-serve tier changes (0086) — the pieces shared by the request route and
+ * Self-serve tier changes (0088) — the pieces shared by the request route and
  * the Stripe webhook that applies them.
  *
  * THE SPLIT, AND WHY IT MATTERS
