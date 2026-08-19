@@ -51,6 +51,9 @@ export interface MondayAsset {
 /** The analyser writes these; anything else on the item is somebody's upload. */
 const INCOME_REPORT_PREFIX = "Stayful_Property_Analysis";
 
+/** Monday's ceiling for one `items(ids:)` call. Its default is 25 — see below. */
+const ITEMS_PER_CALL = 100;
+
 /**
  * The income-analysis PDF on a Monday item, or null.
  *
@@ -776,18 +779,28 @@ export async function fetchIncomeReportAssets(
   const token = process.env.MONDAY_API_TOKEN;
   if (!token) throw new Error("Missing MONDAY_API_TOKEN");
 
-  const data = await mondayGraphql<{
-    items?: { id: string; assets?: MondayAsset[] | null }[] | null;
-  }>(
-    token,
-    `query ($ids: [ID!]) { items(ids: $ids) { id assets { id name public_url } } }`,
-    { ids: itemIds }
-  );
-
   for (const id of itemIds) out.set(id, null);
-  for (const item of data.items ?? []) {
-    out.set(String(item.id), pickIncomeReportAsset(item.assets));
+
+  // `items(ids:)` PAGINATES, and its default limit is 25 — asking for 40 ids
+  // returns the first 25 and says nothing about the rest. Left unset, the sweep
+  // would read every lead past the 25th as having no report and permanently
+  // mark it no_report, which is the one failure mode that looks like success.
+  // ITEMS_PER_CALL is Monday's own ceiling for this query.
+  for (let i = 0; i < itemIds.length; i += ITEMS_PER_CALL) {
+    const chunk = itemIds.slice(i, i + ITEMS_PER_CALL);
+    const data = await mondayGraphql<{
+      items?: { id: string; assets?: MondayAsset[] | null }[] | null;
+    }>(
+      token,
+      `query ($ids: [ID!], $limit: Int!) { items(ids: $ids, limit: $limit) { id assets { id name public_url } } }`,
+      { ids: chunk, limit: chunk.length }
+    );
+
+    for (const item of data.items ?? []) {
+      out.set(String(item.id), pickIncomeReportAsset(item.assets));
+    }
   }
+
   return out;
 }
 

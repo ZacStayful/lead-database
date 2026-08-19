@@ -13,8 +13,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Leads looked at per run. One Monday query, then one download each. */
-const BATCH_SIZE = 40;
+/**
+ * Leads looked at per run. Deliberately larger than one run can finish: the
+ * WALL_CLOCK_BUDGET below is the real governor, and a low cap here just turns a
+ * backlog into a queue of nights. At 40 the 170-lead launch backlog would have
+ * taken five days to clear.
+ */
+const BATCH_SIZE = 150;
 
 /**
  * Stop here and leave the rest for tomorrow (or the next manual run). Under

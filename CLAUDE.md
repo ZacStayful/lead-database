@@ -2267,8 +2267,12 @@ and a bedroom count and no indication of what the property was worth.
 
 Each management lead now shows the projected **gross income** as a range 10%
 either side of the estimate, and beside it what that property earns a
-**management company** at a 15% fee. Live coverage: of 98 sellable items on the
-first board page, **87 parse, 11 carry no analysis at all, 0 fail**.
+**management company** at a 15% fee.
+
+**Live coverage, measured over the whole book at backfill:** of 170 management
+leads, **149 parsed, 21 carry no analysis on their Monday item, 0 unparsed, 0
+failed**. That is 262 of 293 delivered assignments and 9 of the 13 leads in the
+management pool. Gross ranges from £9,573 to £149,283, median £39,614.
 
 ### The report is not part of the product
 
@@ -2349,6 +2353,35 @@ Null means five things that need different handling:
 retried nightly forever is noise, and a transient S3 blip never retried is a
 lead that silently never gets its figure.
 
+### Management leads come from TWO Monday boards
+
+`fetchMondayLeads` reads board **18420117742** ("Management leads for sale"),
+but a substantial share of the management leads in the database arrived through
+the **n8n webhook** (§4) and their items live on board **5891626711**
+("Management Leads"), the main landlord pipeline. Those items carry the **same**
+`Stayful_Property_Analysis_*.pdf` and parse identically — verified on live data.
+
+This needs no board configuration, and must not acquire any:
+`fetchIncomeReportAssets()` queries `items(ids:)`, which is **not board-scoped**,
+so the sweep resolves a report wherever the item happens to live. What follows
+from it is that **an n8n-ingested lead never gets the ingest-time parse** — only
+the board sync attaches a report to the payload — so for those leads the sweep
+is the only route, which is exactly what it is for.
+
+### ⚠️ `items(ids:)` PAGINATES, and its default limit is 25
+
+Asking for 40 ids returns the first 25 and says nothing about the other 15.
+`fetchIncomeReportAssets` maps anything Monday did not return to `null`, which
+`resolveIncomeReport` reads as "no report" — so an unset limit would have
+permanently marked every lead past the 25th of each batch as `no_report`. That
+is the worst shape of bug available here: silent, plausible, and indistinguishable
+from a lead that genuinely has no analysis.
+
+The function therefore chunks at `ITEMS_PER_CALL` (100, Monday's ceiling) and
+passes an explicit `limit`. Caught during the launch backfill, not by the test
+suite — the same lesson as §23.10: the tests covered the parser and the picker,
+and nothing covered the shape of the API response around them.
+
 ### Two writers, and only one of them refreshes
 
 - **`ingestLead()`, created leads only.** `fetchMondayLeads` now asks for
@@ -2363,12 +2396,17 @@ lead that silently never gets its figure.
   **existing** leads up to date, because `ingestLead` deliberately never touches
   an already-ingested row (§4) — without it the ~150 leads that predate the
   feature would never get a figure and a replaced report would keep the old one
-  forever. 40 leads a run, one Monday query then one download each, a 45s
-  wall-clock budget, `?dryRun=true`. A Monday failure aborts the batch **without
-  writing**, rather than marking 40 leads failed because Monday was down for
-  eight seconds.
+  forever. Up to 150 leads a run — the 45s **wall-clock budget** is the real
+  governor and the cap only exists to bound the query, because a low cap turns a
+  backlog into a queue of nights. One Monday query per 100 ids, then one download
+  each, `?dryRun=true` to list candidates without writing. A Monday failure
+  aborts the batch **without writing**, rather than marking a whole batch failed
+  because Monday was down for eight seconds.
 
-Run it by hand once after deploying, or the feed is half populated.
+**The cron only runs on production.** Vercel registers `vercel.json` crons on
+production deployments only, so this job does nothing for a preview and nothing
+at all until the branch is on `main`. A preview shows income figures only for
+leads something else has already parsed.
 
 ### Management only
 
@@ -2421,12 +2459,16 @@ including the three real multi-asset shapes on the live board
 dead URL, a non-PDF body, a timeout, an empty buffer — and the twelve real
 reports, one of which is a third-party valuation that must yield nothing.
 
-Then against the live board, read-only: the enlarged page query confirmed to
-return usable signed URLs, and the full pipeline — asset → parse → columns →
-rendered ranges — run over the 98 sellable items of the first page.
-
-**Not run here:** `?dryRun=true` against production, which needs Supabase
-credentials this build session did not have.
+Then against the live board and the live database. 0089 was applied to
+`znlfwbnvhlacwzgfalcf` and re-verified there (columns, default, CHECK, partial
+index, and `get_customer_pool_leads` still `service_role`-only after the
+drop/recreate). The whole book was then backfilled by running the sweep's own
+compiled modules over all 170 management leads — 149 parsed, 21 `no_report`, 0
+unparsed, 0 failed, every item resolved on Monday. `get_customer_pool_leads` was
+called for a real active customer and returns the figure. One lead was checked
+end to end against its own report: Kieran England / Moorfields, gross £36,112 →
+£32,501–£39,723 a year, fee £4,875–£5,958, midpoint £5,417 — which is exactly
+what that PDF's own "Management Fees (15%)" line prints.
 
 ### Deployment order — migration BEFORE code
 
