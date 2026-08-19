@@ -39,6 +39,7 @@ const THIN_SAMPLE = 30;
 function CapacityRow({ c }: { c: ProductCapacity }) {
   const short = c.demandPerMonth - c.slotsPerMonth;
   const fromRecycling = c.sustainableCustomers - c.sustainableCustomersNewOnly;
+  const noSample = c.recyclingSample === 0;
   const thinSample = c.recyclingSample < THIN_SAMPLE;
   const estimated = c.recyclingBasis !== "observed";
 
@@ -110,13 +111,13 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         {fromRecycling > 0 && (
           <>
             {" "}
-            and {fromRecycling} from recycling leads nobody worked
+            and {fromRecycling} from recycling leads nobody opened
             {c.unworkedRate != null && (
-              <> ({Math.round(c.unworkedRate * 100)}% go unworked)</>
+              <> ({Math.round(c.unworkedRate * 100)}% go unopened)</>
             )}
           </>
         )}
-        . If everyone started working their leads, the ceiling would fall back to{" "}
+        . If everyone started opening their leads, the ceiling would fall back to{" "}
         {c.sustainableCustomersNewOnly}.
       </p>
 
@@ -124,10 +125,10 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         <p className="mt-2 text-sm text-muted-foreground">
           Right now {c.recycledSlotsNow}{" "}
           {c.recycledSlotsNow === 1 ? "lead is" : "leads are"} sitting with
-          someone who is not working{" "}
-          {c.recycledSlotsNow === 1 ? "it" : "them"} and could be passed on.
-          Counted one step at a time — a lead going out for its first resale is
-          not also counted for a second, because the next operator may work it.
+          someone who has not opened{" "}
+          {c.recycledSlotsNow === 1 ? "it" : "them"} and could be passed on. One
+          slot per lead, however many holders ignored it — escalation adds a
+          single operator, to a maximum of four.
         </p>
       )}
 
@@ -138,11 +139,23 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         </p>
       )}
 
-      {thinSample && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          Rate measured over just {c.recyclingSample}{" "}
-          {c.recyclingSample === 1 ? "lead" : "leads"} — too few to rely on yet.
+      {/* Zero sample is NOT a thin sample — it is no measurement at all, and the
+          two must not read alike. With no rate the recycled component is zero,
+          so the ceiling above is the new-leads-only figure: sound, but missing
+          a half rather than including a zero. Say which. */}
+      {noSample ? (
+        <p className="mt-2 text-sm text-amber-800">
+          No recycling measured for this product yet — not one lead has reached
+          the 10-day mark since open tracking began. The ceiling above is new
+          leads alone; treat it as a floor, not a forecast.
         </p>
+      ) : (
+        thinSample && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Rate measured over just {c.recyclingSample}{" "}
+            {c.recyclingSample === 1 ? "lead" : "leads"} — too few to rely on yet.
+          </p>
+        )
       )}
 
       {c.borrowingFromInventory && (
@@ -227,7 +240,7 @@ export function ServiceHealthPanel({ health }: { health: ServiceHealth }) {
           <h2 className="text-base font-medium">How many customers can we serve</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Two things refill every month and both count: new leads arriving, and
-            leads nobody worked coming back through escalation. One-off stock —
+            leads nobody opened coming back through escalation. One-off stock —
             unsold leads and the ignored-lead backlog — is shown separately and
             never added, because it seats a customer once and never again.
             Delivered is what actually happened, as the check on all of it.

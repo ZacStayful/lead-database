@@ -314,7 +314,7 @@ session by definition; see §15 for why it exists at all.
    credit atomically.
 2. Credits carry forward; monthly counters reset on the anchor day.
 3. A lead reaches at most `max_assignments` customers **through ordinary
-   routing**. Escalation raises that column directly, ceiling 5 (§18); soft
+   routing**. Escalation raises that column directly, once, ceiling 4 (§18); soft
    reclaim's derived slot (§7) is retired but its functions remain. A **pool
    claim bypasses the cap entirely** (§19), so `assignment_count` may exceed
    `max_assignments` — nothing enforces the comparison, and the two queries that
@@ -973,39 +973,70 @@ acquisition retired.
 
 ---
 
-## 18. Inactivity escalation *(0062–0070)*
+## 18. Inactivity escalation *(0062–0070, rewritten by 0089)*
 
-Replaces soft reclaim (§7). A lead nobody has engaged with for **10 days** goes
-to one further operator, and again at **20**, then stops. **Full price**
-(`leadPriceFor`), standard two-pool routing, standard new-lead notification. The
-original assignment is untouched — same status, same `price_paid`, no refund.
+Replaces soft reclaim (§7). A lead **nobody has opened** within **10 days** goes
+to one further operator, **once**. **Full price** (`leadPriceFor`), standard
+two-pool routing, standard new-lead notification. The original assignments are
+untouched — same status, same `price_paid`, no refund.
 
 `/api/cron/escalate-leads`, daily at 11:00. Checks `escalation_enabled` first
 and logs a skipped run rather than silently doing nothing.
+
+### 18.0 — The rule is "was it opened", and there is no score *(0089)*
+
+Until 0089 this was two rungs (day 10 and day 20) gated on
+`get_assignment_engagement_scores` — a weighted blend of eight signals in the
+`engagement_weights` table — against thresholds of 0.35 and 0.45.
+
+**It was measuring columns that barely existed.** Across the whole event history:
+**2 `tel_click`, 1 `mailto_click`, 380 `detail_opened`.** A weighted blend where
+the heaviest-weighted terms are almost always zero is not a measurement; in
+practice the score was a noisy proxy for "did anybody open this lead".
+
+Meanwhile the open became a real signal in its own right. `detail_opened` has
+been recorded since `telemetry_from`, and since the contact gate (0079) the feed
+card carries no phone or email — so opening the detail page is the **only** route
+to a landlord's number.
+
+So the rule is now a single fact: **no `detail_opened` on any holder inside the
+lead's own first 10 days.** No score, no weights, no thresholds.
+
+**`viewed_at` deliberately does not count.** §11 already warns the two are not
+equivalent and 0079 is why: expanding a feed card reveals no contact details, and
+114 of 308 assignments were expanded and never opened. Counting an expand would
+exempt a lead on the strength of a click that showed nothing. Measured on the
+telemetry-clean window this is the difference between a **67.9%** and a **37.6%**
+escalation rate — it is the single biggest lever in the model.
+
+**The test lives in `get_escalation_candidates`, keyed off `p_min_age_days`**, so
+the route and the function cannot express the rule differently (the §5E
+discipline) and the trigger age can never drift from the no-open window.
+
+**One escalation per LEAD per run.** The RPC returns *assignments*, and an
+escalating lead carries ~1.27 unopened holders, so the route dedupes on
+`lead_id`. Without it the second holder raises the cap again or throws at the
+ceiling. The ladder is defined as one extra operator however many people ignored
+it. The claim is taken only *after* the RPC succeeds, so a rolled-back escalation
+leaves the lead available to its other holders on the same run.
+
+`get_assignment_engagement_scores` and `engagement_weights` are left in place,
+dormant — nothing calls them, and keeping them makes a rollback a code change
+rather than a data restore. `get_customer_engagement_scores` is a **different**
+function and still drives reclaim recipient selection (§10).
 
 ### Why this one increments `max_assignments` where reclaim would not
 
 §9.3 is still correct *for reclaim*: incrementing the cap would have handed a
 discounted slot away at full price through the sync's top-up path. Escalation
 has no discount and no bespoke recipient rule, so the top-up path is a **second
-executor of the same intent**, not a defeat. Ceiling is **5** — the brief said 4
-when the base default was 2, and 0055 moved the base to 3, so 4 would have left
-room for one rung and silently killed the day-20 step.
+executor of the same intent**, not a defeat.
 
-### The score is per assignment, over a trailing window
-
-`get_assignment_engagement_scores(ids, since)` — weights live in the
-`engagement_weights` **table** (not a function like `engagement_score_params`)
-because they are provisional and must be tunable from admin without a deploy.
-
-Trailing window, not lifetime: a note written on day 1 must not shield a lead on
-day 40. `detail_opened` is weighted 0.30, as heavily as a note, because it is the
-only signal with usable volume — 278 opens against 3 contact-clicks in the first
-16 days. Thresholds (`system_settings`) are **0.35** at day 10 and 0.45 at day 20
-(this said 0.30; production reads 0.35, which is also what §18.2's "a lone
-`mailto_click` (0.30) sits just under the threshold" already assumed),
-tuned so **opening a lead buys ten more days and not twenty**. Changing a weight
-without re-reading that sentence breaks the ladder.
+**Ceiling is 4** (0089, was 5). One rung on a base of 3 can only ever produce a
+4th holder, so a ceiling of 5 left a rung's worth of headroom nothing could
+reach — and `get_service_capacity` reads that ceiling to bound its estimate, so a
+stale 5 would let the model promise a slot the ladder cannot deliver. The
+increment stays `+1`, so a pre-0055 lead capped at 2 escalates to 3.
 
 **The freshness gate moved onto the allocation clock (0073).**
 `escalation_max_lead_age_days` is set to **25** in production — the same number
@@ -1015,13 +1046,12 @@ after. It could not work as built, because the gate counted from
 parse — while allocation, pacing and the pool all count from
 `lead_assignments.assigned_at`. `get_escalation_candidates.lead_age_days` is now
 days since **this assignment**, so the ladder reads as one sequence: assigned →
-day 10 rung → day 20 rung → day 25 pool. The route's null-tolerant branch is
+day 10 rung → day 25 pool. The route's null-tolerant branch is
 left in place and simply never fires now, because `assigned_at` is NOT NULL.
 
-Candidates are **not** gated on `status = 'new'` despite the brief saying so: 31
-of 87 ten-day-old assignments sit at `contacted` scoring ≤0.10, and the PATCH
-route lets an operator set that by hand, so it would have been a one-click
-permanent exemption. Only `won` and `rejected` are excluded by status.
+Candidates are **not** gated on `status = 'new'` despite the brief saying so: the
+PATCH route lets an operator set `contacted` by hand, so it would have been a
+one-click permanent exemption. Only `won` and `rejected` are excluded by status.
 
 ### Closing a lead *(0067)*
 
@@ -1085,22 +1115,31 @@ Nothing gates on any of this (§16) — it is reporting and admin judgement.
 escalation is the machine that recovers it, and unlike inventory that recovery
 recurs every month.
 
-**Measured with escalation's own test, or the number is a lie.** Two things must
-match `get_assignment_engagement_scores`, and both are easy to get wrong:
+**Measured with escalation's own test, or the number is a lie.** Three things
+must match `get_escalation_candidates`, and all three are easy to get wrong:
 
-- **Which signals count** — contact click, note, stage move, status advance. The
-  same set as `passive_only`. Opening a lead is *not* working it. Marking a lead
-  contacted **is**: an operator only does that to organise their own pipeline.
-  One documented inexactness: a lone `mailto_click` (0.30) sits just under the
-  0.35 threshold, so escalation recycles it where this test reads it as active.
-  Left alone rather than duplicating the weighted score, which would drift the
-  moment a weight is edited from admin. The error is one signal wide and it
-  **understates** recycling.
+- **Which signal counts** — since 0089, only `detail_opened`. The old version
+  tracked the weighted score's signal set (contact click, note, stage move,
+  status advance) and carried a documented one-signal error; both are gone with
+  the score. Not `viewed_at`, for the reason §18.0 gives.
 - **When it is asked** — over each assignment's own first ten days, never its
-  lifetime. This is what separates recurring from one-off: asking "what looks
-  dead right now" sweeps in the long-abandoned backlog and answers **76%**, a
-  wave that clears once; asking "was this worked inside its own first ten days"
-  answers **41%**, which a fresh cohort repeats monthly.
+  lifetime and never a rolling "recently". This is what separates recurring from
+  one-off: asking "what looks dead right now" sweeps in the long-abandoned
+  backlog, a wave that clears once; asking "was this opened inside its own first
+  ten days" gives a rate a fresh cohort repeats monthly.
+- **Floored at `telemetry_from`** *(0089)*. `detail_opened` did not exist before
+  that marker, so any assignment older than it scores as "never opened" and the
+  rate reads a flat **100%**. The 90-day window is therefore clamped to
+  `greatest(now() - 90 days, telemetry_from)`. Without the floor the figure is an
+  artefact rather than a measurement — and it looks entirely plausible, which is
+  what makes it dangerous. A malformed marker reads as "no floor" rather than
+  raising, because `/admin` is the page you open when something is already wrong.
+
+**Per LEAD, not per assignment** *(0089)*. The estimate was `delivered_pm × rate`
+over assignments, but escalating raises a cap once per lead and escalating leads
+carry ~1.27 unopened holders. It is now `leads_pm × (share of LEADS with an
+unopened holder)` — the same quantity `recycled_slots_now` counts. The table
+below always said one-per-lead; the per-month estimate simply never followed it.
 
 #### Count one rung ahead — never compound the ladder *(0072)*
 
@@ -1125,11 +1164,23 @@ own ten days, it becomes a live candidate and is counted then, as a fact.
 
 | Column | Meaning |
 |---|---|
-| `recycled_slots_now` | A **count**: leads held by someone not working them, passable today. One per **lead**, never per assignment — `get_escalation_candidates` returns assignments and does not dedupe, but escalating raises `max_assignments` by one, so two silent co-assignees still open only one slot. |
-| `recycled_slots_per_month` | Observed escalations per month once escalation has run; before then a one-rung estimate, `delivered × unworked_rate`. |
+| `recycled_slots_now` | A **count**: leads held by someone who has not opened them, passable today. One per **lead**, never per assignment — `get_escalation_candidates` returns assignments and does not dedupe, but escalating raises `max_assignments` by one, so two unopened co-assignees still open only one slot. |
+| `recycled_slots_per_month` | Observed escalations per month once escalation has run; before then a one-rung estimate, `leads_pm × unopened_rate`. |
 | `recycling_basis` | `observed` or `estimated`, so an estimate is never read as a count. |
+| `recycling_sample` | Leads the rate was measured over. **Zero is not a thin sample, it is no measurement** — the panel says so rather than letting a missing half read as a zero half. GR sits at zero at the 10-day mark. |
 
-Bounded by one rung of headroom per lead (`count(*) where max_assignments < 5`),
+⚠️ **The clamp applies to the ESTIMATE ONLY** *(0089)*. 0072 clamped both
+branches by `one_rung_headroom`, which is right for a projection and wrong for a
+tally: headroom is "leads still below the ceiling **right now**", and escalating
+a lead is exactly what removes it from that set — so the more escalations
+actually happen, the smaller the bound applied to the count of them becomes. At
+steady state (~68% escalating, ~32% left below the ceiling) it would have
+reported roughly **half** the escalations that really occurred. Harmless until
+now only because `observed_raw` had always been zero; escalation firing for the
+first time is what makes it live.
+
+The estimate is still bounded by one rung of headroom per lead
+(`count(*) where max_assignments < 4`),
 not the full run to the ceiling — the clamp obeys the same rule as the estimate.
 On live data that clamp binds: the raw estimate of 117.4 is capped to 98.6,
 because you cannot recycle more leads a month than you ingest when each steps once.
@@ -1204,7 +1255,7 @@ exercised against seeded data.
 
 The third and final rung of the distribution ladder. Initial allocation places a
 lead with up to `max_assignments` operators; inactivity escalation adds one at
-day 10 and again at day 20 (§18); at **day 25** the lead opens to *every*
+day 10 (§18); at **day 25** the lead opens to *every*
 subscriber of its product, who may ring the landlord for free and **claim** it
 if they are still interested.
 

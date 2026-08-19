@@ -53,18 +53,14 @@ export default async function AdminOverviewPage() {
     getCapacityStatus(),
     getGrCapacityStatus(),
     getServiceHealth(),
-    // Read straight rather than through a helper: four keys, one table, and a
+    // Read straight rather than through a helper: two keys, one table, and a
     // helper would only be indirection. Missing keys fall back to the values the
     // migration seeds, so the panel renders before it has ever been saved.
+    // The two score thresholds are gone with the scored ladder (0089).
     createAdminClient()
       .from("system_settings")
       .select("key, value")
-      .in("key", [
-        "escalation_enabled",
-        "escalation_max_lead_age_days",
-        "escalation_score_threshold_day_10",
-        "escalation_score_threshold_day_20",
-      ])
+      .in("key", ["escalation_enabled", "escalation_max_lead_age_days"])
       .then(({ data }) => {
         const m = new Map(
           ((data ?? []) as { key: string; value: string }[]).map((r) => [
@@ -75,8 +71,6 @@ export default async function AdminOverviewPage() {
         return {
           enabled: m.get("escalation_enabled") === "true",
           maxLeadAgeDays: m.get("escalation_max_lead_age_days") ?? "",
-          thresholdDay10: Number(m.get("escalation_score_threshold_day_10") ?? 0.3),
-          thresholdDay20: Number(m.get("escalation_score_threshold_day_20") ?? 0.45),
         };
       }),
   ]);
@@ -199,8 +193,6 @@ export default async function AdminOverviewPage() {
       <EscalationSettingsPanel
         enabled={escalationSettings.enabled}
         maxLeadAgeDays={escalationSettings.maxLeadAgeDays}
-        thresholdDay10={escalationSettings.thresholdDay10}
-        thresholdDay20={escalationSettings.thresholdDay20}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">

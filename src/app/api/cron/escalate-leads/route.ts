@@ -11,26 +11,21 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * The two rungs. A lead untouched for ten days is offered to one more operator;
- * still untouched at twenty, to one more again; after that it is left alone.
- * Not three rungs and not a rolling re-offer — a lead nobody has worked in three
- * weeks is cold, and continuing to recycle it just spreads a dead lead thinner.
- */
-const RUNGS = [
-  { stage: 1, minAgeDays: 10, thresholdKey: "escalation_score_threshold_day_10" },
-  { stage: 2, minAgeDays: 20, thresholdKey: "escalation_score_threshold_day_20" },
-] as const;
-
-/**
- * How far back each rung looks for signs of life.
+ * The single rung (0089). A lead NOBODY OPENED within ten days is offered to one
+ * more operator, once, and then left alone.
  *
- * Ten days for both rungs, deliberately: the question at day 20 is not "has
- * anything happened since this lead arrived" but "has anything happened in the
- * last ten days", the same question the first rung asked. Any activity resets
- * the clock, so an operator who opens a lead on day 15 keeps it past the second
- * rung and only loses it if they then go quiet for another ten days.
+ * There is no second rung and no score. The old ladder gated on a weighted blend
+ * of eight signals, but the ones it weighted most heavily barely exist — 2
+ * tel_click and 1 mailto_click in the whole history against 380 detail_opened —
+ * so it was a noisy proxy for "did anybody open this". Since the contact gate
+ * (0079) the feed card carries no phone or email, which makes an open the only
+ * route to a landlord's number and a meaningful signal in its own right.
+ *
+ * The test itself lives in get_escalation_candidates, keyed off minAgeDays, so
+ * the route and the function cannot express the rule differently (the §5E
+ * discipline). Nothing here re-checks it.
  */
-const SCORE_WINDOW_DAYS = 10;
+const RUNGS = [{ stage: 1, minAgeDays: 10 }] as const;
 
 /** Candidate recipients to pull per lead before filtering. */
 const CANDIDATE_POOL = 10;
@@ -38,7 +33,7 @@ const CANDIDATE_POOL = 10;
 /**
  * Escalations in a single run above which the admin overview raises a loud flag.
  * A soft ceiling: the run still completes in full. It exists to catch a
- * misconfiguration (a threshold typo, a gate switched off) before it has
+ * misconfiguration (a gate switched off, a cutoff moved) before it has
  * redistributed half the book, not to cap legitimate volume.
  */
 const RUN_VOLUME_CEILING = 15;
@@ -51,14 +46,6 @@ type Candidate = {
   assigned_at: string;
   max_assignments: number;
   lead_age_days: number | null;
-};
-
-type Scored = {
-  assignment_id: string;
-  score: number;
-  /** Nothing but looking happened — an open, a read notification, or a login. */
-  passive_only: boolean;
-  signals: Record<string, boolean>;
 };
 
 async function settings(admin: ReturnType<typeof createAdminClient>) {
@@ -138,15 +125,16 @@ async function handle(request: NextRequest) {
   const wouldEscalate: unknown[] = [];
   const skipped: { assignment_id: string; reason: string }[] = [];
 
-  for (const rung of RUNGS) {
-    const threshold = Number(config.get(rung.thresholdKey) ?? "");
-    if (!Number.isFinite(threshold)) {
-      return NextResponse.json(
-        { error: `${rung.thresholdKey} missing or not a number` },
-        { status: 500 }
-      );
-    }
+  // One escalation per LEAD per run.
+  //
+  // The candidate query returns ASSIGNMENTS, and under the unopened rule a lead
+  // commonly has more than one holder who never opened it (~1.27 on live data).
+  // Escalating raises max_assignments by one per call, so processing both would
+  // either hand the lead a fifth operator or throw at the ceiling — and the
+  // ladder is defined as one extra holder, however many people ignored it.
+  const escalatedLeadIds = new Set<string>();
 
+  for (const rung of RUNGS) {
     const { data: candidateRows, error: candErr } = await admin.rpc(
       "get_escalation_candidates",
       { p_cutoff: cutoff, p_stage: rung.stage, p_min_age_days: rung.minAgeDays }
@@ -160,40 +148,12 @@ async function handle(request: NextRequest) {
     const candidates = (candidateRows ?? []) as Candidate[];
     if (candidates.length === 0) continue;
 
-    // Score the whole rung in one call rather than per assignment.
-    const since = new Date(
-      Date.now() - SCORE_WINDOW_DAYS * 24 * 60 * 60 * 1000
-    ).toISOString();
-
-    const { data: scoreRows, error: scoreErr } = await admin.rpc(
-      "get_assignment_engagement_scores",
-      { p_assignment_ids: candidates.map((c) => c.assignment_id), p_since: since }
-    );
-
-    if (scoreErr) {
-      console.error("[escalate] scoring failed", scoreErr);
-      return NextResponse.json({ error: scoreErr.message }, { status: 500 });
-    }
-
-    const scores = new Map(
-      ((scoreRows ?? []) as Scored[]).map((r) => [r.assignment_id, r])
-    );
-
     for (const c of candidates) {
-      const scored = scores.get(c.assignment_id);
-      const score = Number(scored?.score ?? 0);
-      // Opening a lead is looking at it, not working it. Somebody can click in
-      // to see what a lead is, decide against it, and never come back — and
-      // without this that single click would buy them another ten days. The
-      // weights are set so passive signals cannot reach the threshold on their
-      // own, and this flag makes the rule survive any future weight edit from
-      // admin rather than depending on the arithmetic still adding up.
-      const lookedOnly = scored?.passive_only ?? true;
-
-      // Engaged enough to keep it. The clock keeps running: if they go quiet for
-      // another ten days this same rung picks the lead up again, because the
-      // stage has not advanced.
-      if (score >= threshold && !lookedOnly) {
+      // Eligibility is already decided by get_escalation_candidates: it returns
+      // only assignments nobody opened inside their own first minAgeDays. There
+      // is deliberately no second opinion here.
+      if (escalatedLeadIds.has(c.lead_id)) {
+        skipped.push({ assignment_id: c.assignment_id, reason: "lead_already_escalated" });
         continue;
       }
 
@@ -251,13 +211,14 @@ async function handle(request: NextRequest) {
       const price = leadPriceFor(c.lead_type);
 
       if (dryRun) {
+        // Claim the lead in the dry run too, so the reported count matches what
+        // a real run would do rather than listing every unopened holder.
+        escalatedLeadIds.add(c.lead_id);
         wouldEscalate.push({
           assignment_id: c.assignment_id,
           lead_id: c.lead_id,
           stage: rung.stage,
-          score,
-          passive_only: lookedOnly,
-          signals: scored?.signals ?? null,
+          reason: "not_opened",
           from_customer: c.customer_id,
           to_customer: recipientId,
           max_assignments: c.max_assignments,
@@ -307,12 +268,17 @@ async function handle(request: NextRequest) {
         );
       }
 
+      // Claimed only after the RPC succeeded. A failed escalation rolls back
+      // whole, so the lead must stay available to its other unopened holders on
+      // this same run rather than being skipped for a call that did nothing.
+      escalatedLeadIds.add(c.lead_id);
+
       escalated.push({
         assignment_id: c.assignment_id,
         new_assignment_id: newAssignmentId,
         lead_id: c.lead_id,
         stage: rung.stage,
-        score,
+        reason: "not_opened",
         from_customer: c.customer_id,
         to_customer: recipientId,
       });

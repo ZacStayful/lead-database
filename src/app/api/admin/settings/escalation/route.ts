@@ -13,13 +13,16 @@ export const dynamic = "force-dynamic";
  * /api/admin/settings/capacity resolves its key through a helper: system_settings
  * also holds reclaim_enabled_from and telemetry_from, which are stamped once at
  * migration time and would silently change the meaning of historical data if a
- * request could name them.
+ * request could name them. telemetry_from is now doubly load-bearing — 0089
+ * floors the recycled-supply rate on it — so it must stay unreachable from here.
+ *
+ * The two score thresholds were dropped in 0089: escalation no longer scores
+ * anything, it asks whether the lead was opened. Their rows are left in
+ * system_settings, but nothing reads them and nothing may write them.
  */
 const EDITABLE = {
   escalation_enabled: "boolean",
   escalation_max_lead_age_days: "nullable_int",
-  escalation_score_threshold_day_10: "rate",
-  escalation_score_threshold_day_20: "rate",
 } as const;
 
 type Key = keyof typeof EDITABLE;
@@ -52,14 +55,6 @@ function normalise(key: Key, raw: unknown): { value: string } | { error: string 
       const n = Number(raw);
       if (!Number.isInteger(n) || n < 1) {
         return { error: `${key} must be a whole number of days above zero, or empty` };
-      }
-      return { value: String(n) };
-    }
-
-    case "rate": {
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0 || n > 1) {
-        return { error: `${key} must be between 0 and 1` };
       }
       return { value: String(n) };
     }

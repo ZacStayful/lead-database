@@ -10,31 +10,26 @@ import { Switch } from "@/components/ui/switch";
 /**
  * Admin controls for the escalation ladder.
  *
- * Three things, in descending order of how often they will be touched: the
- * kill switch, the lead-age gate, and the two score thresholds.
+ * Two things: the kill switch and the lead-age gate.
  *
- * The thresholds are shown but framed as provisional, because they are: they
- * were set from sixteen days of telemetry against three recorded outcomes, and
- * the point of the 60-day review is to replace them with numbers fitted to what
- * actually converts.
+ * The score thresholds are gone (0089). Escalation no longer scores anything —
+ * it asks whether the lead was opened — so there is no longer a tunable number
+ * standing between a lead and its one extra operator. That is the point: the
+ * old thresholds were provisional guesses against a score whose heaviest
+ * signals barely occurred, and a control that invites tuning implies a
+ * precision the underlying measurement never had.
  */
 export function EscalationSettingsPanel({
   enabled: initialEnabled,
   maxLeadAgeDays: initialAge,
-  thresholdDay10: initialT10,
-  thresholdDay20: initialT20,
 }: {
   enabled: boolean;
   /** Empty string means deliberately not configured — not zero. */
   maxLeadAgeDays: string;
-  thresholdDay10: number;
-  thresholdDay20: number;
 }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(initialEnabled);
   const [age, setAge] = useState(initialAge);
-  const [t10, setT10] = useState(String(initialT10));
-  const [t20, setT20] = useState(String(initialT20));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -64,9 +59,9 @@ export function EscalationSettingsPanel({
         <div>
           <h2 className="text-base font-medium">Lead escalation</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            A lead nobody has touched for 10 days goes to one more operator, and
-            again at 20. Full price, standard routing, and the first operator
-            keeps everything.
+            A lead <strong>nobody has opened</strong> within 10 days goes to one
+            more operator — once, to a maximum of 4. Full price, standard
+            routing, and the operators already holding it keep everything.
           </p>
         </div>
 
@@ -128,59 +123,16 @@ export function EscalationSettingsPanel({
           </div>
         </div>
 
-        {/* Thresholds */}
+        {/* The rule, stated rather than configured. */}
         <div className="rounded-lg border-[0.5px] border-border p-4">
-          <p className="text-sm font-medium">Inactivity thresholds</p>
+          <p className="text-sm font-medium">What counts as engaged</p>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            A lead escalates when its engagement score over the previous 10 days
-            falls below these. Opening a lead scores 0.30, so at 0.30 an open
-            keeps it past day 10 but not past day 20.{" "}
-            <span className="text-amber-800">
-              Provisional — set from 16 days of data and due for review against
-              real outcomes.
-            </span>
+            Opening the lead — anyone holding it opening the detail page within
+            10 days keeps it. Expanding the card in the feed does not count: it
+            no longer shows the landlord&rsquo;s phone or email, so it proves
+            nothing. There is nothing to tune here by design; the rule is a
+            single yes-or-no fact rather than a score.
           </p>
-          <div className="mt-3 flex flex-wrap items-end gap-3">
-            <label className="text-sm">
-              <span className="block text-xs text-muted-foreground">Day 10</span>
-              <Input
-                type="number"
-                step="0.05"
-                min={0}
-                max={1}
-                value={t10}
-                disabled={busy}
-                onChange={(e) => setT10(e.target.value)}
-                className="mt-1 w-28"
-              />
-            </label>
-            <label className="text-sm">
-              <span className="block text-xs text-muted-foreground">Day 20</span>
-              <Input
-                type="number"
-                step="0.05"
-                min={0}
-                max={1}
-                value={t20}
-                disabled={busy}
-                onChange={(e) => setT20(e.target.value)}
-                className="mt-1 w-28"
-              />
-            </label>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() =>
-                void save({
-                  escalation_score_threshold_day_10: Number(t10),
-                  escalation_score_threshold_day_20: Number(t20),
-                })
-              }
-            >
-              Save thresholds
-            </Button>
-          </div>
         </div>
 
         {message && (
