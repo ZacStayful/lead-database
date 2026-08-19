@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, formatDate } from "@/lib/utils";
 import type { PoolLead } from "@/lib/types";
+import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
 import { Mail, Phone, MapPin, BedDouble, Clock } from "lucide-react";
 
 type ClaimOutcome =
@@ -195,6 +196,14 @@ export function ExpiredLeadsPool({
                 {lead.desired_rent && <p>Desired rent: {lead.desired_rent}</p>}
               </div>
             )}
+
+            {/*
+              The one figure that answers "is this call worth making", on the
+              card where that is the only question. Compact, because the claim
+              decision is already carrying the contact details and the scarcity
+              line.
+            */}
+            <IncomeProjection lead={lead} variant="compact" className="mt-3" />
 
             <p className="mt-3 text-xs text-muted-foreground">
               {lead.enquiry_date_known

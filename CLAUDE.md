@@ -2254,3 +2254,225 @@ session is livemode, so the price swap itself has not been exercised end to end
 0088 must be applied before the code deploys. The webhook selects the pending
 columns on **every** `invoice.paid`, so a lagging migration would break
 crediting for everybody, not just for customers using this feature.
+
+---
+
+## 25. Estimated gross income on a lead *(0089)*
+
+Every sellable item on the management leads board (18420117742) carries a
+Stayful property-analysis PDF in the **`files__1`** "Deal Analyser" column, and
+that PDF states the property's projected gross short-term-let revenue. Nothing
+read it, so an operator deciding whether to work a lead saw a name, an address
+and a bedroom count and no indication of what the property was worth.
+
+Each management lead now shows the projected **gross income** as a range 10%
+either side of the estimate, and beside it what that property earns a
+**management company** at a 15% fee.
+
+**Live coverage, measured over the whole book at backfill:** of 170 management
+leads, **149 parsed, 21 carry no analysis on their Monday item, 0 unparsed, 0
+failed**. That is 262 of 293 delivered assignments and 9 of the 13 leads in the
+management pool. Gross ranges from £9,573 to £149,283, median £39,614.
+
+### The report is not part of the product
+
+No PDF is attached to a lead, no URL is stored, and nothing links to one.
+Monday's `public_url` is a **one-hour signed S3 link** — fetched, read for one
+number, discarded. A stored copy would be dead within the hour, and a live
+fetch would hand the customer the whole analysis, which is not what is sold.
+`leads.income_report_asset_id` is an opaque id, never rendered and never a link;
+it exists only so the sweep can skip a report it has already read.
+
+### `gross_annual_income` is OURS. `income_estimate` is THEIRS.
+
+The single most important distinction in this section.
+
+| | `leads.gross_annual_income` (0089) | `lead_assignments.income_estimate` (0012) |
+|---|---|---|
+| Whose | Stayful's, from the analyser | The operator's, typed by hand |
+| Scope | One per **lead** | One per **assignment** |
+| Two holders | See the same number | Can hold different numbers |
+| Present | The moment the lead is delivered | Only once somebody types it |
+| Feeds | The ranges below, and nothing else | Analytics income totals, the wins table, the pool's "last touched" clock |
+
+They sit next to each other on the lead detail page on purpose. Never merge
+them, sum them, or use one as a fallback for the other — the analytics totals
+count the operator's figure precisely *because* it is the operator's.
+
+### One stored figure, everything else derived
+
+`gross_annual_income` is the only money column. The four ranges —
+`src/lib/incomeProjection.ts`, `buildIncomeProjection()` — are computed on every
+render:
+
+```
+low  = gross × 0.9        fee = <gross> / 6.667   (a 15% management fee)
+high = gross × 1.1        monthly = <annual> / 12
+```
+
+Eight columns that must stay in step is eight chances to drift. Monthly is
+`annual / 12` for the same reason: the PDF prints its own monthly line, but it
+is only `round(annual / 12)`.
+
+⚠️ `1/6.667` is not exactly `0.15`, so the derived fee can sit **£1** below the
+one the report prints (which uses `× 0.15`). Irrelevant against a ±10% band, and
+the parser's cross-check allows 1% for it. Do not "fix" it by switching to a
+multiplier — 6.667 is the divisor the business states.
+
+`leads.estimated_monthly_income` from 0001 is **not** reused: dead since day
+one, `text` where this is numeric, and its name reads as the operator's figure.
+
+### A mis-parse must fail silent
+
+`parseGrossAnnualIncome()` matches `Gross Revenue £<annual> £<monthly>` — the
+headline block and the "Revenue Breakdown" table both print it, and they agree —
+then refuses to publish unless **two** independent cross-checks hold:
+
+1. the stated monthly is the stated annual over twelve (2% tolerance), which is
+   what kills a match that has straddled two unrelated table cells;
+2. where the report states its own `Management Fees (15%)`, it agrees with
+   `annual / 6.667` (1% tolerance) — the line that catches the analyser changing
+   what it means by gross, before a customer does.
+
+A wrong income figure is worse than no figure, because an operator prices a call
+on it. The parser never throws; every failure becomes a status.
+
+### The status column, and why it is not just "is the figure null"
+
+Null means five things that need different handling:
+
+| Status | Meaning | Retried? |
+|---|---|---|
+| `pending` | Never attempted | Yes |
+| `parsed` | Figure set and corroborated | No |
+| `no_report` | The item carries no analysis PDF | While the lead is under 30 days old |
+| `unparsed` | A PDF was read and could not be trusted | No — a permanent fact about that document |
+| `failed` | Monday unreachable, download errored, timed out | Yes |
+
+`unparsed` vs `failed` is the load-bearing pair: a legacy third-party valuation
+retried nightly forever is noise, and a transient S3 blip never retried is a
+lead that silently never gets its figure.
+
+### Management leads come from TWO Monday boards
+
+`fetchMondayLeads` reads board **18420117742** ("Management leads for sale"),
+but a substantial share of the management leads in the database arrived through
+the **n8n webhook** (§4) and their items live on board **5891626711**
+("Management Leads"), the main landlord pipeline. Those items carry the **same**
+`Stayful_Property_Analysis_*.pdf` and parse identically — verified on live data.
+
+This needs no board configuration, and must not acquire any:
+`fetchIncomeReportAssets()` queries `items(ids:)`, which is **not board-scoped**,
+so the sweep resolves a report wherever the item happens to live. What follows
+from it is that **an n8n-ingested lead never gets the ingest-time parse** — only
+the board sync attaches a report to the payload — so for those leads the sweep
+is the only route, which is exactly what it is for.
+
+### ⚠️ `items(ids:)` PAGINATES, and its default limit is 25
+
+Asking for 40 ids returns the first 25 and says nothing about the other 15.
+`fetchIncomeReportAssets` maps anything Monday did not return to `null`, which
+`resolveIncomeReport` reads as "no report" — so an unset limit would have
+permanently marked every lead past the 25th of each batch as `no_report`. That
+is the worst shape of bug available here: silent, plausible, and indistinguishable
+from a lead that genuinely has no analysis.
+
+The function therefore chunks at `ITEMS_PER_CALL` (100, Monday's ceiling) and
+passes an explicit `limit`. Caught during the launch backfill, not by the test
+suite — the same lesson as §23.10: the tests covered the parser and the picker,
+and nothing covered the shape of the API response around them.
+
+### Two writers, and only one of them refreshes
+
+- **`ingestLead()`, created leads only.** `fetchMondayLeads` now asks for
+  `assets { id name public_url }` on the page read it already does, so the
+  report costs no extra HTTP; `pickIncomeReportAsset()` takes the newest
+  `Stayful_Property_Analysis*.pdf` (items accumulate spreadsheets, third-party
+  valuations, and occasional re-runs). It runs **before** `autoAssignLead` so
+  the figure is there when the delivery email lands, which puts a network call
+  in front of the money path — hence the 8s timeout and the try/catch. **It can
+  never fail ingest**; a failure leaves the row `pending`.
+- **`/api/cron/parse-income-reports`, daily 12:00.** This is what keeps
+  **existing** leads up to date, because `ingestLead` deliberately never touches
+  an already-ingested row (§4) — without it the ~150 leads that predate the
+  feature would never get a figure and a replaced report would keep the old one
+  forever. Up to 150 leads a run — the 45s **wall-clock budget** is the real
+  governor and the cap only exists to bound the query, because a low cap turns a
+  backlog into a queue of nights. One Monday query per 100 ids, then one download
+  each, `?dryRun=true` to list candidates without writing. A Monday failure
+  aborts the batch **without writing**, rather than marking a whole batch failed
+  because Monday was down for eight seconds.
+
+**The cron only runs on production.** Vercel registers `vercel.json` crons on
+production deployments only, so this job does nothing for a preview and nothing
+at all until the branch is on `main`. A preview shows income figures only for
+leads something else has already parsed.
+
+### Management only
+
+A GR operator earns the margin between the rent they pay and what the property
+makes, not a 15% fee, so the figure would be *wrong* for them rather than
+missing (invariant 6, §17). The GR board has a "PMI analysis" file column but no
+item carries a file. `IncomeProjection` returns null for any non-management
+lead, and both writers skip them.
+
+### Where it shows
+
+One component (`src/components/dashboard/IncomeProjection.tsx`), three
+surfaces: the expanded feed card, the lead detail page, and the expired-leads
+pool card (compact). An operator meets the same number in the feed, on the page
+they work the lead from, and where they decide whether a pooled landlord is
+worth ringing; a second implementation would eventually show two different
+numbers for one property. It renders **nothing** without a figure — a lead with
+no analysis should look like a lead from before this existed, not like a
+property worth nothing.
+
+Adding `gross_annual_income` to `get_customer_pool_leads` is **not** a breach of
+0075's rule that nothing about previous holders may be returned. That rule is
+about what the people who held the lead did with it; this is our own figure,
+identical for every viewer.
+
+Deliberately **not** on the admin pages or in the XLSX export — the figure is a
+selling aid for operators, and the export's `!cols` width array is positional
+and easy to mis-align.
+
+### `unpdf` is pinned to `~1.7.0`
+
+1.8.0 added `engines: { node: ">=22" }` and this project pins no Node version
+anywhere, so a fresh install could pick a package the deployed runtime refuses.
+1.7.0 has no engine floor and parses identically. `pdf-parse` is not an option:
+it reads a bundled test file on import.
+
+### Verification
+
+All 85 migrations applied to a scratch Postgres 16 from empty, then 0089
+re-applied to prove idempotency; the status CHECK exercised on every valid and
+an invalid value; the partial index confirmed; `get_customer_pool_leads`
+confirmed to still be `service_role`-only after **both** drop/recreates (the §11
+ACL trap) and driven against seeded rows to confirm the figure and a null pass
+through.
+
+`buildIncomeProjection` and `pickIncomeReportAsset` went through **22** cases,
+including the three real multi-asset shapes on the live board
+(xlsx + report, legacy PDF + report, two reports). The parser and
+`resolveIncomeReport` went through **24**, among them every failure path — a
+dead URL, a non-PDF body, a timeout, an empty buffer — and the twelve real
+reports, one of which is a third-party valuation that must yield nothing.
+
+Then against the live board and the live database. 0089 was applied to
+`znlfwbnvhlacwzgfalcf` and re-verified there (columns, default, CHECK, partial
+index, and `get_customer_pool_leads` still `service_role`-only after the
+drop/recreate). The whole book was then backfilled by running the sweep's own
+compiled modules over all 170 management leads — 149 parsed, 21 `no_report`, 0
+unparsed, 0 failed, every item resolved on Monday. `get_customer_pool_leads` was
+called for a real active customer and returns the figure. One lead was checked
+end to end against its own report: Kieran England / Moorfields, gross £36,112 →
+£32,501–£39,723 a year, fee £4,875–£5,958, midpoint £5,417 — which is exactly
+what that PDF's own "Management Fees (15%)" line prints.
+
+### Deployment order — migration BEFORE code
+
+0089 first. `get_customer_pool_leads` changes its return shape, and every
+customer lead surface selects `leads(*)`, so code arriving first would query
+columns that do not exist. Nothing here touches a balance, counter, pacing or
+capacity column, so a lagging migration cannot affect lead allocation.

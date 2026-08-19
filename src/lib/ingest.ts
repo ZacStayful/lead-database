@@ -6,6 +6,7 @@ import { extractPostcode, postcodeArea } from "@/lib/postcode";
 import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
 import { sendNewLeadSms } from "@/lib/sms";
 import { leadPriceFor } from "@/lib/plans";
+import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import {
   DEFAULT_MAX_ASSIGNMENTS,
   type Customer,
@@ -290,6 +291,8 @@ export async function ingestLead(
 
   const typedLead = lead as Lead;
 
+  await attachIncomeProjection(supabase, typedLead, payload);
+
   const assignmentsMade = await autoAssignLead(supabase, typedLead);
 
   return {
@@ -297,6 +300,58 @@ export async function ingestLead(
     lead_id: typedLead.id,
     assignments_made: assignmentsMade,
   };
+}
+
+/**
+ * Read the Stayful analysis PDF for a freshly created lead and stamp its gross
+ * income figure (0089).
+ *
+ * CREATED LEADS ONLY, and management only. ingestLead deliberately never
+ * updates an existing row, and that stays true — /api/cron/parse-income-reports
+ * is what refreshes leads already in the database, and it is also what picks up
+ * anything this skips. Guaranteed Rent has no analysis file on its board, and a
+ * 15% management fee is not what a GR operator earns anyway.
+ *
+ * IT CANNOT FAIL INGEST. Every failure is swallowed and the row is left at
+ * `pending` for the sweep. Doing this before autoAssignLead is deliberate — the
+ * figure should be there when the delivery email lands — but that puts a
+ * network call in front of the money path, so resolveIncomeReport's timeout is
+ * load-bearing and the try/catch is a second stop. A landlord nobody rings
+ * because ingest threw is a far worse outcome than a lead whose income figure
+ * arrives at noon.
+ */
+async function attachIncomeProjection(
+  supabase: ReturnType<typeof createAdminClient>,
+  lead: Lead,
+  payload: N8nLeadPayload
+): Promise<void> {
+  if (lead.lead_type !== "management") return;
+
+  const url = payload.income_report_url;
+  const assetId = payload.income_report_asset_id;
+  // No report on the payload is not the same as no report on the item: the n8n
+  // webhook does not send one at all. Leave it pending and let the sweep look.
+  if (typeof url !== "string" || !url) return;
+
+  try {
+    const outcome = await resolveIncomeReport({
+      id: typeof assetId === "string" ? assetId : "",
+      public_url: url,
+    });
+    const { error } = await supabase
+      .from("leads")
+      .update(incomeReportPatch(outcome))
+      .eq("id", lead.id);
+    if (error) {
+      console.error("Income report write failed", lead.id, error);
+      return;
+    }
+    // Keep the in-memory row honest for anything downstream in this request.
+    lead.gross_annual_income = outcome.grossAnnualIncome;
+    lead.income_report_status = outcome.status;
+  } catch (err) {
+    console.error("Income report parse failed", lead.id, err);
+  }
 }
 
 /**
