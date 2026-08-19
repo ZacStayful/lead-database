@@ -31,6 +31,7 @@
     "stripe": "^17.2.0",
     "tailwind-merge": "^2.5.3",
     "tailwindcss-animate": "^1.0.7",
+    "unpdf": "~1.7.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

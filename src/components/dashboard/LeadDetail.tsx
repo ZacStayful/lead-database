@@ -17,6 +17,7 @@ import {
 import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
+import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
 import type {
   AssignmentWithLead,
   ClientLeadEventType,
@@ -466,6 +467,13 @@ export function LeadDetail({
             </div>
           </div>
         </div>
+
+        {/*
+          Directly under the operator's own income field on purpose. The one
+          above is theirs, this one is ours, and putting them side by side is
+          what stops either being mistaken for the other.
+        */}
+        <IncomeProjection lead={lead} className="mt-4" />
 
         {lead.lead_profile && (
           <div className="mt-4 rounded-md bg-muted/50 p-3 text-sm">

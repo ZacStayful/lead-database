@@ -208,6 +208,11 @@ export type PauseOutcome =
  * max_assignments and nothing about who held the lead before or what they did
  * with it — the brief forbids surfacing that, and keeping it out of the type
  * means no later UI change can reach for it by accident.
+ *
+ * gross_annual_income (0089) is not an exception to that rule. It is OUR figure
+ * for the property, identical for every viewer, and says nothing about anybody
+ * who held the lead — which is exactly what an operator deciding whether to
+ * ring a pooled landlord should have.
  */
 export interface PoolLead {
   lead_id: string;
@@ -220,6 +225,8 @@ export interface PoolLead {
   bedrooms: string | null;
   postcode: string | null;
   desired_rent: string | null;
+  /** Stayful's projected gross annual STR revenue; null when not parsed (0089). */
+  gross_annual_income: number | null;
   /** Parsed enquiry date, or null where the free-text column would not parse. */
   enquiry_date: string | null;
   /** False when lead_age_days counts from ingest rather than the enquiry. */
@@ -260,6 +267,29 @@ export interface Lead {
   pool_first_entered_at: string | null;
   pool_expired_at: string | null;
   pool_entry_basis: "unassigned" | "ignored" | null;
+  /**
+   * Stayful's own projected gross annual short-term-let revenue for the
+   * property, read from the analysis PDF on the Monday item (0089). Null until
+   * parsed, and null forever on a lead whose item carries no readable report.
+   *
+   * NOT `LeadAssignment.income_estimate`, which is the OPERATOR'S own monthly
+   * figure. One is ours and the same for every holder; the other is theirs and
+   * differs between them. Never merge them or use one as a fallback for the
+   * other. Every range shown to a customer — gross and management fee, annual
+   * and monthly — derives from this single number in
+   * `src/lib/incomeProjection.ts`.
+   */
+  gross_annual_income: number | null;
+  income_report_status:
+    | "pending"
+    | "parsed"
+    | "no_report"
+    | "unparsed"
+    | "failed";
+  /** Monday asset id. Internal provenance only: never rendered, never a URL. */
+  income_report_asset_id: string | null;
+  income_report_parsed_at: string | null;
+  income_report_error: string | null;
   // GR-specific fields (null for management leads).
   last_contact: string | null;
   desired_rent: string | null;
@@ -613,5 +643,12 @@ export interface N8nLeadPayload {
   lead_profile?: string;
   bedrooms?: string;
   enquiry_date?: string;
+  /**
+   * The analysis PDF on the Monday item, attached by fetchMondayLeads only.
+   * `income_report_url` is a ONE-HOUR SIGNED LINK read once at ingest and never
+   * stored — no report is ever surfaced to a customer (0089).
+   */
+  income_report_asset_id?: string;
+  income_report_url?: string;
   [key: string]: unknown;
 }

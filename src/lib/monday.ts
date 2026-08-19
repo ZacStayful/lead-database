@@ -32,6 +32,52 @@ interface MondayItem {
   id: string;
   name: string;
   column_values: MondayColumnValue[];
+  /** Only requested by the management fetcher; see pickIncomeReportAsset. */
+  assets?: MondayAsset[] | null;
+}
+
+/**
+ * A file on a Monday item. `public_url` is a ONE-HOUR SIGNED S3 LINK: usable
+ * immediately, worthless later, and never to be stored. See incomeReport.ts —
+ * the analysis PDF is read for one number and discarded, and no report is ever
+ * surfaced to a customer.
+ */
+export interface MondayAsset {
+  id: string;
+  name: string;
+  public_url: string;
+}
+
+/** The analyser writes these; anything else on the item is somebody's upload. */
+const INCOME_REPORT_PREFIX = "Stayful_Property_Analysis";
+
+/**
+ * The income-analysis PDF on a Monday item, or null.
+ *
+ * Items accumulate files: a stale third-party valuation, a spreadsheet from
+ * before the analyser existed, and occasionally two analyses where the address
+ * was corrected and the report re-run. Highest asset id wins, because Monday
+ * ids ascend with upload time and the newest analysis is the one that describes
+ * the property as it was sold to us.
+ *
+ * Pure, so it can be exercised against the real shapes on the board without
+ * touching the network.
+ */
+export function pickIncomeReportAsset(
+  assets: MondayAsset[] | null | undefined
+): MondayAsset | null {
+  if (!assets?.length) return null;
+  const pdfs = assets.filter((a) => a.name?.toLowerCase().endsWith(".pdf"));
+  if (!pdfs.length) return null;
+
+  const newest = (list: MondayAsset[]) =>
+    list.reduce((best, a) => (Number(a.id) > Number(best.id) ? a : best));
+
+  // Prefer a report the analyser generated. Falling back to any PDF keeps a
+  // hand-attached analysis working; the parser's own cross-checks are what stop
+  // an unrelated document producing a figure.
+  const analyser = pdfs.filter((a) => a.name.startsWith(INCOME_REPORT_PREFIX));
+  return newest(analyser.length ? analyser : pdfs);
 }
 
 function textFor(item: MondayItem, columnId: string): string {
@@ -639,11 +685,14 @@ export async function fetchMondayLeads(): Promise<N8nLeadPayload[]> {
 
   // Paginate through the board (100 items/page) until exhausted.
   do {
+    // `assets` rides along on the page read the sync already does, so the
+    // income report costs no extra HTTP. public_url is signed for an hour and
+    // is used immediately by ingest; it is never stored.
     const query = cursor
-      ? `query { next_items_page(limit: 100, cursor: "${cursor}") { cursor items { id name column_values(ids: ${JSON.stringify(
+      ? `query { next_items_page(limit: 100, cursor: "${cursor}") { cursor items { id name assets { id name public_url } column_values(ids: ${JSON.stringify(
           columnIds
         )}) { id text } } } }`
-      : `query { boards(ids: ${boardId()}) { items_page(limit: 100) { cursor items { id name column_values(ids: ${JSON.stringify(
+      : `query { boards(ids: ${boardId()}) { items_page(limit: 100) { cursor items { id name assets { id name public_url } column_values(ids: ${JSON.stringify(
           columnIds
         )}) { id text } } } } }`;
 
@@ -685,6 +734,8 @@ export async function fetchMondayLeads(): Promise<N8nLeadPayload[]> {
       // Only ingest items marked as sellable.
       if (textFor(item, COLUMN_MAP.status) !== SELLABLE_STATUS) continue;
 
+      const report = pickIncomeReportAsset(item.assets);
+
       leads.push({
         monday_item_id: item.id,
         lead_name: item.name,
@@ -694,12 +745,52 @@ export async function fetchMondayLeads(): Promise<N8nLeadPayload[]> {
         address: textFor(item, COLUMN_MAP.address),
         bedrooms: textFor(item, COLUMN_MAP.bedrooms),
         enquiry_date: textFor(item, COLUMN_MAP.enquiry_date),
+        income_report_asset_id: report?.id,
+        income_report_url: report?.public_url,
       });
     }
   } while (cursor);
 
   return leads;
 }
+
+/**
+ * The current income-analysis PDF for each of a batch of Monday items.
+ *
+ * For the sweep (/api/cron/parse-income-reports), which works from leads
+ * already in the database and so has no board page to ride along on. Missing
+ * items map to null rather than being absent, so the caller can record
+ * "no report" for an item that has been deleted from the board without
+ * treating it as a transient failure.
+ *
+ * Built on mondayGraphql, so it inherits the 8s timeout — the sweep runs under
+ * a wall-clock budget and must not be able to hang on one bad batch. Throws on
+ * transport, HTTP and GraphQL failures; the caller decides what that means.
+ */
+export async function fetchIncomeReportAssets(
+  itemIds: string[]
+): Promise<Map<string, MondayAsset | null>> {
+  const out = new Map<string, MondayAsset | null>();
+  if (!itemIds.length) return out;
+
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) throw new Error("Missing MONDAY_API_TOKEN");
+
+  const data = await mondayGraphql<{
+    items?: { id: string; assets?: MondayAsset[] | null }[] | null;
+  }>(
+    token,
+    `query ($ids: [ID!]) { items(ids: $ids) { id assets { id name public_url } } }`,
+    { ids: itemIds }
+  );
+
+  for (const id of itemIds) out.set(id, null);
+  for (const item of data.items ?? []) {
+    out.set(String(item.id), pickIncomeReportAsset(item.assets));
+  }
+  return out;
+}
+
 
 /**
  * Pull sellable guaranteed-rent leads from the GR Monday board and map each to

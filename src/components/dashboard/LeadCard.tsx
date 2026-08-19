@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn, initials, formatDate, formatGBP, formatLeadAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
+import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
 import type { AssignmentWithLead } from "@/lib/types";
 import {
   BarChart3,
@@ -194,6 +195,7 @@ export function LeadCard({
               value={formatDate(assignment.assigned_at)}
             />
           </div>
+          <IncomeProjection lead={lead} className="mt-3" />
           {lead.lead_profile && (
             <div className="mt-3 rounded-md bg-muted/50 p-3 text-sm">
               <p className="mb-1 font-medium text-muted-foreground">
