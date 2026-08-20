@@ -32,7 +32,12 @@ export function IncomeProjection({
   variant = "full",
   className,
 }: {
-  lead: { lead_type: LeadType; gross_annual_income: number | null };
+  lead: {
+    lead_type: LeadType;
+    gross_annual_income: number | null;
+    avg_nightly_rate: number | null;
+    occupancy_rate: number | null;
+  };
   variant?: "full" | "compact";
   className?: string;
 }) {
@@ -46,6 +51,16 @@ export function IncomeProjection({
   const feeYear = `${formatGBP(p.feeAnnualLow)} – ${formatGBP(p.feeAnnualHigh)}`;
   const feeMonth = `${formatGBP(p.feeMonthlyLow)} – ${formatGBP(p.feeMonthlyHigh)}`;
 
+  // The two figures the gross is built from (0090): rate x 365 x occupancy IS
+  // the number above, which is why this reads as an explanation rather than two
+  // more statistics. Both or neither — a rate without the occupancy it was
+  // measured at is not something an operator can act on, and the parser only
+  // ever stores them as a corroborated pair.
+  const basis =
+    lead.avg_nightly_rate != null && lead.occupancy_rate != null
+      ? `${formatGBP(lead.avg_nightly_rate)} a night at ${lead.occupancy_rate}% occupancy`
+      : null;
+
   if (variant === "compact") {
     return (
       <div className={className}>
@@ -56,8 +71,9 @@ export function IncomeProjection({
           <span className="font-medium">{feeYear}</span>
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Based on a {MANAGEMENT_FEE_LABEL}, shown 10% either side of Stayful&rsquo;s
-          estimate for this property.
+          {basis ? <>Based on {basis}. </> : null}
+          Fee assumes a {MANAGEMENT_FEE_LABEL}; both shown 10% either side of
+          Stayful&rsquo;s estimate for this property.
         </p>
       </div>
     );
@@ -79,6 +95,13 @@ export function IncomeProjection({
           <p className="text-xs text-muted-foreground">{feeMonth} a month</p>
         </div>
       </div>
+      {basis && (
+        <p className="mt-3 text-sm">
+          <span className="text-muted-foreground">Based on</span>{" "}
+          <span className="font-medium">{basis}</span>
+          <span className="text-muted-foreground">.</span>
+        </p>
+      )}
       <p className="mt-3 text-xs text-muted-foreground">
         Management revenue is based on a {MANAGEMENT_FEE_LABEL}. Gross is
         Stayful&rsquo;s short-term-let projection for this property, shown as a range
