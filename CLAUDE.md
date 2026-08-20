@@ -2271,8 +2271,8 @@ either side of the estimate, and beside it what that property earns a
 
 **Live coverage, measured over the whole book at backfill:** of 170 management
 leads, **149 parsed, 21 carry no analysis on their Monday item, 0 unparsed, 0
-failed**. Of those 149, **137 also carry a nightly rate and occupancy**; the
-other 12 are explained below. Gross ranges from £9,573 to £149,283 (median
+failed**. All 149 carry a nightly rate and occupancy; **137 of those reconcile with
+the gross** and are worded as its basis, the other 12 as comparables (below). Gross ranges from £9,573 to £149,283 (median
 £39,614); nightly rate £57–£755 (median £180); occupancy 33%–85% (median 60%).
 
 ### The report is not part of the product
@@ -2304,30 +2304,43 @@ publishes the gross with these two null rather than failing the lead, and
 fourth figure can never be added to the type and forgotten in one of them.
 
 **Both or neither.** A rate without the occupancy it was measured at is not a
-fact an operator can use, and half a pair cannot be corroborated at all.
+fact an operator can use.
 
-#### Why 12 of 149 leads carry a gross but no basis line
+#### The identity picks the WORDING, not whether to store *(0091)*
 
-The identity is the third cross-check: the pair is stored only when
-`rate × 365 × occupancy` reproduces the stored gross within **2%** (worst
-accepted drift on live data: 1.82%). Twelve reports miss it, by 4% to 143%.
+`rate × 365 × occupancy` reproduces the stated gross within **2%** on 137 of
+149 live leads (0.00%–1.82%, average 0.55%). The next one up is **4.3%**, and
+the rest run to 143% — the two populations are cleanly separated, so the test
+detects something real about the document rather than drawing an arbitrary
+line.
 
-They are not mis-parses — the regexes read exactly what the headline prints.
-The nightly rate is captioned **"ADR across comp set"**, so it is the
-comparable set's average, not necessarily what the analyser projected for this
-property; where the two diverge (an unusual size or sleeps count against its
-comps), the arithmetic genuinely does not close. `Stayful_Property_Analysis_
-Market_Place__Burslem` is the extreme: £145 a night at 44% implies £23,287
-against a stated gross of £9,573.
+0090 used it as a storage gate and stored nothing on the twelve that miss.
+That was the right instinct on the wrong lever: the report states those numbers
+either way, and an operator opening one of those leads saw the money with
+nothing behind it. What actually varies is whether the pair can be called the
+basis of the gross. So `incomeBasis()` in `incomeProjection.ts` applies the
+test at render time and picks between two wordings:
 
-Printing "£145 a night at 44% occupancy" directly above "£8,616 – £10,530 a
-year" would be visibly self-contradictory to any operator who multiplied it
-out, so those leads show the gross alone. **Do not loosen the tolerance to
-raise coverage** — the whole value of the line is that it reconciles.
+| | |
+|---|---|
+| reconciles (137) | *Based on £157 a night at 63% occupancy.* |
+| does not (12) | *Comparable properties average £116 a night at 54% occupancy.* |
 
-The same check is what stops the **wrong** pair being stored: the "Comparable
-Properties" page carries its own Avg Nightly Rate and Avg Occupancy for the
-comp set, real numbers describing a different thing, and they miss by ~12%.
+Both are true. The report captions its nightly rate **"ADR across comp set"** —
+it is the comparable set's average, and usually the analyser prices the
+property at that rate so the arithmetic closes. Where the property is unusual
+against its comps it does not, and the second wording is then the honest
+reading. `Stayful_Property_Analysis_Market_Place__Burslem` is the extreme:
+£145 a night at 44% against a stated gross of £9,573 — a property that
+genuinely underperforms its comparables, which is worth an operator knowing.
+
+**Do not restore the storage gate.** Hiding a figure the document states, to
+protect a sentence we chose to write, is the wrong way round.
+
+The identity was never the primary defence against reading the **wrong** pair,
+which is the objection this invites: the "Comparable Properties" page prints
+`Avg Nightly Rate` and `Avg Occupancy`, while the anchors are `ADR across` and
+`Market average`, which appear only in the headline block and cannot match it.
 
 #### ⚠️ The headline labels are letter-spaced and unmatchable
 
@@ -2398,9 +2411,9 @@ then refuses to publish unless **two** independent cross-checks hold:
    `annual / 6.667` (1% tolerance) — the line that catches the analyser changing
    what it means by gross, before a customer does.
 
-A third check covers the rate and occupancy (above). A wrong income figure is
-worse than no figure, because an operator prices a call on it. The parser never
-throws; every failure becomes a status.
+A wrong income figure is worse than no figure, because an operator prices a
+call on it. The parser never throws; every failure becomes a status. The rate
+and occupancy are reported as stated and judged at render time (above).
 
 ### The status column, and why it is not just "is the figure null"
 
@@ -2524,7 +2537,10 @@ parser went through **33** cases, among them the regression guard that every
 current report still yields a gross, the identity holding on everything
 published, and the comp-set pair being rejected. The backfill then asserted, on
 live data, that no lead has half a pair (0), none has a rate without a gross
-(0), and all 149 gross figures survived untouched.
+(0), and all 149 gross figures survived untouched. 0091 moved the identity to
+render time and went through **16** further cases — Barry Arnould and Burslem
+returning their figures while never being called the basis, the 1.82%
+worst-accepted case still reconciling, and the gross path unchanged.
 
 `buildIncomeProjection` and `pickIncomeReportAsset` went through **22** cases,
 including the three real multi-asset shapes on the live board

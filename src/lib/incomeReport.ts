@@ -7,8 +7,10 @@
  * read for three numbers, and discarded.
  *
  * A MIS-PARSE MUST FAIL SILENT. A wrong income figure is worse than no figure,
- * because an operator prices a call on it — so nothing is published that the
- * document does not corroborate, and this never throws.
+ * because an operator prices a call on it — so the gross is published only when
+ * the document corroborates it twice, and this never throws. The rate and
+ * occupancy are reported as stated; whether they reconcile with the gross is a
+ * question about wording, and belongs at render time.
  *
  * ---------------------------------------------------------------------------
  * WHY THE ANCHORS LOOK BACK-TO-FRONT
@@ -69,16 +71,7 @@ const OCCUPANCY_RE = /(\d+)\s*%\s+Market\s+average\s+(\d+)\s*%/i;
 const MONTHLY_TOLERANCE = 0.02;
 /** The report's own fee line must agree with gross / 6.667. */
 const FEE_TOLERANCE = 0.01;
-/**
- * rate x 365 x occupancy must reproduce the gross. Worst drift observed across
- * the sample is 0.92%, so 2% is roughly double the real spread — tight enough
- * to reject the "Comparable Properties" page's own rate and occupancy, which
- * describe the comp set rather than this property and miss by about 12%.
- */
-const RATE_OCCUPANCY_TOLERANCE = 0.02;
-
 const MANAGEMENT_FEE_DIVISOR = 6.667;
-const NIGHTS_PER_YEAR = 365;
 
 /** What a report yields. Nulls throughout mean "the document did not say". */
 export interface ParsedIncomeReport {
@@ -166,26 +159,31 @@ export async function parseIncomeReport(
 
   return {
     grossAnnualIncome: annual,
-    ...parseRateAndOccupancy(flat, annual),
+    ...parseRateAndOccupancy(flat),
   };
 }
 
 /**
- * The nightly rate and occupancy, but only if their product reproduces the
- * gross we already trust.
+ * The nightly rate and occupancy the report states.
  *
- * Cross-check 3, and the one that decides WHICH pair of numbers we picked up.
- * The report's "Comparable Properties" page states its own average rate and
- * occupancy for the comp set — real numbers describing a different thing — and
- * a pattern that drifted onto them would look entirely plausible. They miss
- * this identity by around 12%.
+ * WHAT THIS DOES NOT DO IS CHECK THE ARITHMETIC. It used to: the pair was
+ * dropped unless `rate × 365 × occupancy` reproduced the gross within 2%. That
+ * hid the figures on 12 of 149 live leads, and it was the wrong place for the
+ * test — the report states these numbers whether or not they multiply out, and
+ * "the report says X" is a different claim from "the gross was derived from X".
+ * `incomeBasis()` in incomeProjection.ts now makes that distinction at render
+ * time, which is where the wording lives. See §25.
+ *
+ * The identity was never the primary defence against reading the WRONG pair
+ * either. The "Comparable Properties" page prints `Avg Nightly Rate` and
+ * `Avg Occupancy`; the anchors here are `ADR across` and `Market average`,
+ * which appear only in the headline block and cannot match it.
  *
  * Both or neither: a rate without the occupancy it was measured at is not a
- * fact an operator can use, and half a pair cannot be corroborated at all.
+ * fact an operator can use.
  */
 function parseRateAndOccupancy(
-  flat: string,
-  grossAnnualIncome: number
+  flat: string
 ): Pick<ParsedIncomeReport, "avgNightlyRate" | "occupancyRate"> {
   const none = { avgNightlyRate: null, occupancyRate: null };
 
@@ -196,16 +194,10 @@ function parseRateAndOccupancy(
   const rate = toNumber(rateMatch[1]);
   const occupancy = toNumber(occMatch[1]);
   if (!Number.isFinite(rate) || rate <= 0) return none;
+  // 0% is a real value the report prints for the MARKET average when there are
+  // no comparable listings; it is never the property's own projected occupancy,
+  // and a zero here would render "at 0% occupancy" beside a five-figure gross.
   if (!Number.isFinite(occupancy) || occupancy <= 0 || occupancy > 100) return none;
-
-  const implied = rate * NIGHTS_PER_YEAR * (occupancy / 100);
-  const drift = Math.abs(implied - grossAnnualIncome) / grossAnnualIncome;
-  if (drift > RATE_OCCUPANCY_TOLERANCE) {
-    console.error(
-      `parseIncomeReport: £${rate} a night at ${occupancy}% implies ${Math.round(implied)}, not ${grossAnnualIncome} — dropping both`
-    );
-    return none;
-  }
 
   return { avgNightlyRate: rate, occupancyRate: occupancy };
 }
