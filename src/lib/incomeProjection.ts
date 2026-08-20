@@ -31,6 +31,20 @@ export const MANAGEMENT_FEE_DIVISOR = 6.667;
 /** The single wording for the assumption. Shown wherever the fee figure is. */
 export const MANAGEMENT_FEE_LABEL = "15% management fee";
 
+/** Nights in the year the analyser prices against. */
+const NIGHTS_PER_YEAR = 365;
+
+/**
+ * How close `rate × 365 × occupancy` must land to the stated gross before we
+ * describe the pair as what the gross is BASED ON.
+ *
+ * Not a publish gate — it only picks the wording. On live data the two
+ * populations are cleanly separated: 137 reports land between 0.00% and 1.82%,
+ * and the next one up is 4.3%. So this is reading a real property of the
+ * document rather than drawing an arbitrary line.
+ */
+const BASIS_RECONCILES_TOLERANCE = 0.02;
+
 export interface IncomeProjection {
   /** Projected gross revenue for the property, ±10%. */
   grossAnnualLow: number;
@@ -46,6 +60,28 @@ export interface IncomeProjection {
 
 type LeadIncomeFields = Pick<Lead, "gross_annual_income">;
 
+type LeadBasisFields = Pick<
+  Lead,
+  "gross_annual_income" | "avg_nightly_rate" | "occupancy_rate"
+>;
+
+export interface IncomeBasis {
+  nightlyRate: number;
+  occupancyPct: number;
+  /**
+   * True when the two figures actually produce the gross above them.
+   *
+   * The report captions its nightly rate "ADR across comp set" — it is the
+   * comparable set's average. Usually the analyser prices the property at that
+   * rate too, and the arithmetic closes; sometimes the property is unusual
+   * against its comps and it does not. Both are worth showing an operator, but
+   * only the first can honestly be called the basis of the gross, so the caller
+   * words them differently. Never suppress the figures on this: the report
+   * states them either way.
+   */
+  reconciles: boolean;
+}
+
 /**
  * Null when there is no trustworthy figure — callers render nothing rather
  * than a zero or an em dash. A lead with no parsed analysis should look like a
@@ -55,6 +91,26 @@ type LeadIncomeFields = Pick<Lead, "gross_annual_income">;
  * round(annual / 12), so storing it would buy a second source of truth for
  * nothing.
  */
+export function incomeBasis(
+  lead: LeadBasisFields | null | undefined
+): IncomeBasis | null {
+  const rate = Number(lead?.avg_nightly_rate);
+  const occupancyPct = Number(lead?.occupancy_rate);
+  const gross = Number(lead?.gross_annual_income);
+  // Both or neither, and a rate is only meaningful beside the gross it explains.
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  if (!Number.isFinite(occupancyPct) || occupancyPct <= 0) return null;
+  if (!Number.isFinite(gross) || gross <= 0) return null;
+
+  const implied = rate * NIGHTS_PER_YEAR * (occupancyPct / 100);
+  return {
+    nightlyRate: Math.round(rate),
+    occupancyPct: Math.round(occupancyPct),
+    reconciles:
+      Math.abs(implied - gross) / gross <= BASIS_RECONCILES_TOLERANCE,
+  };
+}
+
 export function buildIncomeProjection(
   lead: LeadIncomeFields | null | undefined
 ): IncomeProjection | null {

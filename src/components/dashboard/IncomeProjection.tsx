@@ -2,6 +2,7 @@ import { formatGBP } from "@/lib/utils";
 import {
   MANAGEMENT_FEE_LABEL,
   buildIncomeProjection,
+  incomeBasis,
 } from "@/lib/incomeProjection";
 import type { LeadType } from "@/lib/types";
 
@@ -51,15 +52,19 @@ export function IncomeProjection({
   const feeYear = `${formatGBP(p.feeAnnualLow)} – ${formatGBP(p.feeAnnualHigh)}`;
   const feeMonth = `${formatGBP(p.feeMonthlyLow)} – ${formatGBP(p.feeMonthlyHigh)}`;
 
-  // The two figures the gross is built from (0090): rate x 365 x occupancy IS
-  // the number above, which is why this reads as an explanation rather than two
-  // more statistics. Both or neither — a rate without the occupancy it was
-  // measured at is not something an operator can act on, and the parser only
-  // ever stores them as a corroborated pair.
-  const basis =
-    lead.avg_nightly_rate != null && lead.occupancy_rate != null
-      ? `${formatGBP(lead.avg_nightly_rate)} a night at ${lead.occupancy_rate}% occupancy`
-      : null;
+  // The nightly rate and occupancy the report states (0090).
+  //
+  // TWO WORDINGS, ONE RULE. Where rate x 365 x occupancy actually produces the
+  // gross above, the pair IS what that number is built from and gets said so.
+  // Where it does not, the report's own caption is the honest reading — its
+  // nightly rate is captioned "ADR across comp set", so on a property that
+  // prices unlike its comparables the figures describe the comp set rather than
+  // the projection. Both are worth an operator's attention; only one of them
+  // can claim to explain the money above it.
+  const b = incomeBasis(lead);
+  const figures = b
+    ? `${formatGBP(b.nightlyRate)} a night at ${b.occupancyPct}% occupancy`
+    : null;
 
   if (variant === "compact") {
     return (
@@ -71,7 +76,12 @@ export function IncomeProjection({
           <span className="font-medium">{feeYear}</span>
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {basis ? <>Based on {basis}. </> : null}
+          {figures ? (
+            <>
+              {b?.reconciles ? "Based on" : "Comparable properties average"}{" "}
+              {figures}.{" "}
+            </>
+          ) : null}
           Fee assumes a {MANAGEMENT_FEE_LABEL}; both shown 10% either side of
           Stayful&rsquo;s estimate for this property.
         </p>
@@ -95,10 +105,12 @@ export function IncomeProjection({
           <p className="text-xs text-muted-foreground">{feeMonth} a month</p>
         </div>
       </div>
-      {basis && (
+      {figures && (
         <p className="mt-3 text-sm">
-          <span className="text-muted-foreground">Based on</span>{" "}
-          <span className="font-medium">{basis}</span>
+          <span className="text-muted-foreground">
+            {b?.reconciles ? "Based on" : "Comparable properties average"}
+          </span>{" "}
+          <span className="font-medium">{figures}</span>
           <span className="text-muted-foreground">.</span>
         </p>
       )}
