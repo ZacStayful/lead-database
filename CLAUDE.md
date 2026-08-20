@@ -2271,8 +2271,9 @@ either side of the estimate, and beside it what that property earns a
 
 **Live coverage, measured over the whole book at backfill:** of 170 management
 leads, **149 parsed, 21 carry no analysis on their Monday item, 0 unparsed, 0
-failed**. That is 262 of 293 delivered assignments and 9 of the 13 leads in the
-management pool. Gross ranges from £9,573 to £149,283, median £39,614.
+failed**. Of those 149, **137 also carry a nightly rate and occupancy**; the
+other 12 are explained below. Gross ranges from £9,573 to £149,283 (median
+£39,614); nightly rate £57–£755 (median £180); occupancy 33%–85% (median 60%).
 
 ### The report is not part of the product
 
@@ -2282,6 +2283,69 @@ number, discarded. A stored copy would be dead within the hour, and a live
 fetch would hand the customer the whole analysis, which is not what is sold.
 `leads.income_report_asset_id` is an opaque id, never rendered and never a link;
 it exists only so the sweep can skip a report it has already read.
+
+### The nightly rate and occupancy behind it *(0090)*
+
+The same headline block states the property's **average nightly rate** and its
+**occupancy rate**, and `rate × 365 × occupancy` **is** the gross figure. Both
+are stored on `leads` — `avg_nightly_rate` in whole pounds, `occupancy_rate` as
+the percentage printed (63, not 0.63) — and shown as one supporting line under
+the ranges: *"Based on £157 a night at 63% occupancy."* No range on either;
+they are point figures the report states.
+
+They ride on `income_report_status`. A second status column would be a second
+source of truth about a single parse.
+
+**They fail alone, and that is the whole design.** `gross_annual_income` is
+live on leads customers already read; losing it because a nightly rate could
+not be found would trade a working figure for a missing one. So the parser
+publishes the gross with these two null rather than failing the lead, and
+`NO_FIGURES` in `incomeReport.ts` is spread into every failure branch so a
+fourth figure can never be added to the type and forgotten in one of them.
+
+**Both or neither.** A rate without the occupancy it was measured at is not a
+fact an operator can use, and half a pair cannot be corroborated at all.
+
+#### Why 12 of 149 leads carry a gross but no basis line
+
+The identity is the third cross-check: the pair is stored only when
+`rate × 365 × occupancy` reproduces the stored gross within **2%** (worst
+accepted drift on live data: 1.82%). Twelve reports miss it, by 4% to 143%.
+
+They are not mis-parses — the regexes read exactly what the headline prints.
+The nightly rate is captioned **"ADR across comp set"**, so it is the
+comparable set's average, not necessarily what the analyser projected for this
+property; where the two diverge (an unusual size or sleeps count against its
+comps), the arithmetic genuinely does not close. `Stayful_Property_Analysis_
+Market_Place__Burslem` is the extreme: £145 a night at 44% implies £23,287
+against a stated gross of £9,573.
+
+Printing "£145 a night at 44% occupancy" directly above "£8,616 – £10,530 a
+year" would be visibly self-contradictory to any operator who multiplied it
+out, so those leads show the gross alone. **Do not loosen the tolerance to
+raise coverage** — the whole value of the line is that it reconciles.
+
+The same check is what stops the **wrong** pair being stored: the "Comparable
+Properties" page carries its own Avg Nightly Rate and Avg Occupancy for the
+comp set, real numbers describing a different thing, and they miss by ~12%.
+
+#### ⚠️ The headline labels are letter-spaced and unmatchable
+
+In the PDF's text layer `AVG NIGHTLY RATE` comes out as
+`AVG N I G H T LY R AT E`, with the spacing irregular enough (`LY`, `AT`) that
+a tolerant pattern would be guesswork. Every anchor therefore reads the
+**plain-rendered caption that follows the value** and captures backwards —
+`£157 ADR across`, `63% Market average 62%`.
+
+The gross figure escapes this only because the *Revenue Breakdown* table on a
+later page prints it in ordinary title case, which is what `GROSS_RE` matches.
+It never matched the headline. Anchoring on the obvious label is the thing that
+does not work here.
+
+The occupancy regex captures the market average as its second group and throws
+it away: it was not asked for, and one live report states it as **0%** (no
+comparable listings nearby) while its own figures are perfectly good, so
+nothing may depend on it.
 
 ### `gross_annual_income` is OURS. `income_estimate` is THEIRS.
 
@@ -2324,7 +2388,7 @@ one, `text` where this is numeric, and its name reads as the operator's figure.
 
 ### A mis-parse must fail silent
 
-`parseGrossAnnualIncome()` matches `Gross Revenue £<annual> £<monthly>` — the
+`parseIncomeReport()` matches `Gross Revenue £<annual> £<monthly>` — the
 headline block and the "Revenue Breakdown" table both print it, and they agree —
 then refuses to publish unless **two** independent cross-checks hold:
 
@@ -2334,8 +2398,9 @@ then refuses to publish unless **two** independent cross-checks hold:
    `annual / 6.667` (1% tolerance) — the line that catches the analyser changing
    what it means by gross, before a customer does.
 
-A wrong income figure is worse than no figure, because an operator prices a call
-on it. The parser never throws; every failure becomes a status.
+A third check covers the rate and occupancy (above). A wrong income figure is
+worse than no figure, because an operator prices a call on it. The parser never
+throws; every failure becomes a status.
 
 ### The status column, and why it is not just "is the figure null"
 
@@ -2451,6 +2516,15 @@ an invalid value; the partial index confirmed; `get_customer_pool_leads`
 confirmed to still be `service_role`-only after **both** drop/recreates (the §11
 ACL trap) and driven against seeded rows to confirm the figure and a null pass
 through.
+
+0090 was applied to a scratch Postgres and to production; its occupancy CHECK
+was exercised on 101, −1, 0, 100 and null, and `get_customer_pool_leads`
+confirmed `service_role`-only after a **third** drop/recreate. The extended
+parser went through **33** cases, among them the regression guard that every
+current report still yields a gross, the identity holding on everything
+published, and the comp-set pair being rejected. The backfill then asserted, on
+live data, that no lead has half a pair (0), none has a rate without a gross
+(0), and all 149 gross figures survived untouched.
 
 `buildIncomeProjection` and `pickIncomeReportAsset` went through **22** cases,
 including the three real multi-asset shapes on the live board

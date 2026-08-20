@@ -348,6 +348,8 @@ async function attachIncomeProjection(
     }
     // Keep the in-memory row honest for anything downstream in this request.
     lead.gross_annual_income = outcome.grossAnnualIncome;
+    lead.avg_nightly_rate = outcome.avgNightlyRate;
+    lead.occupancy_rate = outcome.occupancyRate;
     lead.income_report_status = outcome.status;
   } catch (err) {
     console.error("Income report parse failed", lead.id, err);

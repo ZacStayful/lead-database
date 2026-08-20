@@ -227,6 +227,9 @@ export interface PoolLead {
   desired_rent: string | null;
   /** Stayful's projected gross annual STR revenue; null when not parsed (0089). */
   gross_annual_income: number | null;
+  /** The nightly rate and occupancy that figure is built from (0090). */
+  avg_nightly_rate: number | null;
+  occupancy_rate: number | null;
   /** Parsed enquiry date, or null where the free-text column would not parse. */
   enquiry_date: string | null;
   /** False when lead_age_days counts from ingest rather than the enquiry. */
@@ -280,6 +283,16 @@ export interface Lead {
    * `src/lib/incomeProjection.ts`.
    */
   gross_annual_income: number | null;
+  /**
+   * The two figures behind the gross: the property's average nightly rate in
+   * whole pounds, and its occupancy as the percentage the report prints (63,
+   * not 0.63). Stored only when `rate x 365 x occupancy` reproduces
+   * `gross_annual_income` — see 0090 — so they are null both when the report
+   * does not state them and when the pair could not be corroborated. Either
+   * way the gross figure stands on its own.
+   */
+  avg_nightly_rate: number | null;
+  occupancy_rate: number | null;
   income_report_status:
     | "pending"
     | "parsed"
