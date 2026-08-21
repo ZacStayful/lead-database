@@ -2369,6 +2369,35 @@ A storage error **never costs the figures**: it logs, returns an empty patch,
 and the gross, rate and occupancy publish regardless — the same "they fail
 alone" rule §25 already applies to the rate and occupancy.
 
+#### ⚠️ pdf.js DETACHES the buffer you hand it
+
+`getDocumentProxy` takes ownership of the `Uint8Array` and detaches its
+`ArrayBuffer`, so anything wanting the bytes **after** parsing must copy first.
+`parseIncomeReport` therefore passes `bytes.slice()`, and the copy lives inside
+the parser rather than at the call site: the parser is the destructive consumer,
+so not destroying its caller's data is its job, and doing it there makes
+"parsing does not consume what you passed in" true for every future caller.
+
+This shipped broken and reached production. `resolveIncomeReport` parsed first
+and returned `bytes` afterwards, by which point it was empty — so the first
+backfill wrote **159 zero-byte PDFs**, each recorded as a stored report an
+operator could open. The figures were all correct, because they are read before
+the detach; only the file was empty, which is what made it look like a rendering
+problem rather than a storage one.
+
+`syncStoredReport` now **refuses to upload a zero-length buffer**, which is what
+turns this class of failure loud. A 0-byte analysis is never a legitimate state,
+and leaving the columns null keeps the row in the backfill queue.
+
+**Why the tests missed it, which is the part worth keeping.**
+`syncStoredReport` was exercised over all four outcomes with *synthetic*
+outcomes carrying fake byte arrays, and the parser over 24 real PDFs for the
+figures it returns. Neither ever ran a real document through parse-**then**-
+upload, so the bug sat in the seam between two well-tested pieces — the same
+shape as the `items(ids:)` pagination trap below and §23.10's failure-path
+cluster. The regression test now asserts that what `resolveIncomeReport` hands
+on is byte-identical to what it downloaded and still begins `%PDF-`.
+
 #### The third sweep pass, and why there was no one-off backfill
 
 159 leads were already `parsed` when this shipped, and neither of the sweep's

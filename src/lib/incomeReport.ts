@@ -181,7 +181,17 @@ export async function parseIncomeReport(
     // Imported lazily so the parser is only pulled into a lambda that actually
     // reads a PDF — the ingest path reaches this on new leads only.
     const { extractText, getDocumentProxy } = await import("unpdf");
-    const doc = await getDocumentProxy(bytes);
+    // ⚠️ A COPY, NOT `bytes`. pdf.js takes ownership of the array it is given
+    // and DETACHES its ArrayBuffer, so the caller's `bytes` comes back with
+    // byteLength 0 once this returns. That silently uploaded 159 empty PDFs
+    // (0092) — the figures parsed fine, because they are read before the
+    // detach, and only the stored file was empty.
+    //
+    // The copy belongs HERE rather than at the call site: this function is the
+    // destructive consumer, so not destroying its caller's data is its job, and
+    // doing it here makes "parsing does not consume what you passed in" true
+    // for every future caller instead of something each one has to remember.
+    const doc = await getDocumentProxy(bytes.slice());
     const { text } = await extractText(doc, { mergePages: true });
     flat = flatten(Array.isArray(text) ? text.join(" ") : text);
   } catch (err) {

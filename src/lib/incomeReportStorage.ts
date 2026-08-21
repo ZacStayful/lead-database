@@ -77,6 +77,16 @@ export async function syncStoredReport({
     if (outcome.status === "failed") return {};
 
     if (outcome.status === "parsed" && outcome.bytes) {
+      // A 0-byte analysis is never a legitimate state, so refuse rather than
+      // store one. This is the check that would have made the detached-buffer
+      // bug loud instead of silent: 159 empty PDFs were written, each one
+      // recorded as a stored report the operator could open, and nothing
+      // complained. Leaving the columns null keeps the row in the backfill
+      // queue so the next run retries it.
+      if (outcome.bytes.byteLength === 0) {
+        console.error("syncStoredReport: refusing to store an empty report", leadId);
+        return {};
+      }
       const path = reportObjectPath(leadId);
       const { error } = await admin.storage
         .from(LEAD_REPORTS_BUCKET)
