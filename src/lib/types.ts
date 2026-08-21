@@ -112,6 +112,16 @@ export interface Customer {
   sms_alerts_enabled: boolean;
   // Per-stream notification opt-in flags (jsonb, NOT NULL, all default true).
   notification_preferences: NotificationPreferences;
+  /**
+   * The operator's own half of the income presentation (0093): fee, contract
+   * terms and process, applied to every lead's presentation. Validated against
+   * a key whitelist in src/lib/presentationSettings.ts. Never contains anything
+   * read from a lead — in particular not the report's 15% management fee, which
+   * is Stayful's and not theirs.
+   */
+  presentation_settings: unknown;
+  /** NULL means never set up, which is what the dashboard prompts on. */
+  presentation_settings_updated_at: string | null;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).
@@ -230,6 +240,13 @@ export interface PoolLead {
   /** The nightly rate and occupancy that figure is built from (0090). */
   avg_nightly_rate: number | null;
   occupancy_rate: number | null;
+  /**
+   * Whether the analysis PDF is stored for this lead (0092). A flag, not the
+   * storage key: the download route is keyed on the lead id and the pool row
+   * set carries the minimum it can.
+   */
+  has_income_report: boolean;
+  income_report_size_bytes: number | null;
   /** Parsed enquiry date, or null where the free-text column would not parse. */
   enquiry_date: string | null;
   /** False when lead_age_days counts from ingest rather than the enquiry. */
@@ -286,13 +303,26 @@ export interface Lead {
   /**
    * The two figures behind the gross: the property's average nightly rate in
    * whole pounds, and its occupancy as the percentage the report prints (63,
-   * not 0.63). Stored only when `rate x 365 x occupancy` reproduces
-   * `gross_annual_income` — see 0090 — so they are null both when the report
-   * does not state them and when the pair could not be corroborated. Either
-   * way the gross figure stands on its own.
+   * not 0.63). Stored whenever the report states them (0091 — an earlier rule
+   * stored them only where `rate x 365 x occupancy` reproduced the gross, which
+   * hid figures the document plainly prints). Whether they reconcile decides
+   * the WORDING at render time, in `incomeBasis()`, not whether they exist.
+   * Null only when the report does not state them, and the gross figure stands
+   * on its own either way.
    */
   avg_nightly_rate: number | null;
   occupancy_rate: number | null;
+  /**
+   * The stored analysis PDF (0092): its object key in the lead-reports bucket,
+   * and its size for the download link's label. Null together when nothing is
+   * stored.
+   *
+   * The path is server-side only — it is never rendered and never handed to the
+   * browser. Operators reach the report through /api/leads/[id]/report, which
+   * authorises them and redirects to a short-lived signed URL.
+   */
+  income_report_path: string | null;
+  income_report_size_bytes: number | null;
   income_report_status:
     | "pending"
     | "parsed"

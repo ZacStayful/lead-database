@@ -18,6 +18,7 @@ import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
+import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import type {
   AssignmentWithLead,
   ClientLeadEventType,
@@ -50,6 +51,7 @@ export function LeadDetail({
   prevLeadId,
   nextLeadId,
   signedCountBefore,
+  presentationConfigured,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -59,6 +61,8 @@ export function LeadDetail({
   prevLeadId: string | null;
   nextLeadId: string | null;
   signedCountBefore: number;
+  /** False when the operator has never set their presentation terms up (§26). */
+  presentationConfigured: boolean;
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -475,6 +479,17 @@ export function LeadDetail({
         */}
         <IncomeProjection lead={lead} className="mt-4" />
 
+        {/*
+          Directly under the figures it explains. An operator who wants to know
+          where £32,501–£39,723 came from should not have to ask us.
+        */}
+        <IncomeReportLink
+          leadId={lead.id}
+          available={Boolean(lead.income_report_path)}
+          sizeBytes={lead.income_report_size_bytes}
+          className="mt-3"
+        />
+
         {lead.lead_profile && (
           <div className="mt-4 rounded-md bg-muted/50 p-3 text-sm">
             <p className="mb-1 font-medium text-muted-foreground">
@@ -516,17 +531,43 @@ export function LeadDetail({
               Objection Assistant
             </a>
           </Button>
+          {/*
+            ?lead= only for management. The report's figures are a management
+            pitch — a GR operator earns the margin between the rent they pay
+            and what the property makes, not a fee (invariant 6). The BUTTON
+            stays for them either way: this toolbar has never been product-
+            gated, and taking it away would remove something they have today.
+          */}
           <Button size="sm" asChild>
             <a
-              href="/income-presentation/index.html"
+              href={
+                isGuaranteedRent
+                  ? "/income-presentation/index.html"
+                  : `/income-presentation/index.html?lead=${lead.id}`
+              }
               target="_blank"
               rel="noopener noreferrer"
             >
               <Presentation className="h-4 w-4" />
-              Income presentation
+              {isGuaranteedRent ? "Income presentation" : "Presentation for this lead"}
             </a>
           </Button>
         </div>
+
+        {/*
+          Met BEFORE the tool opens as well as inside it. Someone who has never
+          set their terms up would otherwise present Stayful's generic fee and
+          contract wording to a landlord as their own.
+        */}
+        {!isGuaranteedRent && !presentationConfigured && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            The presentation fills itself in from this property&rsquo;s analysis.{" "}
+            <a href="/dashboard/settings#presentation" className="text-brand hover:underline">
+              Set up your own fee and terms
+            </a>{" "}
+            so it uses yours.
+          </p>
+        )}
 
         {showActions && (
           <div className="mt-6 flex flex-col gap-3">

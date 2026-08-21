@@ -7,6 +7,7 @@ import { CRITICALLY_BEHIND_DEFICIT } from "@/lib/pacing";
 import { sendNewLeadSms } from "@/lib/sms";
 import { leadPriceFor } from "@/lib/plans";
 import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
+import { syncStoredReport } from "@/lib/incomeReportStorage";
 import {
   DEFAULT_MAX_ASSIGNMENTS,
   type Customer,
@@ -338,9 +339,18 @@ async function attachIncomeProjection(
       id: typeof assetId === "string" ? assetId : "",
       public_url: url,
     });
+    // The stored PDF and the figures land in ONE write, so a lead can never
+    // show a figure with no report behind it or the other way round. A created
+    // lead has nothing stored yet, hence currentPath: null.
+    const stored = await syncStoredReport({
+      admin: supabase,
+      leadId: lead.id,
+      outcome,
+      currentPath: null,
+    });
     const { error } = await supabase
       .from("leads")
-      .update(incomeReportPatch(outcome))
+      .update({ ...incomeReportPatch(outcome), ...stored })
       .eq("id", lead.id);
     if (error) {
       console.error("Income report write failed", lead.id, error);

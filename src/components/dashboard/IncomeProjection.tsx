@@ -17,8 +17,10 @@ import type { LeadType } from "@/lib/types";
  * whether a pooled landlord is worth ringing, and a second implementation
  * would eventually show them two different numbers for the same property.
  *
- * NO REPORT IS SHOWN OR LINKED. The analysis PDF is read once at ingest and
- * discarded; only these derived figures exist in the product.
+ * THE REPORT ITSELF SITS BESIDE THIS, not inside it. IncomeReportLink is a
+ * separate component on the same two surfaces (0092), because a lead can have a
+ * stored PDF and no trustworthy figures, or figures and no stored PDF, and
+ * folding them together would make each conditional on the other.
  *
  * Renders NOTHING without a parsed figure, rather than a zero or an em dash. A
  * lead with no analysis should look like a lead from before this existed, not

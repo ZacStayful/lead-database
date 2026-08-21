@@ -287,6 +287,9 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/settings/notifications`, `/api/customer/goal` (§13),
 `/api/customer/subscribe` (§17), `/api/leads/[id]/reject`,
 `/api/leads/[id]/discard`, `/api/leads/[id]/close`,
+`/api/leads/[id]/report` (§25 — the stored analysis PDF),
+`/api/customer/presentation/[leadId]` (§26),
+`/api/customer/settings/presentation` (§26),
 `/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`.
 
 `/api/customer/goal` is the **only** customer route with no admin client at
@@ -1346,6 +1349,11 @@ premise is that they never rang.
 Lead age falls back honestly: the parsed enquiry date where it parses, ingest
 date where it does not, labelled as such (see §11 on `enquiry_date`).
 
+⚠️ **Since 0092 the full property analysis is readable from the pool card too**,
+without claiming (§25). "Calling is free, keeping is not" is now "calling and
+reading are free, keeping is not" — a knowing extension, not a leak. The
+tailored presentation is the line that did not move: it needs an assignment.
+
 ### 19.8 — Admin
 
 `/admin/pool` — both pools read-only, per-product summary, force in/out, claim
@@ -2275,14 +2283,185 @@ failed**. All 149 carry a nightly rate and occupancy; **137 of those reconcile w
 the gross** and are worded as its basis, the other 12 as comparables (below). Gross ranges from £9,573 to £149,283 (median
 £39,614); nightly rate £57–£755 (median £180); occupancy 33%–85% (median 60%).
 
-### The report is not part of the product
+### The report IS part of the product *(0092 — this reverses the original rule)*
 
-No PDF is attached to a lead, no URL is stored, and nothing links to one.
-Monday's `public_url` is a **one-hour signed S3 link** — fetched, read for one
-number, discarded. A stored copy would be dead within the hour, and a live
-fetch would hand the customer the whole analysis, which is not what is sold.
-`leads.income_report_asset_id` is an opaque id, never rendered and never a link;
-it exists only so the sweep can skip a report it has already read.
+⚠️ This section used to read **"The report is not part of the product — no PDF
+is attached to a lead, no URL is stored, and nothing links to one."** That was
+a deliberate product constraint, and it has been reversed: an operator deciding
+whether to ring a landlord should be able to read the analysis their figures
+come from. 0089's own header still states the old rule; 0092 supersedes it and
+is where the current one lives.
+
+What has **not** changed is the URL. Monday's `public_url` is a **one-hour
+signed S3 link** and is still never persisted — a stored copy would be dead
+before anyone clicked it. What is stored now is the **bytes**, in a bucket of
+our own.
+
+| | |
+|---|---|
+| Bucket | `lead-reports` — private, `application/pdf` only, 25 MB |
+| Policies on `storage.objects` | **none at all** — deny-all to the browser |
+| Path | `<lead_id>/analysis.pdf`, **fixed** |
+| Columns | `income_report_path` (the one flag), `income_report_size_bytes` |
+| Route | `GET /api/leads/[id]/report` → 60-second signed URL, served inline |
+
+**A new bucket rather than `lead-files`.** That one is customer-owned: every one
+of its policies keys on `(storage.foldername(name))[1] = auth.uid()::text`,
+because each object belongs to exactly one customer. A report belongs to a
+**lead** — read by up to three holders plus every pool viewer, owned by none of
+them — so it does not fit that shape. `lead-reports` instead follows the state
+`training-media` ends in after 0061 drops its read policy: no policy at all, and
+every read authorised by a signature rather than by RLS.
+
+**The fixed path IS the retention rule.** One file per lead, replaced by
+overwrite (`upsert: true`), so there is no second object to delete, no window in
+which two exist, and nothing to garbage-collect. The asset id is deliberately
+**not** in the path — it changes when sales re-run the analyser, and a path that
+moved would orphan the old file for ever.
+
+`leads.income_report_asset_id` is still an opaque id, still never rendered and
+still never a link. It now does two jobs: skip a document already read, and tell
+whether a stored report needs replacing.
+
+#### Who may read it — two existing predicates, never a third
+
+`GET /api/leads/[id]/report` takes the **lead** id, as
+`/api/leads/pool/[id]/claim` does, because both audiences reach it that way. It
+allows a caller who either
+
+1. has a `lead_assignments` row for (lead, customer) — the row is the
+   entitlement and **status is deliberately not consulted**, exactly as
+   `/api/customer/files/[id]/download` declines to consult it. A rejected or
+   closed lead is still one they paid for (invariant 4); or
+2. passes `customer_can_see_pool_lead` — the same function the pool listing and
+   the claim already share (§19.4), so the pool can never list a lead whose
+   analysis the route then refuses.
+
+The pool-visibility check **fails closed**: an unreadable predicate is not
+permission. "No report stored" and "not yours" return one identical 404, so the
+endpoint cannot be used to discover which leads exist.
+
+⚠️ **The second audience means a pooled lead's full analysis can be read without
+ever claiming it.** That is a commercial decision taken knowingly, not an
+oversight — §19.7's bargain was "calling is free, keeping is not", and this
+widens the free half. What it must **not** widen is the tailored presentation
+(§26), which stays behind an assignment.
+
+#### The file follows the figures — except on `failed`
+
+`syncStoredReport()` in `src/lib/incomeReportStorage.ts` is the only writer.
+
+| Outcome | Object | Columns |
+|---|---|---|
+| `parsed` | uploaded, `upsert: true` | written |
+| `no_report` | removed | nulled |
+| `unparsed` | removed — no figures means a lone "read the analysis" link is an orphan | nulled |
+| `failed` | **untouched** | **untouched** |
+
+**This is why the storage columns are not in `incomeReportPatch()`.** That
+function clears every figure on every outcome, so a replaced report cannot leave
+stale numbers attributed to a document that no longer states them — right for a
+figure we can recompute tomorrow, wrong for a file. `failed` means Monday was
+unreachable or a download broke; treating it the same way would delete a
+perfectly good PDF, and the operator's link to it, over a network blip.
+
+A storage error **never costs the figures**: it logs, returns an empty patch,
+and the gross, rate and occupancy publish regardless — the same "they fail
+alone" rule §25 already applies to the rate and occupancy.
+
+#### ⚠️ pdf.js DETACHES the buffer you hand it
+
+`getDocumentProxy` takes ownership of the `Uint8Array` and detaches its
+`ArrayBuffer`, so anything wanting the bytes **after** parsing must copy first.
+`parseIncomeReport` therefore passes `bytes.slice()`, and the copy lives inside
+the parser rather than at the call site: the parser is the destructive consumer,
+so not destroying its caller's data is its job, and doing it there makes
+"parsing does not consume what you passed in" true for every future caller.
+
+This shipped broken and reached production. `resolveIncomeReport` parsed first
+and returned `bytes` afterwards, by which point it was empty — so the first
+backfill wrote **159 zero-byte PDFs**, each recorded as a stored report an
+operator could open. The figures were all correct, because they are read before
+the detach; only the file was empty, which is what made it look like a rendering
+problem rather than a storage one.
+
+`syncStoredReport` now **refuses to upload a zero-length buffer**, which is what
+turns this class of failure loud. A 0-byte analysis is never a legitimate state,
+and leaving the columns null keeps the row in the backfill queue.
+
+**Why the tests missed it, which is the part worth keeping.**
+`syncStoredReport` was exercised over all four outcomes with *synthetic*
+outcomes carrying fake byte arrays, and the parser over 24 real PDFs for the
+figures it returns. Neither ever ran a real document through parse-**then**-
+upload, so the bug sat in the seam between two well-tested pieces — the same
+shape as the `items(ids:)` pagination trap below and §23.10's failure-path
+cluster. The regression test now asserts that what `resolveIncomeReport` hands
+on is byte-identical to what it downloaded and still begins `%PDF-`.
+
+#### The third sweep pass, and why there was no one-off backfill
+
+159 leads were already `parsed` when this shipped, and neither of the sweep's
+existing queries would ever look at them again — both are about leads with **no
+figures**. So `/api/cron/parse-income-reports` gained a third pass, on leftover
+batch capacity, newest first, which fills in **both** things such a lead is
+missing: its stored PDF (0092) and its presentation figures (§26).
+
+**IT MAY ONLY ADD, AND NEVER WRITES A COLUMN THAT ALREADY HAS A VALUE.** These
+leads already show a gross figure to customers, so re-running
+`incomeReportPatch` over them would let a report since moved or deleted on
+Monday **blank a working figure** — trading something that works for nothing,
+the one thing this section says never to do. That is why the figures half goes
+through `presentationFiguresPatch()` — the five 0093 columns, omitting any the
+re-read did not produce — and never `incomeReportPatch()`, which also writes
+gross, rate and occupancy. An outcome other than `parsed` writes nothing at all.
+
+**The two halves are written together but neither depends on the other.** A
+failed upload returns an empty storage patch and the figures still land, because
+they are the more valuable half and everything else here fails alone; the row
+keeps a null path, so the upload is retried tomorrow.
+
+**The selector is `income_report_path is null OR platform_fee_pct is null`**,
+not the path alone. Selecting on the path was a trap in the exact situation this
+existed for: a lead backfilled by an older build would get its file, drop out of
+the query, and never pick the figures up. `platform_fee_pct` is the sentinel
+because all 24 live reports sampled state a `Platform Fees (n%)` line — a report
+that genuinely lacks one would be re-read nightly, which `remaining_unbackfilled`
+makes visible rather than hiding. It is reported separately from `remaining`,
+because the two backlogs drain at different rates and one being stuck says
+nothing about the other.
+
+`maxDuration` is **300** and the wall-clock budget **240s** (Vercel Pro, §2), so
+a backlog of this size drains in one run rather than a queue of nights. Both are
+ceilings rather than reservations: an ordinary day with nothing to do still
+finishes in seconds.
+
+It is a pass rather than a script deliberately: it needs no credentials, repeats
+safely, drains itself to nothing, and afterwards keeps picking up any lead whose
+upload failed transiently after a successful parse.
+
+**`/admin/leads` has a "Read income reports" button** for it. The route always
+accepted an admin session as well as the cron secret and its comments assumed it
+could be run by hand, but nothing could actually do that — a backfill meant
+typing the URL, and on a preview deployment meant signing into the app on that
+origin first. `ParseIncomeReportsButton` is the `SyncMondayButton` pattern
+unchanged. It matters beyond the one-off: a report format change or a spell of
+Monday being unreachable both leave a backlog somebody will want to drain
+without waiting a day to see whether it worked.
+
+**The 21 `no_report` leads are not part of this.** Checked against Monday: their
+items carry no files at all, so `no_report` is the truth rather than a backlog.
+The 30-day re-check still catches an analysis attached later.
+
+#### Where the link shows
+
+`IncomeReportLink` — the lead detail page and the expired-pool card, under
+`IncomeProjection` on both. **Not** on the feed card and **not** in admin;
+neither was asked for and both are one-line additions.
+
+It is a **separate component from `IncomeProjection`**, not a line inside it,
+because a lead can have a stored PDF and no trustworthy figures, or figures and
+no stored PDF, and folding them together would make each conditional on the
+other. Both render nothing when they have nothing.
 
 ### The nightly rate and occupancy behind it *(0090)*
 
@@ -2542,6 +2721,14 @@ render time and went through **16** further cases — Barry Arnould and Burslem
 returning their figures while never being called the basis, the 1.82%
 worst-accepted case still reconciling, and the gross path unchanged.
 
+0092 was applied to a scratch Postgres — **all 88 migrations from empty** — and
+re-applied to prove idempotency, confirming the bucket upsert is stable and that
+`get_customer_pool_leads` survives its **fourth** drop/recreate still
+`service_role`-only *and* still returning `avg_nightly_rate` / `occupancy_rate`,
+which is the check that would catch a recreate mistakenly built from 0089's
+body. No `storage.objects` policy names the bucket. It was then applied to
+`znlfwbnvhlacwzgfalcf` and the same four assertions re-run there.
+
 `buildIncomeProjection` and `pickIncomeReportAsset` went through **22** cases,
 including the three real multi-asset shapes on the live board
 (xlsx + report, legacy PDF + report, two reports). The parser and
@@ -2562,7 +2749,180 @@ what that PDF's own "Management Fees (15%)" line prints.
 
 ### Deployment order — migration BEFORE code
 
-0089 first. `get_customer_pool_leads` changes its return shape, and every
-customer lead surface selects `leads(*)`, so code arriving first would query
-columns that do not exist. Nothing here touches a balance, counter, pacing or
-capacity column, so a lagging migration cannot affect lead allocation.
+0089 first, and **0092 on the same rule**. `get_customer_pool_leads` changes its
+return shape in both, and every customer lead surface selects `leads(*)`, so
+code arriving first would query columns that do not exist. Nothing here touches
+a balance, counter, pacing or capacity column, so a lagging migration cannot
+affect lead allocation.
+
+---
+
+## 26. The presentation, tailored to every lead *(0093)*
+
+`public/income-presentation/index.html` is a static tool every management
+customer reaches from Documents: six slides they walk a landlord through on a
+web meeting. Until now the operator **typed every figure into it by hand** —
+its own copy said "enter your own numbers, or bring them across from the STR
+Analyser" — while the analysis PDF §25 already downloads states all of them.
+
+Opened from a lead as `?lead=<id>`, it now arrives filled in.
+
+### 26.1 — What comes from where, and the one thing that must not
+
+| The property's, from the report | The operator's, from their profile |
+|---|---|
+| gross, nightly rate, occupancy | **management fee and its basis** |
+| platform % and cleaning % | fee / cleaning / contract wording |
+| long-let rent | compliance, vetting |
+| the 12-month seasonal curve | onboarding, managed, landlord lists |
+| address, landlord name, phone *(from the lead)* | discovery and next-step lists |
+
+⚠️ **THE MANAGEMENT FEE MUST NEVER COME FROM THE REPORT.** The PDF states one —
+`Management Fees (15%)`, charged on **gross** — and it is *Stayful's*. The
+operator presenting is not Stayful, and seeding it would have them quote our
+price to a landlord as their own. The platform and cleaning percentages **do**
+come from the report, and the distinction is the point: those are operating
+facts about the market that apply to whoever runs the property; the fee is a
+price, and prices are theirs.
+
+The consequence, which is correct and worth stating: **the tool's net will not
+equal the report's net.** The tool computes net itself from gross, platform,
+cleaning and the operator's own fee, so on 88 Bourneside Road the report says
+£43,295 and an operator on 15%-of-net sees £45,169. `net_annual_income` is
+stored precisely because it must not be shown.
+
+**Existing leads get these through the sweep's third pass** (§25), not a one-off
+script — the same pass that stores their PDF, and under the same "may only add"
+rule.
+
+### 26.2 — The curve is a shape, not twelve numbers
+
+The report's forecast is stated in pounds **net at Stayful's fee**, so seeding
+it raw would print twelve months that do not sum to the total on the same
+slide. What is about the property is the **seasonality**, and it survives a
+change of fee — so `monthly_revenue_profile` becomes multipliers of its own
+average month, scaled to the operator's net.
+
+The tool's `genMonths()` used a single hardcoded generic curve softened by a
+`chart.variance` of 0.6. A seeded lead supplies `monthWeights` and releases
+variance to **1**: the damping exists to soften a generic shape and would
+flatten a real one.
+
+### 26.3 — The setup screen collapses, it is not deleted
+
+Of ~28 inputs on the tool's first page, **20 are answered by the analysis**, **6
+move to the profile**, and **3 remain** (discovery ticks, next-step ticks, call
+notes). Seeded, the screen becomes a read-only header, presenter notes, and
+Present.
+
+Two escape hatches, both load-bearing: **"Adjust figures"** reveals the income,
+12-month and cases blocks exactly as they were, because the report is an
+estimate and an operator must be able to overrule a figure they disagree with;
+**"Edit my terms"** goes to Settings.
+
+**Nothing is removed from the file.** Every section is wrapped in the file's own
+`<sc-if>`, so `/dashboard/documents` — the tool with no `?lead=` — still shows
+the complete original form, saving under the original storage key.
+
+### 26.4 — Per-lead storage, and the bug that fixed
+
+The tool saved to **one** `localStorage` key for the whole browser, so working a
+second landlord silently wiped the first. Seeded, the key is
+`wm_income_tool_v1:<leadId>`; unseeded it is the original, untouched.
+
+### 26.5 — The profile prompt, and the staleness trap behind it
+
+`presentation_settings_updated_at` is **null until the profile is saved**, and
+that is the "set up yet?" test — deliberately not whether the blob is empty,
+because a customer who saves a profile identical to the defaults **has**
+configured it and testing the contents would nag them for ever (the same
+NULL-is-not-zero distinction §13 draws for `management_customer_goal`).
+
+When it is null the seeded tool leads with a banner, and the lead page carries
+the same prompt beside the button, so it is met before the tool opens as well
+as inside it. **It prompts, it does not block** — an operator with a landlord on
+the phone must be able to present.
+
+The trap that creates: they read it, set the profile, come back, and see the old
+generic terms because the tool loads its saved copy. Two things handle it:
+
+- **Opening a lead saves nothing.** `save()` fires only from `update()`, so
+  open → leave → return **re-seeds**, which covers the common path.
+- If they *had* edited first, the saved copy carries the `seededAt` it was
+  seeded with; when the profile is newer the tool offers *"Your presentation
+  details have changed · Apply them"*, which re-seeds **the terms only** and
+  leaves their figures and notes alone. Explicit, because silently overwriting
+  an operator's own edits is worse than showing stale terms.
+
+### 26.6 — Assignment only, unlike the PDF
+
+`GET /api/customer/presentation/[leadId]` requires a `lead_assignments` row.
+Deliberately **not** pool-visible, where §25's report deliberately is: reading
+the analysis before you claim is the pool's bargain widened; being handed the
+pitch is the bargain gone. Management only (invariant 6).
+
+### 26.7 — Two duplications that must be maintained as one
+
+- **`src/lib/presentationSeed.ts` mirrors the tool's `defaults()`**, and the
+  seed must be a **complete** object rather than a partial. The tool's
+  `merge(base, over)` copies the base's keys first and therefore **cannot shrink
+  an array**: a profile with three onboarding steps merged over five defaults
+  comes out as five.
+- **`operatorNetAnnual()` duplicates the tool's `calc()`**, because the months
+  and cases are expressed in net pounds and must be scaled against the same net
+  the tool will display.
+
+Same arrangement §20 records for `capture_operator_proof` duplicating
+`get_operator_proof`, and the same rule: they are one thing written twice.
+
+### 26.8 — The static file is generated upstream
+
+Four marked edits, and re-applying them after a regeneration is the maintenance
+cost of this feature: `componentDidMount` (lead id, per-lead key, seeding),
+`genMonths` (real weights), `renderVals` (the flags), and the setup template
+(the `<sc-if>` wrappers and the seeded header). Each is commented
+`STAYFUL EDIT n of 4`.
+
+⚠️ `componentDidMount` also assigned its keydown handler to `this._key`, which is
+now the storage key. It is renamed `_keyHandler`; the two must not collide again.
+
+### Verification
+
+The extended parser was run over **24 live reports**: gross, net, long-let,
+platform %, cleaning % and rate/occupancy on all 24, and the twelve-month curve
+on 23. The one rejection is correct — that report's forecast table prints £0 for
+all twelve months against a £25,696 net, and a curve of twelve zeros is not a
+curve. **All 24 gross figures came back unchanged**, which is the regression
+that would have mattered.
+
+The net anchor was the risk: `NET ANNUAL REVENUE` appears **twice** in every
+report, once per table. Anchoring through `Total Operating Costs` — which
+appears only in the short-let table — was asserted on all 24, along with
+`net < gross` and `gross − costs = net`.
+
+⚠️ One finding worth keeping: the forecast's "vs long-let" column loses its minus
+sign in the PDF text layer, so a negative month reads as a bare `£545`.
+Requiring the sign lost the curve on **11 of 24** reports — precisely the
+properties that underperform a long let in some month, where the seasonal
+picture is most worth showing.
+
+`buildPresentationSeed` and the validator went through **33 cases**, including
+the array-shrink case above run through the tool's own `merge()`, a gross-only
+lead, a lead with no report (which must come out identical to the blank tool),
+and a 12%-of-gross fee correctly repricing the whole curve.
+
+The tool was then rendered in Chromium both ways: blank shows the complete
+original form and no seeded chrome; seeded shows the header, the right figures,
+the profile prompt, hidden income and how-it-works blocks, and presenter notes
+prefilled. "Adjust figures" reveals the income form with `83260` in the gross
+input, the slides render, and the 12-month chart carries the property's real
+seasonality — peak August, trough February, matching the report. No page errors.
+
+All **89 migrations** applied to a scratch Postgres 16 from empty; the
+cardinality CHECK exercised on 11, 12, 13 and null.
+
+### Deployment order — migration BEFORE code
+
+0093 first. The seed route selects the new columns on every request and the
+dashboard reads `presentation_settings` through `getCurrentCustomer()`'s
+`select("*")`, so code arriving first would query columns that do not exist.
