@@ -2410,6 +2410,15 @@ It is a pass rather than a script deliberately: it needs no credentials, repeats
 safely, drains itself to nothing, and afterwards keeps picking up any lead whose
 upload failed transiently after a successful parse.
 
+**`/admin/leads` has a "Read income reports" button** for it. The route always
+accepted an admin session as well as the cron secret and its comments assumed it
+could be run by hand, but nothing could actually do that — a backfill meant
+typing the URL, and on a preview deployment meant signing into the app on that
+origin first. `ParseIncomeReportsButton` is the `SyncMondayButton` pattern
+unchanged. It matters beyond the one-off: a report format change or a spell of
+Monday being unreachable both leave a backlog somebody will want to drain
+without waiting a day to see whether it worked.
+
 **The 21 `no_report` leads are not part of this.** Checked against Monday: their
 items carry no files at all, so `no_report` is the truth rather than a backlog.
 The 30-day re-check still catches an analysis attached later.

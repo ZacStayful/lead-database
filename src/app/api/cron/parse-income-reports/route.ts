@@ -195,7 +195,7 @@ async function handle(request: NextRequest) {
       })),
       storage_backfill: storageBackfill.map((c) => c.id),
       remaining: await countOutstanding(admin),
-      remaining_unstored: await countUnstored(admin),
+      remaining_unbackfilled: await countUnbackfilled(admin),
     });
   }
 
@@ -210,7 +210,7 @@ async function handle(request: NextRequest) {
       skipped: 0,
       stored: 0,
       remaining: 0,
-      remaining_unstored: 0,
+      remaining_unbackfilled: 0,
     });
   }
 
@@ -357,7 +357,7 @@ async function handle(request: NextRequest) {
     // scanned: 40. Reported separately per backlog, because they drain at
     // different rates and one being stuck says nothing about the other.
     remaining: await countOutstanding(admin),
-    remaining_unstored: await countUnstored(admin),
+    remaining_unbackfilled: await countUnbackfilled(admin),
   });
 }
 
@@ -374,7 +374,7 @@ async function countOutstanding(
 }
 
 /** Parsed management leads still missing their file or their 0093 figures. */
-async function countUnstored(
+async function countUnbackfilled(
   admin: ReturnType<typeof createAdminClient>
 ): Promise<number> {
   const { count } = await admin

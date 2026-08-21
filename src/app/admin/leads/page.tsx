@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SyncMondayButton } from "@/components/admin/SyncMondayButton";
+import { ParseIncomeReportsButton } from "@/components/admin/ParseIncomeReportsButton";
 import {
   AdminLeadsTable,
   type LeadRow,
@@ -140,6 +141,7 @@ export default async function AdminLeadsPage() {
             endpoint="/api/monday/sync-gr"
             label="Sync GR from Monday"
           />
+          <ParseIncomeReportsButton />
         </div>
       </div>
 
