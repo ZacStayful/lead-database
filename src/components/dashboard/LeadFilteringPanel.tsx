@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,15 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
+import {
+  belowAllocation,
+  expansionSuggestions,
+  predictMonthlyVolume,
+  type ExpansionSuggestion,
+  type FilterSelection,
+  type ProductVolume,
+  type VolumePrediction,
+} from "@/lib/filterPrediction";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export interface AreaOption {
@@ -27,6 +36,11 @@ export interface FilterPanelProps {
   // Lead volume per postcode area (national), for the map + list hints.
   areaCounts?: Record<string, number>;
   maxAreaCount?: number;
+  // Per-product ingest history the live volume prediction runs on.
+  volume: ProductVolume;
+  // The plan's monthly lead allocation for this product — what a selection is
+  // judged "too small" against.
+  monthlyAllocation: number;
 }
 
 const CONSENT =
@@ -56,6 +70,44 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [areaQuery, setAreaQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmedRisk, setConfirmedRisk] = useState(false);
+
+  // Live prediction for the draft selection, recomputed on every toggle.
+  const draftSelection: FilterSelection = useMemo(
+    () => ({
+      areas: selectedAreas,
+      minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
+      maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+    }),
+    [selectedAreas, minBeds, maxBeds]
+  );
+  const prediction = useMemo(
+    () => predictMonthlyVolume(props.volume, draftSelection),
+    [props.volume, draftSelection]
+  );
+  const isBelow = belowAllocation(prediction, props.monthlyAllocation);
+  const suggestions = useMemo(
+    () => (isBelow ? expansionSuggestions(props.volume, draftSelection) : []),
+    [isBelow, props.volume, draftSelection]
+  );
+
+  // Consent is to a specific number: any change of selection voids it.
+  useEffect(() => {
+    setConfirmedRisk(false);
+  }, [draftSelection]);
+
+  // The SAVED filter's prediction, for the read-only summary view — the same
+  // number the admin surfaces show for this customer.
+  const savedPrediction = useMemo(
+    () =>
+      predictMonthlyVolume(props.volume, {
+        areas: props.areas,
+        minBedrooms: props.minBedrooms,
+        maxBedrooms: props.maxBedrooms,
+      }),
+    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms]
+  );
+  const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
 
   const visibleAreas = useMemo(() => {
     const q = areaQuery.trim().toLowerCase();
@@ -153,6 +205,40 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 <dd className="mt-0.5 text-sm font-medium">{bedroomSummary}</dd>
               </div>
             </dl>
+
+            <div className="space-y-1.5">
+              {savedPrediction.reliable ? (
+                <>
+                  <p className="text-sm">
+                    Predicted volume:{" "}
+                    <span className="font-semibold">
+                      ~{savedPrediction.displayRate} lead
+                      {savedPrediction.displayRate === 1 ? "" : "s"}/month
+                    </span>{" "}
+                    <span className="text-muted-foreground">
+                      of your {props.monthlyAllocation}/month plan
+                    </span>
+                  </p>
+                  <VolumeBar
+                    rate={savedPrediction.displayRate}
+                    allocation={props.monthlyAllocation}
+                    amber={savedBelow}
+                  />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Only {savedPrediction.matchingLeads} matching lead
+                  {savedPrediction.matchingLeads === 1 ? "" : "s"} since 1 July
+                  — too little data to predict monthly volume reliably.
+                </p>
+              )}
+              {savedBelow && (
+                <p className="text-xs text-amber-700">
+                  Below your plan of {props.monthlyAllocation} leads/month —
+                  the volume guarantee is lifted while this filter is active.
+                </p>
+              )}
+            </div>
 
             {props.status === "pending_lift" && props.liftEffectiveDate && (
               <div className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -340,19 +426,85 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               </div>
             </div>
 
-            <p className="rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-              {CONSENT}
-            </p>
+            <PredictionBox
+              prediction={prediction}
+              allocation={props.monthlyAllocation}
+              volume={props.volume}
+              productLabel={productLabel}
+              isBelow={isBelow}
+              nothingSelected={
+                selectedAreas.length === 0 && minBeds === "" && maxBeds === ""
+              }
+              suggestions={suggestions}
+              onAddArea={toggleArea}
+            />
+
+            {isBelow ? (
+              <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <p>
+                  {prediction.reliable ? (
+                    <>
+                      This selection is predicted to deliver about{" "}
+                      <span className="font-semibold">
+                        {prediction.displayRate} lead
+                        {prediction.displayRate === 1 ? "" : "s"} a month
+                      </span>{" "}
+                      against the{" "}
+                      <span className="font-semibold">
+                        {props.monthlyAllocation} leads a month
+                      </span>{" "}
+                      your plan includes. Applying it lifts the volume
+                      guarantee, and your subscription amount stays the same
+                      regardless of how many leads arrive.
+                    </>
+                  ) : (
+                    <>
+                      Too few matching leads have arrived to predict this
+                      selection reliably — volume is likely to be well below
+                      the{" "}
+                      <span className="font-semibold">
+                        {props.monthlyAllocation} leads a month
+                      </span>{" "}
+                      your plan includes. Applying it lifts the volume
+                      guarantee, and your subscription amount stays the same
+                      regardless of how many leads arrive.
+                    </>
+                  )}
+                </p>
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={confirmedRisk}
+                    onChange={(e) => setConfirmedRisk(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                  />
+                  <span>
+                    I understand this filter is predicted to deliver fewer
+                    leads than my plan includes, and I want to apply it at my
+                    own risk.
+                  </span>
+                </label>
+              </div>
+            ) : (
+              <p className="rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                {CONSENT}
+              </p>
+            )}
 
             {error && <p className="text-sm text-amber-600">{error}</p>}
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={apply} disabled={busy}>
+              <Button
+                onClick={apply}
+                disabled={busy || (isBelow && !confirmedRisk)}
+              >
                 {busy
                   ? "Saving…"
-                  : props.status === "off"
-                    ? "Apply filter"
-                    : "Save changes"}
+                  : isBelow
+                    ? "Apply anyway at my own risk"
+                    : props.status === "off"
+                      ? "Apply filter"
+                      : "Save changes"}
               </Button>
               {props.status !== "off" && (
                 <Button
@@ -384,6 +536,152 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Plain two-div progress bar: predicted volume against the plan allocation. */
+function VolumeBar({
+  rate,
+  allocation,
+  amber,
+}: {
+  rate: number;
+  allocation: number;
+  amber: boolean;
+}) {
+  if (allocation <= 0) return null;
+  const pct = Math.min(100, Math.max(0, (rate / allocation) * 100));
+  return (
+    <div
+      className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+      role="img"
+      aria-label={`~${rate} of ${allocation} plan leads per month`}
+    >
+      <div
+        className={`h-full rounded-full ${amber ? "bg-amber-500" : "bg-brand"}`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+/**
+ * The live prediction for the draft selection. Three variants: reliable and at
+ * or above the plan (neutral), reliable but below it (amber warning +
+ * expansion chips), and too little data to extrapolate (no number shown —
+ * a precise rate built on a handful of leads would be false confidence).
+ */
+function PredictionBox({
+  prediction,
+  allocation,
+  volume,
+  productLabel,
+  isBelow,
+  nothingSelected,
+  suggestions,
+  onAddArea,
+}: {
+  prediction: VolumePrediction;
+  allocation: number;
+  volume: ProductVolume;
+  productLabel: string;
+  isBelow: boolean;
+  nothingSelected: boolean;
+  suggestions: ExpansionSuggestion[];
+  onAddArea: (area: string) => void;
+}) {
+  const basis = (
+    <p className="text-xs text-muted-foreground">
+      Based on {prediction.matchingLeads} matching lead
+      {prediction.matchingLeads === 1 ? "" : "s"} since 1 July. Filtered
+      matching can only consider leads with a readable postcode and bedroom
+      count — {volume.matchableLeads} of {volume.totalLeads}{" "}
+      {productLabel.toLowerCase()} leads so far.
+    </p>
+  );
+
+  const chips = suggestions.length > 0 && (
+    <div>
+      <p className="text-xs font-medium">Expanding your search would help:</p>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {suggestions.map((s) => (
+          <button
+            key={s.area}
+            type="button"
+            onClick={() => onAddArea(s.area)}
+            className="rounded-full border-[0.5px] border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+          >
+            + Add {s.area}
+            {s.city !== s.area ? ` (${s.city})` : ""} · +~{s.monthlyRate}/mo
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  if (!prediction.reliable) {
+    return (
+      <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
+        <p className="text-sm">
+          Only {prediction.matchingLeads} lead
+          {prediction.matchingLeads === 1 ? "" : "s"} matching this selection
+          {prediction.matchingLeads === 1 ? " has" : " have"} arrived since 1
+          July — too little data to predict monthly volume reliably.
+        </p>
+        {chips}
+        {basis}
+      </div>
+    );
+  }
+
+  if (isBelow) {
+    return (
+      <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-amber-800">
+        <p className="text-sm">
+          This selection is predicted to produce{" "}
+          <span className="font-semibold">
+            ~{prediction.displayRate} lead
+            {prediction.displayRate === 1 ? "" : "s"}/month — below your plan
+            of {allocation}
+          </span>
+          . This area is too small to support your allocation, so your volume
+          guarantee is lifted while a filter is active. Consider adding more
+          areas.
+        </p>
+        <VolumeBar
+          rate={prediction.displayRate}
+          allocation={allocation}
+          amber
+        />
+        {chips}
+        {basis}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
+      <p className="text-sm">
+        <span className="font-semibold">
+          ~{prediction.displayRate} lead
+          {prediction.displayRate === 1 ? "" : "s"}/month
+        </span>{" "}
+        {nothingSelected
+          ? "arrive across all areas and sizes — narrow your selection to see its prediction."
+          : "match this selection."}{" "}
+        {allocation > 0 && (
+          <span className="text-muted-foreground">
+            Your plan includes {allocation} leads/month.
+          </span>
+        )}
+      </p>
+      <VolumeBar
+        rate={prediction.displayRate}
+        allocation={allocation}
+        amber={false}
+      />
+      {basis}
+    </div>
   );
 }
 

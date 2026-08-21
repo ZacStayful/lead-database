@@ -1,7 +1,16 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { AdminCustomersTable } from "@/components/admin/AdminCustomersTable";
+import {
+  AdminCustomersTable,
+  type FilterVolumeInfo,
+} from "@/components/admin/AdminCustomersTable";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
 import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
+import { activeLeadFilters } from "@/lib/leadFilter";
+import {
+  belowAllocation,
+  fetchLeadVolumeAggregate,
+  predictMonthlyVolume,
+} from "@/lib/filterPrediction";
 import type { Customer, LeadType, PauseEpisode } from "@/lib/types";
 import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
@@ -34,6 +43,38 @@ export default async function AdminCustomersPage() {
   const lastActive: Record<string, string | null> = {};
   for (const c of customers) {
     if (c.user_id) lastActive[c.id] = lastSignInByUser.get(c.user_id) ?? null;
+  }
+
+  // Predicted monthly volume for each active filter — the same functions the
+  // customer's filtering panel runs, so both surfaces show one number.
+  // Best-effort: a failed fetch costs the prediction column, not the page.
+  const predictedVolumes: Record<string, FilterVolumeInfo[]> = {};
+  try {
+    const aggregate = await fetchLeadVolumeAggregate(admin);
+    for (const c of customers) {
+      const filters = activeLeadFilters(c);
+      if (filters.length === 0) continue;
+      predictedVolumes[c.id] = filters.map((f) => {
+        const p = predictMonthlyVolume(aggregate[f.leadType], {
+          areas: f.areas,
+          minBedrooms: f.minBedrooms,
+          maxBedrooms: f.maxBedrooms,
+        });
+        const allocation =
+          f.leadType === "guaranteed_rent"
+            ? (c.gr_monthly_allocation ?? 0)
+            : (c.monthly_allocation ?? 0);
+        return {
+          leadType: f.leadType,
+          monthlyRate: p.displayRate,
+          matchingLeads: p.matchingLeads,
+          reliable: p.reliable,
+          belowAllocation: belowAllocation(p, allocation),
+        };
+      });
+    }
+  } catch (err) {
+    console.error("[admin/customers] filter volume prediction failed", err);
   }
 
   // ---- Paused-customer detail (0077) -------------------------------------
@@ -246,6 +287,7 @@ export default async function AdminCustomersPage() {
         pauseDetail={pauseDetail}
         pauseFacts={pauseFacts}
         billingHealth={billingHealth}
+        predictedVolumes={predictedVolumes}
       />
     </div>
   );

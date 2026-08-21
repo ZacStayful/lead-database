@@ -21,6 +21,12 @@ import {
   locationText,
 } from "@/lib/leadFilter";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
+import {
+  belowAllocation,
+  fetchLeadVolumeAggregate,
+  predictMonthlyVolume,
+  type LeadVolumeAggregate,
+} from "@/lib/filterPrediction";
 import { offerState, formatRemaining, type PostCallOffer } from "@/lib/postCallOffers";
 import { Download } from "lucide-react";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
@@ -63,6 +69,18 @@ export default async function AdminCustomerDetailPage({
     .limit(1)
     .maybeSingle();
   const offer = (offerRaw as PostCallOffer | null) ?? null;
+
+  // Ingest-history aggregate for the filter card's predicted volume — the same
+  // functions the customer's filtering panel runs. Best-effort: a failed fetch
+  // costs the prediction row, never the page.
+  let volumeAggregate: LeadVolumeAggregate | null = null;
+  if (activeLeadFilters(customer).length > 0) {
+    try {
+      volumeAggregate = await fetchLeadVolumeAggregate(admin);
+    } catch (err) {
+      console.error("[admin/customer] filter volume prediction failed", err);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -121,7 +139,7 @@ export default async function AdminCustomerDetailPage({
 
           <GrSubscriptionCard customer={customer} />
 
-          <FilterCard customer={customer} />
+          <FilterCard customer={customer} volumeAggregate={volumeAggregate} />
         </div>
 
         <div className="lg:col-span-2">
@@ -205,14 +223,36 @@ export default async function AdminCustomerDetailPage({
  * priority_score (the deficit-formula value used to rank filtered candidates).
  * Never shown to the customer.
  */
-function FilterCard({ customer }: { customer: Customer }) {
-  const products = activeLeadFilters(customer).map((f) => ({
-    ...f,
-    priority:
+function FilterCard({
+  customer,
+  volumeAggregate,
+}: {
+  customer: Customer;
+  volumeAggregate: LeadVolumeAggregate | null;
+}) {
+  const products = activeLeadFilters(customer).map((f) => {
+    const allocation =
       f.leadType === "guaranteed_rent"
-        ? computeGrPacing(customer).deficit
-        : computePacing(customer).deficit,
-  }));
+        ? (customer.gr_monthly_allocation ?? 0)
+        : (customer.monthly_allocation ?? 0);
+    const prediction = volumeAggregate
+      ? predictMonthlyVolume(volumeAggregate[f.leadType], {
+          areas: f.areas,
+          minBedrooms: f.minBedrooms,
+          maxBedrooms: f.maxBedrooms,
+        })
+      : null;
+    return {
+      ...f,
+      priority:
+        f.leadType === "guaranteed_rent"
+          ? computeGrPacing(customer).deficit
+          : computePacing(customer).deficit,
+      prediction,
+      allocation,
+      below: prediction ? belowAllocation(prediction, allocation) : false,
+    };
+  });
 
   if (products.length === 0) return null;
 
@@ -249,6 +289,34 @@ function FilterCard({ customer }: { customer: Customer }) {
                 </dt>
                 <dd className="mt-0.5 font-medium">{p.priority}</dd>
               </div>
+              {p.prediction && (
+                <div>
+                  <dt className="text-xs text-muted-foreground">
+                    Predicted volume
+                  </dt>
+                  <dd className="mt-0.5 font-medium">
+                    {p.prediction.reliable ? (
+                      <>
+                        ~{p.prediction.displayRate} leads/month{" "}
+                        <span className="font-normal text-muted-foreground">
+                          ({p.prediction.matchingLeads} matches since 1 Jul)
+                        </span>
+                        {p.below && (
+                          <span className="block text-xs font-normal text-amber-700">
+                            Below plan of {p.allocation}/month — guarantee
+                            lifted
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="font-normal text-muted-foreground">
+                        Too little data ({p.prediction.matchingLeads} match
+                        {p.prediction.matchingLeads === 1 ? "" : "es"})
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              )}
               {p.status === "pending_lift" && p.liftDate && (
                 <div>
                   <dt className="text-xs text-muted-foreground">Lifts on</dt>

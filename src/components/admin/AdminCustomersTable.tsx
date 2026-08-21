@@ -20,7 +20,7 @@ import {
   filterTooltip,
   hasLeadFilter,
 } from "@/lib/leadFilter";
-import type { Customer, PauseEpisode } from "@/lib/types";
+import type { Customer, LeadType, PauseEpisode } from "@/lib/types";
 import {
   PAUSE_BANDS,
   PAUSE_BAND_LABEL,
@@ -149,12 +149,27 @@ const ACCOUNT_BADGE: Record<string, string> = {
   cancelled: "border-transparent bg-red-100 text-red-700",
 };
 
+/**
+ * Predicted monthly volume for one of a customer's active filters, computed
+ * server-side from the same `filterPrediction` functions the customer panel
+ * uses — so the admin reads the number the customer was shown.
+ */
+export interface FilterVolumeInfo {
+  leadType: LeadType;
+  /** Rounded leads/month. */
+  monthlyRate: number;
+  matchingLeads: number;
+  reliable: boolean;
+  belowAllocation: boolean;
+}
+
 export function AdminCustomersTable({
   customers,
   lastActive = {},
   pauseDetail = {},
   pauseFacts = {},
   billingHealth = {},
+  predictedVolumes = {},
 }: {
   customers: Customer[];
   /** customer.id → last sign-in timestamp (null = has login, never signed in). */
@@ -165,6 +180,8 @@ export function AdminCustomersTable({
   pauseFacts?: Record<string, PauseFacts>;
   /** customer.id → what Stripe says about whether they will bill again. */
   billingHealth?: Record<string, BillingHealth>;
+  /** customer.id → predicted monthly volume per active filter. */
+  predictedVolumes?: Record<string, FilterVolumeInfo[]>;
 }) {
   const [tab, setTab] = useState<Tab>("all");
   const [product, setProduct] = useState<ProductTab>("all");
@@ -436,27 +453,49 @@ export function AdminCustomersTable({
                     {/* What they actually filtered for. The badge alone said a
                         filter existed but not what it excluded, so judging why a
                         customer is starved of leads meant opening their page. */}
-                    {filters.map((f) => (
-                      <span
-                        key={f.leadType}
-                        title={filterTooltip(f)}
-                        className="mt-0.5 block text-xs font-normal text-muted-foreground"
-                      >
-                        {filters.length > 1 && (
-                          <span className="font-medium">
-                            {f.leadType === "guaranteed_rent" ? "GR" : "Mgmt"}:{" "}
-                          </span>
-                        )}
-                        {filterSummary(f)}
-                        {f.status === "pending_lift" && (
-                          <span className="text-amber-700">
-                            {" "}
-                            · lifting
-                            {f.liftDate ? ` ${formatDate(f.liftDate)}` : ""}
-                          </span>
-                        )}
-                      </span>
-                    ))}
+                    {filters.map((f) => {
+                      const vol = predictedVolumes[c.id]?.find(
+                        (v) => v.leadType === f.leadType
+                      );
+                      return (
+                        <span
+                          key={f.leadType}
+                          title={filterTooltip(f)}
+                          className="mt-0.5 block text-xs font-normal text-muted-foreground"
+                        >
+                          {filters.length > 1 && (
+                            <span className="font-medium">
+                              {f.leadType === "guaranteed_rent" ? "GR" : "Mgmt"}:{" "}
+                            </span>
+                          )}
+                          {filterSummary(f)}
+                          {f.status === "pending_lift" && (
+                            <span className="text-amber-700">
+                              {" "}
+                              · lifting
+                              {f.liftDate ? ` ${formatDate(f.liftDate)}` : ""}
+                            </span>
+                          )}
+                          {vol &&
+                            (!vol.reliable ? (
+                              <span className="text-amber-700">
+                                {" "}
+                                · low data ({vol.matchingLeads} lead
+                                {vol.matchingLeads === 1 ? "" : "s"})
+                              </span>
+                            ) : (
+                              <span
+                                className={
+                                  vol.belowAllocation ? "text-amber-700" : ""
+                                }
+                              >
+                                {" "}
+                                · ~{vol.monthlyRate}/mo predicted
+                              </span>
+                            ))}
+                        </span>
+                      );
+                    })}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{c.email}</TableCell>
                   <TableCell>
