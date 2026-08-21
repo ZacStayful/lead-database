@@ -273,11 +273,19 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   }
 
   async function apply() {
+    // The radius details are recorded only when the selection genuinely came
+    // from a resolved radius search — admin reads them to see what the
+    // customer asked for. Routing reads the areas either way.
+    const fromRadius =
+      locationMode === "radius" && radius != null && radius.outcode !== null;
     const ok = await post({
       action: "apply",
       areas: selectedAreas,
       min_bedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       max_bedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      selection_mode: fromRadius ? "radius" : "areas",
+      radius_outcode: fromRadius ? radius.outcode : null,
+      radius_miles: fromRadius ? radiusMiles : null,
     });
     if (ok) setEditing(false);
   }

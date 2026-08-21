@@ -98,6 +98,11 @@ export interface Customer {
   filter_max_bedrooms: number | null;
   filter_enabled_at: string | null;
   filter_lift_effective_date: string | null;
+  // How the filter was set (0094, metadata only — routing reads filter_areas).
+  // null = set before the radius mode existed; read only while a filter is on.
+  filter_selection_mode: "areas" | "radius" | string | null;
+  filter_radius_outcode: string | null;
+  filter_radius_miles: number | null;
   // Lead filtering (guaranteed-rent product) — gr_ mirror of the above.
   gr_filter_status: FilterStatus | string;
   gr_filter_areas: string[] | null;
@@ -105,6 +110,9 @@ export interface Customer {
   gr_filter_max_bedrooms: number | null;
   gr_filter_enabled_at: string | null;
   gr_filter_lift_effective_date: string | null;
+  gr_filter_selection_mode: "areas" | "radius" | string | null;
+  gr_filter_radius_outcode: string | null;
+  gr_filter_radius_miles: number | null;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;

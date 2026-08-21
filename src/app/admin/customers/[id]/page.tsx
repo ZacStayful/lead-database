@@ -18,6 +18,7 @@ import { formatDate } from "@/lib/utils";
 import {
   activeLeadFilters,
   bedroomPhrase,
+  filterKindLabel,
   locationText,
 } from "@/lib/leadFilter";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
@@ -271,6 +272,10 @@ function FilterCard({
               </Badge>
             </div>
             <dl className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <dt className="text-xs text-muted-foreground">Filter type</dt>
+                <dd className="mt-0.5 font-medium">{filterKindLabel(p)}</dd>
+              </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Areas</dt>
                 <dd className="mt-0.5 font-medium">

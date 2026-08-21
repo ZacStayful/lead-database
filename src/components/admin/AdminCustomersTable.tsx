@@ -16,6 +16,7 @@ import { formatDate } from "@/lib/utils";
 import { computePacing, computeGrPacing, type PacingStatus } from "@/lib/pacing";
 import {
   activeLeadFilters,
+  filterKindLabel,
   filterSummary,
   filterTooltip,
   hasLeadFilter,
@@ -469,6 +470,9 @@ export function AdminCustomersTable({
                             </span>
                           )}
                           {filterSummary(f)}
+                          {f.selectionMode === "radius" && (
+                            <span> · {filterKindLabel(f)}</span>
+                          )}
                           {f.status === "pending_lift" && (
                             <span className="text-amber-700">
                               {" "}
