@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cityForArea } from "@/lib/postcode";
+import { distanceToNearestKm } from "@/lib/areaCentroids";
 import type { LeadType } from "@/lib/types";
 
 /**
@@ -75,6 +76,8 @@ export interface ExpansionSuggestion {
   matchingLeads: number;
   /** Rounded leads/month the chip displays as "+~N/mo". */
   monthlyRate: number;
+  /** Km to the nearest selected area; null when no centroid is known. */
+  distanceKm: number | null;
 }
 
 /**
@@ -145,9 +148,29 @@ export function belowAllocation(
 }
 
 /**
- * Unselected areas that would add the most volume under the CURRENT bedroom
- * range, best first, zero-volume areas dropped. Empty when no areas are
+ * Proximity-score tuning. The soften constant (km, roughly half a postcode
+ * area's width) stops a next-door area with one lead from always outranking a
+ * slightly farther area with real volume; the exponent makes distance decay
+ * superlinear, so a hotspot 200km away cannot outrank a genuine neighbour —
+ * checked against live data: a Canterbury (CT) operator is offered Tunbridge
+ * Wells, not Nottingham.
+ */
+const DISTANCE_SOFTEN_KM = 25;
+const DISTANCE_EXPONENT = 1.5;
+
+/**
+ * Unselected areas the customer would plausibly expand INTO: close to the
+ * areas they already selected, and carrying real volume under the CURRENT
+ * bedroom range. Zero-volume areas are dropped; empty when no areas are
  * selected — the customer is already taking everything.
+ *
+ * Ranking blends the two things the suggestion is for — getting the customer
+ * closer to their allocation, from somewhere that still looks like THEIR
+ * patch — as `matchingLeads / (distanceKm + soften)^exponent`. A neighbouring
+ * area with decent volume beats both a distant hotspot and an adjacent dead
+ * zone; among near neighbours the richer one wins, because the point is
+ * closing the gap. Areas with no known centroid (e.g. BT, absent from the
+ * boundary file) rank after every area whose distance is known, by volume.
  */
 export function expansionSuggestions(
   volume: ProductVolume,
@@ -155,26 +178,40 @@ export function expansionSuggestions(
   limit = 3
 ): ExpansionSuggestion[] {
   if (sel.areas.length === 0) return [];
-  const selected = new Set(sel.areas.map((a) => a.toUpperCase()));
+  const selectedList = sel.areas.map((a) => a.toUpperCase());
+  const selected = new Set(selectedList);
 
-  const out: ExpansionSuggestion[] = [];
+  const scored: Array<ExpansionSuggestion & { score: number | null }> = [];
   for (const area of Object.keys(volume.areaBedCounts)) {
     if (selected.has(area)) continue;
     const p = predictMonthlyVolume(volume, { ...sel, areas: [area] });
     if (p.matchingLeads === 0) continue;
-    out.push({
+    const distanceKm = distanceToNearestKm(area, selectedList);
+    scored.push({
       area,
       city: cityForArea(area) || area,
       matchingLeads: p.matchingLeads,
       monthlyRate: p.displayRate,
+      distanceKm,
+      score:
+        distanceKm === null
+          ? null
+          : p.matchingLeads /
+            (distanceKm + DISTANCE_SOFTEN_KM) ** DISTANCE_EXPONENT,
     });
   }
 
-  out.sort(
-    (a, b) =>
-      b.matchingLeads - a.matchingLeads || a.area.localeCompare(b.area)
-  );
-  return out.slice(0, limit);
+  scored.sort((a, b) => {
+    if (a.score !== null && b.score !== null) {
+      return b.score - a.score || (a.distanceKm! - b.distanceKm!);
+    }
+    if (a.score !== null) return -1;
+    if (b.score !== null) return 1;
+    return b.matchingLeads - a.matchingLeads || a.area.localeCompare(b.area);
+  });
+  return scored
+    .slice(0, limit)
+    .map(({ score: _score, ...suggestion }) => suggestion);
 }
 
 /** Row shape both fetch paths produce (the filtering page's own loop, and fetchLeadVolumeAggregate). */

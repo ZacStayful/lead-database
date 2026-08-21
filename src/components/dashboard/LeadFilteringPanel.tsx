@@ -92,9 +92,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   );
 
   // Consent is to a specific number: any change of selection voids it.
+  // Keyed on the raw inputs, not the memoised object — React may recompute a
+  // useMemo without its inputs changing, which must not untick the box.
   useEffect(() => {
     setConfirmedRisk(false);
-  }, [draftSelection]);
+  }, [selectedAreas, minBeds, maxBeds]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
   // number the admin surfaces show for this customer.
@@ -602,7 +604,9 @@ function PredictionBox({
 
   const chips = suggestions.length > 0 && (
     <div>
-      <p className="text-xs font-medium">Expanding your search would help:</p>
+      <p className="text-xs font-medium">
+        Nearby areas that would get you closer:
+      </p>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {suggestions.map((s) => (
           <button
@@ -613,6 +617,8 @@ function PredictionBox({
           >
             + Add {s.area}
             {s.city !== s.area ? ` (${s.city})` : ""} · +~{s.monthlyRate}/mo
+            {s.distanceKm != null &&
+              ` · ${Math.max(1, Math.round(s.distanceKm * 0.621))} mi`}
           </button>
         ))}
       </div>
