@@ -147,21 +147,23 @@ export function haversineKm(a: LatLng, b: LatLng): number {
 }
 
 /**
- * Distance in km from `area` to the NEAREST of `fromAreas`, or null when
- * either side has no known centroid. Codes must already be uppercase.
+ * Distance in km from `area` to the NEAREST of `fromAreas` — and which one it
+ * was, so a UI can say "21 mi from Manchester" rather than leaving the reader
+ * to guess the anchor. Null when either side has no known centroid. Codes
+ * must already be uppercase.
  */
 export function distanceToNearestKm(
   area: string,
   fromAreas: string[]
-): number | null {
+): { km: number; fromArea: string } | null {
   const from = AREA_CENTROIDS[area];
   if (!from) return null;
-  let best: number | null = null;
+  let best: { km: number; fromArea: string } | null = null;
   for (const other of fromAreas) {
     const c = AREA_CENTROIDS[other];
     if (!c) continue;
     const d = haversineKm(from, c);
-    if (best === null || d < best) best = d;
+    if (best === null || d < best.km) best = { km: d, fromArea: other };
   }
   return best;
 }

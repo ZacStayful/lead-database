@@ -78,6 +78,11 @@ export interface ExpansionSuggestion {
   monthlyRate: number;
   /** Km to the nearest selected area; null when no centroid is known. */
   distanceKm: number | null;
+  /**
+   * WHICH selected area the distance is measured from, so a multi-area
+   * selection reads "21 mi from Manchester" rather than an unanchored figure.
+   */
+  nearestSelectedArea: string | null;
 }
 
 /**
@@ -178,12 +183,14 @@ export function expansionSuggestions(
     if (selected.has(area)) continue;
     const p = predictMonthlyVolume(volume, { ...sel, areas: [area] });
     if (p.matchingLeads === 0) continue;
+    const nearest = distanceToNearestKm(area, selectedList);
     out.push({
       area,
       city: cityForArea(area) || area,
       matchingLeads: p.matchingLeads,
       monthlyRate: p.displayRate,
-      distanceKm: distanceToNearestKm(area, selectedList),
+      distanceKm: nearest?.km ?? null,
+      nearestSelectedArea: nearest?.fromArea ?? null,
     });
   }
 

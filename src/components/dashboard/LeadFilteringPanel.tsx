@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
+import { cityForArea } from "@/lib/postcode";
+import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
+import { areasWithinRadius, type AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import {
   belowAllocation,
@@ -72,6 +75,30 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [confirmedRisk, setConfirmedRisk] = useState(false);
 
+  // How the customer picks locations: hand-pick areas, or a radius around
+  // their own postcode that resolves to the areas the circle touches. Radius
+  // is a SELECTOR, not a different filter: routing matches on postcode areas,
+  // so what is saved is always the resolved area set, through the same apply.
+  const [locationMode, setLocationMode] = useState<"areas" | "radius">("areas");
+  const [radiusPostcode, setRadiusPostcode] = useState("");
+  const [radiusMiles, setRadiusMiles] = useState(15);
+  const [geoFeatures, setGeoFeatures] = useState<AreaFeature[] | null>(null);
+  const [geoFailed, setGeoFailed] = useState(false);
+
+  // Boundary polygons for the radius test — fetched once, on first use of
+  // radius mode (the map fetches the same file, so it is usually cached).
+  useEffect(() => {
+    if (locationMode !== "radius" || geoFeatures || geoFailed) return;
+    let alive = true;
+    fetch("/data/uk-postcode-areas.geojson")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => alive && setGeoFeatures(d.features as AreaFeature[]))
+      .catch(() => alive && setGeoFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [locationMode, geoFeatures, geoFailed]);
+
   // Live prediction for the draft selection, recomputed on every toggle.
   const draftSelection: FilterSelection = useMemo(
     () => ({
@@ -86,9 +113,15 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [props.volume, draftSelection]
   );
   const isBelow = belowAllocation(prediction, props.monthlyAllocation);
+  // Nearest-area chips belong to hand-picking; in radius mode the "widen
+  // search" line is the expansion mechanic, and a chip toggle would be undone
+  // by the radius-to-selection sync anyway.
   const suggestions = useMemo(
-    () => (isBelow ? expansionSuggestions(props.volume, draftSelection) : []),
-    [isBelow, props.volume, draftSelection]
+    () =>
+      isBelow && locationMode === "areas"
+        ? expansionSuggestions(props.volume, draftSelection)
+        : [],
+    [isBelow, locationMode, props.volume, draftSelection]
   );
 
   // Consent is to a specific number: any change of selection voids it.
@@ -111,6 +144,85 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   );
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
 
+  // Radius mode: resolve the typed postcode + radius to the postcode areas
+  // the circle touches, and work out the smallest widening that would add
+  // more leads — "another 5 miles brings in Gloucester, about +2/month".
+  const MILES_TO_KM = 1.60934;
+  const radius = useMemo((): {
+    outcode: string | null;
+    covered: string[];
+    upside: { extraMiles: number; newAreas: string[]; extraRate: number } | null;
+  } | null => {
+    if (locationMode !== "radius" || !geoFeatures) return null;
+    const unresolved = { outcode: null, covered: [], upside: null };
+    const outcode = parseOutcode(radiusPostcode);
+    if (!outcode) return unresolved;
+    const centre = outcodeCentroid(outcode);
+    if (!centre) return unresolved;
+
+    const covered = areasWithinRadius(
+      geoFeatures,
+      centre,
+      radiusMiles * MILES_TO_KM
+    );
+    const bedSel = {
+      minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
+      maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+    };
+    const current = predictMonthlyVolume(props.volume, {
+      areas: covered,
+      ...bedSel,
+    });
+
+    // Scan outwards in 5-mile steps for the first widening that adds leads.
+    let upside: {
+      extraMiles: number;
+      newAreas: string[];
+      extraRate: number;
+    } | null = null;
+    for (const extra of [5, 10, 15, 20, 25, 30]) {
+      const wider = areasWithinRadius(
+        geoFeatures,
+        centre,
+        (radiusMiles + extra) * MILES_TO_KM
+      );
+      if (wider.length === covered.length) continue;
+      const p = predictMonthlyVolume(props.volume, {
+        areas: wider,
+        ...bedSel,
+      });
+      if (p.displayRate > current.displayRate) {
+        upside = {
+          extraMiles: extra,
+          newAreas: wider.filter((a) => !covered.includes(a)),
+          extraRate: p.displayRate - current.displayRate,
+        };
+        break;
+      }
+    }
+    return { outcode, covered, upside };
+  }, [
+    locationMode,
+    geoFeatures,
+    radiusPostcode,
+    radiusMiles,
+    minBeds,
+    maxBeds,
+    props.volume,
+  ]);
+
+  // In radius mode the covered areas ARE the selection, so the map, the
+  // prediction, the consent gate and apply all run off the same state as
+  // hand-picking. Keyed on the joined list to avoid a re-render loop.
+  const coveredKey =
+    radius && radius.outcode !== null ? radius.covered.join(",") : null;
+  useEffect(() => {
+    if (locationMode !== "radius" || coveredKey === null) return;
+    setSelectedAreas((prev) =>
+      prev.join(",") === coveredKey ? prev : coveredKey === "" ? [] : coveredKey.split(",")
+    );
+  }, [locationMode, coveredKey]);
+
   const visibleAreas = useMemo(() => {
     const q = areaQuery.trim().toLowerCase();
     if (!q) return availableAreas;
@@ -124,6 +236,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     setSelectedAreas((prev) =>
       prev.includes(area) ? prev.filter((a) => a !== area) : [...prev, area]
     );
+  }
+
+  /**
+   * A map click while in radius mode is the customer taking over by hand —
+   * switch to area mode first, or the radius sync would immediately undo the
+   * toggle. The radius-derived selection is kept as the starting point.
+   */
+  function toggleFromMap(area: string) {
+    if (locationMode === "radius") setLocationMode("areas");
+    toggleArea(area);
   }
 
   async function post(body: Record<string, unknown>) {
@@ -295,10 +417,39 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
             )}
 
             <div>
-              <label className="text-sm font-medium">Areas</label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-medium">Locations</label>
+                <div className="flex rounded-md border-[0.5px] border-border p-0.5 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setLocationMode("areas")}
+                    className={
+                      "rounded px-2.5 py-1 " +
+                      (locationMode === "areas"
+                        ? "bg-brand/10 text-brand"
+                        : "text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    Pick areas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLocationMode("radius")}
+                    className={
+                      "rounded px-2.5 py-1 " +
+                      (locationMode === "radius"
+                        ? "bg-brand/10 text-brand"
+                        : "text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    Radius search
+                  </button>
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Choose the postcode areas you want leads from. Leave all
-                unchecked to accept any location.
+                {locationMode === "areas"
+                  ? "Choose the postcode areas you want leads from. Leave all unchecked to accept any location."
+                  : "Enter your business postcode and how far you're willing to travel — we'll work out which postcode areas that covers."}
               </p>
               {availableAreas.length === 0 ? (
                 <p className="mt-2 text-sm text-muted-foreground">
@@ -313,10 +464,12 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                         maxCount={maxAreaCount}
                         selectable={selectableAreas}
                         selected={selectedAreas}
-                        onToggle={toggleArea}
+                        onToggle={toggleFromMap}
                       />
                     </div>
                   )}
+                  {locationMode === "areas" && (
+                  <>
                   <Input
                     className="mt-2"
                     placeholder="Search areas…"
@@ -373,6 +526,131 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                           </button>
                         </span>
                       ))}
+                    </div>
+                  )}
+                  </>
+                  )}
+
+                  {locationMode === "radius" && (
+                    <div className="mt-2 space-y-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                        <div className="flex-1">
+                          <label
+                            htmlFor={`${product}-radius-postcode`}
+                            className="block text-xs text-muted-foreground"
+                          >
+                            Your business postcode
+                          </label>
+                          <Input
+                            id={`${product}-radius-postcode`}
+                            value={radiusPostcode}
+                            onChange={(e) => setRadiusPostcode(e.target.value)}
+                            placeholder="e.g. LE67 8QN"
+                            autoComplete="postal-code"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor={`${product}-radius-miles`}
+                            className="block text-xs text-muted-foreground"
+                          >
+                            Radius
+                          </label>
+                          <select
+                            id={`${product}-radius-miles`}
+                            value={radiusMiles}
+                            onChange={(e) =>
+                              setRadiusMiles(parseInt(e.target.value, 10))
+                            }
+                            className="h-10 rounded-md border-[0.5px] border-border bg-background px-3 text-sm"
+                          >
+                            {[5, 10, 15, 20, 25, 30, 40, 50].map((m) => (
+                              <option key={m} value={m}>
+                                {m} miles
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {geoFailed && (
+                        <p className="text-sm text-amber-600">
+                          The area boundaries could not be loaded, so radius
+                          search is unavailable right now. You can still pick
+                          areas by hand.
+                        </p>
+                      )}
+                      {!geoFeatures && !geoFailed && (
+                        <p className="text-sm text-muted-foreground">
+                          Loading area boundaries…
+                        </p>
+                      )}
+                      {radius &&
+                        radius.outcode === null &&
+                        radiusPostcode.trim() !== "" && (
+                          <p className="text-sm text-amber-600">
+                            We don't recognise that postcode — check it, or
+                            try just its first half (e.g. LE67).
+                          </p>
+                        )}
+
+                      {radius && radius.outcode !== null && (
+                        <div className="space-y-2">
+                          <p className="text-sm">
+                            Within {radiusMiles} miles of{" "}
+                            <span className="font-semibold">
+                              {radius.outcode}
+                            </span>{" "}
+                            you'd receive leads from:{" "}
+                            {radius.covered.length > 0 ? (
+                              <span className="font-medium">
+                                {radius.covered
+                                  .map((a) => cityForArea(a) ? `${a} — ${cityForArea(a)}` : a)
+                                  .join(", ")}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">
+                                no postcode areas — widen the radius.
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Leads are matched by postcode area, so your filter
+                            covers each of these areas in full — including the
+                            parts beyond your radius.
+                          </p>
+                          {radius.upside && (
+                            <p className="text-sm">
+                              Widening to{" "}
+                              <span className="font-semibold">
+                                {radiusMiles + radius.upside.extraMiles} miles
+                              </span>{" "}
+                              would add{" "}
+                              {radius.upside.newAreas
+                                .map((a) => cityForArea(a) || a)
+                                .join(", ")}{" "}
+                              — about{" "}
+                              <span className="font-semibold">
+                                +{radius.upside.extraRate} lead
+                                {radius.upside.extraRate === 1 ? "" : "s"}
+                                /month
+                              </span>
+                              .{" "}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRadiusMiles(
+                                    radiusMiles + radius.upside!.extraMiles
+                                  )
+                                }
+                                className="font-medium text-brand hover:underline"
+                              >
+                                Widen search
+                              </button>
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
@@ -618,7 +896,11 @@ function PredictionBox({
             + Add {s.area}
             {s.city !== s.area ? ` (${s.city})` : ""} · +~{s.monthlyRate}/mo
             {s.distanceKm != null &&
-              ` · ${Math.max(1, Math.round(s.distanceKm * 0.621))} mi`}
+              ` · ${Math.max(1, Math.round(s.distanceKm * 0.621))} mi from ${
+                s.nearestSelectedArea
+                  ? cityForArea(s.nearestSelectedArea) || s.nearestSelectedArea
+                  : "your areas"
+              }`}
           </button>
         ))}
       </div>
