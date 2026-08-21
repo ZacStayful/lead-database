@@ -148,70 +148,63 @@ export function belowAllocation(
 }
 
 /**
- * Proximity-score tuning. The soften constant (km, roughly half a postcode
- * area's width) stops a next-door area with one lead from always outranking a
- * slightly farther area with real volume; the exponent makes distance decay
- * superlinear, so a hotspot 200km away cannot outrank a genuine neighbour —
- * checked against live data: a Canterbury (CT) operator is offered Tunbridge
- * Wells, not Nottingham.
- */
-const DISTANCE_SOFTEN_KM = 25;
-const DISTANCE_EXPONENT = 1.5;
-
-/**
- * Unselected areas the customer would plausibly expand INTO: close to the
- * areas they already selected, and carrying real volume under the CURRENT
- * bedroom range. Zero-volume areas are dropped; empty when no areas are
- * selected — the customer is already taking everything.
+ * Unselected areas the customer would plausibly expand INTO. The first area
+ * someone selects is where they are (or close to it), so suggestions are the
+ * areas AROUND their selection — places they could realistically service —
+ * ranked strictly by distance to the nearest selected area, nearest first.
+ * The point is to broaden their idea of what is within reach, not to point
+ * at wherever the national lead volume happens to sit: a hotspot 200km away
+ * is never a serviceable suggestion however many leads it holds. Volume
+ * decides only (a) membership — an area with zero matching leads under the
+ * current bedroom range is dropped, it would add nothing — and (b) the tie
+ * between two areas at effectively the same distance.
  *
- * Ranking blends the two things the suggestion is for — getting the customer
- * closer to their allocation, from somewhere that still looks like THEIR
- * patch — as `matchingLeads / (distanceKm + soften)^exponent`. A neighbouring
- * area with decent volume beats both a distant hotspot and an adjacent dead
- * zone; among near neighbours the richer one wins, because the point is
- * closing the gap. Areas with no known centroid (e.g. BT, absent from the
- * boundary file) rank after every area whose distance is known, by volume.
+ * Areas with no known centroid (e.g. BT, absent from the boundary file) rank
+ * after every area whose distance is known, by volume; the same fallback
+ * applies to the whole list when the customer's own selection has no
+ * centroid. Empty when no areas are selected — they already take everything.
  */
 export function expansionSuggestions(
   volume: ProductVolume,
   sel: FilterSelection,
-  limit = 3
+  limit = 5
 ): ExpansionSuggestion[] {
   if (sel.areas.length === 0) return [];
   const selectedList = sel.areas.map((a) => a.toUpperCase());
   const selected = new Set(selectedList);
 
-  const scored: Array<ExpansionSuggestion & { score: number | null }> = [];
+  const out: ExpansionSuggestion[] = [];
   for (const area of Object.keys(volume.areaBedCounts)) {
     if (selected.has(area)) continue;
     const p = predictMonthlyVolume(volume, { ...sel, areas: [area] });
     if (p.matchingLeads === 0) continue;
-    const distanceKm = distanceToNearestKm(area, selectedList);
-    scored.push({
+    out.push({
       area,
       city: cityForArea(area) || area,
       matchingLeads: p.matchingLeads,
       monthlyRate: p.displayRate,
-      distanceKm,
-      score:
-        distanceKm === null
-          ? null
-          : p.matchingLeads /
-            (distanceKm + DISTANCE_SOFTEN_KM) ** DISTANCE_EXPONENT,
+      distanceKm: distanceToNearestKm(area, selectedList),
     });
   }
 
-  scored.sort((a, b) => {
-    if (a.score !== null && b.score !== null) {
-      return b.score - a.score || (a.distanceKm! - b.distanceKm!);
+  // Nearest first, in 20km bands: centroid distance is approximate, so two
+  // areas in the same band are "equally close" and the one with more leads
+  // wins the tie. Banding (rather than a pairwise tolerance) keeps the
+  // ordering transitive.
+  const band = (km: number) => Math.floor(km / 20);
+  out.sort((a, b) => {
+    if (a.distanceKm !== null && b.distanceKm !== null) {
+      return (
+        band(a.distanceKm) - band(b.distanceKm) ||
+        b.matchingLeads - a.matchingLeads ||
+        a.distanceKm - b.distanceKm
+      );
     }
-    if (a.score !== null) return -1;
-    if (b.score !== null) return 1;
+    if (a.distanceKm !== null) return -1;
+    if (b.distanceKm !== null) return 1;
     return b.matchingLeads - a.matchingLeads || a.area.localeCompare(b.area);
   });
-  return scored
-    .slice(0, limit)
-    .map(({ score: _score, ...suggestion }) => suggestion);
+  return out.slice(0, limit);
 }
 
 /** Row shape both fetch paths produce (the filtering page's own loop, and fetchLeadVolumeAggregate). */
