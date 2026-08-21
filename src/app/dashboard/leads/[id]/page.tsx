@@ -70,6 +70,7 @@ export default async function LeadDetailPage({
       prevLeadId={prevLeadId}
       nextLeadId={nextLeadId}
       signedCountBefore={signedCountBefore ?? 0}
+      presentationConfigured={customer.presentation_settings_updated_at != null}
     />
   );
 }

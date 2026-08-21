@@ -41,7 +41,7 @@
     <div style="max-width:880px;margin:0 auto;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
       <div>
         <div style="font-weight:600;font-size:17px;color:#1a1a19;">Presentation setup</div>
-        <div style="font-size:13px;color:#8a8b84;">Enter your figures — saved on this device as you type.</div>
+        <div style="font-size:13px;color:#8a8b84;">{{ setupSubhead }}</div>
       </div>
       <button type="button" onClick="{{ goPresent }}" style="background:#2f7d4f;color:#fff;border:none;border-radius:9px;padding:11px 22px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .15s ease, background .15s ease;" style-hover="background:#245f3c;transform:translateY(-1px);">Present</button>
     </div>
@@ -49,6 +49,49 @@
 
   <div style="max-width:880px;margin:0 auto;padding:28px 24px 0;display:flex;flex-direction:column;gap:20px;">
 
+    <!-- ==== STAYFUL EDIT 4 of 4 (0093): the collapsed, seeded setup screen ====
+         Everything below this block is the ORIGINAL form, untouched, wrapped in
+         a manualSetup conditional, so the blank tool at /dashboard/documents still
+         shows all of it. When a lead has seeded the tool, 20 of its ~28 inputs
+         are already answered by the property's analysis and 6 more by the
+         operator's saved profile, so asking again is asking twice. -->
+    <sc-if value="{{ seeded }}" hint-placeholder-val="{{ false }}">
+
+    <sc-if value="{{ profileUnset }}" hint-placeholder-val="{{ false }}">
+    <div style="background:#fdf6e3;border:1px solid rgba(180,140,20,0.35);border-radius:14px;padding:20px 22px;">
+      <div style="font-weight:600;font-size:16px;margin-bottom:6px;">Your presentation details aren&rsquo;t set up yet</div>
+      <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:#5a4a1a;max-width:70ch;">The figures below come from this property&rsquo;s analysis, but your fee, contract terms and process are still generic wording. Set them once and every lead&rsquo;s presentation uses them.</p>
+      <a href="{{ profileUrl }}" style="display:inline-flex;align-items:center;gap:8px;background:#2f7d4f;color:#fff;border-radius:9px;padding:10px 18px;font-size:14px;font-weight:600;">Set up my details</a>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ profileStale }}" hint-placeholder-val="{{ false }}">
+    <div style="background:#fff;border:1px solid rgba(20,30,22,0.16);border-radius:14px;padding:16px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
+      <span style="font-size:14px;color:#1a1a19;">Your presentation details have changed since you set this lead up.</span>
+      <button onClick="{{ applyProfile }}" style="background:#2f7d4f;color:#fff;border:0;border-radius:9px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;">Apply them</button>
+    </div>
+    </sc-if>
+
+    <div style="background:#16241c;border-radius:14px;padding:28px;color:#f4f8f2;">
+      <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:rgba(244,248,242,0.6);margin-bottom:8px;">Presenting as {{ companyLabel }}</div>
+      <div style="font-weight:600;font-size:20px;margin-bottom:4px;">{{ propertyLabel }}</div>
+      <div style="font-size:14px;color:rgba(244,248,242,0.72);margin-bottom:20px;">{{ landlordLine }}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:18px;">
+        <div><div style="font-size:12px;color:rgba(244,248,242,0.6);">Gross revenue</div><div style="font-size:19px;font-weight:600;">{{ grossAnnual }}</div></div>
+        <div><div style="font-size:12px;color:rgba(244,248,242,0.6);">Your net</div><div style="font-size:19px;font-weight:600;">{{ netAnnual }}</div></div>
+        <div><div style="font-size:12px;color:rgba(244,248,242,0.6);">Nightly rate</div><div style="font-size:19px;font-weight:600;">{{ nightly }}</div></div>
+        <div><div style="font-size:12px;color:rgba(244,248,242,0.6);">Occupancy</div><div style="font-size:19px;font-weight:600;">{{ occupancy }}</div></div>
+      </div>
+      <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:rgba(244,248,242,0.72);max-width:70ch;">From Stayful&rsquo;s analysis of this property. Your fee and terms come from your settings. Check anything you disagree with before you present &mdash; the analysis is an estimate.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;">
+        <button onClick="{{ toggleFigures }}" style="background:rgba(244,248,242,0.12);color:#f4f8f2;border:1px solid rgba(244,248,242,0.25);border-radius:9px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;">{{ figuresToggle }}</button>
+        <button onClick="{{ reloadFigures }}" style="background:transparent;color:rgba(244,248,242,0.72);border:0;padding:9px 4px;font-size:14px;cursor:pointer;text-decoration:underline;">Reload figures from the lead</button>
+        <a href="{{ profileUrl }}" style="color:rgba(244,248,242,0.72);padding:9px 4px;font-size:14px;text-decoration:underline;">Edit my terms</a>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ figuresEditable }}" hint-placeholder-val="{{ true }}">
     <!-- Intro -->
     <div style="background:#16241c;border-radius:14px;padding:30px 28px;color:#f4f8f2;display:flex;flex-direction:column;align-items:center;text-align:center;">
       <div style="font-weight:600;font-size:18px;margin-bottom:10px;">Build a presentation tailored to this lead</div>
@@ -128,6 +171,9 @@
       </div>
     </div>
 
+    </sc-if>
+
+    <sc-if value="{{ manualSetup }}" hint-placeholder-val="{{ true }}">
     <!-- how it works -->
     <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:14px;padding:24px;">
       <div style="font-weight:600;font-size:16px;margin-bottom:4px;">How it works</div>
@@ -200,6 +246,8 @@
         </div>
       </div>
     </div>
+
+    </sc-if>
 
     <!-- notes -->
     <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:14px;padding:24px;">
@@ -512,23 +560,96 @@
 class Component extends DCLogic {
   constructor(props) {
     super(props);
-    this.state = { data: this.defaults(), mode: 'setup', slide: 1, notesOpen: false, openAcc: 'fee', subs: {} };
+    // STAYFUL EDIT (0093): seeded / figuresOpen / profileStale drive the
+    // collapsed setup screen and the two profile prompts.
+    this.state = { data: this.defaults(), mode: 'setup', slide: 1, notesOpen: false, openAcc: 'fee', subs: {}, seeded: false, figuresOpen: false, profileStale: false };
   }
   componentDidMount() {
+    // ---- STAYFUL EDIT 1 of 4 (0093): open pre-filled for one lead. ----------
+    // This file is generated upstream, so every change to it is bounded and
+    // marked. See CLAUDE.md §26.
+    //
+    // With ?lead=<id> the tool saves under a PER-LEAD key. It used to use one
+    // key for the whole browser, so working a second landlord silently wiped
+    // the first. No lead id means the original key, unchanged, which is what
+    // keeps /dashboard/documents and everybody's saved work exactly as it was.
     try {
-      const raw = localStorage.getItem('wm_income_tool_v1');
-      if (raw) { const saved = JSON.parse(raw); this.setState({ data: this.merge(this.defaults(), saved) }); }
+      const leadId = (new URLSearchParams(location.search).get('lead') || '').trim();
+      this._leadId = /^[0-9a-f-]{36}$/i.test(leadId) ? leadId : '';
+      this._key = this._leadId ? 'wm_income_tool_v1:' + this._leadId : 'wm_income_tool_v1';
+      const raw = localStorage.getItem(this._key);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        this.setState({ data: this.merge(this.defaults(), saved), seeded: !!this._leadId });
+        // Their own edits win. If the profile has been set up since, offer it
+        // rather than overwriting what they typed.
+        if (this._leadId) this.checkProfile(saved);
+      } else if (this._leadId) {
+        this.seedFromLead();
+      }
     } catch (e) {}
-    this._key = (e) => {
+    // ---- end STAYFUL EDIT 1 ------------------------------------------------
+    // STAYFUL: renamed from _key, which now holds the storage key (edit 1).
+    this._keyHandler = (e) => {
       if (this.state.mode !== 'present') return;
       const tag = (e.target && e.target.tagName) || '';
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
       if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) { e.preventDefault(); this.go(1); }
       else if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); this.go(-1); }
     };
-    window.addEventListener('keydown', this._key);
+    window.addEventListener('keydown', this._keyHandler);
   }
-  componentWillUnmount() { if (this._key) window.removeEventListener('keydown', this._key); }
+  componentWillUnmount() { if (this._keyHandler) window.removeEventListener('keydown', this._keyHandler); }
+
+  // ---- STAYFUL: seeding helpers (0093) -----------------------------------
+  // NEVER THROWS AND NEVER BLOCKS. A failed fetch leaves the tool exactly as it
+  // behaved before any of this existed: the defaults, editable by hand.
+  seedFromLead = async (profileOnly) => {
+    if (!this._leadId) return;
+    try {
+      const res = await fetch('/api/customer/presentation/' + this._leadId);
+      if (!res.ok) return;
+      const body = await res.json();
+      if (!body || !body.data) return;
+      this._profile = body.profile || null;
+      this.setState(st => {
+        // profileOnly: apply the operator's terms over what they have already
+        // edited, leaving their figures and their notes alone.
+        const next = profileOnly
+          ? this.merge(st.data, {
+              fee: body.data.fee, cleaning: body.data.cleaning,
+              contract: body.data.contract, compliance: body.data.compliance,
+              vetting: body.data.vetting, onboarding: body.data.onboarding,
+              managed: body.data.managed, landlord: body.data.landlord
+            })
+          : this.merge(this.defaults(), body.data);
+        next.seededAt = (body.profile && body.profile.updatedAt) || '';
+        this.save(next);
+        return { data: next, seeded: true, profileStale: false };
+      });
+    } catch (e) {}
+  };
+
+  // Did they set their terms up AFTER this lead was seeded? Only reachable when
+  // they had already edited something — merely opening a lead saves nothing, so
+  // the common "read the prompt, go and fill it in, come back" path re-seeds
+  // from scratch on its own.
+  checkProfile = async (saved) => {
+    try {
+      const res = await fetch('/api/customer/presentation/' + this._leadId);
+      if (!res.ok) return;
+      const body = await res.json();
+      this._profile = body.profile || null;
+      const now = body.profile && body.profile.updatedAt;
+      const then = saved && saved.seededAt;
+      this.setState({ seeded: true, profileStale: !!(now && now !== then) });
+    } catch (e) {}
+  };
+
+  applyProfile = () => this.seedFromLead(true);
+  reloadFigures = () => { if (this._leadId) { try { localStorage.removeItem(this._key); } catch (e) {} this.seedFromLead(false); } };
+  toggleFigures = () => this.setState(st => ({ figuresOpen: !st.figuresOpen }));
+  // ---- end STAYFUL seeding helpers ---------------------------------------
   merge(base, over) {
     const out = Array.isArray(base) ? [] : {};
     for (const k in base) out[k] = base[k];
@@ -574,10 +695,16 @@ class Component extends DCLogic {
         { label: 'Send management agreement', done: false },
         { label: 'Send income breakdown', done: false }
       ],
-      notes: { landlord: '', phone: '', note: '' }
+      notes: { landlord: '', phone: '', note: '' },
+      // STAYFUL EDIT (0093): the property's own seasonal curve as multipliers
+      // of its average month, and the profile timestamp this lead was seeded
+      // at. Null/'' means "no lead seeded this".
+      monthWeights: null,
+      seededAt: ''
     };
   }
-  save(data) { try { localStorage.setItem('wm_income_tool_v1', JSON.stringify(data)); } catch (e) {} }
+  // STAYFUL EDIT (0093): per-lead storage key, falling back to the original.
+  save(data) { try { localStorage.setItem(this._key || 'wm_income_tool_v1', JSON.stringify(data)); } catch (e) {} }
   update(mut) {
     this.setState(s => { const data = JSON.parse(JSON.stringify(s.data)); mut(data); this.save(data); return { data }; });
   }
@@ -609,7 +736,15 @@ class Component extends DCLogic {
   };
   genMonths = () => {
     this.update(d => {
-      const w = [0.62, 0.67, 0.83, 0.98, 1.15, 1.32, 1.43, 1.47, 1.19, 0.98, 0.74, 0.58];
+      // ---- STAYFUL EDIT 2 of 4 (0093) --------------------------------------
+      // Use THIS property's seasonal curve when its analysis gave us one. The
+      // array below is a generic seasonal shape and was the only option; a real
+      // curve is strictly better, and the variance damping that softens the
+      // generic one is released to 1 by the seed so it does not flatten it.
+      const w = (Array.isArray(d.monthWeights) && d.monthWeights.length === 12)
+        ? d.monthWeights
+        : [0.62, 0.67, 0.83, 0.98, 1.15, 1.32, 1.43, 1.47, 1.19, 0.98, 0.74, 0.58];
+      // ---- end STAYFUL EDIT 2 ----------------------------------------------
       const v = Number(d.chart.variance) || 0;
       const avg = this.calc(d).netMonthlyNum;
       d.months = w.map(f => Math.max(0, Math.round(avg * (1 + (f - 1) * v) / 10) * 10));
@@ -674,6 +809,27 @@ class Component extends DCLogic {
 
     const fee = d.fee;
     return {
+      // ---- STAYFUL EDIT 3 of 4 (0093): flags for the collapsed setup screen.
+      // manualSetup is the one the template switches on, so the blank tool
+      // (no ?lead=) keeps the complete form it has always had.
+      manualSetup: !s.seeded,
+      seeded: s.seeded,
+      // The income, 12-month and cases blocks: always for the blank tool, and
+      // behind "Adjust figures" for a seeded lead. The report is an estimate
+      // and an operator must be able to overrule a figure they disagree with.
+      figuresEditable: !s.seeded || s.figuresOpen,
+      figuresOpen: s.figuresOpen,
+      figuresToggle: s.figuresOpen ? 'Hide figures' : 'Adjust figures',
+      setupSubhead: s.seeded
+        ? 'Filled in from this property\u2019s analysis \u2014 check it, then present.'
+        : 'Enter your figures \u2014 saved on this device as you type.',
+      profileUnset: s.seeded && !!this._profile && !this._profile.configured,
+      profileStale: s.seeded && !!s.profileStale,
+      profileUrl: (this._profile && this._profile.url) || '/dashboard/settings',
+      toggleFigures: this.toggleFigures,
+      applyProfile: this.applyProfile,
+      reloadFigures: this.reloadFigures,
+      // ---- end STAYFUL EDIT 3 ----------------------------------------------
       isSetup: s.mode === 'setup', isPresent: s.mode === 'present',
       s1: s.slide === 1, s2: s.slide === 2, s3: s.slide === 3, s4: s.slide === 4, s5: s.slide === 5, s6: s.slide === 6,
       counter: s.slide + ' / 6',
@@ -682,6 +838,7 @@ class Component extends DCLogic {
       onChange: this.onChange, addItem: this.addItem, removeItem: this.removeItem, genMonths: this.genMonths,
       goPrev: this.goPrev, goNext: this.goNext, goSetup: this.goSetup, goPresent: this.goPresent,
       toggleNotes: this.toggleNotes, toggleAcc: this.toggleAcc, toggleSub: this.toggleSub,
+      landlordLine: (d.notes.landlord || 'This landlord') + (d.notes.phone ? ' \u00b7 ' + d.notes.phone : ''),
       companyLabel: d.company || '[Your company]',
       propertyLabel: d.property || 'this property',
       grossAnnual: this.gbp(c.gross), grossMonthly: this.gbp(c.grossM),

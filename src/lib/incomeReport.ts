@@ -73,8 +73,64 @@ const NIGHTLY_RATE_RE = /£\s*([\d,]+)\s+ADR\s+across/i;
  */
 const OCCUPANCY_RE = /(\d+)\s*%\s+Market\s+average\s+(\d+)\s*%/i;
 
+/**
+ * The Short-Term Rental breakdown's bottom two rows, matched TOGETHER (0093).
+ *
+ * `NET ANNUAL REVENUE` appears TWICE in every report — once for the short-let
+ * table and once for the long-let one directly below it — so matching it alone
+ * is a coin toss that happens to land right today and would land wrong the day
+ * the tables swap order. Anchoring through `Total Operating Costs`, which
+ * appears only in the short-let table, makes the pair unambiguous and hands
+ * back the costs figure that corroborates it.
+ *
+ * The headline block states the same number as `N E T R E V E N U E`, which is
+ * letter-spaced and unmatchable — the reason this reads the table, as GROSS_RE
+ * does.
+ */
+const NET_RE =
+  /Total\s+Operating\s+Costs\s*\(\s*[\d.]+\s*%\s*\)\s*£\s*([\d,]+)\s*£\s*[\d,]+\s*NET\s+ANNUAL\s+REVENUE\s*£\s*([\d,]+)\s*£\s*([\d,]+)/i;
+
+/**
+ * `Platform Fees (15%) £12,489` and `Cleaning & Laundry (18%) £14,987`.
+ *
+ * These two DO come from the report where the management fee deliberately does
+ * not: a platform's commission and what a clean costs are facts about the
+ * market that apply to whoever runs the property, while the management fee is
+ * the operator's own price and is theirs to set (§26).
+ */
+const PLATFORM_RE = /Platform\s+Fees\s*\(\s*([\d.]+)\s*%\s*\)\s*£\s*([\d,]+)/i;
+const CLEANING_RE =
+  /Cleaning\s*(?:&|and)\s*Laundry\s*\(\s*([\d.]+)\s*%\s*\)\s*£\s*([\d,]+)/i;
+
+/**
+ * `Gross Rental Income £26,940 £2,245` — the Long-Term Let table's top row, and
+ * the only place that phrase appears.
+ */
+const LONG_LET_RE = /Gross\s+Rental\s+Income\s*£\s*([\d,]+)\s*£\s*([\d,]+)/i;
+
+/**
+ * The forecast table prints `January £3,142 +£1,122 100%` per row. Full month
+ * names appear only there — the bar chart above it abbreviates to `Jan` — so
+ * the name is a safe anchor and the order is read from the names rather than
+ * from position.
+ */
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
+
 /** The stated monthly must be the stated annual over twelve, within rounding. */
 const MONTHLY_TOLERANCE = 0.02;
+/** A stated percentage must agree with the money printed beside it. */
+const PCT_TOLERANCE = 0.01;
+/** Gross minus the report's own total operating costs must be its net. */
+const NET_TOLERANCE = 0.01;
+/**
+ * Twelve rounded monthlies against a rounded annual. Looser than the others
+ * because twelve roundings accumulate, and it is still tight enough to reject a
+ * curve that has picked up a row from another table.
+ */
+const PROFILE_SUM_TOLERANCE = 0.05;
 /** The report's own fee line must agree with gross / 6.667. */
 const FEE_TOLERANCE = 0.01;
 const MANAGEMENT_FEE_DIVISOR = 6.667;
@@ -86,6 +142,19 @@ export interface ParsedIncomeReport {
   avgNightlyRate: number | null;
   /** The percentage as printed (63, not 0.63). Same null rule as the rate. */
   occupancyRate: number | null;
+  /**
+   * What the landlord keeps at STAYFUL'S fee structure. Never shown to anyone
+   * (0093) — the presentation computes its own net from the operator's fee.
+   * Kept because it corroborates the whole breakdown table.
+   */
+  netAnnualIncome: number | null;
+  /** The Long-Term Let table's gross rent. */
+  longLetAnnualIncome: number | null;
+  /** Percentages as printed (15, not 0.15). */
+  platformFeePct: number | null;
+  cleaningFeePct: number | null;
+  /** The twelve-month forecast, January first, or null. */
+  monthlyRevenueProfile: number[] | null;
 }
 
 /**
@@ -166,6 +235,7 @@ export async function parseIncomeReport(
   return {
     grossAnnualIncome: annual,
     ...parseRateAndOccupancy(flat),
+    ...parsePresentationFigures(flat, annual),
   };
 }
 
@@ -208,6 +278,156 @@ function parseRateAndOccupancy(
   return { avgNightlyRate: rate, occupancyRate: occupancy };
 }
 
+/**
+ * Everything else the report states, for the tailored presentation (0093).
+ *
+ * FIVE FIGURES THAT FAIL INDEPENDENTLY, and independently of the gross. Each is
+ * dropped on its own if it cannot be corroborated, and none of them can fail the
+ * parse: a lead whose platform-fee percentage could not be read still shows the
+ * income figures 149 leads are already live with, and its presentation simply
+ * falls back to the tool's own default for that one field.
+ *
+ * `p_gross` is passed in rather than re-matched because every cross-check here
+ * is against it, and re-reading it would let two branches disagree about which
+ * gross they were checking.
+ */
+function parsePresentationFigures(
+  flat: string,
+  gross: number
+): Pick<
+  ParsedIncomeReport,
+  | "netAnnualIncome"
+  | "longLetAnnualIncome"
+  | "platformFeePct"
+  | "cleaningFeePct"
+  | "monthlyRevenueProfile"
+> {
+  const netAnnualIncome = parseNet(flat, gross);
+  return {
+    netAnnualIncome,
+    longLetAnnualIncome: parseLongLet(flat),
+    platformFeePct: parsePctLine(flat, PLATFORM_RE, gross, "platform"),
+    cleaningFeePct: parsePctLine(flat, CLEANING_RE, gross, "cleaning"),
+    // The forecast is checked against the NET, not the gross — it is a table of
+    // net monthlies — so it can only be trusted when the net was.
+    monthlyRevenueProfile: parseMonthlyProfile(flat, netAnnualIncome),
+  };
+}
+
+/**
+ * The short-let table's net, corroborated twice: the printed monthly must be
+ * the printed annual over twelve, and `gross - total operating costs` must
+ * reproduce it. The second is the strong one — it says the whole breakdown
+ * table was read coherently rather than a match having straddled two unrelated
+ * cells.
+ */
+function parseNet(flat: string, gross: number): number | null {
+  const m = flat.match(NET_RE);
+  if (!m) return null;
+
+  const costs = toNumber(m[1]);
+  const annual = toNumber(m[2]);
+  const monthly = toNumber(m[3]);
+  if (!Number.isFinite(annual) || annual <= 0) return null;
+  if (!Number.isFinite(monthly) || monthly <= 0) return null;
+  if (!Number.isFinite(costs) || costs <= 0) return null;
+
+  const expectedMonthly = annual / 12;
+  if (Math.abs(monthly - expectedMonthly) / expectedMonthly > MONTHLY_TOLERANCE) {
+    console.error(`parseNet: monthly ${monthly} does not match annual ${annual} / 12`);
+    return null;
+  }
+  // A net at or above gross is not a net; it is a match on the wrong table.
+  if (annual >= gross) {
+    console.error(`parseNet: net ${annual} is not below gross ${gross}`);
+    return null;
+  }
+  if (Math.abs(gross - costs - annual) / annual > NET_TOLERANCE) {
+    console.error(`parseNet: gross ${gross} - costs ${costs} does not give net ${annual}`);
+    return null;
+  }
+  return annual;
+}
+
+/** The long-let table's gross rent, corroborated by its own monthly. */
+function parseLongLet(flat: string): number | null {
+  const m = flat.match(LONG_LET_RE);
+  if (!m) return null;
+  const annual = toNumber(m[1]);
+  const monthly = toNumber(m[2]);
+  if (!Number.isFinite(annual) || annual <= 0) return null;
+  if (!Number.isFinite(monthly) || monthly <= 0) return null;
+  const expectedMonthly = annual / 12;
+  if (Math.abs(monthly - expectedMonthly) / expectedMonthly > MONTHLY_TOLERANCE) {
+    console.error(`parseLongLet: monthly ${monthly} does not match annual ${annual} / 12`);
+    return null;
+  }
+  return annual;
+}
+
+/**
+ * A `(15%) £12,489` cost line. The percentage is what we want; the money beside
+ * it is what proves we read the right line, because a percentage on its own is
+ * two characters and could come from anywhere in the document.
+ */
+function parsePctLine(
+  flat: string,
+  re: RegExp,
+  gross: number,
+  label: string
+): number | null {
+  const m = flat.match(re);
+  if (!m) return null;
+  const pct = Number(m[1]);
+  const money = toNumber(m[2]);
+  if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) return null;
+  if (!Number.isFinite(money) || money <= 0) return null;
+  const expected = (gross * pct) / 100;
+  if (Math.abs(money - expected) / expected > PCT_TOLERANCE) {
+    console.error(`parsePctLine(${label}): ${money} is not ${pct}% of ${gross}`);
+    return null;
+  }
+  return pct;
+}
+
+/**
+ * The twelve-month forecast, in calendar order.
+ *
+ * ALL TWELVE OR NOTHING. A partial forecast is not a seasonal curve, and a
+ * shape built from nine months would misprice a season silently. The sum is
+ * checked against the report's own net, which is what catches a row picked up
+ * from a neighbouring table.
+ */
+function parseMonthlyProfile(flat: string, net: number | null): number[] | null {
+  if (net == null) return null;
+
+  const months: number[] = [];
+  for (const name of MONTH_NAMES) {
+    // Anchored on the SECOND £ — the "vs long-let" column — so a month named
+    // anywhere else in the document cannot match. Its sign is optional on
+    // purpose: the report prints "+£75" for a gain but a NEGATIVE delta comes
+    // through the text layer as a bare "£545", the minus glyph having been
+    // dropped. Requiring the sign silently lost the forecast on every property
+    // that underperforms a long let in any single month — 11 of 24 live
+    // reports, which is exactly the population where the seasonal curve is
+    // most worth showing.
+    const m = flat.match(
+      new RegExp(`${name}\\s*£\\s*([\\d,]+)\\s*[+\\-\\u2212]?\\s*£`, "i")
+    );
+    if (!m) return null;
+    const value = toNumber(m[1]);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    months.push(value);
+  }
+
+  const sum = months.reduce((a, b) => a + b, 0);
+  if (Math.abs(sum - net) / net > PROFILE_SUM_TOLERANCE) {
+    console.error(`parseMonthlyProfile: months sum to ${sum}, net is ${net}`);
+    return null;
+  }
+  return months;
+}
+
 // ---------------------------------------------------------------------------
 // Fetching a report and turning the outcome into columns.
 //
@@ -229,6 +449,12 @@ export interface IncomeReportOutcome {
   grossAnnualIncome: number | null;
   avgNightlyRate: number | null;
   occupancyRate: number | null;
+  /** The presentation figures (0093). Same fail-alone rule as the two above. */
+  netAnnualIncome: number | null;
+  longLetAnnualIncome: number | null;
+  platformFeePct: number | null;
+  cleaningFeePct: number | null;
+  monthlyRevenueProfile: number[] | null;
   assetId: string | null;
   error: string | null;
   /**
@@ -272,6 +498,11 @@ const NO_FIGURES = {
   grossAnnualIncome: null,
   avgNightlyRate: null,
   occupancyRate: null,
+  netAnnualIncome: null,
+  longLetAnnualIncome: null,
+  platformFeePct: null,
+  cleaningFeePct: null,
+  monthlyRevenueProfile: null,
   bytes: null,
 } as const;
 
@@ -349,6 +580,11 @@ export function incomeReportPatch(
     gross_annual_income: outcome.grossAnnualIncome,
     avg_nightly_rate: outcome.avgNightlyRate,
     occupancy_rate: outcome.occupancyRate,
+    net_annual_income: outcome.netAnnualIncome,
+    long_let_annual_income: outcome.longLetAnnualIncome,
+    platform_fee_pct: outcome.platformFeePct,
+    cleaning_fee_pct: outcome.cleaningFeePct,
+    monthly_revenue_profile: outcome.monthlyRevenueProfile,
     income_report_status: outcome.status,
     income_report_asset_id: outcome.assetId,
     income_report_parsed_at: new Date().toISOString(),

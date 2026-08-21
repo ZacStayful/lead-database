@@ -112,6 +112,16 @@ export interface Customer {
   sms_alerts_enabled: boolean;
   // Per-stream notification opt-in flags (jsonb, NOT NULL, all default true).
   notification_preferences: NotificationPreferences;
+  /**
+   * The operator's own half of the income presentation (0093): fee, contract
+   * terms and process, applied to every lead's presentation. Validated against
+   * a key whitelist in src/lib/presentationSettings.ts. Never contains anything
+   * read from a lead — in particular not the report's 15% management fee, which
+   * is Stayful's and not theirs.
+   */
+  presentation_settings: unknown;
+  /** NULL means never set up, which is what the dashboard prompts on. */
+  presentation_settings_updated_at: string | null;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).

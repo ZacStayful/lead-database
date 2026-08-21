@@ -288,6 +288,8 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/subscribe` (§17), `/api/leads/[id]/reject`,
 `/api/leads/[id]/discard`, `/api/leads/[id]/close`,
 `/api/leads/[id]/report` (§25 — the stored analysis PDF),
+`/api/customer/presentation/[leadId]` (§26),
+`/api/customer/settings/presentation` (§26),
 `/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`.
 
 `/api/customer/goal` is the **only** customer route with no admin client at
@@ -2687,5 +2689,174 @@ what that PDF's own "Management Fees (15%)" line prints.
 
 0089 first, and **0092 on the same rule**. `get_customer_pool_leads` changes its
 return shape in both, and every customer lead surface selects `leads(*)`, so
-code arriving first would query columns that do not exist. Nothing here touches a balance, counter, pacing or
-capacity column, so a lagging migration cannot affect lead allocation.
+code arriving first would query columns that do not exist. Nothing here touches
+a balance, counter, pacing or capacity column, so a lagging migration cannot
+affect lead allocation.
+
+---
+
+## 26. The presentation, tailored to every lead *(0093)*
+
+`public/income-presentation/index.html` is a static tool every management
+customer reaches from Documents: six slides they walk a landlord through on a
+web meeting. Until now the operator **typed every figure into it by hand** —
+its own copy said "enter your own numbers, or bring them across from the STR
+Analyser" — while the analysis PDF §25 already downloads states all of them.
+
+Opened from a lead as `?lead=<id>`, it now arrives filled in.
+
+### 26.1 — What comes from where, and the one thing that must not
+
+| The property's, from the report | The operator's, from their profile |
+|---|---|
+| gross, nightly rate, occupancy | **management fee and its basis** |
+| platform % and cleaning % | fee / cleaning / contract wording |
+| long-let rent | compliance, vetting |
+| the 12-month seasonal curve | onboarding, managed, landlord lists |
+| address, landlord name, phone *(from the lead)* | discovery and next-step lists |
+
+⚠️ **THE MANAGEMENT FEE MUST NEVER COME FROM THE REPORT.** The PDF states one —
+`Management Fees (15%)`, charged on **gross** — and it is *Stayful's*. The
+operator presenting is not Stayful, and seeding it would have them quote our
+price to a landlord as their own. The platform and cleaning percentages **do**
+come from the report, and the distinction is the point: those are operating
+facts about the market that apply to whoever runs the property; the fee is a
+price, and prices are theirs.
+
+The consequence, which is correct and worth stating: **the tool's net will not
+equal the report's net.** The tool computes net itself from gross, platform,
+cleaning and the operator's own fee, so on 88 Bourneside Road the report says
+£43,295 and an operator on 15%-of-net sees £45,169. `net_annual_income` is
+stored precisely because it must not be shown.
+
+### 26.2 — The curve is a shape, not twelve numbers
+
+The report's forecast is stated in pounds **net at Stayful's fee**, so seeding
+it raw would print twelve months that do not sum to the total on the same
+slide. What is about the property is the **seasonality**, and it survives a
+change of fee — so `monthly_revenue_profile` becomes multipliers of its own
+average month, scaled to the operator's net.
+
+The tool's `genMonths()` used a single hardcoded generic curve softened by a
+`chart.variance` of 0.6. A seeded lead supplies `monthWeights` and releases
+variance to **1**: the damping exists to soften a generic shape and would
+flatten a real one.
+
+### 26.3 — The setup screen collapses, it is not deleted
+
+Of ~28 inputs on the tool's first page, **20 are answered by the analysis**, **6
+move to the profile**, and **3 remain** (discovery ticks, next-step ticks, call
+notes). Seeded, the screen becomes a read-only header, presenter notes, and
+Present.
+
+Two escape hatches, both load-bearing: **"Adjust figures"** reveals the income,
+12-month and cases blocks exactly as they were, because the report is an
+estimate and an operator must be able to overrule a figure they disagree with;
+**"Edit my terms"** goes to Settings.
+
+**Nothing is removed from the file.** Every section is wrapped in the file's own
+`<sc-if>`, so `/dashboard/documents` — the tool with no `?lead=` — still shows
+the complete original form, saving under the original storage key.
+
+### 26.4 — Per-lead storage, and the bug that fixed
+
+The tool saved to **one** `localStorage` key for the whole browser, so working a
+second landlord silently wiped the first. Seeded, the key is
+`wm_income_tool_v1:<leadId>`; unseeded it is the original, untouched.
+
+### 26.5 — The profile prompt, and the staleness trap behind it
+
+`presentation_settings_updated_at` is **null until the profile is saved**, and
+that is the "set up yet?" test — deliberately not whether the blob is empty,
+because a customer who saves a profile identical to the defaults **has**
+configured it and testing the contents would nag them for ever (the same
+NULL-is-not-zero distinction §13 draws for `management_customer_goal`).
+
+When it is null the seeded tool leads with a banner, and the lead page carries
+the same prompt beside the button, so it is met before the tool opens as well
+as inside it. **It prompts, it does not block** — an operator with a landlord on
+the phone must be able to present.
+
+The trap that creates: they read it, set the profile, come back, and see the old
+generic terms because the tool loads its saved copy. Two things handle it:
+
+- **Opening a lead saves nothing.** `save()` fires only from `update()`, so
+  open → leave → return **re-seeds**, which covers the common path.
+- If they *had* edited first, the saved copy carries the `seededAt` it was
+  seeded with; when the profile is newer the tool offers *"Your presentation
+  details have changed · Apply them"*, which re-seeds **the terms only** and
+  leaves their figures and notes alone. Explicit, because silently overwriting
+  an operator's own edits is worse than showing stale terms.
+
+### 26.6 — Assignment only, unlike the PDF
+
+`GET /api/customer/presentation/[leadId]` requires a `lead_assignments` row.
+Deliberately **not** pool-visible, where §25's report deliberately is: reading
+the analysis before you claim is the pool's bargain widened; being handed the
+pitch is the bargain gone. Management only (invariant 6).
+
+### 26.7 — Two duplications that must be maintained as one
+
+- **`src/lib/presentationSeed.ts` mirrors the tool's `defaults()`**, and the
+  seed must be a **complete** object rather than a partial. The tool's
+  `merge(base, over)` copies the base's keys first and therefore **cannot shrink
+  an array**: a profile with three onboarding steps merged over five defaults
+  comes out as five.
+- **`operatorNetAnnual()` duplicates the tool's `calc()`**, because the months
+  and cases are expressed in net pounds and must be scaled against the same net
+  the tool will display.
+
+Same arrangement §20 records for `capture_operator_proof` duplicating
+`get_operator_proof`, and the same rule: they are one thing written twice.
+
+### 26.8 — The static file is generated upstream
+
+Four marked edits, and re-applying them after a regeneration is the maintenance
+cost of this feature: `componentDidMount` (lead id, per-lead key, seeding),
+`genMonths` (real weights), `renderVals` (the flags), and the setup template
+(the `<sc-if>` wrappers and the seeded header). Each is commented
+`STAYFUL EDIT n of 4`.
+
+⚠️ `componentDidMount` also assigned its keydown handler to `this._key`, which is
+now the storage key. It is renamed `_keyHandler`; the two must not collide again.
+
+### Verification
+
+The extended parser was run over **24 live reports**: gross, net, long-let,
+platform %, cleaning % and rate/occupancy on all 24, and the twelve-month curve
+on 23. The one rejection is correct — that report's forecast table prints £0 for
+all twelve months against a £25,696 net, and a curve of twelve zeros is not a
+curve. **All 24 gross figures came back unchanged**, which is the regression
+that would have mattered.
+
+The net anchor was the risk: `NET ANNUAL REVENUE` appears **twice** in every
+report, once per table. Anchoring through `Total Operating Costs` — which
+appears only in the short-let table — was asserted on all 24, along with
+`net < gross` and `gross − costs = net`.
+
+⚠️ One finding worth keeping: the forecast's "vs long-let" column loses its minus
+sign in the PDF text layer, so a negative month reads as a bare `£545`.
+Requiring the sign lost the curve on **11 of 24** reports — precisely the
+properties that underperform a long let in some month, where the seasonal
+picture is most worth showing.
+
+`buildPresentationSeed` and the validator went through **33 cases**, including
+the array-shrink case above run through the tool's own `merge()`, a gross-only
+lead, a lead with no report (which must come out identical to the blank tool),
+and a 12%-of-gross fee correctly repricing the whole curve.
+
+The tool was then rendered in Chromium both ways: blank shows the complete
+original form and no seeded chrome; seeded shows the header, the right figures,
+the profile prompt, hidden income and how-it-works blocks, and presenter notes
+prefilled. "Adjust figures" reveals the income form with `83260` in the gross
+input, the slides render, and the 12-month chart carries the property's real
+seasonality — peak August, trough February, matching the report. No page errors.
+
+All **89 migrations** applied to a scratch Postgres 16 from empty; the
+cardinality CHECK exercised on 11, 12, 13 and null.
+
+### Deployment order — migration BEFORE code
+
+0093 first. The seed route selects the new columns on every request and the
+dashboard reads `presentation_settings` through `getCurrentCustomer()`'s
+`select("*")`, so code arriving first would query columns that do not exist.

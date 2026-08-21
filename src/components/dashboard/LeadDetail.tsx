@@ -51,6 +51,7 @@ export function LeadDetail({
   prevLeadId,
   nextLeadId,
   signedCountBefore,
+  presentationConfigured,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -60,6 +61,8 @@ export function LeadDetail({
   prevLeadId: string | null;
   nextLeadId: string | null;
   signedCountBefore: number;
+  /** False when the operator has never set their presentation terms up (§26). */
+  presentationConfigured: boolean;
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -528,17 +531,43 @@ export function LeadDetail({
               Objection Assistant
             </a>
           </Button>
+          {/*
+            ?lead= only for management. The report's figures are a management
+            pitch — a GR operator earns the margin between the rent they pay
+            and what the property makes, not a fee (invariant 6). The BUTTON
+            stays for them either way: this toolbar has never been product-
+            gated, and taking it away would remove something they have today.
+          */}
           <Button size="sm" asChild>
             <a
-              href="/income-presentation/index.html"
+              href={
+                isGuaranteedRent
+                  ? "/income-presentation/index.html"
+                  : `/income-presentation/index.html?lead=${lead.id}`
+              }
               target="_blank"
               rel="noopener noreferrer"
             >
               <Presentation className="h-4 w-4" />
-              Income presentation
+              {isGuaranteedRent ? "Income presentation" : "Presentation for this lead"}
             </a>
           </Button>
         </div>
+
+        {/*
+          Met BEFORE the tool opens as well as inside it. Someone who has never
+          set their terms up would otherwise present Stayful's generic fee and
+          contract wording to a landlord as their own.
+        */}
+        {!isGuaranteedRent && !presentationConfigured && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            The presentation fills itself in from this property&rsquo;s analysis.{" "}
+            <a href="/dashboard/settings#presentation" className="text-brand hover:underline">
+              Set up your own fee and terms
+            </a>{" "}
+            so it uses yours.
+          </p>
+        )}
 
         {showActions && (
           <div className="mt-6 flex flex-col gap-3">

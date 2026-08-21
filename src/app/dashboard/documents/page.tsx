@@ -32,8 +32,17 @@ export default async function DocumentsPage() {
                 Build a tailored income presentation to walk a landlord through
                 the figures on a web meeting — the income analysis, the 12-month
                 picture, the best, likely and worst cases, and how you work.
-                Enter your own numbers (or bring them across from the STR
-                Analyser); they&apos;re saved in your browser as you go.
+                Open it from a management lead and it arrives already filled
+                in from that property&apos;s analysis; opened here it starts
+                blank for a property you are working outside the marketplace.
+                Either way it uses your own fee and terms once you&apos;ve{" "}
+                <a
+                  href="/dashboard/settings#presentation"
+                  className="text-brand hover:underline"
+                >
+                  set them up
+                </a>
+                .
               </p>
             </div>
             <Button asChild>
