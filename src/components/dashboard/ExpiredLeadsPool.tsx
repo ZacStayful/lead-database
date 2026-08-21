@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn, formatDate } from "@/lib/utils";
 import type { PoolLead } from "@/lib/types";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
+import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import { Mail, Phone, MapPin, BedDouble, Clock } from "lucide-react";
 
 type ClaimOutcome =
@@ -204,6 +205,18 @@ export function ExpiredLeadsPool({
               line.
             */}
             <IncomeProjection lead={lead} variant="compact" className="mt-3" />
+
+            {/*
+              The analysis is readable BEFORE claiming, like the contact
+              details above it. That is the pool's bargain widened, not broken:
+              calling is free and reading is free, keeping is not (§19.7).
+            */}
+            <IncomeReportLink
+              leadId={lead.lead_id}
+              available={lead.has_income_report}
+              sizeBytes={lead.income_report_size_bytes}
+              className="mt-2"
+            />
 
             <p className="mt-3 text-xs text-muted-foreground">
               {lead.enquiry_date_known

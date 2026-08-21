@@ -18,6 +18,7 @@ import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
+import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import type {
   AssignmentWithLead,
   ClientLeadEventType,
@@ -474,6 +475,17 @@ export function LeadDetail({
           what stops either being mistaken for the other.
         */}
         <IncomeProjection lead={lead} className="mt-4" />
+
+        {/*
+          Directly under the figures it explains. An operator who wants to know
+          where £32,501–£39,723 came from should not have to ask us.
+        */}
+        <IncomeReportLink
+          leadId={lead.id}
+          available={Boolean(lead.income_report_path)}
+          sizeBytes={lead.income_report_size_bytes}
+          className="mt-3"
+        />
 
         {lead.lead_profile && (
           <div className="mt-4 rounded-md bg-muted/50 p-3 text-sm">

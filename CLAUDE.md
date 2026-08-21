@@ -287,6 +287,7 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/settings/notifications`, `/api/customer/goal` (§13),
 `/api/customer/subscribe` (§17), `/api/leads/[id]/reject`,
 `/api/leads/[id]/discard`, `/api/leads/[id]/close`,
+`/api/leads/[id]/report` (§25 — the stored analysis PDF),
 `/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`.
 
 `/api/customer/goal` is the **only** customer route with no admin client at
@@ -1346,6 +1347,11 @@ premise is that they never rang.
 Lead age falls back honestly: the parsed enquiry date where it parses, ingest
 date where it does not, labelled as such (see §11 on `enquiry_date`).
 
+⚠️ **Since 0092 the full property analysis is readable from the pool card too**,
+without claiming (§25). "Calling is free, keeping is not" is now "calling and
+reading are free, keeping is not" — a knowing extension, not a leak. The
+tailored presentation is the line that did not move: it needs an assignment.
+
 ### 19.8 — Admin
 
 `/admin/pool` — both pools read-only, per-product summary, force in/out, claim
@@ -2275,14 +2281,123 @@ failed**. All 149 carry a nightly rate and occupancy; **137 of those reconcile w
 the gross** and are worded as its basis, the other 12 as comparables (below). Gross ranges from £9,573 to £149,283 (median
 £39,614); nightly rate £57–£755 (median £180); occupancy 33%–85% (median 60%).
 
-### The report is not part of the product
+### The report IS part of the product *(0092 — this reverses the original rule)*
 
-No PDF is attached to a lead, no URL is stored, and nothing links to one.
-Monday's `public_url` is a **one-hour signed S3 link** — fetched, read for one
-number, discarded. A stored copy would be dead within the hour, and a live
-fetch would hand the customer the whole analysis, which is not what is sold.
-`leads.income_report_asset_id` is an opaque id, never rendered and never a link;
-it exists only so the sweep can skip a report it has already read.
+⚠️ This section used to read **"The report is not part of the product — no PDF
+is attached to a lead, no URL is stored, and nothing links to one."** That was
+a deliberate product constraint, and it has been reversed: an operator deciding
+whether to ring a landlord should be able to read the analysis their figures
+come from. 0089's own header still states the old rule; 0092 supersedes it and
+is where the current one lives.
+
+What has **not** changed is the URL. Monday's `public_url` is a **one-hour
+signed S3 link** and is still never persisted — a stored copy would be dead
+before anyone clicked it. What is stored now is the **bytes**, in a bucket of
+our own.
+
+| | |
+|---|---|
+| Bucket | `lead-reports` — private, `application/pdf` only, 25 MB |
+| Policies on `storage.objects` | **none at all** — deny-all to the browser |
+| Path | `<lead_id>/analysis.pdf`, **fixed** |
+| Columns | `income_report_path` (the one flag), `income_report_size_bytes` |
+| Route | `GET /api/leads/[id]/report` → 60-second signed URL, served inline |
+
+**A new bucket rather than `lead-files`.** That one is customer-owned: every one
+of its policies keys on `(storage.foldername(name))[1] = auth.uid()::text`,
+because each object belongs to exactly one customer. A report belongs to a
+**lead** — read by up to three holders plus every pool viewer, owned by none of
+them — so it does not fit that shape. `lead-reports` instead follows the state
+`training-media` ends in after 0061 drops its read policy: no policy at all, and
+every read authorised by a signature rather than by RLS.
+
+**The fixed path IS the retention rule.** One file per lead, replaced by
+overwrite (`upsert: true`), so there is no second object to delete, no window in
+which two exist, and nothing to garbage-collect. The asset id is deliberately
+**not** in the path — it changes when sales re-run the analyser, and a path that
+moved would orphan the old file for ever.
+
+`leads.income_report_asset_id` is still an opaque id, still never rendered and
+still never a link. It now does two jobs: skip a document already read, and tell
+whether a stored report needs replacing.
+
+#### Who may read it — two existing predicates, never a third
+
+`GET /api/leads/[id]/report` takes the **lead** id, as
+`/api/leads/pool/[id]/claim` does, because both audiences reach it that way. It
+allows a caller who either
+
+1. has a `lead_assignments` row for (lead, customer) — the row is the
+   entitlement and **status is deliberately not consulted**, exactly as
+   `/api/customer/files/[id]/download` declines to consult it. A rejected or
+   closed lead is still one they paid for (invariant 4); or
+2. passes `customer_can_see_pool_lead` — the same function the pool listing and
+   the claim already share (§19.4), so the pool can never list a lead whose
+   analysis the route then refuses.
+
+The pool-visibility check **fails closed**: an unreadable predicate is not
+permission. "No report stored" and "not yours" return one identical 404, so the
+endpoint cannot be used to discover which leads exist.
+
+⚠️ **The second audience means a pooled lead's full analysis can be read without
+ever claiming it.** That is a commercial decision taken knowingly, not an
+oversight — §19.7's bargain was "calling is free, keeping is not", and this
+widens the free half. What it must **not** widen is the tailored presentation
+(§26), which stays behind an assignment.
+
+#### The file follows the figures — except on `failed`
+
+`syncStoredReport()` in `src/lib/incomeReportStorage.ts` is the only writer.
+
+| Outcome | Object | Columns |
+|---|---|---|
+| `parsed` | uploaded, `upsert: true` | written |
+| `no_report` | removed | nulled |
+| `unparsed` | removed — no figures means a lone "read the analysis" link is an orphan | nulled |
+| `failed` | **untouched** | **untouched** |
+
+**This is why the storage columns are not in `incomeReportPatch()`.** That
+function clears every figure on every outcome, so a replaced report cannot leave
+stale numbers attributed to a document that no longer states them — right for a
+figure we can recompute tomorrow, wrong for a file. `failed` means Monday was
+unreachable or a download broke; treating it the same way would delete a
+perfectly good PDF, and the operator's link to it, over a network blip.
+
+A storage error **never costs the figures**: it logs, returns an empty patch,
+and the gross, rate and occupancy publish regardless — the same "they fail
+alone" rule §25 already applies to the rate and occupancy.
+
+#### The third sweep pass, and why there was no one-off backfill
+
+149 leads were already `parsed` when this shipped, and neither of the sweep's
+existing queries would ever look at them again — both are about leads with **no
+figures**. So `/api/cron/parse-income-reports` gained a third pass over
+`income_report_status = 'parsed' and income_report_path is null`, on leftover
+batch capacity, newest first.
+
+**It may add a file and nothing else.** These leads already show a gross figure
+to customers, so re-running `incomeReportPatch` over them would let a report
+since moved or deleted on Monday **blank a working figure** — trading something
+that works for nothing, the one thing this section says never to do. An outcome
+other than `parsed` therefore writes nothing at all and the row is simply looked
+at again tomorrow. `remaining_unstored` is reported separately from `remaining`,
+because the two backlogs drain at different rates and one being stuck says
+nothing about the other.
+
+It is a pass rather than a script deliberately: it needs no credentials, repeats
+safely, drains itself to nothing, and afterwards keeps picking up any lead whose
+upload failed transiently after a successful parse.
+
+#### Where the link shows
+
+`IncomeReportLink` — the lead detail page and the expired-pool card, under
+`IncomeProjection` on both. **Not** on the feed card and **not** in admin;
+neither was asked for and both are one-line additions.
+
+It is a **separate component from `IncomeProjection`**, not a line inside it,
+because a lead can have a stored PDF and no trustworthy figures, or figures and
+no stored PDF, and folding them together would make each conditional on the
+other. Both render nothing when they have nothing.
 
 ### The nightly rate and occupancy behind it *(0090)*
 
@@ -2542,6 +2657,14 @@ render time and went through **16** further cases — Barry Arnould and Burslem
 returning their figures while never being called the basis, the 1.82%
 worst-accepted case still reconciling, and the gross path unchanged.
 
+0092 was applied to a scratch Postgres — **all 88 migrations from empty** — and
+re-applied to prove idempotency, confirming the bucket upsert is stable and that
+`get_customer_pool_leads` survives its **fourth** drop/recreate still
+`service_role`-only *and* still returning `avg_nightly_rate` / `occupancy_rate`,
+which is the check that would catch a recreate mistakenly built from 0089's
+body. No `storage.objects` policy names the bucket. It was then applied to
+`znlfwbnvhlacwzgfalcf` and the same four assertions re-run there.
+
 `buildIncomeProjection` and `pickIncomeReportAsset` went through **22** cases,
 including the three real multi-asset shapes on the live board
 (xlsx + report, legacy PDF + report, two reports). The parser and
@@ -2562,7 +2685,7 @@ what that PDF's own "Management Fees (15%)" line prints.
 
 ### Deployment order — migration BEFORE code
 
-0089 first. `get_customer_pool_leads` changes its return shape, and every
-customer lead surface selects `leads(*)`, so code arriving first would query
-columns that do not exist. Nothing here touches a balance, counter, pacing or
+0089 first, and **0092 on the same rule**. `get_customer_pool_leads` changes its
+return shape in both, and every customer lead surface selects `leads(*)`, so
+code arriving first would query columns that do not exist. Nothing here touches a balance, counter, pacing or
 capacity column, so a lagging migration cannot affect lead allocation.

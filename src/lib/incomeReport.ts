@@ -2,9 +2,15 @@
  * Reading the figures out of a Stayful property-analysis PDF: the projected
  * gross revenue (0089), and the nightly rate and occupancy behind it (0090).
  *
- * THE DOCUMENT NEVER REACHES A CUSTOMER. Nothing here stores or returns the
- * PDF, its URL, or any other figure it contains. The report is downloaded,
- * read for three numbers, and discarded.
+ * THE DOCUMENT IS NOW KEPT (0092). It used to be downloaded, read for three
+ * numbers and discarded; operators can now read the analysis their figures come
+ * from. Nothing changes HERE, though — this file still only reads. It hands the
+ * bytes back on the outcome and incomeReportStorage.ts decides what becomes of
+ * them, so the parser keeps its no-Supabase-import rule and the two concerns
+ * stay separable.
+ *
+ * The report's URL is still never stored. Monday's public_url is signed for an
+ * hour, so a persisted copy would be dead before anyone clicked it.
  *
  * A MIS-PARSE MUST FAIL SILENT. A wrong income figure is worse than no figure,
  * because an operator prices a call on it — so the gross is published only when
@@ -225,6 +231,15 @@ export interface IncomeReportOutcome {
   occupancyRate: number | null;
   assetId: string | null;
   error: string | null;
+  /**
+   * The report itself, on a `parsed` outcome only.
+   *
+   * NOT A COLUMN. `incomeReportPatch()` never reads it; it is here so the
+   * caller can hand the bytes to `syncStoredReport()` without downloading the
+   * same document twice. Null on every other outcome — a report we could not
+   * read is not one to keep (0092).
+   */
+  bytes: Uint8Array | null;
 }
 
 /** Matches the lead-files ceiling; an analysis is ~25 KB, so this is a bound on nonsense. */
@@ -246,14 +261,18 @@ const DOWNLOAD_TIMEOUT_MS = 8000;
  * that document and is not retried.
  */
 /**
- * Every failure outcome carries the same empty figures. Spread rather than
- * repeated, so adding a fourth figure to the type cannot leave one branch
- * behind still reporting a stale value.
+ * Every failure outcome carries the same empty figures, and no bytes. Spread
+ * rather than repeated, so adding a fourth figure to the type cannot leave one
+ * branch behind still reporting a stale value.
+ *
+ * `bytes` belongs here for the same reason: a branch that forgot to null it
+ * would hand a truncated or unreadable download to the storage layer.
  */
 const NO_FIGURES = {
   grossAnnualIncome: null,
   avgNightlyRate: null,
   occupancyRate: null,
+  bytes: null,
 } as const;
 
 export async function resolveIncomeReport(
@@ -313,7 +332,7 @@ export async function resolveIncomeReport(
 
   // `parsed` is only ever reached with a gross figure; the rate and occupancy
   // may legitimately be null and that is not an unparsed report.
-  return { status: "parsed", ...parsed, assetId: asset.id, error: null };
+  return { status: "parsed", ...parsed, assetId: asset.id, error: null, bytes };
 }
 
 /**
