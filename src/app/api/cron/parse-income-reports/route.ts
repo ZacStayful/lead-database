@@ -5,6 +5,7 @@ import { isAdminUser } from "@/lib/auth";
 import { fetchIncomeReportAssets } from "@/lib/monday";
 import {
   incomeReportPatch,
+  presentationFiguresPatch,
   resolveIncomeReport,
   type IncomeReportStatus,
 } from "@/lib/incomeReport";
@@ -12,7 +13,11 @@ import { syncStoredReport } from "@/lib/incomeReportStorage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Vercel Pro allows 300 (§2). Raised so a backlog drains in ONE run rather than
+// a queue of nights — the wall-clock budget below is still what actually stops
+// the loop, and this is a ceiling rather than a reservation, so an ordinary day
+// with nothing to do still finishes in seconds.
+export const maxDuration = 300;
 
 /**
  * Leads looked at per run. Deliberately larger than one run can finish: the
@@ -20,14 +25,14 @@ export const maxDuration = 60;
  * backlog into a queue of nights. At 40 the 170-lead launch backlog would have
  * taken five days to clear.
  */
-const BATCH_SIZE = 150;
+const BATCH_SIZE = 200;
 
 /**
  * Stop here and leave the rest for tomorrow (or the next manual run). Under
  * maxDuration, so the run reports what it did instead of being killed with the
  * work half done and nothing written about it.
  */
-const WALL_CLOCK_BUDGET_MS = 45_000;
+const WALL_CLOCK_BUDGET_MS = 240_000;
 
 /** How long a lead stays worth re-checking for a late-attached report. */
 const NO_REPORT_RECHECK_DAYS = 30;
@@ -142,12 +147,13 @@ async function handle(request: NextRequest) {
     }
   }
 
-  // A lead that was parsed before 0092 has its figures and no stored PDF, and
-  // nothing above would ever look at it again — the two queries above are about
-  // leads with no figures. So this third pass drains that gap and then costs
-  // nothing, which is why it is a pass here rather than a one-off script: it
-  // needs no credentials, it repeats safely, and it also picks up any lead
-  // whose upload failed transiently after a successful parse.
+  // A lead parsed before 0092/0093 has its gross and neither the stored PDF nor
+  // the presentation figures, and nothing above would ever look at it again —
+  // the two queries above are about leads with NO figures. So this third pass
+  // drains that gap and then costs nothing, which is why it is a pass here
+  // rather than a one-off script: it needs no credentials, it repeats safely,
+  // and it also picks up any lead whose upload failed transiently after a
+  // successful parse.
   //
   // Newest first: an operator is far more likely to open a lead they were sent
   // this week than one from three months ago.
@@ -158,8 +164,15 @@ async function handle(request: NextRequest) {
       .select(select)
       .eq("lead_type", "management")
       .eq("income_report_status", "parsed")
-      .is("income_report_path", null)
       .not("income_report_asset_id", "is", null)
+      // EITHER gap: no stored file, or none of the 0093 presentation figures.
+      // Selecting on the path alone was a trap — a lead backfilled by an older
+      // build would get its file, drop out of this query, and never pick the
+      // figures up. platform_fee_pct is the sentinel because all 24 live
+      // reports sampled state a "Platform Fees (n%)" line; one that genuinely
+      // does not would be re-read nightly, which remaining_unbackfilled makes
+      // visible rather than hiding.
+      .or("income_report_path.is.null,platform_fee_pct.is.null")
       .order("created_at", { ascending: false })
       .limit(BATCH_SIZE - candidates.length);
 
@@ -272,14 +285,15 @@ async function handle(request: NextRequest) {
   }
 
   // ---------------------------------------------------------------------
-  // The storage-only pass.
+  // The backfill pass.
   //
-  // IT MAY ADD A FILE AND NOTHING ELSE. These leads already show a gross
-  // figure to customers, so re-running incomeReportPatch over them would let a
-  // report that has since been moved or deleted on Monday BLANK a working
-  // figure — trading something that works for nothing, which is the one thing
-  // §25 says never to do. So an outcome other than 'parsed' writes nothing at
-  // all and the row is simply looked at again tomorrow.
+  // IT MAY ONLY ADD, and never writes a column that already has a value. These
+  // leads already show a gross figure to customers, so re-running
+  // incomeReportPatch over them would let a report that has since been moved or
+  // deleted on Monday BLANK a working figure — trading something that works for
+  // nothing, which is the one thing §25 says never to do. An outcome other than
+  // 'parsed' therefore writes nothing at all and the row is simply looked at
+  // again tomorrow.
   // ---------------------------------------------------------------------
   let stored = 0;
   let storageSkipped = 0;
@@ -293,12 +307,22 @@ async function handle(request: NextRequest) {
       continue;
     }
 
-    const patch = await syncStoredReport({
+    // presentationFiguresPatch, NOT incomeReportPatch: the five 0093 columns
+    // and nothing else. The gross, rate and occupancy on these rows are already
+    // right and customers can see them.
+    const figures = presentationFiguresPatch(outcome);
+    const storedPatch = await syncStoredReport({
       admin,
       leadId: lead.id,
       outcome,
       currentPath: lead.income_report_path,
     });
+
+    // The two halves are written together but neither depends on the other. A
+    // failed upload returns an empty patch, and the figures must not go down
+    // with it — they are the more valuable half, and everything else here fails
+    // alone. The row keeps a null path, so the upload is retried tomorrow.
+    const patch = { ...figures, ...storedPatch };
     if (!Object.keys(patch).length) {
       storageSkipped += 1;
       continue;
@@ -309,11 +333,12 @@ async function handle(request: NextRequest) {
       .update(patch)
       .eq("id", lead.id);
     if (storeError) {
-      console.error("parse-income-reports: storage write failed", lead.id, storeError);
+      console.error("parse-income-reports: backfill write failed", lead.id, storeError);
       storageSkipped += 1;
       continue;
     }
-    stored += 1;
+    if (storedPatch.income_report_path) stored += 1;
+    else storageSkipped += 1;
   }
 
   return NextResponse.json({
@@ -348,7 +373,7 @@ async function countOutstanding(
   return count ?? 0;
 }
 
-/** Parsed management leads still missing their stored report (0092). */
+/** Parsed management leads still missing their file or their 0093 figures. */
 async function countUnstored(
   admin: ReturnType<typeof createAdminClient>
 ): Promise<number> {
@@ -357,8 +382,8 @@ async function countUnstored(
     .select("id", { count: "exact", head: true })
     .eq("lead_type", "management")
     .eq("income_report_status", "parsed")
-    .is("income_report_path", null)
-    .not("income_report_asset_id", "is", null);
+    .not("income_report_asset_id", "is", null)
+    .or("income_report_path.is.null,platform_fee_pct.is.null");
   return count ?? 0;
 }
 

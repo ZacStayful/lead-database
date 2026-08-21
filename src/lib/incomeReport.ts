@@ -573,6 +573,37 @@ export async function resolveIncomeReport(
  * an unreadable one clears the old values rather than leaving stale numbers
  * attributed to a document that no longer states them.
  */
+/**
+ * ONLY the presentation figures 0093 added, for backfilling a lead that already
+ * has its income block.
+ *
+ * ⚠️ THIS IS NOT `incomeReportPatch()` AND MUST NEVER BECOME IT. That function
+ * writes `gross_annual_income`, `avg_nightly_rate` and `occupancy_rate` as well,
+ * which is right when a lead is being read for the first time and wrong when it
+ * already has them: 159 leads are live with a gross figure customers can see,
+ * and re-writing it from a re-read would let a report that has since been moved
+ * or deleted on Monday BLANK a working figure. Trading something that works for
+ * nothing is the one thing §25 says never to do.
+ *
+ * So the backfill pass this exists for MAY ONLY ADD. It never writes a column
+ * that already has a value, and it returns an empty patch unless the re-read
+ * actually produced something.
+ */
+export function presentationFiguresPatch(
+  outcome: IncomeReportOutcome
+): Record<string, unknown> {
+  if (outcome.status !== "parsed") return {};
+  const patch: Record<string, unknown> = {};
+  if (outcome.netAnnualIncome != null) patch.net_annual_income = outcome.netAnnualIncome;
+  if (outcome.longLetAnnualIncome != null)
+    patch.long_let_annual_income = outcome.longLetAnnualIncome;
+  if (outcome.platformFeePct != null) patch.platform_fee_pct = outcome.platformFeePct;
+  if (outcome.cleaningFeePct != null) patch.cleaning_fee_pct = outcome.cleaningFeePct;
+  if (outcome.monthlyRevenueProfile != null)
+    patch.monthly_revenue_profile = outcome.monthlyRevenueProfile;
+  return patch;
+}
+
 export function incomeReportPatch(
   outcome: IncomeReportOutcome
 ): Record<string, unknown> {

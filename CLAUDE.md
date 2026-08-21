@@ -2371,24 +2371,48 @@ alone" rule §25 already applies to the rate and occupancy.
 
 #### The third sweep pass, and why there was no one-off backfill
 
-149 leads were already `parsed` when this shipped, and neither of the sweep's
+159 leads were already `parsed` when this shipped, and neither of the sweep's
 existing queries would ever look at them again — both are about leads with **no
-figures**. So `/api/cron/parse-income-reports` gained a third pass over
-`income_report_status = 'parsed' and income_report_path is null`, on leftover
-batch capacity, newest first.
+figures**. So `/api/cron/parse-income-reports` gained a third pass, on leftover
+batch capacity, newest first, which fills in **both** things such a lead is
+missing: its stored PDF (0092) and its presentation figures (§26).
 
-**It may add a file and nothing else.** These leads already show a gross figure
-to customers, so re-running `incomeReportPatch` over them would let a report
-since moved or deleted on Monday **blank a working figure** — trading something
-that works for nothing, the one thing this section says never to do. An outcome
-other than `parsed` therefore writes nothing at all and the row is simply looked
-at again tomorrow. `remaining_unstored` is reported separately from `remaining`,
+**IT MAY ONLY ADD, AND NEVER WRITES A COLUMN THAT ALREADY HAS A VALUE.** These
+leads already show a gross figure to customers, so re-running
+`incomeReportPatch` over them would let a report since moved or deleted on
+Monday **blank a working figure** — trading something that works for nothing,
+the one thing this section says never to do. That is why the figures half goes
+through `presentationFiguresPatch()` — the five 0093 columns, omitting any the
+re-read did not produce — and never `incomeReportPatch()`, which also writes
+gross, rate and occupancy. An outcome other than `parsed` writes nothing at all.
+
+**The two halves are written together but neither depends on the other.** A
+failed upload returns an empty storage patch and the figures still land, because
+they are the more valuable half and everything else here fails alone; the row
+keeps a null path, so the upload is retried tomorrow.
+
+**The selector is `income_report_path is null OR platform_fee_pct is null`**,
+not the path alone. Selecting on the path was a trap in the exact situation this
+existed for: a lead backfilled by an older build would get its file, drop out of
+the query, and never pick the figures up. `platform_fee_pct` is the sentinel
+because all 24 live reports sampled state a `Platform Fees (n%)` line — a report
+that genuinely lacks one would be re-read nightly, which `remaining_unbackfilled`
+makes visible rather than hiding. It is reported separately from `remaining`,
 because the two backlogs drain at different rates and one being stuck says
 nothing about the other.
+
+`maxDuration` is **300** and the wall-clock budget **240s** (Vercel Pro, §2), so
+a backlog of this size drains in one run rather than a queue of nights. Both are
+ceilings rather than reservations: an ordinary day with nothing to do still
+finishes in seconds.
 
 It is a pass rather than a script deliberately: it needs no credentials, repeats
 safely, drains itself to nothing, and afterwards keeps picking up any lead whose
 upload failed transiently after a successful parse.
+
+**The 21 `no_report` leads are not part of this.** Checked against Monday: their
+items carry no files at all, so `no_report` is the truth rather than a backlog.
+The 30-day re-check still catches an analysis attached later.
 
 #### Where the link shows
 
@@ -2728,6 +2752,10 @@ equal the report's net.** The tool computes net itself from gross, platform,
 cleaning and the operator's own fee, so on 88 Bourneside Road the report says
 £43,295 and an operator on 15%-of-net sees £45,169. `net_annual_income` is
 stored precisely because it must not be shown.
+
+**Existing leads get these through the sweep's third pass** (§25), not a one-off
+script — the same pass that stores their PDF, and under the same "may only add"
+rule.
 
 ### 26.2 — The curve is a shape, not twelve numbers
 
