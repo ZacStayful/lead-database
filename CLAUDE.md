@@ -2926,3 +2926,213 @@ cardinality CHECK exercised on 11, 12, 13 and null.
 0093 first. The seed route selects the new columns on every request and the
 dashboard reads `presentation_settings` through `getCurrentCustomer()`'s
 `select("*")`, so code arriving first would query columns that do not exist.
+
+---
+
+## 27. The public API and MCP server *(0095)*
+
+A customer can read **their own** leads from their own tools — n8n, a script, an
+AI assistant — with a per-customer API key. `/api/v1` for REST, `/api/mcp` for
+MCP. **Read-only in every direction**: no writes, no billing, no admin, and
+nothing that spends a credit.
+
+This is a **second front door onto rooms that already have a lock**. Invariant 7
+already held, so nothing here widens what a customer may reach; it changes how
+they may prove who they are.
+
+### 27.1 — Containment: features, never the build
+
+The requirement was that a customer gets to USE what the database offers and
+never to copy it. Each line below is enforced by something, not by intention:
+
+| Asset | Reachable | Enforced by |
+|---|---|---|
+| Source, files, config | No | No tool reads a file or takes a path |
+| Table names, unexposed columns, migration history | No | Derived select lists + `internal()` |
+| RPC names, RLS design, triggers | No | No database error ever reaches a caller |
+| Scores, thresholds, capacity/pacing models, pricing | No | Absent from the vocabulary, not derivable |
+| Another customer's data | No | `customer_id` resolved **server-side from the credential**; no endpoint accepts one |
+| How many operators hold a lead | No | `assignment_count` / `max_assignments` withheld (§19.7) |
+| Which lead ids exist | No | Byte-identical 404s |
+| Supabase / Stripe / Monday credentials, storage layout | No | The report endpoint streams bytes rather than a signed URL |
+
+**THE STANDING RULE: never add a tool or endpoint that takes a query, a table
+name, a column list, a file path or an arbitrary filter.** Every addition is a
+named operation with a fixed shape. A generic `query` tool would hand over in one
+commit everything above protects, and it is exactly the shape that looks
+convenient when somebody asks for "just one more filter".
+`__tests__/dispatch.test.ts` asserts no tool takes one.
+
+### 27.2 — One vocabulary, and why there is no spread anywhere
+
+`src/lib/api/schema.ts` is the single field definition. Both the `.select()`
+column strings and the serialized output are **derived** from it, so a column
+cannot be selected without being exposed, a field cannot be exposed without being
+selected, and the output keys are exactly the spec keys. There is no
+`{ ...row }` anywhere in `serialize.ts`, and that is the point: a spread would
+publish whatever a future migration adds.
+
+`serialize.test.ts` asserts the emitted key set against a literal list
+**duplicated on purpose** — a test deriving it from the same source would pass
+whatever changed.
+
+### 27.3 — Two credentials, one `Caller`
+
+`resolveCaller` accepts a bearer API key or a cookie session and produces the
+same `Caller`, which is what lets the service layer take a customer id and know
+nothing about how it was proved. An OAuth token becomes a third branch rather
+than a rewrite.
+
+**A present `Authorization` header is terminal and never falls back to the
+session** — not just `Bearer sfl_`, any header at all. Preferring an ambient
+cookie over an explicit credential would show somebody testing a key their own
+*session's* data and make a revoked key look like it still works.
+
+**Keys outlive cancellation, deliberately.** Holding a product gates *creating* a
+key; using one is not gated. Nothing else here withdraws what a customer paid
+for — reject does not refund, §18E leaves unused credits intact — and cutting
+their integration on the day they leave would also remove their ability to export
+their own history. `is_active = false` **does** stop a key: archived is not
+cancelled (§18D), and only one of those means "out of circulation".
+
+### 27.4 — ⚠️ Next caches `fetch`, and it silently broke the rate limiter
+
+`createAdminClient()` sends `cache: "no-store"` on every request. **This is
+load-bearing and must not be removed.**
+
+supabase-js talks to PostgREST over `fetch`, and the App Router patches `fetch`
+with its own Data Cache. The rate limiter — an RPC that increments a counter and
+returns the new value — **never reached the database from a deployed build**,
+while the identical function committed normally over direct SQL. Sixty-six
+requests in a minute all passed and `X-RateLimit-Remaining` sat at 59 throughout.
+
+What made it hard to see: **plain inserts kept working**, so `api_request_log`
+filled up correctly while the counter beside it stayed empty, which reads as a
+database fault rather than a caching one. The tell was a response coming back
+byte-identical minutes apart, still describing a function signature that had
+since been replaced.
+
+Two rules follow. If a privileged read looks stale or an RPC appears not to run,
+**start at the fetch cache, not the SQL**. And a call made for its *side effect*
+is exactly the shape this breaks, because a cached response means the call never
+happens.
+
+**Related: `consume_api_rate_limit` returns `jsonb`, not a one-row table.** A
+`RETURNS TABLE` function is called by PostgREST as a set-returning function in a
+FROM clause, and through that path its upserts did not persist either. A scalar
+return is evaluated in the target list, which is what every other writing RPC
+here already does.
+
+**Every response sets `Cache-Control: no-store, private`.** Next's default of
+`public, max-age=0, must-revalidate` invites any shared proxy to hold a copy,
+which on this surface would mean one customer's leads in somebody else's cache.
+
+### 27.5 — Cursors carry their sort, and their timestamp verbatim
+
+Keyset pagination, never offset: the daily sync inserts while a client is
+mid-walk, and offset paging over a table taking inserts repeats and skips rows.
+
+Two failure modes here are silent and both are guarded. Postgres returns
+`assigned_at` with **microseconds** and `new Date(x).toISOString()` truncates to
+milliseconds, so a round-tripped cursor can re-emit or skip a row assigned in the
+same millisecond — the raw string goes in and the same string comes out. And a
+cursor **carries the sort it was issued under**, because paging one ordering with
+another's boundary drops rows without erroring.
+
+Both sort columns are NOT NULL, which is what makes the tuple comparison total.
+**Do not add a nullable third sort mode** without handling nulls explicitly.
+
+### 27.6 — Rate limits, the kill switch, and seeing it
+
+60 requests a minute per key and 5,000 a day per customer, both consumed in one
+round trip. **Increment then compare, never check then increment** — the
+claim-by-write discipline `credit_invoice()` uses against Stripe redelivery. The
+limiter **fails closed**: an error returns `rate_limited`, because letting
+requests through when the limiter breaks disables the only defence against a
+runaway integration at the moment it is under load.
+
+`system_settings.api_enabled` turns the whole surface off without a deploy,
+cached in process for 30 seconds. It deliberately does **not** gate the
+key-management routes — a customer must be able to revoke a key while the API is
+off.
+
+`api_request_log` records every request **including rejected ones**, which are
+most of what is worth looking at when something is wrong. `/admin/api` and the
+customer's own settings panel both read it, and **both show REST and MCP side by
+side**: they are one feature with two front doors, and a view showing one would
+hide the half somebody came looking for. Usage totals are a rollup written by the
+daily sweep, never a counter on the request path — that would turn every read
+into a write.
+
+### 27.7 — Client support is a documented limitation, not a surprise
+
+MCP authorization is **OPTIONAL** in the spec, so a static-key server is not
+spec-violating — but clients differ. n8n, Cursor and VS Code work today; Claude
+Desktop works through an `mcp-remote --header` bridge; claude.ai connectors
+expect OAuth and their header support is in beta; **ChatGPT cannot present an API
+key at all**. The table is in `/dashboard/api` so a customer meets it before they
+build on it.
+
+**Phase 1.5 is OAuth 2.1**, and two things here exist to make it additive: the
+resolver branches on credential kind, and the 401 is shaped so
+`WWW-Authenticate: Bearer resource_metadata="…"` is a one-line addition. Next
+serves `/.well-known/*` fine, so there is no platform blocker.
+
+### Verification
+
+The repo's first automated tests: **vitest**, 60 cases, pure units only — no
+network, no database, sub-second — which is what makes it safe to put in front of
+`next build`. There is no CI here, so the Vercel build is the only place tests
+can be enforced, and an untriggered suite reads as coverage without being any.
+`npm run lint` also runs for the first time: there was no ESLint config, so it
+had been sitting on an interactive prompt.
+
+Migration applied to live `znlfwbnvhlacwzgfalcf` (**Postgres 17.6** — the repo's
+"scratch Postgres 16" convention is out of date). Every CHECK exercised on valid
+and invalid values, the unique and partial indexes confirmed, FK cascade
+confirmed on customer delete, re-applied for idempotency, and
+`consume_api_rate_limit` confirmed `service_role`-only after its grants — twice,
+since it was replaced.
+
+Then end to end against a preview deployment with a real key on a real customer
+(20 assignments): all five endpoints returned only allow-listed fields; a scan
+for 18 banned tokens across a full page came back clean; a 7-page cursor walk
+returned 20 rows with no duplicates; a cursor replayed under the other sort was
+refused; a foreign id, a malformed id and a report-less lead returned
+byte-identical 404s; the report streamed a real 24KB `%PDF-1.3`. On MCP:
+`initialize` negotiated, a notification was acknowledged with 202, GET returned
+405, a hostile `Origin` 403, an unsupported protocol version 400, unauthenticated
+`tools/list` was refused, all five tools listed and called, and `run_sql` was
+rejected as unknown. A concurrent burst of 80 produced 48 × 200 and 27 × 429 with
+`Retry-After`, which also demonstrates the atomicity under real contention.
+
+### 27.8 — ⚠️ Filtering on an embedded resource needs `!inner`
+
+`ASSIGNMENT_COLUMNS` selects `lead:leads!inner(…)`, and the `!inner` is
+load-bearing. `?product=` filters on `lead.lead_type`, and in PostgREST a filter
+on a NON-inner embedded resource filters the EMBEDDED RESOURCE rather than the
+parent rows — every assignment still returns, with the lead nulled on the ones
+that do not match.
+
+Shipped broken and caught in pre-merge review. `?product=guaranteed_rent` on a
+management-only customer returned their entire book with half the rows carrying
+`"lead": null`: a 200 that paginates normally and is wrong, which is the worst
+shape available on a surface built for automated syncs.
+
+The same lesson as §25's `items(ids:)` pagination trap and §23.10's failure-path
+cluster — the pieces either side were tested and the seam between them was not.
+`serialize.test.ts` and `leads.test.ts` now assert the `!inner`, and both were
+confirmed to fail against the old select before being kept.
+
+`lead_assignments.lead_id` is nullable by declaration (0001 never added the
+constraint), though no row has ever been null. An inner join could therefore drop
+an assignment with no lead where a left join would have kept it — which is the
+better behaviour, not a regression: such a row carries nothing a caller can use.
+
+### Deployment order — migration BEFORE code
+
+0095 first: the resolver selects from `customer_api_keys` on every request. It is
+additive and inert on its own, and nothing in this feature writes a balance,
+counter, pacing or capacity column, so a lagging migration cannot affect lead
+allocation. 0096 (`sweep_api_tables`) follows it and is read by the pool sweep
+only — a lagging 0096 costs a day of housekeeping, nothing more.

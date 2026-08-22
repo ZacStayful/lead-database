@@ -138,6 +138,15 @@ async function handle(request: NextRequest) {
     | { entered: number; exited: number; expired: number }
     | undefined;
 
+  // Public-API housekeeping, riding on the one daily job that already runs.
+  //
+  // Rate-limit windows are rolled into the per-day usage totals BEFORE they are
+  // discarded, so the settings panel and /admin/api keep a month of history
+  // without anything having to be counted on the request path. Deliberately
+  // after the dry-run and kill-switch branches above: a preview run writes
+  // nothing, and a disabled pool should not quietly do database work.
+  const apiHousekeeping = await sweepApiTables(admin);
+
   return NextResponse.json({
     status: "ok",
     entered: result?.entered ?? 0,
@@ -153,7 +162,52 @@ async function handle(request: NextRequest) {
       allocated: exits.filter((e) => e.reason === "allocated").length,
       barred: exits.filter((e) => e.reason === "barred").length,
     },
+    api_usage_rolled_up: apiHousekeeping.rolledUp,
+    api_windows_deleted: apiHousekeeping.windowsDeleted,
+    api_log_rows_deleted: apiHousekeeping.logRowsDeleted,
   });
+}
+
+/**
+ * Fold expiring rate-limit windows into api_usage_daily, then discard them, and
+ * drop request-log rows older than 30 days.
+ *
+ * Best-effort: a failure here is a reporting gap, and must never fail the pool
+ * sweep, which is the part of this job that actually moves leads.
+ */
+async function sweepApiTables(
+  admin: ReturnType<typeof createAdminClient>
+): Promise<{ rolledUp: number; windowsDeleted: number; logRowsDeleted: number }> {
+  const out = { rolledUp: 0, windowsDeleted: 0, logRowsDeleted: 0 };
+
+  try {
+    // One statement, so the rollup cannot double-count.
+    //
+    // The first cut read api_usage_daily, added the expiring windows in
+    // TypeScript, upserted, then deleted — which is idempotent only because the
+    // delete removes the source rows. If the upsert landed and the delete failed,
+    // the next run added the same windows again. Doing the addition inside the
+    // upsert removes that, and removes an N+1 (a select plus an upsert per
+    // key-day) at the same time.
+    const { data, error } = await admin.rpc("sweep_api_tables");
+    if (error) {
+      console.error("[sweep] api housekeeping failed", error);
+      return out;
+    }
+    const row = (Array.isArray(data) ? data[0] : data) as {
+      rolled_up?: number;
+      windows_deleted?: number;
+      log_rows_deleted?: number;
+    } | null;
+
+    out.rolledUp = Number(row?.rolled_up ?? 0);
+    out.windowsDeleted = Number(row?.windows_deleted ?? 0);
+    out.logRowsDeleted = Number(row?.log_rows_deleted ?? 0);
+  } catch (err) {
+    console.error("[sweep] api housekeeping threw", err);
+  }
+
+  return out;
 }
 
 // Vercel Cron issues a GET; POST is here so the job can be triggered by hand
