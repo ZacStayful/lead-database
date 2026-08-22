@@ -36,6 +36,11 @@ function baseHeaders(requestId: string, minuteCount: number): Record<string, str
     "X-Request-Id": requestId,
     "X-RateLimit-Limit": String(RATE_LIMIT_PER_MINUTE),
     "X-RateLimit-Remaining": String(remaining),
+    // Every response here is per-customer and authenticated. Next's default of
+    // `public, max-age=0, must-revalidate` invites any shared proxy between us
+    // and the caller to hold a copy, which for this surface would mean one
+    // customer's leads sitting in someone else's cache.
+    "Cache-Control": "no-store, private",
   };
 }
 
@@ -92,9 +97,6 @@ export function withApi<T>(
 
     caller = resolved.caller;
     const headers = baseHeaders(requestId, caller.minuteCount);
-    // TEMPORARY DIAGNOSTIC — remove before merge.
-    const dbg = (globalThis as Record<string, unknown>).__rlDebug;
-    if (typeof dbg === "string") headers["X-Debug-RL"] = dbg.replace(/[^\x20-\x7e]/g, "");
 
     if (!caller.scopes.includes(options.scope)) {
       return finish(

@@ -227,6 +227,14 @@ alter table public.api_request_log enable row level security;
 -- The caller compares the returned counts against its own limits; this
 -- function deliberately takes no limit argument, because a parameter that
 -- looks like it enforces something and does not is worse than none.
+--
+-- RETURNS JSONB, NOT A ONE-ROW TABLE. The first cut returned
+-- `table (minute_count integer, day_count integer)`, which PostgREST calls as
+-- a set-returning function in a FROM clause. Through that path the upserts did
+-- not persist at all — while the identical function committed normally when
+-- called directly over SQL — so every caller read a count of 1 for ever and the
+-- limit could never be reached. A scalar return is evaluated in the target
+-- list, which is the shape every other writing RPC in this codebase uses.
 -- ---------------------------------------------------------------------------
 create or replace function public.consume_api_rate_limit(
   p_key_id           uuid,
@@ -234,14 +242,17 @@ create or replace function public.consume_api_rate_limit(
   p_minute_seconds   integer default 60,
   p_day_seconds      integer default 86400
 )
-returns table (minute_count integer, day_count integer)
+returns jsonb
 language plpgsql
+volatile
 security definer
 set search_path = public
 as $$
 declare
   v_minute_window timestamptz;
   v_day_window    timestamptz;
+  v_minute        integer;
+  v_day           integer;
 begin
   -- A zero or negative window divides by zero inside the floor() below.
   if p_minute_seconds <= 0 or p_day_seconds <= 0 then
@@ -259,15 +270,15 @@ begin
   values ('key', p_key_id, v_minute_window, 1)
   on conflict (subject_kind, subject_id, window_start)
     do update set request_count = api_rate_limits.request_count + 1
-  returning api_rate_limits.request_count into minute_count;
+  returning request_count into v_minute;
 
   insert into public.api_rate_limits (subject_kind, subject_id, window_start, request_count)
   values ('customer', p_customer_id, v_day_window, 1)
   on conflict (subject_kind, subject_id, window_start)
     do update set request_count = api_rate_limits.request_count + 1
-  returning api_rate_limits.request_count into day_count;
+  returning request_count into v_day;
 
-  return next;
+  return jsonb_build_object('minute_count', v_minute, 'day_count', v_day);
 end;
 $$;
 

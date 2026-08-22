@@ -284,26 +284,6 @@ async function consumeRateLimit(
   const row = Array.isArray(data) ? data[0] : data;
   const minuteCount = Number((row as { minute_count?: number })?.minute_count ?? 0);
   const dayCount = Number((row as { day_count?: number })?.day_count ?? 0);
-  // TEMPORARY DIAGNOSTIC — remove before merge.
-  const second = await admin.rpc("consume_api_rate_limit", {
-    p_key_id: keyId,
-    p_customer_id: customerId,
-    p_minute_seconds: RATE_LIMIT_WINDOW_SECONDS,
-    p_day_seconds: RATE_LIMIT_DAY_SECONDS,
-  });
-  const readBack = await admin
-    .from("api_rate_limits")
-    .select("subject_kind, request_count")
-    .eq("subject_id", keyId);
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "unset";
-  (globalThis as Record<string, unknown>).__rlDebug = JSON.stringify({
-    first: data,
-    second: second.data,
-    secondErr: second.error?.message ?? null,
-    readBack: readBack.data,
-    readBackErr: readBack.error?.message ?? null,
-    proj: url.replace("https://", "").split(".")[0],
-  }).slice(0, 500);
 
   if (minuteCount > RATE_LIMIT_PER_MINUTE) {
     return fail(

@@ -109,6 +109,7 @@ export async function POST(request: NextRequest) {
         status: STATUS_BY_CODE[resolved.code],
         headers: {
           "X-Request-Id": requestId,
+          "Cache-Control": "no-store, private",
           // Shaped so the OAuth phase can add a `resource_metadata` parameter
           // here without restructuring the response.
           "WWW-Authenticate": "Bearer",
@@ -125,7 +126,7 @@ export async function POST(request: NextRequest) {
     log("parse_error", 400, "invalid_request", caller.keyId, caller.customerId);
     return NextResponse.json(rpcError(null, JSONRPC_PARSE_ERROR, "Invalid JSON."), {
       status: 400,
-      headers: { "X-Request-Id": requestId },
+      headers: { "X-Request-Id": requestId, "Cache-Control": "no-store, private" },
     });
   }
 
@@ -144,7 +145,7 @@ export async function POST(request: NextRequest) {
     log(outcome.operation, 202, null, caller.keyId, caller.customerId);
     return new NextResponse(null, {
       status: 202,
-      headers: { "X-Request-Id": requestId },
+      headers: { "X-Request-Id": requestId, "Cache-Control": "no-store, private" },
     });
   }
 
@@ -152,6 +153,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(outcome.body, {
     headers: {
       "X-Request-Id": requestId,
+      "Cache-Control": "no-store, private",
       "MCP-Protocol-Version": declared ?? ASSUMED_PROTOCOL_VERSION,
     },
   });
