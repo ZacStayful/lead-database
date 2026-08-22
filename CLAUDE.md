@@ -3106,9 +3106,33 @@ byte-identical 404s; the report streamed a real 24KB `%PDF-1.3`. On MCP:
 rejected as unknown. A concurrent burst of 80 produced 48 × 200 and 27 × 429 with
 `Retry-After`, which also demonstrates the atomicity under real contention.
 
+### 27.8 — ⚠️ Filtering on an embedded resource needs `!inner`
+
+`ASSIGNMENT_COLUMNS` selects `lead:leads!inner(…)`, and the `!inner` is
+load-bearing. `?product=` filters on `lead.lead_type`, and in PostgREST a filter
+on a NON-inner embedded resource filters the EMBEDDED RESOURCE rather than the
+parent rows — every assignment still returns, with the lead nulled on the ones
+that do not match.
+
+Shipped broken and caught in pre-merge review. `?product=guaranteed_rent` on a
+management-only customer returned their entire book with half the rows carrying
+`"lead": null`: a 200 that paginates normally and is wrong, which is the worst
+shape available on a surface built for automated syncs.
+
+The same lesson as §25's `items(ids:)` pagination trap and §23.10's failure-path
+cluster — the pieces either side were tested and the seam between them was not.
+`serialize.test.ts` and `leads.test.ts` now assert the `!inner`, and both were
+confirmed to fail against the old select before being kept.
+
+`lead_assignments.lead_id` is nullable by declaration (0001 never added the
+constraint), though no row has ever been null. An inner join could therefore drop
+an assignment with no lead where a left join would have kept it — which is the
+better behaviour, not a regression: such a row carries nothing a caller can use.
+
 ### Deployment order — migration BEFORE code
 
 0095 first: the resolver selects from `customer_api_keys` on every request. It is
 additive and inert on its own, and nothing in this feature writes a balance,
 counter, pacing or capacity column, so a lagging migration cannot affect lead
-allocation.
+allocation. 0096 (`sweep_api_tables`) follows it and is read by the pool sweep
+only — a lagging 0096 costs a day of housekeeping, nothing more.
