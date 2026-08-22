@@ -42,7 +42,12 @@ import type { Customer } from "@/lib/types";
 export type MondayStatusCandidate = ProductCustomerFields &
   Pick<
     Customer,
-    "is_active" | "paused_at" | "cancel_at_period_end" | "gr_cancel_at_period_end"
+    | "is_active"
+    | "paused_at"
+    | "cancel_at_period_end"
+    | "gr_cancel_at_period_end"
+    | "lapsed_at"
+    | "gr_lapsed_at"
   >;
 
 /** Everything the orchestrator needs off the customer row. */
@@ -64,6 +69,7 @@ const ROW_COLUMNS =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
   "cancel_at_period_end, gr_cancel_at_period_end, " +
+  "lapsed_at, gr_lapsed_at, " +
   "monday_item_id, monday_board_id, monday_link_state, monday_status_label";
 
 /**
@@ -103,9 +109,18 @@ export function mondayStatusLabelFor(
   // between a subscription event and the invoice that follows it. Keying on
   // subscription_status means a customer who is paying reads as a customer
   // whatever account_status says.
+  //
+  // lapsed_at is the third route in (0097): a customer whose collection has been
+  // failing for longer than past_due_lapse_days. It has to be its own column
+  // rather than a widening of the account_status clause below, precisely BECAUSE
+  // that clause excludes past_due — a lapsed customer keeps subscription_status =
+  // 'past_due', since that is what Stripe still reports. Admitting past_due there
+  // would let a stale 'cancelled' outvote a customer who is demonstrably paying,
+  // which is the hole the clause was written to close.
   const managementCancelling =
     c.cancel_at_period_end === true ||
     c.subscription_status === "canceled" ||
+    c.lapsed_at != null ||
     (c.account_status === "cancelled" &&
       c.subscription_status !== "active" &&
       c.subscription_status !== "past_due");
@@ -117,7 +132,8 @@ export function mondayStatusLabelFor(
   // period apart for no reason a reader of the board could discover.
   const grCancelling =
     c.gr_cancel_at_period_end === true ||
-    c.gr_subscription_status === "canceled";
+    c.gr_subscription_status === "canceled" ||
+    c.gr_lapsed_at != null;
   // "Still a GR relationship": active OR past_due (a billing problem is not a
   // departure) and not on the way out.
   const grStillThere = grHeld && !grCancelling;
@@ -138,7 +154,23 @@ export function mondayStatusLabelFor(
   //    right for "should I offer them a checkout" and wrong here, where a failed
   //    payment has its own label. Recovery needs no extra handling: invoice.paid
   //    sets subscription_status back to 'active' and rule 4 takes over.
-  if (c.subscription_status === "past_due") return ENQUIRY_STATUS.card_declined;
+  //
+  //    This label means "declined, AND WE STILL EXPECT TO BE PAID" — hence the
+  //    !managementCancelling guard, which mirrors the one the GR card-declined
+  //    rule below has always carried. Two ways to reach it:
+  //
+  //    Once the lapse cron has given up on them (0097) rule 1 has already
+  //    returned Cancelled above, so a customer cannot sit here indefinitely,
+  //    which is what they did before lapsed_at existed. But rule 1 deliberately
+  //    steps aside for somebody with a LIVE GR subscription — and without this
+  //    guard they fell through to here and read "Wants to pay card declined",
+  //    while the very same customer with management cancelled OUTRIGHT read
+  //    "Guaranteed rent customer". The lapse is meant to be equivalent to a
+  //    cancellation, so it must land on the same label; a paying GR customer
+  //    should never be described by their dead management subscription.
+  if (c.subscription_status === "past_due" && !managementCancelling) {
+    return ENQUIRY_STATUS.card_declined;
+  }
 
   // 4/5. Management wins for a customer holding both.
   if (managementHeld && !managementCancelling) {
@@ -187,12 +219,6 @@ export interface MondayStatusSyncOutcome {
 }
 
 export interface MondayStatusSyncOptions {
-  /**
-   * Real end of service, for the Customer end date cell. A date sets it, null
-   * CLEARS it (the customer changed their mind), undefined leaves it untouched.
-   * Only the webhook's subscription branch knows this.
-   */
-  endDate?: string | null;
   /** Free-text tag for the log line, e.g. "invoice.paid". */
   reason?: string;
 }
@@ -241,10 +267,10 @@ export async function syncCustomerMondayStatus(
     // reading the board would make our write conditional on somebody else's edit.
     const labelUnchanged = row.monday_status_label === label;
 
-    // With no date instruction there is nothing else that could need writing, so
-    // this returns without touching Monday at all. That is the monthly
-    // invoice.paid path, which is the one that matters for volume.
-    if (labelUnchanged && opts?.endDate === undefined) {
+    // Nothing else can need writing once the label matches, so this returns
+    // without touching Monday at all. That is the monthly invoice.paid path,
+    // which is the one that matters for volume.
+    if (labelUnchanged) {
       return {
         written: false,
         skipped: "unchanged",
@@ -276,20 +302,6 @@ export async function syncCustomerMondayStatus(
       };
     }
 
-    // A date instruction costs one item read, but it must not cost a WRITE when
-    // the cell already says what we want. customer.subscription.updated fires on
-    // all sorts of unrelated changes and arrives here asking to clear an end date
-    // that is almost always already empty; without this the board would take a
-    // pointless mutation every time.
-    if (labelUnchanged && !endDateNeedsWrite(resolved.item.endDate, opts?.endDate)) {
-      return {
-        written: false,
-        skipped: "unchanged",
-        label,
-        itemId: resolved.item.id,
-      };
-    }
-
     // First write wins on the start date. Only sent when the cell is empty, so
     // resume-from-pause, payment recovery and re-subscribe never rewrite it.
     // Mirrors the coalesce on first_contacted_at and first-cancellation-wins on
@@ -312,7 +324,6 @@ export async function syncCustomerMondayStatus(
       label,
       boardId: row.monday_board_id,
       startDate,
-      endDate: opts?.endDate,
     });
 
     if (!write.written) {
@@ -356,24 +367,6 @@ export async function syncCustomerMondayStatus(
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-/**
- * Would writing `desired` to the end-date cell actually change anything?
- *
- * `undefined` means "leave it alone", so never. Otherwise compare on the date part
- * only: Monday returns a date cell as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM" depending
- * on whether a time was ever set, and the board's own automation used to write the
- * timed form. Comparing raw strings would treat "2026-08-17 09:05" and "2026-08-17"
- * as different and rewrite the cell on every event.
- */
-export function endDateNeedsWrite(
-  cell: string,
-  desired: string | null | undefined
-): boolean {
-  if (desired === undefined) return false;
-  const current = (cell ?? "").trim().slice(0, 10);
-  return current !== (desired ?? "");
 }
 
 /** Customer fields the matcher compares against the board. */

@@ -45,6 +45,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
+| `/api/cron/lapse-past-due` | `0 6 * * *` | Write off customers declined 3+ days (§28) |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The account is
@@ -443,7 +444,20 @@ for being new with no way to earn out of it.
   fires) but `customer.subscription.updated` sets it from `current_period_start`
   and the Stripe period keeps rolling. Neither had reached their next anchor date
   when 0084 shipped. Excluding them from the metric (§21) sidesteps it either way.
-- No ESLint config (`next lint` prompts interactively) and **no test suite**.
+- ~~**A `past_due` customer is counted as an active management slot, and can buy a
+  top-up.**~~ **Both fixed in 0097 (§28).** `capacity.ts` keys on `account_status`,
+  which a decline never changed, so a declined customer held a slot indefinitely;
+  the lapse now demotes them after three days. `topupIneligibilityReason()` read
+  only `account_status` too, so it would sell £75 of credit that the candidate
+  functions — which key on `subscription_status` — would never spend; it now
+  refuses `past_due`. The two columns still disagree by design elsewhere, and §18A
+  is the guide to which surface reads which.
+- ~~No ESLint config (`next lint` prompts interactively) and **no test suite**.~~
+  **Both now exist.** `.eslintrc.json` is committed, and `vitest` runs the suite
+  under `src/**/__tests__/`. `npm run build` is `vitest run && next build`, so the
+  tests gate every deploy — which is only safe because they are pure units with no
+  network or database (see `vitest.config.ts`). Older sections below still say
+  "no test suite"; read those as true at the time they were written.
 
 ---
 
@@ -1841,7 +1855,8 @@ this is the opposite direction and the app already writes to this board directly
 | The five subscription labels | **This code** |
 | The five sales labels (`Web meeting booked/sat/no show`, `In the future`, `In the future due to call`) | Sales, by hand — never written from code |
 | Group placement | The board's own automations |
-| `Customer start date` / `Customer end date` | **This code** (see 23.3) |
+| `Customer start date` | **This code** (see 23.3) |
+| `Customer end date` | Board automation `7920935830` (see 23.3) |
 
 Ten "when status changes to X, move item to group Y" automations place every item,
 and all 34 items currently sit in the group matching their label. So the code sets
@@ -1869,9 +1884,9 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
 | # | Condition | Label |
 |---|---|---|
 | 0 | `is_active = false` | **`null`** |
-| 1 | management cancelling-or-cancelled **and GR not still there** | `Cancelled` |
+| 1 | management cancelling-or-cancelled-or-**lapsed** **and GR not still there** | `Cancelled` |
 | 2 | `paused_at is not null` | `Paused` |
-| 3 | management `subscription_status = 'past_due'` | `Wants to pay card declined` |
+| 3 | management `subscription_status = 'past_due'` **and not cancelling** | `Wants to pay card declined` |
 | 4 | holds management, not cancelling | `Management Customer` |
 | 5 | GR active and not cancelling | `Guaranteed rent customer` |
 | 6 | GR `past_due` and not cancelling | `Wants to pay card declined` |
@@ -1889,6 +1904,18 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
   testing "held" first would never reach `Paused`.
 - **`past_due` before rule 4** because `holdsProduct()` counts `past_due` as held.
   Recovery needs no code: `invoice.paid` clears it and rule 4 takes over.
+- **Rule 1 reads `lapsed_at` (0097, §28).** Cancellation is now three things, not
+  two: a pending cancellation, a cancelled subscription, or a customer written off
+  for persistent non-payment. It is a COLUMN rather than a widening of the
+  `account_status` clause precisely because that clause excludes `past_due` — and a
+  lapsed customer stays `past_due`, since that is still what Stripe reports.
+- **Rule 3 carries `and not cancelling`, mirroring rule 6, and that guard is not
+  cosmetic.** Rule 1 deliberately steps aside for a live GR subscription, so
+  without it a customer whose management had been lapsed but who still paid for GR
+  fell through to `Wants to pay card declined` — while the identical customer with
+  management cancelled *outright* read `Guaranteed rent customer`. A paying GR
+  customer must never be described by their dead management subscription. Caught by
+  driving the rule, not by reading it.
 - **Cancellation outranks held, GR outranks cancellation.** Somebody who cancels
   management but keeps GR reads `Guaranteed rent customer` — still a paying
   customer. Management-wins applies only between two *live* products.
@@ -1898,37 +1925,67 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
 Deliberately not reusing `holdsProduct()` as the whole rule: it treats `past_due`
 as held, which is right for "offer them a checkout" and wrong here.
 
-### 23.3 — Why the date columns had to move into code
+### 23.3 — The two Customer date columns, and who owns which
 
-Two board automations used to write them, and both become wrong the moment the
-label is automated:
+⚠️ **This section used to read "Why the date columns had to move into code" and
+said BOTH were code-owned. That is now half true, and the split is deliberate.**
 
-- `7920935809` (status → `Management Customer`) set **Customer start date = Now**
-  on **every** entry into that label. **Verified live** by clearing the cell and
-  flipping `Paused` → `Management Customer`, which re-stamped it. Left alone it
-  would reset the start date of every customer who resumes a pause, recovers a
-  failed payment or re-subscribes — silent data loss on exactly the customers whose
-  history matters most.
-- `7920935830` (status → `Cancelled`) set **Customer end date = Now**, which with
-  `Cancelled` written at click records the request date, not the end of service.
+| Cell | Owner |
+|---|---|
+| **Customer start date** (`date_mm5ft19y`) | **This code**, first-write-wins |
+| **Customer end date** (`date_mm5fxrbn`) | **Board automation `7920935830`** |
 
-**Prerequisite, done on the Monday side:** delete `7920935830` (its group move is
-already duplicated by `7921870420`) and strip the start-date action from
-`7920935809`, which cannot be deleted because it is the only automation moving
-items into `group_mm5f9by1`.
+**Start date is code-owned because an automation cannot do first-write-wins.**
+`7920935809` sets it to `Now` on **every** entry into `Management Customer` —
+verified live by clearing the cell and flipping `Paused` → `Management Customer`,
+which re-stamped it. Left in charge it resets the start date of every customer who
+resumes a pause, recovers a failed payment or re-subscribes. It also never stamps
+GR customers at all (`7921747590` only moves the group), so Karey Summers has no
+start date. The code sends the cell only when it is empty, mirroring the
+`coalesce` on `first_contacted_at` (§6).
 
-The code then writes status and both dates in one
-`change_multiple_column_values` call, so they can never be half applied:
+**End date is automation-owned**, and the code no longer writes it. The cost is
+stated rather than hidden: `7920935830` stamps the cell when an item enters
+`Cancelled`, so the column records **the date the customer cancelled, not the end
+of their paid period**. For a portal cancellation those differ by up to a billing
+period, because §21's `at_period_end` mode means we write `Cancelled` at the click.
+Accepted knowingly — one writer that is slightly coarse beats two fighting over one
+cell — and for a lapse (§28) "now" is the honest answer anyway. The old
+`cancel_at` / `ended_at` computation and `endDateNeedsWrite()` are gone with it.
 
-- **Start date: first write wins** — only sent when the cell is empty, mirroring
-  the `coalesce` on `first_contacted_at` (§6). This also closes a gap: GR customers
-  never got a start date, because `7921747590` only moves the group.
-- **End date: the real end of service** — `sub.cancel_at` (falling back to
-  `subscriptionPeriodEnd()`) on a pending cancellation, `ended_at ?? canceled_at`
-  once it has happened, and **cleared** on a change of mind, in the same branch
-  that clears `cancellation_feedback`.
-- `endDate` is `string | null | undefined`: set, clear, leave alone. `{}` clears a
-  Monday date cell.
+**Required Monday-side state:** `7920935809` must have its **date action removed**
+(its group move stays — it is one of two automations moving items into
+`group_mm5f9by1`, alongside `7921982789`). `7920935830` **stays on**; it is now the
+only writer of the end-date cell.
+
+⚠️ **The API token cannot make these edits.** `manage_automations` returns
+`USER_UNAUTHORIZED`, so anything in this section is a hand-fix in the Monday UI and
+cannot be automated from the app. Which is why it is worth stating what the board
+must look like, rather than assuming.
+
+**"Enquiry date" (`date_mm50brxt`) is a third column and is written by nobody
+after item creation.** It records when the enquiry arrived; `setEnquiryStatus`
+mutates only the status column and the start-date cell, and no automation targets
+it. It is the one date on that board that has never been at risk, which matters
+because it is also the one most often asked of it. (Renamed from "Date added" —
+harmless, since the code addresses columns by id, never by title.)
+
+**How to tell who wrote a Customer date cell:** the code writes **date-only**, an
+automation writes a **time**. Allan Carmichael's read `2026-08-22 08:16` after his
+payment recovered on 22 Aug — his real start date overwritten by `7920935809`. It
+was repaired to **2026-07-20**, his billing anchor and the day before his first
+lead, *not* his `created_at` of 8 July, which is when the enquiry arrived rather
+than when he started paying. The two are a fortnight apart for him.
+
+The rest of the book turned out to be fine: every other management customer's cell
+agrees with their billing anchor to within a day, because the automation stamps on
+*entry* and for most of them that happened once. Only re-entry corrupts it, which
+is why the three paused customers are the ones still exposed until the date action
+is removed.
+
+- **Start date: first write wins** — only sent when the cell is empty. This also
+  closes a gap: GR customers never got one from automations.
+- `startDate` is `string | undefined`: set, or leave alone.
 
 `subscriptionPeriodEnd()` moved into `src/lib/stripe.ts` and is shared with the
 admin billing panel — `current_period_end` moved onto subscription items in the
@@ -1947,12 +2004,13 @@ reads it to decide business state. Two consequences:
   board's label first would instead make our write conditional on somebody else's
   edit — and double the round trips.
 
-A date instruction costs one item read, but `endDateNeedsWrite()` still suppresses
-the **write** when the cell already agrees — `customer.subscription.updated` fires
-on all sorts of unrelated changes and arrives asking to clear an end date that is
-almost always already empty. It compares on the date part only, because Monday
-returns `YYYY-MM-DD` or `YYYY-MM-DD HH:MM` depending on whether a time was ever
-set and the old automation wrote times.
+⚠️ **This paragraph described an end-date instruction costing one item read, and
+`endDateNeedsWrite()` suppressing the write when the cell already agreed. Both are
+gone** — the code no longer writes that cell at all (§23.3), so there is no date
+instruction to carry and the cache comparison is now the whole short-circuit: a
+matching label returns without touching Monday. The item read survives only for the
+start-date "is the cell empty" test, on the path where the label has actually
+changed.
 
 On a failed push `monday_status_label` is left **unchanged** so the next event
 retries naturally; `monday_status_error` carries the reason for the admin cell.
@@ -2102,7 +2160,7 @@ more useful than the individual fixes:
 | `monday-link` did not check the board | `items(ids:)` is not board-scoped, so an id from any other board validated and then failed on every push. |
 | A repeat enquiry repointed the link | This route creates a new item per submission, so status writes would land on the duplicate while sales worked the original. First item wins. |
 | A GR-board link was terminal | `resolveItem` short-circuited on any stored id, so a GR-form enquirer could never later be matched to a management-board item. A stored link is now trusted only when it is on the status board. |
-| End date was management-only | The automation being deleted stamped it for **both** products, so a departing GR customer would have silently lost their end date. |
+| End date was management-only | The automation stamped it for **both** products, so a departing GR customer would have silently lost their end date. (Moot since §23.3 handed that cell back to the automation.) |
 
 The lesson worth keeping: a suite that only exercises the happy path will report
 "verified" on code whose failure modes are all silent. The label rule and matcher
@@ -2120,7 +2178,8 @@ at once, and the distinction between a GR customer who is leaving and one who is
 merely `past_due`. The matcher and `endDateNeedsWrite` went through **21**, among
 them the phone tier, which resolves nobody on today's data and would otherwise ship
 unexercised, and the two-items-share-a-number ambiguity case that exists on the live
-board.
+board. (`endDateNeedsWrite` has since been removed — §23.3 handed that cell back to
+the board automation.)
 
 Both were then run against the real board and the real 31 active customer rows,
 read-only: **30 resolve — 28 by email, 2 by name — no item claimed twice, and the
@@ -3136,3 +3195,173 @@ additive and inert on its own, and nothing in this feature writes a balance,
 counter, pacing or capacity column, so a lagging migration cannot affect lead
 allocation. 0096 (`sweep_api_tables`) follows it and is read by the pool sweep
 only — a lagging 0096 costs a day of housekeeping, nothing more.
+
+---
+
+## 28. Lapsing a persistently-declined customer *(0097)*
+
+A customer whose collection has been failing for more than **3 days**
+(`past_due_lapse_days`) is written off: removed from the active-customer
+population, and shown on the Monday board as **Cancelled** rather than "Wants to
+pay card declined".
+
+`/api/cron/lapse-past-due`, daily at 06:00.
+
+### What was actually broken
+
+Nothing ever converted a persistently-declined customer into a cancelled one.
+Two facts combined to make `past_due` a permanent state rather than a transient
+one:
+
+- `mapStatus()` collapsed Stripe's **`unpaid`** — the terminal dunning state, all
+  retries exhausted — into our `past_due`, so end-of-dunning was
+  indistinguishable from the first failed charge;
+- `account_status` only ever became `'cancelled'` on a Stripe `canceled`. A
+  payment failure never demoted it, deliberately, because a failure is usually
+  temporary.
+
+So somebody who cancels the card authority behind their subscription — the most
+common way a small operator actually leaves — sat at `subscription_status =
+'past_due'` with `account_status = 'active'` **for ever**: card-declined on the
+board indefinitely, still consuming a management capacity slot, still green in
+admin, and still able to buy a £75 top-up.
+
+The three-day threshold is short on purpose. Stripe's own retry schedule runs for
+weeks; the point of this is that the board and the active-customer count stop
+describing somebody as a paying customer long before Stripe gives up on them.
+
+### `unpaid` is a cancellation now
+
+`mapStatus` returns `'canceled'` for it, which needs no new branch anywhere: the
+management branch already sets `account_status = 'cancelled'` and stamps
+`cancelled_at` on that value, the label rule already returns `Cancelled`, capacity
+already releases the slot. What it gives up is the ability to tell "unpaid but
+alive in Stripe" from "cancelled outright" — nothing reads that distinction, and
+Stripe remains the source of truth for it.
+
+That is the CLEAN end of dunning only. A subscription Stripe simply leaves at
+`past_due` never produces the event at all, which is what the cron is for, and in
+practice that is the common case.
+
+### It never calls Stripe, and never writes `subscription_status`
+
+Both refusals are load-bearing.
+
+**No Stripe call**, so nothing irreversible happens on a timer. The subscription
+is left to keep retrying, and a late success restores the customer with no manual
+step: `invoice.paid` promotes `account_status` back out of `'cancelled'` (§23.9)
+and clears both new columns. Cancelling in Stripe at day 3 would pre-empt Stripe's
+own retry schedule and kill subscriptions that would have recovered — Allan's
+recovered at 40 hours.
+
+**No `subscription_status` write**, so the row stays honest about what Stripe
+actually reports. It also means the `customer.subscription.updated` events that
+keep arriving carrying `past_due` are a no-op here rather than two writers
+fighting over one column. `lapsed_at` is what the label rule reads.
+
+### Four columns, two jobs, one writer each
+
+| Column | Meaning | Writer |
+|---|---|---|
+| `past_due_since` / `gr_past_due_since` | when the CURRENT episode began | the Stripe webhook |
+| `lapsed_at` / `gr_lapsed_at` | we have written them off | the lapse cron only |
+
+`past_due_since` is **coalesced, and that is the whole mechanism**: Stripe retries
+a dead card repeatedly and every retry lands on `invoice.payment_failed`.
+Re-stamping would hold the three-day clock permanently at zero, so a customer with
+a genuinely dead card would never lapse — the exact failure the clock exists to
+prevent. Any status other than `past_due` clears both columns, which is what makes
+recovery free and what starts a fresh episode on a fresh clock.
+
+`applyPastDueEpisode()` and `mapStripeSubscriptionStatus()` live in
+`src/lib/pastDueEpisode.ts` rather than in the webhook route, for the reason
+`applyPendingPlanChange()` does (§24): a Next route file can only export its HTTP
+handlers, and these are rules worth driving directly.
+
+### Why `lapsed_at` is a column and not a reading of `account_status`
+
+`mondayStatusLabelFor()` must stay a **pure function of the row** — the property
+0087 was written to establish. So the lapse has to be visible in the row.
+
+`account_status` alone cannot carry it. That rule's cancellation test deliberately
+excludes `past_due` (`account_status = 'cancelled' and subscription_status not in
+('active','past_due')`) so a stale `'cancelled'` can never outvote a customer who
+is demonstrably paying, and the rule must not depend on the §23.9 promotion fix
+having run. Widening it to admit `past_due` would re-open exactly the hole it was
+written to close. An explicit stamp with one writer cannot be confused with a
+stale status.
+
+### Both products, and the asymmetry stated rather than hidden
+
+`gr_subscription_status = 'past_due'` **already** excludes a GR customer from GR
+routing, GR capacity and every GR email, so on that side the lapse is the board
+label and `gr_cancelled_at`. Management is where the defect was, because
+`account_status` is what keeps a management customer in the capacity count. The GR
+branch never writes `account_status` (invariant 6).
+
+### What needed no change, and that is the point
+
+Once `account_status = 'cancelled'` is written these self-correct: `capacity.ts`
+releases the slot, the admin badge and product tabs read Cancelled, the pause route
+refuses them, and `canInviteManagement()` offers them a re-invite (§18E). And these
+had already excluded them the moment they went `past_due`: the SQL candidate
+functions, pool visibility, the admin overview active count and MRR,
+inactivity-nudge, progress-report and announcements.
+
+The lapse changes a customer's state through the column the rest of the system
+already reads, rather than adding a predicate to nine places.
+
+### The top-up hole, closed alongside
+
+`topupIneligibilityReason()` read `account_status` only — every check in it did —
+while the thing that actually stops delivery is both candidate functions requiring
+`subscription_status = 'active'`. So a declined management customer passed every
+check and could be charged **£75 for credit routing would never spend**, which is
+the one outcome that function's own doc comment says it exists to prevent. It now
+refuses `past_due`, with a message naming the billing portal rather than support:
+unlike `cancelled`, this one the customer can fix themselves.
+
+### Verification
+
+All 89 applicable migrations applied to a scratch Postgres 16 from empty (0002
+needs `pg_cron`), then 0097 re-applied to prove idempotency. The backfill was
+exercised over five seeded shapes: failures either side of a successful payment
+(takes the one AFTER the payment, not the older one), no payment rows at all
+(falls back to `updated_at`), an active customer with an old failure (not
+stamped), a GR episode with a management failure that must be ignored, and an
+existing stamp that must not move.
+
+The label rule, the top-up gate, `mapStripeSubscriptionStatus` and
+`applyPastDueEpisode` went through **40 cases**, now committed as vitest tests
+under `src/lib/__tests__/` rather than left in a scratch harness — so they gate
+every build. One real defect came out of them and is recorded above: rule 3 needed
+the `and not cancelling` guard, without which a lapsed customer still paying for GR
+read as card-declined. That case was unreachable by reading the rule and obvious
+the moment it was driven — the same lesson as §23.10 and §25's parse-then-upload
+seam. The guard's test was mutation-checked: reverting the guard fails it and
+nothing else.
+
+The cron's selection was driven against seeded rows aged 1, 2, 4, 5 and 9 days,
+plus an already-lapsed row, an archived row, an unstamped row and an active one:
+only the two genuinely eligible rows are picked, and the guarded write makes a
+second run select nobody.
+
+`next build` is clean and registers the route.
+
+Migration 0097 was then applied to `znlfwbnvhlacwzgfalcf` and re-verified there:
+four nullable columns, both settings rows, and a backfill that matched nobody —
+zero customers past_due on either product at apply time, so no customer row
+changed.
+
+**Stripe was not rehearsed.** The Stripe account reachable from the build session
+is a different account from the one this app bills on, so the `unpaid` mapping has
+not been exercised end to end — check it against the app's own key or in the
+dashboard, the same caveat §12 records for the tier swap.
+
+### Deployment order — migration BEFORE code
+
+0097 first. The webhook selects the new columns on **every** `invoice.paid` and
+every subscription event, so a lagging migration would break crediting for
+everybody, not only for customers using this feature. Nothing here touches a
+balance, counter, pacing or capacity column, so a lagging migration cannot affect
+lead allocation.
