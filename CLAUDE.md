@@ -452,7 +452,12 @@ for being new with no way to earn out of it.
   functions — which key on `subscription_status` — would never spend; it now
   refuses `past_due`. The two columns still disagree by design elsewhere, and §18A
   is the guide to which surface reads which.
-- No ESLint config (`next lint` prompts interactively) and **no test suite**.
+- ~~No ESLint config (`next lint` prompts interactively) and **no test suite**.~~
+  **Both now exist.** `.eslintrc.json` is committed, and `vitest` runs the suite
+  under `src/**/__tests__/`. `npm run build` is `vitest run && next build`, so the
+  tests gate every deploy — which is only safe because they are pure units with no
+  network or database (see `vitest.config.ts`). Older sections below still say
+  "no test suite"; read those as true at the time they were written.
 
 ---
 
@@ -3327,11 +3332,14 @@ stamped), a GR episode with a management failure that must be ignored, and an
 existing stamp that must not move.
 
 The label rule, the top-up gate, `mapStripeSubscriptionStatus` and
-`applyPastDueEpisode` went through **40 cases**. One real defect came out of it and
-is recorded above: rule 3 needed the `and not cancelling` guard, without which a
-lapsed customer still paying for GR read as card-declined. That case was
-unreachable by reading the rule and obvious the moment it was driven — the same
-lesson as §23.10 and §25's parse-then-upload seam.
+`applyPastDueEpisode` went through **40 cases**, now committed as vitest tests
+under `src/lib/__tests__/` rather than left in a scratch harness — so they gate
+every build. One real defect came out of them and is recorded above: rule 3 needed
+the `and not cancelling` guard, without which a lapsed customer still paying for GR
+read as card-declined. That case was unreachable by reading the rule and obvious
+the moment it was driven — the same lesson as §23.10 and §25's parse-then-upload
+seam. The guard's test was mutation-checked: reverting the guard fails it and
+nothing else.
 
 The cron's selection was driven against seeded rows aged 1, 2, 4, 5 and 9 days,
 plus an already-lapsed row, an archived row, an unstamped row and an active one:
@@ -3339,6 +3347,11 @@ only the two genuinely eligible rows are picked, and the guarded write makes a
 second run select nobody.
 
 `next build` is clean and registers the route.
+
+Migration 0097 was then applied to `znlfwbnvhlacwzgfalcf` and re-verified there:
+four nullable columns, both settings rows, and a backfill that matched nobody —
+zero customers past_due on either product at apply time, so no customer row
+changed.
 
 **Stripe was not rehearsed.** The Stripe account reachable from the build session
 is a different account from the one this app bills on, so the `unpaid` mapping has
