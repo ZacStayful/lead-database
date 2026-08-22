@@ -2,6 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  applyPastDueEpisode,
+  mapStripeSubscriptionStatus as mapStatus,
+} from "@/lib/pastDueEpisode";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import {
   GR_PLANS,
@@ -83,23 +87,6 @@ function logMondayPush(
       skipped: push.skipped,
       error: push.error,
     });
-  }
-}
-
-/** Map a Stripe subscription status onto our customers.subscription_status. */
-function mapStatus(status: Stripe.Subscription.Status): string {
-  switch (status) {
-    case "active":
-    case "trialing":
-      return "active";
-    case "past_due":
-    case "unpaid":
-      return "past_due";
-    case "canceled":
-    case "incomplete_expired":
-      return "canceled";
-    default:
-      return "inactive";
   }
 }
 
@@ -339,13 +326,18 @@ export async function POST(request: NextRequest) {
         // handle on the row — and adding the column here costs no extra query.
         const { data: existing } = await admin
           .from("customers")
-          .select("id, cancelled_at, gr_cancelled_at, cancellation_feedback")
+          .select(
+            "id, cancelled_at, gr_cancelled_at, cancellation_feedback, " +
+              "past_due_since, gr_past_due_since"
+          )
           .or(customerMatchFilter(customerId, isGuaranteedRent))
           .maybeSingle<{
             id: string;
             cancelled_at: string | null;
             gr_cancelled_at: string | null;
             cancellation_feedback: string | null;
+            past_due_since: string | null;
+            gr_past_due_since: string | null;
           }>();
 
         const update: Record<string, unknown> = {
@@ -431,6 +423,18 @@ export async function POST(request: NextRequest) {
             update.gr_cancelled_at = null;
           }
 
+          // Past-due episode (0094). A GR failure never touches account_status
+          // (invariant 6) — gr_subscription_status = 'past_due' already removes
+          // them from GR routing and GR capacity, so what the lapse adds on this
+          // side is the board label and the cancellation date.
+          applyPastDueEpisode(
+            update,
+            status,
+            existing?.gr_past_due_since,
+            true,
+            nowIso
+          );
+
           // Pending cancellation (0087). Stored so the Monday label rule is a pure
           // function of the row rather than depending on this branch passing it
           // along — see the migration header. Cleared on the same condition the
@@ -505,6 +509,18 @@ export async function POST(request: NextRequest) {
           // second thing to keep true.
           update.cancel_at_period_end =
             status !== "canceled" && sub.cancel_at_period_end === true;
+
+          // Past-due episode (0094). Cleared by every non-past_due status,
+          // including 'canceled' — a subscription that has actually ended is
+          // described by cancelled_at and account_status, and leaving a stale
+          // write-off stamp behind would make lapsed_at mean two things.
+          applyPastDueEpisode(
+            update,
+            status,
+            existing?.past_due_since,
+            false,
+            nowIso
+          );
 
           if (anchor) update.billing_cycle_anchor = anchor;
         }
@@ -769,6 +785,11 @@ export async function POST(request: NextRequest) {
             const grUpdate: Record<string, unknown> = {
               gr_subscription_status: "active",
               gr_stripe_subscription_id: subscriptionId,
+              // Close any past-due episode and undo any write-off (0094), as the
+              // management branch does. No account_status counterpart here — that
+              // column is management-only (invariant 6).
+              gr_past_due_since: null,
+              gr_lapsed_at: null,
               updated_at: new Date().toISOString(),
             };
             // Re-anchor the GR billing cycle to this period's start on every
@@ -952,6 +973,12 @@ export async function POST(request: NextRequest) {
           // to the start of the period this invoice covers.
           const renewalUpdate: Record<string, unknown> = {
             subscription_status: "active",
+            // Close any past-due episode and undo any write-off (0094). Money
+            // arrived, so both facts are now false; the promotion above has
+            // already taken account_status back out of 'cancelled'. Together
+            // these are what make recovery from a lapse need no manual step.
+            past_due_since: null,
+            lapsed_at: null,
             updated_at: new Date().toISOString(),
           };
           const renewalAnchor = toDateString(invoice.period_start);
@@ -995,11 +1022,17 @@ export async function POST(request: NextRequest) {
         const priceIds = priceIdsFromInvoice(invoice);
         const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
 
+        // past_due_since rides on the lookup this branch already performs — one
+        // more column on a query that has to run anyway (0094).
         const { data: customer } = await admin
           .from("customers")
-          .select("id")
+          .select("id, past_due_since, gr_past_due_since")
           .or(customerMatchFilter(customerId, isGuaranteedRent))
-          .maybeSingle();
+          .maybeSingle<{
+            id: string;
+            past_due_since: string | null;
+            gr_past_due_since: string | null;
+          }>();
 
         if (customer) {
           await admin.from("payments").insert({
@@ -1011,19 +1044,29 @@ export async function POST(request: NextRequest) {
             lead_type: isGuaranteedRent ? "guaranteed_rent" : "management",
           });
 
+          // Stamp the start of this past-due episode, FIRST FAILURE ONLY (0094).
+          // Stripe retries a declined card repeatedly over the following weeks and
+          // every retry lands here; re-stamping would hold the lapse clock at zero
+          // for ever, so a customer with a permanently dead card would never lapse
+          // — which is precisely the state this was built to end.
+          const failureUpdate: Record<string, unknown> = {
+            updated_at: new Date().toISOString(),
+          };
+          if (isGuaranteedRent) {
+            failureUpdate.gr_subscription_status = "past_due";
+            if (!customer.gr_past_due_since) {
+              failureUpdate.gr_past_due_since = new Date().toISOString();
+            }
+          } else {
+            failureUpdate.subscription_status = "past_due";
+            if (!customer.past_due_since) {
+              failureUpdate.past_due_since = new Date().toISOString();
+            }
+          }
+
           await admin
             .from("customers")
-            .update(
-              isGuaranteedRent
-                ? {
-                    gr_subscription_status: "past_due",
-                    updated_at: new Date().toISOString(),
-                  }
-                : {
-                    subscription_status: "past_due",
-                    updated_at: new Date().toISOString(),
-                  }
-            )
+            .update(failureUpdate)
             .eq("id", customer.id);
 
           // Board push -> "Wants to pay card declined". Reverted automatically on

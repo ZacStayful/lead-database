@@ -182,6 +182,19 @@ export function topupIneligibilityReason(
   if (customer.account_status === "cancelled") {
     return "Your Management subscription is cancelled, so leads can't be assigned. Please contact support.";
   }
+  // A failed payment is refused too, and this was a real hole (0094): every check
+  // in this function read account_status, which a decline never changes, while the
+  // thing that actually stops delivery — both candidate functions requiring
+  // subscription_status = 'active' — reads the column below. So a declined
+  // customer passed all of these and could be charged £75 for credit that routing
+  // would never spend, which is the one outcome the doc comment above says this
+  // function exists to prevent.
+  //
+  // Named separately from 'cancelled' because the fix differs: this one is
+  // recoverable by the customer, in the portal, without contacting anybody.
+  if (customer.subscription_status === "past_due") {
+    return "Your last Management payment didn't go through, so leads can't be assigned. Update your card in the billing portal and your balance will be waiting.";
+  }
   if (customer.paused_at) {
     return "Your Management subscription is paused, so new leads can't be assigned. Resume it first and your balance will be waiting.";
   }
