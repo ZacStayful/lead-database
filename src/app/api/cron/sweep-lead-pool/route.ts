@@ -138,6 +138,15 @@ async function handle(request: NextRequest) {
     | { entered: number; exited: number; expired: number }
     | undefined;
 
+  // Public-API housekeeping, riding on the one daily job that already runs.
+  //
+  // Rate-limit windows are rolled into the per-day usage totals BEFORE they are
+  // discarded, so the settings panel and /admin/api keep a month of history
+  // without anything having to be counted on the request path. Deliberately
+  // after the dry-run and kill-switch branches above: a preview run writes
+  // nothing, and a disabled pool should not quietly do database work.
+  const apiHousekeeping = await sweepApiTables(admin);
+
   return NextResponse.json({
     status: "ok",
     entered: result?.entered ?? 0,
@@ -153,7 +162,86 @@ async function handle(request: NextRequest) {
       allocated: exits.filter((e) => e.reason === "allocated").length,
       barred: exits.filter((e) => e.reason === "barred").length,
     },
+    api_usage_rolled_up: apiHousekeeping.rolledUp,
+    api_windows_deleted: apiHousekeeping.windowsDeleted,
+    api_log_rows_deleted: apiHousekeeping.logRowsDeleted,
   });
+}
+
+/**
+ * Fold expiring rate-limit windows into api_usage_daily, then discard them, and
+ * drop request-log rows older than 30 days.
+ *
+ * Best-effort: a failure here is a reporting gap, and must never fail the pool
+ * sweep, which is the part of this job that actually moves leads.
+ */
+async function sweepApiTables(
+  admin: ReturnType<typeof createAdminClient>
+): Promise<{ rolledUp: number; windowsDeleted: number; logRowsDeleted: number }> {
+  const out = { rolledUp: 0, windowsDeleted: 0, logRowsDeleted: 0 };
+  const cutoff = new Date(Date.now() - 86_400_000).toISOString();
+  const logCutoff = new Date(Date.now() - 30 * 86_400_000).toISOString();
+
+  try {
+    const { data: expiring } = await admin
+      .from("api_rate_limits")
+      .select("subject_id, window_start, request_count")
+      .eq("subject_kind", "key")
+      .lt("window_start", cutoff);
+
+    const rows = (expiring ?? []) as {
+      subject_id: string;
+      window_start: string;
+      request_count: number;
+    }[];
+
+    // Sum per key per day before writing, so one upsert covers a whole day
+    // rather than 1,440 of them.
+    const totals = new Map<string, number>();
+    for (const r of rows) {
+      const day = r.window_start.slice(0, 10);
+      const k = `${r.subject_id}|${day}`;
+      totals.set(k, (totals.get(k) ?? 0) + r.request_count);
+    }
+
+    const entries = Array.from(totals.entries());
+    for (const [k, count] of entries) {
+      const [keyId, day] = k.split("|");
+      const { data: existing } = await admin
+        .from("api_usage_daily")
+        .select("request_count")
+        .eq("key_id", keyId)
+        .eq("day", day)
+        .maybeSingle();
+
+      const { error } = await admin.from("api_usage_daily").upsert(
+        {
+          key_id: keyId,
+          day,
+          request_count:
+            ((existing as { request_count?: number } | null)?.request_count ?? 0) + count,
+        },
+        { onConflict: "key_id,day" }
+      );
+      if (!error) out.rolledUp += 1;
+    }
+
+    const { count: deleted } = await admin
+      .from("api_rate_limits")
+      .delete({ count: "exact" })
+      .lt("window_start", cutoff);
+    out.windowsDeleted = deleted ?? 0;
+
+    const { count: logDeleted } = await admin
+      .from("api_request_log")
+      .delete({ count: "exact" })
+      .lt("created_at", logCutoff);
+    out.logRowsDeleted = logDeleted ?? 0;
+  } catch (err) {
+    console.error("[sweep] api housekeeping failed", err);
+  }
+
+  return out;
 }
 
 // Vercel Cron issues a GET; POST is here so the job can be triggered by hand
