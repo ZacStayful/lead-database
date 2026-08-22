@@ -284,6 +284,10 @@ async function consumeRateLimit(
   const row = Array.isArray(data) ? data[0] : data;
   const minuteCount = Number((row as { minute_count?: number })?.minute_count ?? 0);
   const dayCount = Number((row as { day_count?: number })?.day_count ?? 0);
+  // TEMPORARY DIAGNOSTIC — remove before merge.
+  (globalThis as Record<string, unknown>).__rlDebug = JSON.stringify({
+    data, error, minuteCount, dayCount,
+  }).slice(0, 400);
 
   if (minuteCount > RATE_LIMIT_PER_MINUTE) {
     return fail(

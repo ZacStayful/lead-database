@@ -92,6 +92,9 @@ export function withApi<T>(
 
     caller = resolved.caller;
     const headers = baseHeaders(requestId, caller.minuteCount);
+    // TEMPORARY DIAGNOSTIC — remove before merge.
+    const dbg = (globalThis as Record<string, unknown>).__rlDebug;
+    if (typeof dbg === "string") headers["X-Debug-RL"] = dbg.replace(/[^\x20-\x7e]/g, "");
 
     if (!caller.scopes.includes(options.scope)) {
       return finish(
