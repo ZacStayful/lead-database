@@ -1,13 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
+import { cityForArea } from "@/lib/postcode";
+import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
+import { areasWithinRadius, type AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
+import {
+  belowAllocation,
+  expansionSuggestions,
+  predictMonthlyVolume,
+  type ExpansionSuggestion,
+  type FilterSelection,
+  type ProductVolume,
+  type VolumePrediction,
+} from "@/lib/filterPrediction";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export interface AreaOption {
@@ -27,6 +39,11 @@ export interface FilterPanelProps {
   // Lead volume per postcode area (national), for the map + list hints.
   areaCounts?: Record<string, number>;
   maxAreaCount?: number;
+  // Per-product ingest history the live volume prediction runs on.
+  volume: ProductVolume;
+  // The plan's monthly lead allocation for this product — what a selection is
+  // judged "too small" against.
+  monthlyAllocation: number;
 }
 
 const CONSENT =
@@ -56,6 +73,155 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [areaQuery, setAreaQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmedRisk, setConfirmedRisk] = useState(false);
+
+  // How the customer picks locations: hand-pick areas, or a radius around
+  // their own postcode that resolves to the areas the circle touches. Radius
+  // is a SELECTOR, not a different filter: routing matches on postcode areas,
+  // so what is saved is always the resolved area set, through the same apply.
+  const [locationMode, setLocationMode] = useState<"areas" | "radius">("areas");
+  const [radiusPostcode, setRadiusPostcode] = useState("");
+  const [radiusMiles, setRadiusMiles] = useState(15);
+  const [geoFeatures, setGeoFeatures] = useState<AreaFeature[] | null>(null);
+  const [geoFailed, setGeoFailed] = useState(false);
+
+  // Boundary polygons for the radius test — fetched once, on first use of
+  // radius mode (the map fetches the same file, so it is usually cached).
+  useEffect(() => {
+    if (locationMode !== "radius" || geoFeatures || geoFailed) return;
+    let alive = true;
+    fetch("/data/uk-postcode-areas.geojson")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => alive && setGeoFeatures(d.features as AreaFeature[]))
+      .catch(() => alive && setGeoFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [locationMode, geoFeatures, geoFailed]);
+
+  // Live prediction for the draft selection, recomputed on every toggle.
+  const draftSelection: FilterSelection = useMemo(
+    () => ({
+      areas: selectedAreas,
+      minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
+      maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+    }),
+    [selectedAreas, minBeds, maxBeds]
+  );
+  const prediction = useMemo(
+    () => predictMonthlyVolume(props.volume, draftSelection),
+    [props.volume, draftSelection]
+  );
+  const isBelow = belowAllocation(prediction, props.monthlyAllocation);
+  // Nearest-area chips belong to hand-picking; in radius mode the "widen
+  // search" line is the expansion mechanic, and a chip toggle would be undone
+  // by the radius-to-selection sync anyway.
+  const suggestions = useMemo(
+    () =>
+      isBelow && locationMode === "areas"
+        ? expansionSuggestions(props.volume, draftSelection)
+        : [],
+    [isBelow, locationMode, props.volume, draftSelection]
+  );
+
+  // Consent is to a specific number: any change of selection voids it.
+  // Keyed on the raw inputs, not the memoised object — React may recompute a
+  // useMemo without its inputs changing, which must not untick the box.
+  useEffect(() => {
+    setConfirmedRisk(false);
+  }, [selectedAreas, minBeds, maxBeds]);
+
+  // The SAVED filter's prediction, for the read-only summary view — the same
+  // number the admin surfaces show for this customer.
+  const savedPrediction = useMemo(
+    () =>
+      predictMonthlyVolume(props.volume, {
+        areas: props.areas,
+        minBedrooms: props.minBedrooms,
+        maxBedrooms: props.maxBedrooms,
+      }),
+    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms]
+  );
+  const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
+
+  // Radius mode: resolve the typed postcode + radius to the postcode areas
+  // the circle touches, and work out the smallest widening that would add
+  // more leads — "another 5 miles brings in Gloucester, about +2/month".
+  const MILES_TO_KM = 1.60934;
+  const radius = useMemo((): {
+    outcode: string | null;
+    covered: string[];
+    upside: { extraMiles: number; newAreas: string[]; extraRate: number } | null;
+  } | null => {
+    if (locationMode !== "radius" || !geoFeatures) return null;
+    const unresolved = { outcode: null, covered: [], upside: null };
+    const outcode = parseOutcode(radiusPostcode);
+    if (!outcode) return unresolved;
+    const centre = outcodeCentroid(outcode);
+    if (!centre) return unresolved;
+
+    const covered = areasWithinRadius(
+      geoFeatures,
+      centre,
+      radiusMiles * MILES_TO_KM
+    );
+    const bedSel = {
+      minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
+      maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+    };
+    const current = predictMonthlyVolume(props.volume, {
+      areas: covered,
+      ...bedSel,
+    });
+
+    // Scan outwards in 5-mile steps for the first widening that adds leads.
+    let upside: {
+      extraMiles: number;
+      newAreas: string[];
+      extraRate: number;
+    } | null = null;
+    for (const extra of [5, 10, 15, 20, 25, 30]) {
+      const wider = areasWithinRadius(
+        geoFeatures,
+        centre,
+        (radiusMiles + extra) * MILES_TO_KM
+      );
+      if (wider.length === covered.length) continue;
+      const p = predictMonthlyVolume(props.volume, {
+        areas: wider,
+        ...bedSel,
+      });
+      if (p.displayRate > current.displayRate) {
+        upside = {
+          extraMiles: extra,
+          newAreas: wider.filter((a) => !covered.includes(a)),
+          extraRate: p.displayRate - current.displayRate,
+        };
+        break;
+      }
+    }
+    return { outcode, covered, upside };
+  }, [
+    locationMode,
+    geoFeatures,
+    radiusPostcode,
+    radiusMiles,
+    minBeds,
+    maxBeds,
+    props.volume,
+  ]);
+
+  // In radius mode the covered areas ARE the selection, so the map, the
+  // prediction, the consent gate and apply all run off the same state as
+  // hand-picking. Keyed on the joined list to avoid a re-render loop.
+  const coveredKey =
+    radius && radius.outcode !== null ? radius.covered.join(",") : null;
+  useEffect(() => {
+    if (locationMode !== "radius" || coveredKey === null) return;
+    setSelectedAreas((prev) =>
+      prev.join(",") === coveredKey ? prev : coveredKey === "" ? [] : coveredKey.split(",")
+    );
+  }, [locationMode, coveredKey]);
 
   const visibleAreas = useMemo(() => {
     const q = areaQuery.trim().toLowerCase();
@@ -70,6 +236,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     setSelectedAreas((prev) =>
       prev.includes(area) ? prev.filter((a) => a !== area) : [...prev, area]
     );
+  }
+
+  /**
+   * A map click while in radius mode is the customer taking over by hand —
+   * switch to area mode first, or the radius sync would immediately undo the
+   * toggle. The radius-derived selection is kept as the starting point.
+   */
+  function toggleFromMap(area: string) {
+    if (locationMode === "radius") setLocationMode("areas");
+    toggleArea(area);
   }
 
   async function post(body: Record<string, unknown>) {
@@ -97,11 +273,19 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   }
 
   async function apply() {
+    // The radius details are recorded only when the selection genuinely came
+    // from a resolved radius search — admin reads them to see what the
+    // customer asked for. Routing reads the areas either way.
+    const fromRadius =
+      locationMode === "radius" && radius != null && radius.outcode !== null;
     const ok = await post({
       action: "apply",
       areas: selectedAreas,
       min_bedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       max_bedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      selection_mode: fromRadius ? "radius" : "areas",
+      radius_outcode: fromRadius ? radius.outcode : null,
+      radius_miles: fromRadius ? radiusMiles : null,
     });
     if (ok) setEditing(false);
   }
@@ -153,6 +337,40 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 <dd className="mt-0.5 text-sm font-medium">{bedroomSummary}</dd>
               </div>
             </dl>
+
+            <div className="space-y-1.5">
+              {savedPrediction.reliable ? (
+                <>
+                  <p className="text-sm">
+                    Predicted volume:{" "}
+                    <span className="font-semibold">
+                      ~{savedPrediction.displayRate} lead
+                      {savedPrediction.displayRate === 1 ? "" : "s"}/month
+                    </span>{" "}
+                    <span className="text-muted-foreground">
+                      of your {props.monthlyAllocation}/month plan
+                    </span>
+                  </p>
+                  <VolumeBar
+                    rate={savedPrediction.displayRate}
+                    allocation={props.monthlyAllocation}
+                    amber={savedBelow}
+                  />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Only {savedPrediction.matchingLeads} matching lead
+                  {savedPrediction.matchingLeads === 1 ? "" : "s"} since 1 July
+                  — too little data to predict monthly volume reliably.
+                </p>
+              )}
+              {savedBelow && (
+                <p className="text-xs text-amber-700">
+                  Below your plan of {props.monthlyAllocation} leads/month —
+                  the volume guarantee is lifted while this filter is active.
+                </p>
+              )}
+            </div>
 
             {props.status === "pending_lift" && props.liftEffectiveDate && (
               <div className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -207,10 +425,39 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
             )}
 
             <div>
-              <label className="text-sm font-medium">Areas</label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-medium">Locations</label>
+                <div className="flex rounded-md border-[0.5px] border-border p-0.5 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setLocationMode("areas")}
+                    className={
+                      "rounded px-2.5 py-1 " +
+                      (locationMode === "areas"
+                        ? "bg-brand/10 text-brand"
+                        : "text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    Pick areas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLocationMode("radius")}
+                    className={
+                      "rounded px-2.5 py-1 " +
+                      (locationMode === "radius"
+                        ? "bg-brand/10 text-brand"
+                        : "text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    Radius search
+                  </button>
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Choose the postcode areas you want leads from. Leave all
-                unchecked to accept any location.
+                {locationMode === "areas"
+                  ? "Choose the postcode areas you want leads from. Leave all unchecked to accept any location."
+                  : "Enter your business postcode and how far you're willing to travel — we'll work out which postcode areas that covers."}
               </p>
               {availableAreas.length === 0 ? (
                 <p className="mt-2 text-sm text-muted-foreground">
@@ -225,10 +472,12 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                         maxCount={maxAreaCount}
                         selectable={selectableAreas}
                         selected={selectedAreas}
-                        onToggle={toggleArea}
+                        onToggle={toggleFromMap}
                       />
                     </div>
                   )}
+                  {locationMode === "areas" && (
+                  <>
                   <Input
                     className="mt-2"
                     placeholder="Search areas…"
@@ -287,6 +536,131 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                       ))}
                     </div>
                   )}
+                  </>
+                  )}
+
+                  {locationMode === "radius" && (
+                    <div className="mt-2 space-y-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                        <div className="flex-1">
+                          <label
+                            htmlFor={`${product}-radius-postcode`}
+                            className="block text-xs text-muted-foreground"
+                          >
+                            Your business postcode
+                          </label>
+                          <Input
+                            id={`${product}-radius-postcode`}
+                            value={radiusPostcode}
+                            onChange={(e) => setRadiusPostcode(e.target.value)}
+                            placeholder="e.g. LE67 8QN"
+                            autoComplete="postal-code"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor={`${product}-radius-miles`}
+                            className="block text-xs text-muted-foreground"
+                          >
+                            Radius
+                          </label>
+                          <select
+                            id={`${product}-radius-miles`}
+                            value={radiusMiles}
+                            onChange={(e) =>
+                              setRadiusMiles(parseInt(e.target.value, 10))
+                            }
+                            className="h-10 rounded-md border-[0.5px] border-border bg-background px-3 text-sm"
+                          >
+                            {[5, 10, 15, 20, 25, 30, 40, 50].map((m) => (
+                              <option key={m} value={m}>
+                                {m} miles
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {geoFailed && (
+                        <p className="text-sm text-amber-600">
+                          The area boundaries could not be loaded, so radius
+                          search is unavailable right now. You can still pick
+                          areas by hand.
+                        </p>
+                      )}
+                      {!geoFeatures && !geoFailed && (
+                        <p className="text-sm text-muted-foreground">
+                          Loading area boundaries…
+                        </p>
+                      )}
+                      {radius &&
+                        radius.outcode === null &&
+                        radiusPostcode.trim() !== "" && (
+                          <p className="text-sm text-amber-600">
+                            We don't recognise that postcode — check it, or
+                            try just its first half (e.g. LE67).
+                          </p>
+                        )}
+
+                      {radius && radius.outcode !== null && (
+                        <div className="space-y-2">
+                          <p className="text-sm">
+                            Within {radiusMiles} miles of{" "}
+                            <span className="font-semibold">
+                              {radius.outcode}
+                            </span>{" "}
+                            you'd receive leads from:{" "}
+                            {radius.covered.length > 0 ? (
+                              <span className="font-medium">
+                                {radius.covered
+                                  .map((a) => cityForArea(a) ? `${a} — ${cityForArea(a)}` : a)
+                                  .join(", ")}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">
+                                no postcode areas — widen the radius.
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Leads are matched by postcode area, so your filter
+                            covers each of these areas in full — including the
+                            parts beyond your radius.
+                          </p>
+                          {radius.upside && (
+                            <p className="text-sm">
+                              Widening to{" "}
+                              <span className="font-semibold">
+                                {radiusMiles + radius.upside.extraMiles} miles
+                              </span>{" "}
+                              would add{" "}
+                              {radius.upside.newAreas
+                                .map((a) => cityForArea(a) || a)
+                                .join(", ")}{" "}
+                              — about{" "}
+                              <span className="font-semibold">
+                                +{radius.upside.extraRate} lead
+                                {radius.upside.extraRate === 1 ? "" : "s"}
+                                /month
+                              </span>
+                              .{" "}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRadiusMiles(
+                                    radiusMiles + radius.upside!.extraMiles
+                                  )
+                                }
+                                className="font-medium text-brand hover:underline"
+                              >
+                                Widen search
+                              </button>
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -340,19 +714,85 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               </div>
             </div>
 
-            <p className="rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-              {CONSENT}
-            </p>
+            <PredictionBox
+              prediction={prediction}
+              allocation={props.monthlyAllocation}
+              volume={props.volume}
+              productLabel={productLabel}
+              isBelow={isBelow}
+              nothingSelected={
+                selectedAreas.length === 0 && minBeds === "" && maxBeds === ""
+              }
+              suggestions={suggestions}
+              onAddArea={toggleArea}
+            />
+
+            {isBelow ? (
+              <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <p>
+                  {prediction.reliable ? (
+                    <>
+                      This selection is predicted to deliver about{" "}
+                      <span className="font-semibold">
+                        {prediction.displayRate} lead
+                        {prediction.displayRate === 1 ? "" : "s"} a month
+                      </span>{" "}
+                      against the{" "}
+                      <span className="font-semibold">
+                        {props.monthlyAllocation} leads a month
+                      </span>{" "}
+                      your plan includes. Applying it lifts the volume
+                      guarantee, and your subscription amount stays the same
+                      regardless of how many leads arrive.
+                    </>
+                  ) : (
+                    <>
+                      Too few matching leads have arrived to predict this
+                      selection reliably — volume is likely to be well below
+                      the{" "}
+                      <span className="font-semibold">
+                        {props.monthlyAllocation} leads a month
+                      </span>{" "}
+                      your plan includes. Applying it lifts the volume
+                      guarantee, and your subscription amount stays the same
+                      regardless of how many leads arrive.
+                    </>
+                  )}
+                </p>
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={confirmedRisk}
+                    onChange={(e) => setConfirmedRisk(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                  />
+                  <span>
+                    I understand this filter is predicted to deliver fewer
+                    leads than my plan includes, and I want to apply it at my
+                    own risk.
+                  </span>
+                </label>
+              </div>
+            ) : (
+              <p className="rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                {CONSENT}
+              </p>
+            )}
 
             {error && <p className="text-sm text-amber-600">{error}</p>}
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={apply} disabled={busy}>
+              <Button
+                onClick={apply}
+                disabled={busy || (isBelow && !confirmedRisk)}
+              >
                 {busy
                   ? "Saving…"
-                  : props.status === "off"
-                    ? "Apply filter"
-                    : "Save changes"}
+                  : isBelow
+                    ? "Apply anyway at my own risk"
+                    : props.status === "off"
+                      ? "Apply filter"
+                      : "Save changes"}
               </Button>
               {props.status !== "off" && (
                 <Button
@@ -384,6 +824,160 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Plain two-div progress bar: predicted volume against the plan allocation. */
+function VolumeBar({
+  rate,
+  allocation,
+  amber,
+}: {
+  rate: number;
+  allocation: number;
+  amber: boolean;
+}) {
+  if (allocation <= 0) return null;
+  const pct = Math.min(100, Math.max(0, (rate / allocation) * 100));
+  return (
+    <div
+      className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+      role="img"
+      aria-label={`~${rate} of ${allocation} plan leads per month`}
+    >
+      <div
+        className={`h-full rounded-full ${amber ? "bg-amber-500" : "bg-brand"}`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+/**
+ * The live prediction for the draft selection. Three variants: reliable and at
+ * or above the plan (neutral), reliable but below it (amber warning +
+ * expansion chips), and too little data to extrapolate (no number shown —
+ * a precise rate built on a handful of leads would be false confidence).
+ */
+function PredictionBox({
+  prediction,
+  allocation,
+  volume,
+  productLabel,
+  isBelow,
+  nothingSelected,
+  suggestions,
+  onAddArea,
+}: {
+  prediction: VolumePrediction;
+  allocation: number;
+  volume: ProductVolume;
+  productLabel: string;
+  isBelow: boolean;
+  nothingSelected: boolean;
+  suggestions: ExpansionSuggestion[];
+  onAddArea: (area: string) => void;
+}) {
+  const basis = (
+    <p className="text-xs text-muted-foreground">
+      Based on {prediction.matchingLeads} matching lead
+      {prediction.matchingLeads === 1 ? "" : "s"} since 1 July. Filtered
+      matching can only consider leads with a readable postcode and bedroom
+      count — {volume.matchableLeads} of {volume.totalLeads}{" "}
+      {productLabel.toLowerCase()} leads so far.
+    </p>
+  );
+
+  const chips = suggestions.length > 0 && (
+    <div>
+      <p className="text-xs font-medium">
+        Nearby areas that would get you closer:
+      </p>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {suggestions.map((s) => (
+          <button
+            key={s.area}
+            type="button"
+            onClick={() => onAddArea(s.area)}
+            className="rounded-full border-[0.5px] border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+          >
+            + Add {s.area}
+            {s.city !== s.area ? ` (${s.city})` : ""} · +~{s.monthlyRate}/mo
+            {s.distanceKm != null &&
+              ` · ${Math.max(1, Math.round(s.distanceKm * 0.621))} mi from ${
+                s.nearestSelectedArea
+                  ? cityForArea(s.nearestSelectedArea) || s.nearestSelectedArea
+                  : "your areas"
+              }`}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  if (!prediction.reliable) {
+    return (
+      <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
+        <p className="text-sm">
+          Only {prediction.matchingLeads} lead
+          {prediction.matchingLeads === 1 ? "" : "s"} matching this selection
+          {prediction.matchingLeads === 1 ? " has" : " have"} arrived since 1
+          July — too little data to predict monthly volume reliably.
+        </p>
+        {chips}
+        {basis}
+      </div>
+    );
+  }
+
+  if (isBelow) {
+    return (
+      <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-amber-800">
+        <p className="text-sm">
+          This selection is predicted to produce{" "}
+          <span className="font-semibold">
+            ~{prediction.displayRate} lead
+            {prediction.displayRate === 1 ? "" : "s"}/month — below your plan
+            of {allocation}
+          </span>
+          . This area is too small to support your allocation, so your volume
+          guarantee is lifted while a filter is active. Consider adding more
+          areas.
+        </p>
+        <VolumeBar
+          rate={prediction.displayRate}
+          allocation={allocation}
+          amber
+        />
+        {chips}
+        {basis}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
+      <p className="text-sm">
+        <span className="font-semibold">
+          ~{prediction.displayRate} lead
+          {prediction.displayRate === 1 ? "" : "s"}/month
+        </span>{" "}
+        {nothingSelected
+          ? "arrive across all areas and sizes — narrow your selection to see its prediction."
+          : "match this selection."}{" "}
+        {allocation > 0 && (
+          <span className="text-muted-foreground">
+            Your plan includes {allocation} leads/month.
+          </span>
+        )}
+      </p>
+      <VolumeBar
+        rate={prediction.displayRate}
+        allocation={allocation}
+        amber={false}
+      />
+      {basis}
+    </div>
   );
 }
 
