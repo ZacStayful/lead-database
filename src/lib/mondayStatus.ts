@@ -219,12 +219,6 @@ export interface MondayStatusSyncOutcome {
 }
 
 export interface MondayStatusSyncOptions {
-  /**
-   * Real end of service, for the Customer end date cell. A date sets it, null
-   * CLEARS it (the customer changed their mind), undefined leaves it untouched.
-   * Only the webhook's subscription branch knows this.
-   */
-  endDate?: string | null;
   /** Free-text tag for the log line, e.g. "invoice.paid". */
   reason?: string;
 }
@@ -273,10 +267,10 @@ export async function syncCustomerMondayStatus(
     // reading the board would make our write conditional on somebody else's edit.
     const labelUnchanged = row.monday_status_label === label;
 
-    // With no date instruction there is nothing else that could need writing, so
-    // this returns without touching Monday at all. That is the monthly
-    // invoice.paid path, which is the one that matters for volume.
-    if (labelUnchanged && opts?.endDate === undefined) {
+    // Nothing else can need writing once the label matches, so this returns
+    // without touching Monday at all. That is the monthly invoice.paid path,
+    // which is the one that matters for volume.
+    if (labelUnchanged) {
       return {
         written: false,
         skipped: "unchanged",
@@ -308,20 +302,6 @@ export async function syncCustomerMondayStatus(
       };
     }
 
-    // A date instruction costs one item read, but it must not cost a WRITE when
-    // the cell already says what we want. customer.subscription.updated fires on
-    // all sorts of unrelated changes and arrives here asking to clear an end date
-    // that is almost always already empty; without this the board would take a
-    // pointless mutation every time.
-    if (labelUnchanged && !endDateNeedsWrite(resolved.item.endDate, opts?.endDate)) {
-      return {
-        written: false,
-        skipped: "unchanged",
-        label,
-        itemId: resolved.item.id,
-      };
-    }
-
     // First write wins on the start date. Only sent when the cell is empty, so
     // resume-from-pause, payment recovery and re-subscribe never rewrite it.
     // Mirrors the coalesce on first_contacted_at and first-cancellation-wins on
@@ -344,7 +324,6 @@ export async function syncCustomerMondayStatus(
       label,
       boardId: row.monday_board_id,
       startDate,
-      endDate: opts?.endDate,
     });
 
     if (!write.written) {
@@ -388,24 +367,6 @@ export async function syncCustomerMondayStatus(
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-/**
- * Would writing `desired` to the end-date cell actually change anything?
- *
- * `undefined` means "leave it alone", so never. Otherwise compare on the date part
- * only: Monday returns a date cell as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM" depending
- * on whether a time was ever set, and the board's own automation used to write the
- * timed form. Comparing raw strings would treat "2026-08-17 09:05" and "2026-08-17"
- * as different and rewrite the cell on every event.
- */
-export function endDateNeedsWrite(
-  cell: string,
-  desired: string | null | undefined
-): boolean {
-  if (desired === undefined) return false;
-  const current = (cell ?? "").trim().slice(0, 10);
-  return current !== (desired ?? "");
 }
 
 /** Customer fields the matcher compares against the board. */

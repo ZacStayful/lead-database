@@ -600,34 +600,15 @@ export async function POST(request: NextRequest) {
           // and wrote it back over `Cancelled`.
           const cancellationPending = sub.cancel_at_period_end === true;
 
-          // The REAL end of service, not the date they asked. cancel_at is what
-          // Stripe sets when a cancellation is scheduled; ended_at is set once it
-          // has actually happened. Passing null CLEARS the cell, which is the
-          // change-of-mind case — gated on exactly the condition the
-          // cancellation-reason clearing above uses, so the two never disagree.
-          //
-          // Computed for BOTH products. The board automation that used to stamp
-          // this fired on the `Cancelled` label whichever product caused it, so
-          // deriving it for management only would have quietly dropped the end date
-          // for a departing GR customer the moment that automation was deleted.
-          let endDate: string | null | undefined;
-          if (status === "canceled") {
-            endDate =
-              toDateString(sub.ended_at) ??
-              toDateString(sub.canceled_at) ??
-              new Date().toISOString().slice(0, 10);
-          } else if (cancellationPending) {
-            endDate =
-              toDateString(sub.cancel_at) ??
-              toDateString(subscriptionPeriodEnd(sub));
-          } else if (status === "active") {
-            // Active and no longer scheduled to cancel — they changed their mind.
-            endDate = null;
-          }
-
+          // The Customer end date cell is NOT written from here any more. Board
+          // automation 7920935830 owns it: it stamps the cell when an item enters
+          // `Cancelled`, so the column records the date the customer cancelled
+          // rather than the end of their paid period. Coarser than the cancel_at /
+          // ended_at figure this branch used to compute, and accepted knowingly —
+          // one writer that is slightly coarse beats two fighting over one cell.
+          // Customer START date stays code-owned; see setEnquiryStatus.
           try {
             const push = await syncCustomerMondayStatus(admin, existing.id, {
-              endDate,
               reason: event.type,
             });
             logMondayPush(existing.id, event.type, push);

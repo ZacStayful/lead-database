@@ -96,7 +96,6 @@ async function handle(request: NextRequest) {
   const cutoffIso = cutoff.toISOString();
 
   const nowIso = new Date().toISOString();
-  const today = nowIso.slice(0, 10);
 
   const lapsed: { id: string; email: string; product: string; since: string }[] = [];
   const errors: string[] = [];
@@ -176,7 +175,7 @@ async function handle(request: NextRequest) {
       }
     }
 
-    await pushBoard(admin, customer.id, today);
+    await pushBoard(admin, customer.id);
 
     lapsed.push({
       id: customer.id,
@@ -248,7 +247,7 @@ async function handle(request: NextRequest) {
       }
     }
 
-    await pushBoard(admin, customer.id, today);
+    await pushBoard(admin, customer.id);
 
     lapsed.push({
       id: customer.id,
@@ -269,9 +268,12 @@ async function handle(request: NextRequest) {
 }
 
 /**
- * Move the customer to Cancelled on the sales board, stamping the end of service
- * as today — which for a lapse is the truth: we stopped treating them as a
- * customer now, and there is no future period end to wait for.
+ * Move the customer to Cancelled on the sales board.
+ *
+ * The Customer end date cell looks after itself: board automation 7920935830
+ * stamps it on entry into `Cancelled`, and for a lapse "now" is the honest
+ * answer anyway — we stopped treating them as a customer today, and there is no
+ * future period end to wait for.
  *
  * A customer who holds the OTHER product and is still paying for it will not
  * actually read as Cancelled: the label rule keeps a live GR subscription ahead
@@ -283,12 +285,10 @@ async function handle(request: NextRequest) {
  */
 async function pushBoard(
   admin: ReturnType<typeof createAdminClient>,
-  customerId: string,
-  today: string
+  customerId: string
 ): Promise<void> {
   try {
     const push = await syncCustomerMondayStatus(admin, customerId, {
-      endDate: today,
       reason: "lapse-past-due",
     });
     if (

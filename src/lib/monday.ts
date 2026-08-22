@@ -182,7 +182,10 @@ const ENQUIRY_STATUS_COLUMN = "color_mm5eda07";
 
 /** "Customer start date" — stamped once, on first becoming a customer. */
 const ENQUIRY_START_DATE_COLUMN = "date_mm5ft19y";
-/** "Customer end date" — the real end of service, not the cancellation click. */
+/**
+ * "Customer end date" — READ ONLY from here on. Board automation 7920935830 owns
+ * the cell; we still read it so admin surfaces can report what the board says.
+ */
 const ENQUIRY_END_DATE_COLUMN = "date_mm5fxrbn";
 
 /**
@@ -282,18 +285,20 @@ export interface MondayStatusWriteResult {
  * createBoardContact below does the opposite; that is safe only because its
  * callers are an admin-triggered sync and a try/catch-wrapped form post.
  *
- * The dates are a three-way choice, which is why endDate is
- * `string | null | undefined`:
- *   - a date string sets the cell
- *   - null CLEARS it (Monday takes `{}` for an empty date)
- *   - undefined leaves it untouched
+ * THE TWO DATE CELLS HAVE DIFFERENT OWNERS, and only one of them is ours.
  *
- * Both dates are code-owned rather than automation-owned, deliberately. The
- * board's own automations used to stamp them, but "set Customer start date = Now"
- * fires on EVERY entry into Management Customer — verified live — so once the
- * label is written by code it would reset the start date of every customer who
- * resumes from a pause, recovers a failed payment or re-subscribes. Those two
- * automation actions are removed; the group moves stay.
+ * Customer start date is CODE-OWNED and first-write-wins, because that is the
+ * one thing an unconditional Monday automation cannot do: "set Customer start
+ * date = Now" fires on EVERY entry into Management Customer — verified live —
+ * so an automation resets the start date of every customer who resumes from a
+ * pause, recovers a failed payment or re-subscribes. It also covers GR
+ * customers, whom no automation stamps at all.
+ *
+ * Customer end date is AUTOMATION-OWNED and is deliberately not written here.
+ * Board automation 7920935830 stamps it when an item enters `Cancelled`, which
+ * records the date the customer cancelled rather than the end of their paid
+ * period. That is a knowing choice: the column means "cancelled date", and one
+ * writer that is slightly coarse beats two writers fighting over one cell.
  */
 export async function setEnquiryStatus(params: {
   itemId: string;
@@ -301,8 +306,6 @@ export async function setEnquiryStatus(params: {
   boardId?: string | null;
   /** Only pass when the item's cell is empty — first write wins. */
   startDate?: string | null;
-  /** Date to set, null to clear, undefined to leave alone. */
-  endDate?: string | null;
 }): Promise<MondayStatusWriteResult> {
   const token = process.env.MONDAY_API_TOKEN;
   if (!token) return { written: false, skipped: "not_configured" };
@@ -321,13 +324,8 @@ export async function setEnquiryStatus(params: {
   if (params.startDate) {
     values[ENQUIRY_START_DATE_COLUMN] = { date: params.startDate };
   }
-  if (params.endDate !== undefined) {
-    values[ENQUIRY_END_DATE_COLUMN] = params.endDate
-      ? { date: params.endDate }
-      : {};
-  }
 
-  // One request for the label and both dates, so they can never be half applied.
+  // One request for the label and the start date, so they cannot be half applied.
   //
   // create_labels_if_missing stays FALSE on purpose: an unknown or mis-cased
   // label then fails loudly (ColumnValueException / missingLabel) instead of

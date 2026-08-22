@@ -1850,7 +1850,8 @@ this is the opposite direction and the app already writes to this board directly
 | The five subscription labels | **This code** |
 | The five sales labels (`Web meeting booked/sat/no show`, `In the future`, `In the future due to call`) | Sales, by hand — never written from code |
 | Group placement | The board's own automations |
-| `Customer start date` / `Customer end date` | **This code** (see 23.3) |
+| `Customer start date` | **This code** (see 23.3) |
+| `Customer end date` | Board automation `7920935830` (see 23.3) |
 
 Ten "when status changes to X, move item to group Y" automations place every item,
 and all 34 items currently sit in the group matching their label. So the code sets
@@ -1919,68 +1920,67 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
 Deliberately not reusing `holdsProduct()` as the whole rule: it treats `past_due`
 as held, which is right for "offer them a checkout" and wrong here.
 
-### 23.3 — Why the date columns had to move into code
+### 23.3 — The two Customer date columns, and who owns which
 
-Two board automations used to write them, and both become wrong the moment the
-label is automated:
+⚠️ **This section used to read "Why the date columns had to move into code" and
+said BOTH were code-owned. That is now half true, and the split is deliberate.**
 
-- `7920935809` (status → `Management Customer`) set **Customer start date = Now**
-  on **every** entry into that label. **Verified live** by clearing the cell and
-  flipping `Paused` → `Management Customer`, which re-stamped it. Left alone it
-  would reset the start date of every customer who resumes a pause, recovers a
-  failed payment or re-subscribes — silent data loss on exactly the customers whose
-  history matters most.
-- `7920935830` (status → `Cancelled`) set **Customer end date = Now**, which with
-  `Cancelled` written at click records the request date, not the end of service.
+| Cell | Owner |
+|---|---|
+| **Customer start date** (`date_mm5ft19y`) | **This code**, first-write-wins |
+| **Customer end date** (`date_mm5fxrbn`) | **Board automation `7920935830`** |
 
-**Prerequisite, on the Monday side:** disable `7920935830` (its group move is
-already duplicated by `7921870420`) and `7920935809`.
+**Start date is code-owned because an automation cannot do first-write-wins.**
+`7920935809` sets it to `Now` on **every** entry into `Management Customer` —
+verified live by clearing the cell and flipping `Paused` → `Management Customer`,
+which re-stamped it. Left in charge it resets the start date of every customer who
+resumes a pause, recovers a failed payment or re-subscribes. It also never stamps
+GR customers at all (`7921747590` only moves the group), so Karey Summers has no
+start date. The code sends the cell only when it is empty, mirroring the
+`coalesce` on `first_contacted_at` (§6).
 
-⚠️ This used to add that `7920935809` "cannot be deleted because it is the only
-automation moving items into `group_mm5f9by1`". **That is no longer true** —
-`7921982789` (status → `Management Customer` → move to `group_mm5f9by1`) is an
-exact duplicate of its group move and is live, so both date-writing automations
-can simply be switched off and the grouping survives. Both duplicates were
-confirmed `is_active = true` before recommending it. Disable rather than delete:
-same effect, one click to reverse.
+**End date is automation-owned**, and the code no longer writes it. The cost is
+stated rather than hidden: `7920935830` stamps the cell when an item enters
+`Cancelled`, so the column records **the date the customer cancelled, not the end
+of their paid period**. For a portal cancellation those differ by up to a billing
+period, because §21's `at_period_end` mode means we write `Cancelled` at the click.
+Accepted knowingly — one writer that is slightly coarse beats two fighting over one
+cell — and for a lapse (§27) "now" is the honest answer anyway. The old
+`cancel_at` / `ended_at` computation and `endDateNeedsWrite()` are gone with it.
 
-⚠️ **The API token cannot do this.** `manage_automations` returns
-`USER_UNAUTHORIZED` for both, so these two edits are a hand-fix in the Monday UI
-and cannot be automated from the app.
+**Required Monday-side state:** `7920935809` must have its **date action removed**
+(its group move stays — it is one of two automations moving items into
+`group_mm5f9by1`, alongside `7921982789`). `7920935830` **stays on**; it is now the
+only writer of the end-date cell.
 
-⚠️ **This paragraph said "done on the Monday side". IT WAS NOT DONE** — both
-automations were still live and firing until 0094, and the damage was exactly what
-this section predicted. Allan Carmichael's card failed on 20 Aug and recovered on
-22 Aug; the recovery pushed `Management Customer`, `7920935809` fired behind it,
-and his Customer start date was overwritten from 8 July to `2026-08-22 08:16`.
-The giveaway is the TIME: the code writes date-only, so any Customer date cell
-carrying `HH:MM` was written by an automation, not by us.
+⚠️ **The API token cannot make these edits.** `manage_automations` returns
+`USER_UNAUTHORIZED`, so anything in this section is a hand-fix in the Monday UI and
+cannot be automated from the app. Which is why it is worth stating what the board
+must look like, rather than assuming.
 
-His cell was repaired to **2026-07-20**, his billing anchor and the day before his
-first lead landed — NOT his `created_at` of 8 July, which is when the enquiry
-arrived rather than when he started paying. The two are a fortnight apart for him,
-and Customer start date means the second one.
+**"Enquiry date" (`date_mm50brxt`) is a third column and is written by nobody
+after item creation.** It records when the enquiry arrived; `setEnquiryStatus`
+mutates only the status column and the start-date cell, and no automation targets
+it. It is the one date on that board that has never been at risk, which matters
+because it is also the one most often asked of it. (Renamed from "Date added" —
+harmless, since the code addresses columns by id, never by title.)
 
-**"Date added" (`date_mm50brxt`) is a THIRD column and is not involved.** It
-records when the enquiry arrived, is written once at item creation by
-`ENQUIRY_COLUMN_MAP`, and is touched by no automation and no later code path —
-`setEnquiryStatus` mutates only the status column and the two Customer date
-columns. It is the one date on that board that has never been at risk, which is
-worth knowing because it is also the one most often asked of the board ("when did
-this customer first sign up").
+**How to tell who wrote a Customer date cell:** the code writes **date-only**, an
+automation writes a **time**. Allan Carmichael's read `2026-08-22 08:16` after his
+payment recovered on 22 Aug — his real start date overwritten by `7920935809`. It
+was repaired to **2026-07-20**, his billing anchor and the day before his first
+lead, *not* his `created_at` of 8 July, which is when the enquiry arrived rather
+than when he started paying. The two are a fortnight apart for him.
 
-The code then writes status and both dates in one
-`change_multiple_column_values` call, so they can never be half applied:
+The rest of the book turned out to be fine: every other management customer's cell
+agrees with their billing anchor to within a day, because the automation stamps on
+*entry* and for most of them that happened once. Only re-entry corrupts it, which
+is why the three paused customers are the ones still exposed until the date action
+is removed.
 
-- **Start date: first write wins** — only sent when the cell is empty, mirroring
-  the `coalesce` on `first_contacted_at` (§6). This also closes a gap: GR customers
-  never got a start date, because `7921747590` only moves the group.
-- **End date: the real end of service** — `sub.cancel_at` (falling back to
-  `subscriptionPeriodEnd()`) on a pending cancellation, `ended_at ?? canceled_at`
-  once it has happened, and **cleared** on a change of mind, in the same branch
-  that clears `cancellation_feedback`.
-- `endDate` is `string | null | undefined`: set, clear, leave alone. `{}` clears a
-  Monday date cell.
+- **Start date: first write wins** — only sent when the cell is empty. This also
+  closes a gap: GR customers never got one from automations.
+- `startDate` is `string | undefined`: set, or leave alone.
 
 `subscriptionPeriodEnd()` moved into `src/lib/stripe.ts` and is shared with the
 admin billing panel — `current_period_end` moved onto subscription items in the
@@ -1999,12 +1999,13 @@ reads it to decide business state. Two consequences:
   board's label first would instead make our write conditional on somebody else's
   edit — and double the round trips.
 
-A date instruction costs one item read, but `endDateNeedsWrite()` still suppresses
-the **write** when the cell already agrees — `customer.subscription.updated` fires
-on all sorts of unrelated changes and arrives asking to clear an end date that is
-almost always already empty. It compares on the date part only, because Monday
-returns `YYYY-MM-DD` or `YYYY-MM-DD HH:MM` depending on whether a time was ever
-set and the old automation wrote times.
+⚠️ **This paragraph described an end-date instruction costing one item read, and
+`endDateNeedsWrite()` suppressing the write when the cell already agreed. Both are
+gone** — the code no longer writes that cell at all (§23.3), so there is no date
+instruction to carry and the cache comparison is now the whole short-circuit: a
+matching label returns without touching Monday. The item read survives only for the
+start-date "is the cell empty" test, on the path where the label has actually
+changed.
 
 On a failed push `monday_status_label` is left **unchanged** so the next event
 retries naturally; `monday_status_error` carries the reason for the admin cell.
@@ -2154,7 +2155,7 @@ more useful than the individual fixes:
 | `monday-link` did not check the board | `items(ids:)` is not board-scoped, so an id from any other board validated and then failed on every push. |
 | A repeat enquiry repointed the link | This route creates a new item per submission, so status writes would land on the duplicate while sales worked the original. First item wins. |
 | A GR-board link was terminal | `resolveItem` short-circuited on any stored id, so a GR-form enquirer could never later be matched to a management-board item. A stored link is now trusted only when it is on the status board. |
-| End date was management-only | The automation being deleted stamped it for **both** products, so a departing GR customer would have silently lost their end date. |
+| End date was management-only | The automation stamped it for **both** products, so a departing GR customer would have silently lost their end date. (Moot since §23.3 handed that cell back to the automation.) |
 
 The lesson worth keeping: a suite that only exercises the happy path will report
 "verified" on code whose failure modes are all silent. The label rule and matcher
@@ -2172,7 +2173,8 @@ at once, and the distinction between a GR customer who is leaving and one who is
 merely `past_due`. The matcher and `endDateNeedsWrite` went through **21**, among
 them the phone tier, which resolves nobody on today's data and would otherwise ship
 unexercised, and the two-items-share-a-number ambiguity case that exists on the live
-board.
+board. (`endDateNeedsWrite` has since been removed — §23.3 handed that cell back to
+the board automation.)
 
 Both were then run against the real board and the real 31 active customer rows,
 read-only: **30 resolve — 28 by email, 2 by name — no item claimed twice, and the
