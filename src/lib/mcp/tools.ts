@@ -20,7 +20,7 @@ import type { ApiResult } from "@/lib/api/errors";
 import type { Caller } from "@/lib/api/caller";
 import { getAccount } from "@/lib/api/service/account";
 import { getAssignment, listAssignments, listNotes } from "@/lib/api/service/leads";
-import { getReport } from "@/lib/api/service/report";
+import { getReportSummary } from "@/lib/api/service/report";
 import { MAX_PAGE_SIZE } from "@/lib/api/limits";
 
 export interface McpTool {
@@ -160,13 +160,13 @@ The PDF itself is downloaded over HTTPS rather than through this tool, because a
     },
     run: async (caller, args) => {
       const id = String(args.assignment_id ?? "");
-      const result = await getReport(caller, id);
+      const result = await getReportSummary(caller, id);
       if (!result.ok) return result;
       return {
         ok: true,
         data: {
           available: true,
-          size_bytes: result.data.bytes.byteLength,
+          size_bytes: result.data.size_bytes,
           download_url: `/api/v1/leads/${id}/report`,
           note: "Fetch the download_url with the same Authorization header to retrieve the PDF.",
         },

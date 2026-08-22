@@ -93,3 +93,45 @@ export async function getReport(
 
   return ok({ bytes, filename: `stayful-analysis-${lead.id}.pdf` });
 }
+
+
+/**
+ * Whether a report exists for one assignment, and how big it is.
+ *
+ * Deliberately does NOT go through getReport(). That signs a URL and pulls the
+ * whole PDF through the lambda, which is the right thing when the caller wants
+ * the bytes and pure waste when it wants a boolean and an integer — the size is
+ * already a column. Same assignment predicate and the same indistinguishable
+ * 404, so this is cheaper without being more permissive.
+ */
+export async function getReportSummary(
+  caller: Caller,
+  assignmentId: string,
+  adminClient?: Admin
+): Promise<ApiResult<{ available: true; size_bytes: number | null }>> {
+  const admin = adminClient ?? createAdminClient();
+
+  const { data, error } = await admin
+    .from("lead_assignments")
+    .select("id, lead:leads!inner(id, income_report_path, income_report_size_bytes)")
+    .eq("id", assignmentId)
+    .eq("customer_id", caller.customerId)
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === "22P02") return notFound();
+    return internal("getReportSummary", error);
+  }
+  if (!data) return notFound();
+
+  const lead = (data as unknown as {
+    lead: {
+      income_report_path: string | null;
+      income_report_size_bytes: number | null;
+    } | null;
+  }).lead;
+
+  if (!lead?.income_report_path) return notFound();
+
+  return ok({ available: true, size_bytes: lead.income_report_size_bytes ?? null });
+}

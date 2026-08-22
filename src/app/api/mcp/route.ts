@@ -53,6 +53,8 @@ export async function POST(request: NextRequest) {
   const ip = clientIp(request);
   const userAgent = request.headers.get("user-agent");
 
+  // Awaited for the reason given in src/lib/api/handler.ts: an un-awaited
+  // insert can be lost when the invocation freezes on responding.
   const log = (
     operation: string,
     statusCode: number,
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest) {
     keyId: string | null,
     customerId: string | null
   ) =>
-    void logApiRequest({
+    logApiRequest({
       requestId,
       surface: "mcp",
       operation,
@@ -74,7 +76,7 @@ export async function POST(request: NextRequest) {
     });
 
   if (!originAllowed(request)) {
-    log("origin_rejected", 403, "forbidden_origin", null, null);
+    await log("origin_rejected", 403, "forbidden_origin", null, null);
     return NextResponse.json(
       rpcError(null, JSONRPC_INVALID_REQUEST, "Origin not allowed."),
       { status: 403, headers: { "X-Request-Id": requestId } }
@@ -89,7 +91,7 @@ export async function POST(request: NextRequest) {
     declared &&
     !(SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(declared)
   ) {
-    log("bad_protocol_version", 400, "invalid_request", null, null);
+    await log("bad_protocol_version", 400, "invalid_request", null, null);
     return NextResponse.json(
       rpcError(
         null,
@@ -102,7 +104,7 @@ export async function POST(request: NextRequest) {
 
   const resolved = await resolveCaller(request, { allow: ["api_key"] });
   if (!resolved.ok) {
-    log("unauthenticated", STATUS_BY_CODE[resolved.code], resolved.code, null, null);
+    await log("unauthenticated", STATUS_BY_CODE[resolved.code], resolved.code, null, null);
     return NextResponse.json(
       rpcError(null, JSONRPC_INVALID_REQUEST, resolved.message),
       {
@@ -123,7 +125,7 @@ export async function POST(request: NextRequest) {
   try {
     message = (await request.json()) as JsonRpcMessage;
   } catch {
-    log("parse_error", 400, "invalid_request", caller.keyId, caller.customerId);
+    await log("parse_error", 400, "invalid_request", caller.keyId, caller.customerId);
     return NextResponse.json(rpcError(null, JSONRPC_PARSE_ERROR, "Invalid JSON."), {
       status: 400,
       headers: { "X-Request-Id": requestId, "Cache-Control": "no-store, private" },
@@ -132,7 +134,7 @@ export async function POST(request: NextRequest) {
 
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     // Batching was removed from the protocol, so an array is not a valid body.
-    log("invalid_request", 400, "invalid_request", caller.keyId, caller.customerId);
+    await log("invalid_request", 400, "invalid_request", caller.keyId, caller.customerId);
     return NextResponse.json(
       rpcError(null, JSONRPC_INVALID_REQUEST, "Expected a single JSON-RPC message."),
       { status: 400, headers: { "X-Request-Id": requestId } }
@@ -142,7 +144,7 @@ export async function POST(request: NextRequest) {
   const outcome = await dispatch(message, caller);
 
   if (outcome.kind === "accepted") {
-    log(outcome.operation, 202, null, caller.keyId, caller.customerId);
+    await log(outcome.operation, 202, null, caller.keyId, caller.customerId);
     return new NextResponse(null, {
       status: 202,
       headers: { "X-Request-Id": requestId, "Cache-Control": "no-store, private" },

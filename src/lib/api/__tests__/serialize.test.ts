@@ -187,6 +187,21 @@ describe("serializeNote", () => {
   });
 });
 
+describe("the lead embed must be an inner join", () => {
+  it("uses !inner, or filtering on lead_type silently returns everything", () => {
+    // THE REGRESSION GUARD FOR THE ?product= BUG.
+    //
+    // listAssignments filters with .eq("lead.lead_type", …). In PostgREST a
+    // filter on a NON-inner embedded resource filters the embedded resource
+    // rather than the parent rows: every assignment still comes back, with the
+    // lead nulled on the ones that do not match. The result is a 200 that
+    // paginates normally and returns the caller's entire book — the kind of
+    // wrong an automated sync ingests for weeks.
+    expect(ASSIGNMENT_COLUMNS).toContain("lead:leads!inner(");
+    expect(ASSIGNMENT_COLUMNS).not.toMatch(/lead:leads\(/);
+  });
+});
+
 describe("select strings", () => {
   it("never selects a never-exposed column", () => {
     const selected = `${LEAD_COLUMNS} ${ASSIGNMENT_COLUMNS}`;

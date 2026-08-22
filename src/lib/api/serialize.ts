@@ -54,10 +54,27 @@ export const NOTE_COLUMNS = columnsFor(NOTE_FIELDS).join(", ");
  *
  * PostgREST resolves `lead:leads(...)` through the foreign key, so the whole
  * page is one query rather than an N+1 over leads.
+ *
+ * ⚠️ THE `!inner` IS LOAD-BEARING — do not drop it to "simplify" the select.
+ *
+ * Filtering on a NON-inner embedded resource filters the EMBEDDED RESOURCE, not
+ * the parent rows: every assignment still comes back, and the ones that do not
+ * match simply arrive with the lead nulled. `?product=` in listAssignments
+ * filters on `lead.lead_type`, so without this the filter silently returns the
+ * caller's entire book with half the rows carrying `"lead": null` — a 200 that
+ * paginates normally and is wrong, which an automated sync would ingest for
+ * weeks before anybody noticed.
+ *
+ * `lead_assignments.lead_id` is nullable by declaration (0001 never added the
+ * constraint) though no row has ever been null — 0 of 330 today. So an inner
+ * join could in principle drop an assignment with no lead where a left join
+ * would have kept it. That is the better behaviour rather than a regression: an
+ * assignment pointing at no lead carries nothing a caller can use, and the
+ * serializer would emit `"lead": null` for it either way.
  */
 export const ASSIGNMENT_COLUMNS = `${columnsFor(ASSIGNMENT_FIELDS).join(
   ", "
-)}, lead:leads(${LEAD_COLUMNS})`;
+)}, lead:leads!inner(${LEAD_COLUMNS})`;
 
 /**
  * Sort columns must also be selected, because the cursor is built from the

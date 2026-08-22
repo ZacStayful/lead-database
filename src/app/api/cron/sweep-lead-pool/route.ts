@@ -179,66 +179,32 @@ async function sweepApiTables(
   admin: ReturnType<typeof createAdminClient>
 ): Promise<{ rolledUp: number; windowsDeleted: number; logRowsDeleted: number }> {
   const out = { rolledUp: 0, windowsDeleted: 0, logRowsDeleted: 0 };
-  const cutoff = new Date(Date.now() - 86_400_000).toISOString();
-  const logCutoff = new Date(Date.now() - 30 * 86_400_000).toISOString();
 
   try {
-    const { data: expiring } = await admin
-      .from("api_rate_limits")
-      .select("subject_id, window_start, request_count")
-      .eq("subject_kind", "key")
-      .lt("window_start", cutoff);
-
-    const rows = (expiring ?? []) as {
-      subject_id: string;
-      window_start: string;
-      request_count: number;
-    }[];
-
-    // Sum per key per day before writing, so one upsert covers a whole day
-    // rather than 1,440 of them.
-    const totals = new Map<string, number>();
-    for (const r of rows) {
-      const day = r.window_start.slice(0, 10);
-      const k = `${r.subject_id}|${day}`;
-      totals.set(k, (totals.get(k) ?? 0) + r.request_count);
+    // One statement, so the rollup cannot double-count.
+    //
+    // The first cut read api_usage_daily, added the expiring windows in
+    // TypeScript, upserted, then deleted — which is idempotent only because the
+    // delete removes the source rows. If the upsert landed and the delete failed,
+    // the next run added the same windows again. Doing the addition inside the
+    // upsert removes that, and removes an N+1 (a select plus an upsert per
+    // key-day) at the same time.
+    const { data, error } = await admin.rpc("sweep_api_tables");
+    if (error) {
+      console.error("[sweep] api housekeeping failed", error);
+      return out;
     }
+    const row = (Array.isArray(data) ? data[0] : data) as {
+      rolled_up?: number;
+      windows_deleted?: number;
+      log_rows_deleted?: number;
+    } | null;
 
-    const entries = Array.from(totals.entries());
-    for (const [k, count] of entries) {
-      const [keyId, day] = k.split("|");
-      const { data: existing } = await admin
-        .from("api_usage_daily")
-        .select("request_count")
-        .eq("key_id", keyId)
-        .eq("day", day)
-        .maybeSingle();
-
-      const { error } = await admin.from("api_usage_daily").upsert(
-        {
-          key_id: keyId,
-          day,
-          request_count:
-            ((existing as { request_count?: number } | null)?.request_count ?? 0) + count,
-        },
-        { onConflict: "key_id,day" }
-      );
-      if (!error) out.rolledUp += 1;
-    }
-
-    const { count: deleted } = await admin
-      .from("api_rate_limits")
-      .delete({ count: "exact" })
-      .lt("window_start", cutoff);
-    out.windowsDeleted = deleted ?? 0;
-
-    const { count: logDeleted } = await admin
-      .from("api_request_log")
-      .delete({ count: "exact" })
-      .lt("created_at", logCutoff);
-    out.logRowsDeleted = logDeleted ?? 0;
+    out.rolledUp = Number(row?.rolled_up ?? 0);
+    out.windowsDeleted = Number(row?.windows_deleted ?? 0);
+    out.logRowsDeleted = Number(row?.log_rows_deleted ?? 0);
   } catch (err) {
-    console.error("[sweep] api housekeeping failed", err);
+    console.error("[sweep] api housekeeping threw", err);
   }
 
   return out;

@@ -59,13 +59,18 @@ export function withApi<T>(
 
     let caller: Caller | null = null;
 
-    const finish = (
+    // AWAITED, not fire-and-forget. A serverless invocation can freeze the
+    // moment its response is returned, so an un-awaited insert may never reach
+    // the database — silently dropping exactly the rows /admin/api and the
+    // customer's activity view exist to show. The cost is one indexed insert on
+    // endpoints that are otherwise sub-100ms reads.
+    const finish = async (
       status: number,
       body: unknown,
       errorCode: ApiErrorCode | null,
       headers: Record<string, string>
-    ): NextResponse => {
-      void logApiRequest({
+    ): Promise<NextResponse> => {
+      await logApiRequest({
         requestId,
         surface: "rest",
         operation: options.operation,
@@ -87,7 +92,7 @@ export function withApi<T>(
       if (resolved.code === "rate_limited") {
         headers["Retry-After"] = String(RATE_LIMIT_WINDOW_SECONDS);
       }
-      return finish(
+      return await finish(
         status,
         { error: { code: resolved.code, message: resolved.message } },
         resolved.code,
@@ -99,7 +104,7 @@ export function withApi<T>(
     const headers = baseHeaders(requestId, caller.minuteCount);
 
     if (!caller.scopes.includes(options.scope)) {
-      return finish(
+      return await finish(
         403,
         {
           error: {
@@ -117,7 +122,7 @@ export function withApi<T>(
       result = await fn(caller, request, context?.params ?? {});
     } catch (err) {
       console.error(`[api] ${options.operation} threw`, err);
-      return finish(
+      return await finish(
         500,
         {
           error: {
@@ -132,7 +137,7 @@ export function withApi<T>(
     }
 
     if (!result.ok) {
-      return finish(
+      return await finish(
         STATUS_BY_CODE[result.code],
         { error: { code: result.code, message: result.message } },
         result.code,
@@ -145,7 +150,7 @@ export function withApi<T>(
     if (options.render) {
       const response = options.render(result.data);
       for (const [k, v] of Object.entries(headers)) response.headers.set(k, v);
-      void logApiRequest({
+      await logApiRequest({
         requestId,
         surface: "rest",
         operation: options.operation,
@@ -160,6 +165,6 @@ export function withApi<T>(
       return response;
     }
 
-    return finish(200, result.data, null, headers);
+    return await finish(200, result.data, null, headers);
   };
 }
