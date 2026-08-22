@@ -11,7 +11,7 @@ import type Stripe from "stripe";
  */
 
 /**
- * Maintain the past-due episode stamps for one product (0094).
+ * Maintain the past-due episode stamps for one product (0097).
  *
  * COALESCE SEMANTICS ON THE START, and that is the whole point: Stripe retries a
  * failed card several times over the following weeks, and each retry arrives here
@@ -51,7 +51,7 @@ export function applyPastDueEpisode(
 /**
  * Map a Stripe subscription status onto our customers.subscription_status.
  *
- * `unpaid` IS A CANCELLATION, NOT A DECLINE (0094). It used to return 'past_due'
+ * `unpaid` IS A CANCELLATION, NOT A DECLINE (0097). It used to return 'past_due'
  * alongside `past_due` itself, which made the end of the dunning cycle — every
  * retry exhausted, Stripe has given up — indistinguishable from the first failed
  * charge. Nothing downstream could tell them apart, so a dead subscription read

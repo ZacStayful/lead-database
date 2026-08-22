@@ -98,6 +98,11 @@ export interface Customer {
   filter_max_bedrooms: number | null;
   filter_enabled_at: string | null;
   filter_lift_effective_date: string | null;
+  // How the filter was set (0094, metadata only — routing reads filter_areas).
+  // null = set before the radius mode existed; read only while a filter is on.
+  filter_selection_mode: "areas" | "radius" | string | null;
+  filter_radius_outcode: string | null;
+  filter_radius_miles: number | null;
   // Lead filtering (guaranteed-rent product) — gr_ mirror of the above.
   gr_filter_status: FilterStatus | string;
   gr_filter_areas: string[] | null;
@@ -105,6 +110,9 @@ export interface Customer {
   gr_filter_max_bedrooms: number | null;
   gr_filter_enabled_at: string | null;
   gr_filter_lift_effective_date: string | null;
+  gr_filter_selection_mode: "areas" | "radius" | string | null;
+  gr_filter_radius_outcode: string | null;
+  gr_filter_radius_miles: number | null;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
@@ -150,12 +158,12 @@ export interface Customer {
   // sales board at the moment it is requested; gates nothing else.
   cancel_at_period_end: boolean;
   gr_cancel_at_period_end: boolean;
-  // When the CURRENT past-due episode began (0094). Stamped by the Stripe webhook
+  // When the CURRENT past-due episode began (0097). Stamped by the Stripe webhook
   // on the first failure and never re-stamped by a retry — a retry that reset it
   // would keep the three-day clock permanently at zero — and cleared on recovery.
   past_due_since: string | null;
   gr_past_due_since: string | null;
-  // Written off after past_due_lapse_days of failed collection (0094). Written
+  // Written off after past_due_lapse_days of failed collection (0097). Written
   // ONLY by /api/cron/lapse-past-due; cleared by recovery. Read by the Monday
   // label rule so a lapsed customer reads Cancelled rather than card-declined.
   // account_status = 'cancelled', written alongside it on the management side, is

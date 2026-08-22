@@ -44,7 +44,7 @@ async function settings(admin: ReturnType<typeof createAdminClient>) {
  * IT NEVER CALLS STRIPE. The subscription is left alone to keep retrying, so
  * nothing irreversible happens on a timer and a late success still recovers the
  * customer with no manual step: invoice.paid promotes account_status back out of
- * 'cancelled' (§23.9) and clears both 0094 columns.
+ * 'cancelled' (§23.9) and clears both 0097 columns.
  *
  * It also never writes subscription_status. Leaving it 'past_due' keeps the row
  * honest about what Stripe actually reports, and means the customer.subscription

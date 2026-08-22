@@ -423,7 +423,7 @@ export async function POST(request: NextRequest) {
             update.gr_cancelled_at = null;
           }
 
-          // Past-due episode (0094). A GR failure never touches account_status
+          // Past-due episode (0097). A GR failure never touches account_status
           // (invariant 6) — gr_subscription_status = 'past_due' already removes
           // them from GR routing and GR capacity, so what the lapse adds on this
           // side is the board label and the cancellation date.
@@ -510,7 +510,7 @@ export async function POST(request: NextRequest) {
           update.cancel_at_period_end =
             status !== "canceled" && sub.cancel_at_period_end === true;
 
-          // Past-due episode (0094). Cleared by every non-past_due status,
+          // Past-due episode (0097). Cleared by every non-past_due status,
           // including 'canceled' — a subscription that has actually ended is
           // described by cancelled_at and account_status, and leaving a stale
           // write-off stamp behind would make lapsed_at mean two things.
@@ -766,7 +766,7 @@ export async function POST(request: NextRequest) {
             const grUpdate: Record<string, unknown> = {
               gr_subscription_status: "active",
               gr_stripe_subscription_id: subscriptionId,
-              // Close any past-due episode and undo any write-off (0094), as the
+              // Close any past-due episode and undo any write-off (0097), as the
               // management branch does. No account_status counterpart here — that
               // column is management-only (invariant 6).
               gr_past_due_since: null,
@@ -954,7 +954,7 @@ export async function POST(request: NextRequest) {
           // to the start of the period this invoice covers.
           const renewalUpdate: Record<string, unknown> = {
             subscription_status: "active",
-            // Close any past-due episode and undo any write-off (0094). Money
+            // Close any past-due episode and undo any write-off (0097). Money
             // arrived, so both facts are now false; the promotion above has
             // already taken account_status back out of 'cancelled'. Together
             // these are what make recovery from a lapse need no manual step.
@@ -1004,7 +1004,7 @@ export async function POST(request: NextRequest) {
         const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
 
         // past_due_since rides on the lookup this branch already performs — one
-        // more column on a query that has to run anyway (0094).
+        // more column on a query that has to run anyway (0097).
         const { data: customer } = await admin
           .from("customers")
           .select("id, past_due_since, gr_past_due_since")
@@ -1025,7 +1025,7 @@ export async function POST(request: NextRequest) {
             lead_type: isGuaranteedRent ? "guaranteed_rent" : "management",
           });
 
-          // Stamp the start of this past-due episode, FIRST FAILURE ONLY (0094).
+          // Stamp the start of this past-due episode, FIRST FAILURE ONLY (0097).
           // Stripe retries a declined card repeatedly over the following weeks and
           // every retry lands here; re-stamping would hold the lapse clock at zero
           // for ever, so a customer with a permanently dead card would never lapse

@@ -110,7 +110,7 @@ export function mondayStatusLabelFor(
   // subscription_status means a customer who is paying reads as a customer
   // whatever account_status says.
   //
-  // lapsed_at is the third route in (0094): a customer whose collection has been
+  // lapsed_at is the third route in (0097): a customer whose collection has been
   // failing for longer than past_due_lapse_days. It has to be its own column
   // rather than a widening of the account_status clause below, precisely BECAUSE
   // that clause excludes past_due — a lapsed customer keeps subscription_status =
@@ -159,7 +159,7 @@ export function mondayStatusLabelFor(
   //    !managementCancelling guard, which mirrors the one the GR card-declined
   //    rule below has always carried. Two ways to reach it:
   //
-  //    Once the lapse cron has given up on them (0094) rule 1 has already
+  //    Once the lapse cron has given up on them (0097) rule 1 has already
   //    returned Cancelled above, so a customer cannot sit here indefinitely,
   //    which is what they did before lapsed_at existed. But rule 1 deliberately
   //    steps aside for somebody with a LIVE GR subscription — and without this

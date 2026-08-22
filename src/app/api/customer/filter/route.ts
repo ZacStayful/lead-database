@@ -20,6 +20,9 @@ function cols(product: LeadType) {
       max: "gr_filter_max_bedrooms",
       enabledAt: "gr_filter_enabled_at",
       liftDate: "gr_filter_lift_effective_date",
+      selectionMode: "gr_filter_selection_mode",
+      radiusOutcode: "gr_filter_radius_outcode",
+      radiusMiles: "gr_filter_radius_miles",
       anchor: "gr_billing_cycle_anchor" as keyof Customer,
       balance: "gr_lead_balance" as keyof Customer,
       allocation: "gr_monthly_allocation" as keyof Customer,
@@ -33,6 +36,9 @@ function cols(product: LeadType) {
     max: "filter_max_bedrooms",
     enabledAt: "filter_enabled_at",
     liftDate: "filter_lift_effective_date",
+    selectionMode: "filter_selection_mode",
+    radiusOutcode: "filter_radius_outcode",
+    radiusMiles: "filter_radius_miles",
     anchor: "billing_cycle_anchor" as keyof Customer,
     balance: "lead_balance" as keyof Customer,
     allocation: "monthly_allocation" as keyof Customer,
@@ -73,6 +79,9 @@ export async function POST(req: NextRequest) {
     areas?: unknown;
     min_bedrooms?: unknown;
     max_bedrooms?: unknown;
+    selection_mode?: unknown;
+    radius_outcode?: unknown;
+    radius_miles?: unknown;
   };
   try {
     body = await req.json();
@@ -119,12 +128,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // How the selection was made — metadata for admin (0094). Routing reads
+    // only the areas; an unrecognised or absent mode is stored as hand-picked
+    // and the radius details are kept only when the mode really was radius.
+    const selectionMode =
+      body.selection_mode === "radius" ? "radius" : "areas";
+    const radiusOutcode =
+      selectionMode === "radius" &&
+      typeof body.radius_outcode === "string" &&
+      /^[A-Z]{1,2}\d[A-Z0-9]?$/.test(body.radius_outcode.trim().toUpperCase())
+        ? body.radius_outcode.trim().toUpperCase()
+        : null;
+    const radiusMiles =
+      selectionMode === "radius" ? toIntOrNull(body.radius_miles) : null;
+
     const update: Record<string, unknown> = {
       [c.status]: "active",
       [c.areas]: areas.length > 0 ? areas : null,
       [c.min]: min,
       [c.max]: max,
       [c.liftDate]: null, // applying/editing cancels any scheduled lift
+      [c.selectionMode]: selectionMode,
+      [c.radiusOutcode]: radiusOutcode,
+      [c.radiusMiles]:
+        radiusMiles !== null && radiusMiles > 0 && radiusMiles <= 200
+          ? radiusMiles
+          : null,
       updated_at: new Date().toISOString(),
     };
 

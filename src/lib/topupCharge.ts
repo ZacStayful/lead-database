@@ -182,7 +182,7 @@ export function topupIneligibilityReason(
   if (customer.account_status === "cancelled") {
     return "Your Management subscription is cancelled, so leads can't be assigned. Please contact support.";
   }
-  // A failed payment is refused too, and this was a real hole (0094): every check
+  // A failed payment is refused too, and this was a real hole (0097): every check
   // in this function read account_status, which a decline never changes, while the
   // thing that actually stops delivery — both candidate functions requiring
   // subscription_status = 'active' — reads the column below. So a declined
