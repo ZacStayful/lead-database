@@ -28,6 +28,11 @@ export interface LeadFilterView {
   minBedrooms: number | null;
   maxBedrooms: number | null;
   liftDate: string | null;
+  /** How it was set (0094): "areas", "radius", or null for pre-0094 filters. */
+  selectionMode: string | null;
+  /** Radius details, only meaningful when selectionMode is "radius". */
+  radiusOutcode: string | null;
+  radiusMiles: number | null;
 }
 
 export function isFilterActive(status?: string | null): boolean {
@@ -59,6 +64,9 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       minBedrooms: customer.filter_min_bedrooms,
       maxBedrooms: customer.filter_max_bedrooms,
       liftDate: customer.filter_lift_effective_date,
+      selectionMode: customer.filter_selection_mode ?? null,
+      radiusOutcode: customer.filter_radius_outcode ?? null,
+      radiusMiles: customer.filter_radius_miles ?? null,
     });
   }
 
@@ -71,6 +79,9 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       minBedrooms: customer.gr_filter_min_bedrooms,
       maxBedrooms: customer.gr_filter_max_bedrooms,
       liftDate: customer.gr_filter_lift_effective_date,
+      selectionMode: customer.gr_filter_selection_mode ?? null,
+      radiusOutcode: customer.gr_filter_radius_outcode ?? null,
+      radiusMiles: customer.gr_filter_radius_miles ?? null,
     });
   }
 
@@ -135,12 +146,25 @@ export function filterSummary(f: LeadFilterView, maxAreas = 3): string {
   return beds ? `${beds} · ${places}` : places;
 }
 
+/**
+ * How the filter was chosen, for admin display. A radius filter names the
+ * search that produced the areas ("Radius: 15 mi from LE67"); anything else —
+ * including every filter set before 0094 recorded the mode — is hand-picked.
+ */
+export function filterKindLabel(f: LeadFilterView): string {
+  if (f.selectionMode === "radius" && f.radiusOutcode && f.radiusMiles) {
+    return `Radius: ${f.radiusMiles} mi from ${f.radiusOutcode}`;
+  }
+  return "Hand-picked areas";
+}
+
 /** Untruncated description for a title attribute. */
 export function filterTooltip(f: LeadFilterView): string {
   const parts = [
     `${f.label} lead filter`,
     `Bedrooms: ${bedroomPhrase(f.minBedrooms, f.maxBedrooms)}`,
     `Locations: ${locationText(f.areas)}`,
+    `Set by: ${filterKindLabel(f)}`,
   ];
   if (f.status === "pending_lift") {
     parts.push(

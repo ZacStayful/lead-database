@@ -7,6 +7,11 @@ import {
   type FilterPanelProps,
 } from "@/components/dashboard/LeadFilteringPanel";
 import { areaLabel } from "@/lib/postcode";
+import {
+  buildLeadVolumeAggregate,
+  type LeadVolumeAggregate,
+  type LeadVolumeRow,
+} from "@/lib/filterPrediction";
 import type { Customer, FilterStatus } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -18,25 +23,30 @@ export default async function LeadFilteringPage() {
 
   const admin = createAdminClient();
 
-  // Per-area lead counts across the whole inventory, so the map can shade each
-  // area by volume and the customer can see where leads actually come from.
-  // Paginated: a single select is capped (Supabase default 1000 rows), which
-  // would undercount the map once the lead table grows past 1000.
+  // One paginated pass over the lead book builds two structures: the per-area
+  // counts that shade the map (all-time, both products, bedroom-blind — as
+  // ever), and the per-product volume aggregate the prediction runs on. Rows
+  // with no postcode area are kept for the aggregate's totals (the prediction
+  // UI reports how many leads a filter can never match) and skipped for the
+  // map. Paginated: a single select is capped (Supabase default 1000 rows),
+  // which would undercount once the lead table grows past 1000.
   const areaCounts: Record<string, number> = {};
+  const volumeRows: LeadVolumeRow[] = [];
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await admin
       .from("leads")
-      .select("postcode_area")
-      .not("postcode_area", "is", null)
+      .select("postcode_area, bedrooms, lead_type, created_at")
       .range(from, from + PAGE - 1);
     if (error || !data || data.length === 0) break;
-    for (const r of data as { postcode_area: string | null }[]) {
+    for (const r of data as LeadVolumeRow[]) {
+      volumeRows.push(r);
       const a = r.postcode_area?.toUpperCase();
       if (a) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
     }
     if (data.length < PAGE) break;
   }
+  const volumeAggregate = buildLeadVolumeAggregate(volumeRows);
 
   const availableAreas: AreaOption[] = Object.keys(areaCounts)
     .sort((a, b) => a.localeCompare(b))
@@ -46,7 +56,13 @@ export default async function LeadFilteringPage() {
     0
   );
 
-  const panels = panelPropsFor(customer, availableAreas, areaCounts, maxAreaCount);
+  const panels = panelPropsFor(
+    customer,
+    availableAreas,
+    areaCounts,
+    maxAreaCount,
+    volumeAggregate
+  );
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -74,7 +90,8 @@ function panelPropsFor(
   customer: Customer,
   availableAreas: AreaOption[],
   areaCounts: Record<string, number>,
-  maxAreaCount: number
+  maxAreaCount: number,
+  volumeAggregate: LeadVolumeAggregate
 ): FilterPanelProps[] {
   const panels: FilterPanelProps[] = [];
 
@@ -93,6 +110,10 @@ function panelPropsFor(
       availableAreas,
       areaCounts,
       maxAreaCount,
+      volume: volumeAggregate.management,
+      // Raw allocation, deliberately not the pool-debit-adjusted effective
+      // figure: the prediction is compared against what the plan owes.
+      monthlyAllocation: customer.monthly_allocation ?? 0,
     });
   }
 
@@ -111,6 +132,8 @@ function panelPropsFor(
       availableAreas,
       areaCounts,
       maxAreaCount,
+      volume: volumeAggregate.guaranteed_rent,
+      monthlyAllocation: customer.gr_monthly_allocation ?? 0,
     });
   }
 
