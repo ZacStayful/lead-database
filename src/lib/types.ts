@@ -103,19 +103,23 @@ export interface Customer {
   filter_selection_mode: "areas" | "radius" | string | null;
   filter_radius_outcode: string | null;
   filter_radius_miles: number | null;
-  // The accepted volume guarantee (0098). Derived only by filterGuarantee.ts
-  // and, like the columns above, meaningful only while filter_status is
-  // 'active' or 'pending_lift'. These are the CONTRACT: the panel shows the
-  // persisted figures, never a freshly computed quote, which would drift as
-  // ingest moves and show a guarantee the customer never agreed to.
-  filter_guaranteed_leads: number | null;
-  filter_guarantee_estimate: number | null;
-  filter_guarantee_likelihood_pct: number | null;
-  filter_guarantee_cost_per_lead_pence: number | null;
-  filter_guarantee_plan_price_pence: number | null;
-  filter_guarantee_accepted_at: string | null;
-  /** Cumulative leads credited for missed guarantees. Counts up only. */
-  filter_guarantee_credit: number;
+  // The volume forecast the customer was shown and acknowledged (0098, renamed
+  // 0100). Derived only by filterForecast.ts and, like the columns above,
+  // meaningful only while filter_status is 'active' or 'pending_lift'.
+  //
+  // These are what the customer was TOLD, so every surface shows the persisted
+  // figures rather than a freshly computed one — a recomputed figure drifts as
+  // ingest moves and would display something they never saw.
+  //
+  // ⚠️ Not a commitment. filter_expected_leads is a lower bound at
+  // FORECAST_CONFIDENCE, nothing settles a shortfall against it, and no copy
+  // reading these may offer to.
+  filter_expected_leads: number | null;
+  filter_forecast_estimate: number | null;
+  filter_forecast_likelihood_pct: number | null;
+  filter_forecast_cost_per_lead_pence: number | null;
+  filter_forecast_plan_price_pence: number | null;
+  filter_forecast_acknowledged_at: string | null;
   // Lead filtering (guaranteed-rent product) — gr_ mirror of the above.
   gr_filter_status: FilterStatus | string;
   gr_filter_areas: string[] | null;
@@ -126,13 +130,12 @@ export interface Customer {
   gr_filter_selection_mode: "areas" | "radius" | string | null;
   gr_filter_radius_outcode: string | null;
   gr_filter_radius_miles: number | null;
-  gr_filter_guaranteed_leads: number | null;
-  gr_filter_guarantee_estimate: number | null;
-  gr_filter_guarantee_likelihood_pct: number | null;
-  gr_filter_guarantee_cost_per_lead_pence: number | null;
-  gr_filter_guarantee_plan_price_pence: number | null;
-  gr_filter_guarantee_accepted_at: string | null;
-  gr_filter_guarantee_credit: number;
+  gr_filter_expected_leads: number | null;
+  gr_filter_forecast_estimate: number | null;
+  gr_filter_forecast_likelihood_pct: number | null;
+  gr_filter_forecast_cost_per_lead_pence: number | null;
+  gr_filter_forecast_plan_price_pence: number | null;
+  gr_filter_forecast_acknowledged_at: string | null;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
@@ -475,8 +478,8 @@ export const DEFAULT_MAX_ASSIGNMENTS = 3;
  * The two candidate pools are not symmetric. An unfiltered customer's demand is
  * elastic — any lead in the country satisfies it, so a slot lost here is a slot
  * found somewhere else this week. A filtered customer's demand is inelastic:
- * they can only ever be served from the areas they chose, and once those areas
- * carry a guarantee, a slot lost is a promise broken. So when filtered demand
+ * they can only ever be served from the areas they chose, and a slot lost there
+ * is a lead they will simply never get. So when filtered demand
  * for one lead reaches this ceiling, the critically-behind override stands
  * down — the unfiltered customer it would have helped has a whole marketplace
  * to be helped from, and the filtered ones do not.

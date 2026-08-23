@@ -6,11 +6,11 @@ import { CONTENDED_FILTERED_CUSTOMERS, type LeadType } from "@/lib/types";
 /**
  * Predicting a lead filter's monthly volume from real ingest history.
  *
- * When a customer narrows their leads by postcode area and bedroom range, the
- * volume guarantee lifts (see the filtering panel's consent copy). This module
- * quantifies what they are consenting TO: given the leads that have actually
- * arrived since ingest began, how many per month would have matched this
- * selection? The customer panel, its expansion suggestions, and both admin
+ * When a customer narrows their leads by postcode area and bedroom range, they
+ * will receive fewer of them. This module quantifies how many fewer: given the
+ * leads that have actually arrived since ingest began, how many per month would
+ * have matched this selection? `filterForecast.ts` turns that into the figure
+ * the customer is shown. The customer panel, its expansion suggestions, and both admin
  * surfaces all call the same functions here — one definition, the
  * `announcementTargetsCustomer()` discipline — so a customer and an admin
  * always see the same number for the same filter.
@@ -22,8 +22,9 @@ import { CONTENDED_FILTERED_CUSTOMERS, type LeadType } from "@/lib/types";
  * every prediction by construction. `matchableLeads` vs `totalLeads` is how
  * the UI surfaces that honestly.
  *
- * Display only — nothing here is persisted and nothing gates routing. The
- * guarantee lifts on any filter regardless of what the prediction says.
+ * Display only — nothing here is persisted and nothing gates routing. A filter
+ * applies whatever this predicts; the prediction informs the customer, it does
+ * not decide anything, and nothing downstream of it is a commitment.
  */
 
 /** Day 1 of real ingest history. Verified: no leads.created_at precedes it. */
@@ -118,10 +119,10 @@ export interface VolumePrediction {
   reliable: boolean;
   /**
    * The observation window the rate was measured over, carried through from
-   * `ProductVolume`. The guarantee needs the raw (count, exposure) pair rather
+   * `ProductVolume`. The forecast needs the raw (count, exposure) pair rather
    * than the rate alone — a rate of 5/month means something very different
-   * measured over one week than over one year, and the guarantee's confidence
-   * is exactly that difference (see filterGuarantee.ts).
+   * measured over one week than over one year, and the forecast's confidence
+   * is exactly that difference (see filterForecast.ts).
    */
   weeksElapsed: number;
 }
@@ -193,7 +194,7 @@ export function predictMonthlyVolume(
     }
   }
   // Whole leads: a share can make this fractional, and every downstream
-  // consumer — the reliability floor, the guarantee's negative binomial — is
+  // consumer — the reliability floor, the forecast's negative binomial — is
   // counting events, not expectations.
   matchingLeads = Math.floor(matchingLeads);
 
@@ -292,7 +293,7 @@ export interface LeadVolumeRow {
    * True when `lead_retired_from_allocation()` (0073) would return true — the
    * lead was claimed from the expired pool, or pooled on the `ignored` basis.
    * Ordinary routing will never hand it to anyone again (invariant 11), so it
-   * must not count towards a volume the guarantee is priced on. Optional so
+   * must not count towards a volume the forecast is priced on. Optional so
    * callers that cannot cheaply determine it keep today's behaviour.
    */
   retired?: boolean | null;
@@ -363,7 +364,7 @@ export function buildLeadVolumeAggregate(
  * ORDER BY IS LOAD-BEARING, not tidiness. PostgREST's `.range()` is
  * LIMIT/OFFSET, and Postgres guarantees no row order without an ORDER BY — so
  * across pages the planner may repeat or skip rows, silently moving the number
- * the guarantee is priced on. Harmless while one page covers the table; a
+ * the forecast is priced on. Harmless while one page covers the table; a
  * stable sort is what keeps it harmless once it does not.
  */
 export async function fetchLeadVolumeAggregate(
@@ -492,7 +493,7 @@ export async function fetchAreaContention(
     // Fail OPEN, deliberately. An empty contention map quotes the UNSHARED
     // volume, which is the number this feature showed before contention
     // existed — optimistic by at most the sharing factor. Failing closed would
-    // quote zero and refuse guarantees outright on a transient read error.
+    // quote zero and refuse to forecast at all on a transient read error.
     console.error("area contention read failed; quoting unshared", error);
     return { filteredCustomers, maxPerLead: CONTENDED_FILTERED_CUSTOMERS };
   }

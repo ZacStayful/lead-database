@@ -9,8 +9,16 @@ import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
-import { areasWithinRadius, type AreaFeature } from "@/lib/geoRadius";
+import type { AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
+import { PredictionBox } from "@/components/filtering/PredictionBox";
+import { VolumeBar } from "@/components/filtering/VolumeBar";
+import { resolveRadius } from "@/components/filtering/radiusSearch";
+import {
+  bedroomInputValue,
+  formatPence as poundsFromPence,
+  summariseBedrooms,
+} from "@/components/filtering/format";
 import {
   belowAllocation,
   expansionSuggestions,
@@ -22,10 +30,10 @@ import {
   type VolumePrediction,
 } from "@/lib/filterPrediction";
 import {
-  quoteGuarantee,
+  forecastVolume,
   recommendedDowngrade,
-  type GuaranteeQuote,
-} from "@/lib/filterGuarantee";
+  type VolumeForecast,
+} from "@/lib/filterForecast";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export interface AreaOption {
@@ -51,36 +59,29 @@ export interface FilterPanelProps {
   // judged "too small" against.
   monthlyAllocation: number;
   // How many other filtered customers already compete for each area, so the
-  // draft quote matches what routing will actually deliver.
+  // draft forecast matches what routing will actually deliver.
   contention?: AreaContention | null;
-  // The ACCEPTED guarantee, as persisted. The summary view renders these, never
-  // a freshly computed quote: the stored figures are the contract, and a
-  // recomputed one would drift with ingest and show terms nobody agreed to.
-  guaranteedLeads?: number | null;
-  guaranteeLikelihoodPct?: number | null;
-  guaranteeCostPerLeadPence?: number | null;
-  guaranteeAcceptedAt?: string | null;
-  /** Leads credited so far for missed guarantees. */
-  guaranteeCredit?: number;
+  // The forecast the customer was SHOWN, as persisted. The summary view renders
+  // these and never a freshly computed one: a recomputed figure drifts with
+  // ingest and would display something they never actually read.
+  expectedLeads?: number | null;
+  forecastLikelihoodPct?: number | null;
+  forecastCostPerLeadPence?: number | null;
+  forecastAcknowledgedAt?: string | null;
 }
 
 /** "£21.43" from 2143. */
-function poundsFromPence(pence: number): string {
-  return `£${(pence / 100).toFixed(2)}`;
-}
-
-// Shown when a filter is wide enough that the full allocation is still
-// guaranteed — the reassuring case, and no consent is needed for it.
+// Shown when a filter is wide enough that we still expect to deliver the full
+// allocation — the reassuring case, and nothing to acknowledge.
 const CONSENT_FULL =
-  "This selection is big enough that we can still guarantee your full monthly allocation, at your usual price per lead. Nothing about your subscription changes.";
+  "This selection is big enough that we still expect to deliver your full monthly allocation, at your usual price per lead. Nothing about your subscription changes.";
 
-// The one remaining case where the guarantee really is lifted: too little
-// history through these areas to promise anything yet.
+// Too little history through these areas to forecast anything yet.
 const CONSENT_UNRELIABLE =
-  "Too few leads have come through this selection for us to predict its volume, so we can't put a guarantee on it yet. You may receive fewer leads some months, and your monthly subscription amount stays the same regardless. Once enough leads have come through these areas, we'll offer you a guaranteed number.";
+  "Too few leads have come through this selection for us to forecast its volume, so we can't tell you what to expect from it yet. You may receive fewer leads some months, and your monthly subscription amount stays the same regardless. Once enough leads have come through these areas, we'll be able to show you a number.";
 
 const MINI_GUIDE =
-  "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range, and the guarantee you accept is the one that applies from then on. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts. From that date, your filter guarantee ends and you return to the standard full allocation.";
+  "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts, and from that date you return to the standard full allocation.";
 
 export function LeadFilteringPanel(props: FilterPanelProps) {
   const router = useRouter();
@@ -103,13 +104,13 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [areaQuery, setAreaQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [acceptedGuarantee, setAcceptedGuarantee] = useState(false);
-  // A second, explicit step for a poor offer. Separate from the acceptance so
-  // ticking one does not imply the other.
+  const [acknowledgedForecast, setAcknowledgedForecast] = useState(false);
+  // A second, explicit step for poor value. Separate from the acknowledgement
+  // so ticking one does not imply the other.
   const [acknowledgedPoorValue, setAcknowledgedPoorValue] = useState(false);
-  // The server's quote when it disagreed with ours (409) — volumes moved while
-  // the customer was choosing.
-  const [restatedQuote, setRestatedQuote] = useState<GuaranteeQuote | null>(null);
+  // The server's forecast when it disagreed with ours (409) — volumes moved
+  // while the customer was choosing.
+  const [restatedForecast, setRestatedForecast] = useState<VolumeForecast | null>(null);
 
   // How the customer picks locations: hand-pick areas, or a radius around
   // their own postcode that resolves to the areas the circle touches. Radius
@@ -148,30 +149,30 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     () => predictMonthlyVolume(props.volume, draftSelection, props.contention),
     [props.volume, draftSelection, props.contention]
   );
-  const quote = useMemo(
-    () => quoteGuarantee(prediction, props.monthlyAllocation, product),
+  const forecast = useMemo(
+    () => forecastVolume(prediction, props.monthlyAllocation, product),
     [prediction, props.monthlyAllocation, product]
   );
-  // A cheaper plan that still covers the whole guarantee. Only ever suggested
+  // A cheaper plan that still covers the whole forecast. Only ever suggested
   // when it cannot cost the customer a lead, so it is advice, not a trade-off.
   const downgrade = useMemo(
     () =>
-      quote.offerable
-        ? recommendedDowngrade(quote.guaranteed, props.monthlyAllocation, product)
+      forecast.offerable
+        ? recommendedDowngrade(forecast.expected, props.monthlyAllocation, product)
         : null,
-    [quote, props.monthlyAllocation, product]
+    [forecast, props.monthlyAllocation, product]
   );
   // The expansion chips still key off "too small for your plan" — that is the
   // question they answer, and it is not the same question as whether the
-  // guarantee is reduced.
+  // forecast is below the allocation.
   const isBelow = belowAllocation(prediction, props.monthlyAllocation);
   // The gate. Note this is NOT `isBelow`: a filter estimated at exactly the
-  // allocation raises no "too small" warning yet still carries a reduced
-  // guarantee, and that reduction is a term the customer has to agree to.
-  const needsAcceptance = quote.offerable && quote.reducesGuarantee;
+  // allocation raises no "too small" warning yet is still forecast to deliver
+  // less than the plan sells, which the customer should read before applying.
+  const needsAcknowledgement = forecast.offerable && forecast.reducesVolume;
   const blocked =
-    (needsAcceptance && !acceptedGuarantee) ||
-    (quote.requiresExtraConfirm && !acknowledgedPoorValue);
+    (needsAcknowledgement && !acknowledgedForecast) ||
+    (forecast.requiresExtraConfirm && !acknowledgedPoorValue);
   // Nearest-area chips belong to hand-picking; in radius mode the "widen
   // search" line is the expansion mechanic, and a chip toggle would be undone
   // by the radius-to-selection sync anyway.
@@ -183,13 +184,13 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [isBelow, locationMode, props.volume, draftSelection]
   );
 
-  // Consent is to a specific number: any change of selection voids it.
-  // Keyed on the raw inputs, not the memoised object — React may recompute a
+  // The acknowledgement is to a SPECIFIC number: any change of selection voids
+  // it. Keyed on the raw inputs, not the memoised object — React may recompute a
   // useMemo without its inputs changing, which must not untick the box.
   useEffect(() => {
-    setAcceptedGuarantee(false);
+    setAcknowledgedForecast(false);
     setAcknowledgedPoorValue(false);
-    setRestatedQuote(null);
+    setRestatedForecast(null);
   }, [selectedAreas, minBeds, maxBeds]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
@@ -208,23 +209,22 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [props.volume, props.areas, props.minBedrooms, props.maxBedrooms, props.contention]
   );
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
-  // What was ACCEPTED, not what today's data would quote. The two drift as
-  // ingest moves, and only one of them is the agreement.
-  const acceptedLeads = props.guaranteedLeads ?? null;
-  const acceptedCostPence = props.guaranteeCostPerLeadPence ?? null;
-  const acceptedLikelihood = props.guaranteeLikelihoodPct ?? null;
+  // What the customer was SHOWN, not what today's data would quote. The two
+  // drift as ingest moves, and only one of them is what they actually read.
+  const shownLeads = props.expectedLeads ?? null;
+  const shownCostPence = props.forecastCostPerLeadPence ?? null;
+  const shownLikelihood = props.forecastLikelihoodPct ?? null;
   const savedDowngrade = useMemo(
     () =>
-      acceptedLeads != null
-        ? recommendedDowngrade(acceptedLeads, props.monthlyAllocation, product)
+      shownLeads != null
+        ? recommendedDowngrade(shownLeads, props.monthlyAllocation, product)
         : null,
-    [acceptedLeads, props.monthlyAllocation, product]
+    [shownLeads, props.monthlyAllocation, product]
   );
 
   // Radius mode: resolve the typed postcode + radius to the postcode areas
   // the circle touches, and work out the smallest widening that would add
   // more leads — "another 5 miles brings in Gloucester, about +2/month".
-  const MILES_TO_KM = 1.60934;
   const radius = useMemo((): {
     outcode: string | null;
     covered: string[];
@@ -237,46 +237,17 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     const centre = outcodeCentroid(outcode);
     if (!centre) return unresolved;
 
-    const covered = areasWithinRadius(
+    const { covered, upside } = resolveRadius(
       geoFeatures,
       centre,
-      radiusMiles * MILES_TO_KM
+      radiusMiles,
+      props.volume,
+      {
+        minBedrooms: bedroomInputValue(minBeds),
+        maxBedrooms: bedroomInputValue(maxBeds),
+      },
+      props.contention
     );
-    const bedSel = {
-      minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
-      maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
-    };
-    const current = predictMonthlyVolume(props.volume, {
-      areas: covered,
-      ...bedSel,
-    });
-
-    // Scan outwards in 5-mile steps for the first widening that adds leads.
-    let upside: {
-      extraMiles: number;
-      newAreas: string[];
-      extraRate: number;
-    } | null = null;
-    for (const extra of [5, 10, 15, 20, 25, 30]) {
-      const wider = areasWithinRadius(
-        geoFeatures,
-        centre,
-        (radiusMiles + extra) * MILES_TO_KM
-      );
-      if (wider.length === covered.length) continue;
-      const p = predictMonthlyVolume(props.volume, {
-        areas: wider,
-        ...bedSel,
-      });
-      if (p.displayRate > current.displayRate) {
-        upside = {
-          extraMiles: extra,
-          newAreas: wider.filter((a) => !covered.includes(a)),
-          extraRate: p.displayRate - current.displayRate,
-        };
-        break;
-      }
-    }
     return { outcode, covered, upside };
   }, [
     locationMode,
@@ -286,6 +257,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     minBeds,
     maxBeds,
     props.volume,
+    props.contention,
   ]);
 
   // In radius mode the covered areas ARE the selection, so the map, the
@@ -336,12 +308,12 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       });
       const data = await res.json();
       if (!res.ok) {
-        // The server re-derives the guarantee and refuses if ours is stale
-        // (409) or unaccepted (400). Both carry the current quote, so show
-        // that rather than the number the customer was looking at.
-        if (data?.guarantee) {
-          setRestatedQuote(data.guarantee as GuaranteeQuote);
-          setAcceptedGuarantee(false);
+        // The server re-derives the forecast and refuses if ours is stale
+        // (409) or unacknowledged (400). Both carry the current figures, so
+        // show those rather than the number the customer was looking at.
+        if (data?.forecast) {
+          setRestatedForecast(data.forecast as VolumeForecast);
+          setAcknowledgedForecast(false);
           setAcknowledgedPoorValue(false);
         }
         setError(data.error ?? "Something went wrong.");
@@ -371,11 +343,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       selection_mode: fromRadius ? "radius" : "areas",
       radius_outcode: fromRadius ? radius.outcode : null,
       radius_miles: fromRadius ? radiusMiles : null,
-      accept_guarantee: acceptedGuarantee,
-      // The number on screen. If the server derives a different one, it
-      // refuses and restates rather than binding the customer to terms they
+      acknowledge_forecast: acknowledgedForecast,
+      // The number on screen. If the server derives a different one, it refuses
+      // and restates rather than recording the customer against a figure they
       // never saw.
-      quoted_guaranteed_leads: quote.offerable ? quote.guaranteed : null,
+      quoted_expected_leads: forecast.offerable ? forecast.expected : null,
     });
     if (ok) setEditing(false);
   }
@@ -383,9 +355,9 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   async function lift() {
     if (
       !window.confirm(
-        acceptedLeads != null
-          ? `This ends your filter guarantee of ${acceptedLeads} leads a month and returns you to the standard full allocation. Continue?`
-          : "This returns you to the standard guaranteed lead allocation. Continue?"
+        shownLeads != null
+          ? `This removes your filter and returns you to your full allocation of ${props.monthlyAllocation} leads a month, from any location. Continue?`
+          : "This removes your filter and returns you to your full lead allocation. Continue?"
       )
     ) {
       return;
@@ -456,40 +428,38 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                   — too little data to predict monthly volume reliably.
                 </p>
               )}
-              {acceptedLeads != null && acceptedCostPence != null ? (
+              {shownLeads != null && shownCostPence != null ? (
                 <div className="space-y-1 rounded-md border-[0.5px] border-border bg-muted/40 px-3 py-2">
+                  {/*
+                    "At least", never "we guarantee". shownLeads is a lower bound
+                    at FORECAST_CONFIDENCE, so it is missed by design about one
+                    month in six, and nothing credits the difference back.
+                  */}
                   <p className="text-xs">
-                    We guarantee{" "}
+                    On this filter you can expect{" "}
                     <span className="font-semibold">
-                      {acceptedLeads} lead{acceptedLeads === 1 ? "" : "s"} a month
-                    </span>{" "}
-                    on this filter, at{" "}
-                    <span className="font-semibold">
-                      {poundsFromPence(acceptedCostPence)}
-                    </span>{" "}
-                    per guaranteed lead
-                    {acceptedLikelihood != null && (
-                      <> — {acceptedLikelihood}% likely to be met</>
+                      at least {shownLeads} lead
+                      {shownLeads === 1 ? "" : "s"} a month
+                    </span>
+                    {shownLikelihood != null && (
+                      <> — {shownLikelihood}% likely</>
                     )}
-                    .
-                    {props.guaranteeAcceptedAt && (
-                      <> Accepted {formatDate(props.guaranteeAcceptedAt)}.</>
+                    , which works out at{" "}
+                    <span className="font-semibold">
+                      {poundsFromPence(shownCostPence)}
+                    </span>{" "}
+                    a lead.
+                    {props.forecastAcknowledgedAt && (
+                      <> Based on volumes as at {formatDate(props.forecastAcknowledgedAt)}.</>
                     )}
                   </p>
-                  {(props.guaranteeCredit ?? 0) > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      {props.guaranteeCredit} lead
-                      {props.guaranteeCredit === 1 ? "" : "s"} credited to your
-                      balance so far for months we fell short.
-                    </p>
-                  )}
                   {savedDowngrade && (
                     <p className="text-xs text-amber-700">
                       On the {poundsFromPence(savedDowngrade.priceGbp * 100)}{" "}
-                      plan you would get the same {acceptedLeads} guaranteed
-                      lead{acceptedLeads === 1 ? "" : "s"} at{" "}
+                      plan you would expect the same {shownLeads} lead
+                      {shownLeads === 1 ? "" : "s"} at{" "}
                       {poundsFromPence(
-                        Math.ceil((savedDowngrade.priceGbp * 100) / acceptedLeads)
+                        Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads)
                       )}{" "}
                       each.{" "}
                       <a href="/dashboard/settings" className="underline">
@@ -503,8 +473,8 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 savedBelow && (
                   <p className="text-xs text-amber-700">
                     Below your plan of {props.monthlyAllocation} leads/month —
-                    too little history through these areas to guarantee a
-                    number yet.
+                    too little history through these areas to forecast a number
+                    yet.
                   </p>
                 )
               )}
@@ -557,9 +527,9 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 Lead filtering lets you receive only leads in the locations and
                 bedroom sizes you choose. It's useful if you focus on particular
                 cities or property sizes. Narrowing your selection can mean
-                fewer leads a month — we'll tell you the number we can guarantee
-                and what that works out at per lead before you apply. Leave a
-                control open to accept anything for that dimension.
+                fewer leads a month — we'll tell you how many to expect and what
+                that works out at per lead before you apply. Leave a control
+                open to accept anything for that dimension.
               </p>
             )}
 
@@ -866,57 +836,67 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               onAddArea={toggleArea}
             />
 
-            {quote.offerable && quote.reducesGuarantee ? (
+            {forecast.offerable && forecast.reducesVolume ? (
               <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {/*
+                  THE WORDING IS THE HONESTY HERE. `expected` is the largest
+                  number we can deliver with FORECAST_CONFIDENCE, so it is a
+                  lower bound that will be missed about one month in six by
+                  design, and no shortfall is credited back. "At least N, P%
+                  likely" is therefore the only accurate way to say it — never
+                  "we guarantee", and never a sentence about what happens if we
+                  fall short, because the answer is "nothing".
+                */}
                 <dl className="space-y-1">
                   <div className="flex items-baseline justify-between gap-4">
                     <dt>This selection is worth about</dt>
                     <dd className="font-semibold tabular-nums">
-                      {quote.estimate} lead{quote.estimate === 1 ? "" : "s"} a month
+                      {forecast.estimate} lead
+                      {forecast.estimate === 1 ? "" : "s"} a month
                     </dd>
                   </div>
                   <div className="flex items-baseline justify-between gap-4">
-                    <dt>We guarantee</dt>
+                    <dt>You can expect</dt>
                     <dd className="font-semibold tabular-nums">
-                      {quote.guaranteed} lead{quote.guaranteed === 1 ? "" : "s"} a month
+                      at least {forecast.expected} a month
                     </dd>
                   </div>
-                  <div className="flex items-baseline justify-between gap-4">
-                    <dt>Cost per guaranteed lead</dt>
-                    <dd className="font-semibold tabular-nums">
-                      {poundsFromPence(quote.costPerLeadPence!)}
-                    </dd>
-                  </div>
-                  {quote.likelihoodPct != null && (
+                  {forecast.likelihoodPct != null && (
                     <div className="flex items-baseline justify-between gap-4">
-                      <dt>Likelihood of meeting it</dt>
+                      <dt>Likelihood of that</dt>
                       <dd className="font-semibold tabular-nums">
-                        {quote.likelihoodPct}%
+                        {forecast.likelihoodPct}%
                       </dd>
                     </div>
                   )}
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt>Works out at</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {poundsFromPence(forecast.costPerLeadPence!)} a lead
+                    </dd>
+                  </div>
                 </dl>
                 <p className="text-xs">
                   Based on your plan price of{" "}
-                  {poundsFromPence(quote.planPricePence)} a month for{" "}
-                  {quote.allocation} leads. If we deliver fewer than{" "}
-                  {quote.guaranteed} in a billing month, we add the difference to
-                  your lead balance and it carries forward — your subscription
-                  amount does not change.
+                  {poundsFromPence(forecast.planPricePence)} a month for{" "}
+                  {forecast.allocation} leads, and on how many matching leads
+                  have actually come through these areas. It is a forecast, not
+                  a guarantee — some months will be quieter than others, and
+                  your subscription amount stays the same either way.
                 </p>
 
                 {downgrade && (
                   <p className="rounded-md bg-amber-100/70 px-3 py-2 text-xs">
                     On the {poundsFromPence(downgrade.priceGbp * 100)} plan you
-                    would get the same {quote.guaranteed} guaranteed lead
-                    {quote.guaranteed === 1 ? "" : "s"} at{" "}
+                    would expect the same {forecast.expected} lead
+                    {forecast.expected === 1 ? "" : "s"} at{" "}
                     <span className="font-semibold">
                       {poundsFromPence(
-                        Math.ceil((downgrade.priceGbp * 100) / quote.guaranteed)
+                        Math.ceil((downgrade.priceGbp * 100) / forecast.expected)
                       )}
                     </span>{" "}
                     each instead of{" "}
-                    {poundsFromPence(quote.costPerLeadPence!)}.{" "}
+                    {poundsFromPence(forecast.costPerLeadPence!)}.{" "}
                     <a href="/dashboard/settings" className="underline">
                       Change your plan
                     </a>{" "}
@@ -927,27 +907,28 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 <label className="flex cursor-pointer items-start gap-2">
                   <input
                     type="checkbox"
-                    checked={acceptedGuarantee}
-                    onChange={(e) => setAcceptedGuarantee(e.target.checked)}
+                    checked={acknowledgedForecast}
+                    onChange={(e) => setAcknowledgedForecast(e.target.checked)}
                     className="mt-0.5 h-4 w-4 shrink-0"
                   />
                   <span>
-                    I accept a guarantee of {quote.guaranteed} lead
-                    {quote.guaranteed === 1 ? "" : "s"} a month for this filter,
-                    at {poundsFromPence(quote.costPerLeadPence!)} per guaranteed
-                    lead.
+                    I understand this filter is expected to deliver at least{" "}
+                    {forecast.expected} lead
+                    {forecast.expected === 1 ? "" : "s"} a month, working out at{" "}
+                    {poundsFromPence(forecast.costPerLeadPence!)} a lead, and
+                    that my subscription price is unchanged.
                   </span>
                 </label>
 
-                {/* A poor offer is still shown — the customer may have good
-                    reasons — but it gets a second, separate step, and the
-                    thing that actually helps sits next to it. */}
-                {quote.requiresExtraConfirm && (
+                {/* Poor value is still allowed — the customer may have good
+                    reasons — but it gets a second, separate step, and the thing
+                    that actually helps sits next to it. */}
+                {forecast.requiresExtraConfirm && (
                   <div className="space-y-2 rounded-md border-[0.5px] border-amber-400 bg-amber-100/70 px-3 py-2">
                     <p className="text-xs">
                       That is a high price per lead. Widening your selection is
                       usually the better move: a bigger area raises the number
-                      we can guarantee and brings the cost per lead down.
+                      you can expect and brings the cost per lead down.
                       {suggestions.length > 0 && " Nearby areas are suggested above."}
                     </p>
                     <label className="flex cursor-pointer items-start gap-2 text-xs">
@@ -967,36 +948,36 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                   </div>
                 )}
               </div>
-            ) : quote.reason === "unreliable" ? (
+            ) : forecast.reason === "unreliable" ? (
               <p className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 {CONSENT_UNRELIABLE}
               </p>
             ) : (
               <p className="rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                {quote.offerable
+                {forecast.offerable
                   ? CONSENT_FULL
-                  : "Choose at least one area or a bedroom range to see what we can guarantee."}
+                  : "Choose at least one area or a bedroom range to see what you can expect."}
               </p>
             )}
 
-            {/* Volumes moved between rendering the quote and accepting it. The
-                server refused rather than substituting a number the customer
-                never saw. */}
-            {restatedQuote && (
+            {/* Volumes moved between rendering the forecast and applying it.
+                The server refused rather than recording the customer against a
+                number they never saw. */}
+            {restatedForecast && (
               <p className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                Lead volumes have moved since this was quoted. We can now
-                guarantee{" "}
+                Lead volumes have moved since this was worked out. You can now
+                expect{" "}
                 <span className="font-semibold">
-                  {restatedQuote.guaranteed} lead
-                  {restatedQuote.guaranteed === 1 ? "" : "s"} a month
+                  at least {restatedForecast.expected} lead
+                  {restatedForecast.expected === 1 ? "" : "s"} a month
                 </span>
-                {restatedQuote.costPerLeadPence != null && (
+                {restatedForecast.costPerLeadPence != null && (
                   <>
                     {" "}
-                    at {poundsFromPence(restatedQuote.costPerLeadPence)} each
+                    at {poundsFromPence(restatedForecast.costPerLeadPence)} each
                   </>
                 )}
-                . Review the figures above and accept again to continue.
+                . Review the figures above and confirm again to continue.
               </p>
             )}
 
@@ -1006,8 +987,8 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               <Button onClick={apply} disabled={busy || blocked}>
                 {busy
                   ? "Saving…"
-                  : needsAcceptance
-                    ? "Accept and apply"
+                  : needsAcknowledgement
+                    ? "Confirm and apply"
                     : props.status === "off"
                       ? "Apply filter"
                       : "Save changes"}
@@ -1046,175 +1027,13 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
 }
 
 /** Plain two-div progress bar: predicted volume against the plan allocation. */
-function VolumeBar({
-  rate,
-  allocation,
-  amber,
-}: {
-  rate: number;
-  allocation: number;
-  amber: boolean;
-}) {
-  if (allocation <= 0) return null;
-  const pct = Math.min(100, Math.max(0, (rate / allocation) * 100));
-  return (
-    <div
-      className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-muted"
-      role="img"
-      aria-label={`~${rate} of ${allocation} plan leads per month`}
-    >
-      <div
-        className={`h-full rounded-full ${amber ? "bg-amber-500" : "bg-brand"}`}
-        style={{ width: `${pct}%` }}
-      />
-    </div>
-  );
-}
 
-/**
- * The live prediction for the draft selection. Three variants: reliable and at
- * or above the plan (neutral), reliable but below it (amber warning +
- * expansion chips), and too little data to extrapolate (no number shown —
- * a precise rate built on a handful of leads would be false confidence).
- */
-function PredictionBox({
-  prediction,
-  allocation,
-  volume,
-  productLabel,
-  isBelow,
-  nothingSelected,
-  suggestions,
-  onAddArea,
-}: {
-  prediction: VolumePrediction;
-  allocation: number;
-  volume: ProductVolume;
-  productLabel: string;
-  isBelow: boolean;
-  nothingSelected: boolean;
-  suggestions: ExpansionSuggestion[];
-  onAddArea: (area: string) => void;
-}) {
-  const basis = (
-    <p className="text-xs text-muted-foreground">
-      Based on {prediction.matchingLeads} matching lead
-      {prediction.matchingLeads === 1 ? "" : "s"} since 1 July. Filtered
-      matching can only consider leads with a readable postcode and bedroom
-      count — {volume.matchableLeads} of {volume.totalLeads}{" "}
-      {productLabel.toLowerCase()} leads so far.
-    </p>
-  );
-
-  const chips = suggestions.length > 0 && (
-    <div>
-      <p className="text-xs font-medium">
-        Nearby areas that would get you closer:
-      </p>
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
-        {suggestions.map((s) => (
-          <button
-            key={s.area}
-            type="button"
-            onClick={() => onAddArea(s.area)}
-            className="rounded-full border-[0.5px] border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
-          >
-            + Add {s.area}
-            {s.city !== s.area ? ` (${s.city})` : ""} · +~{s.monthlyRate}/mo
-            {s.distanceKm != null &&
-              ` · ${Math.max(1, Math.round(s.distanceKm * 0.621))} mi from ${
-                s.nearestSelectedArea
-                  ? cityForArea(s.nearestSelectedArea) || s.nearestSelectedArea
-                  : "your areas"
-              }`}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-
-  if (!prediction.reliable) {
-    return (
-      <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
-        <p className="text-sm">
-          Only {prediction.matchingLeads} lead
-          {prediction.matchingLeads === 1 ? "" : "s"} matching this selection
-          {prediction.matchingLeads === 1 ? " has" : " have"} arrived since 1
-          July — too little data to predict monthly volume reliably.
-        </p>
-        {chips}
-        {basis}
-      </div>
-    );
-  }
-
-  if (isBelow) {
-    return (
-      <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-amber-800">
-        <p className="text-sm">
-          This selection is predicted to produce{" "}
-          <span className="font-semibold">
-            ~{prediction.displayRate} lead
-            {prediction.displayRate === 1 ? "" : "s"}/month — below your plan
-            of {allocation}
-          </span>
-          . This selection is too small to support your full allocation, so the
-          number we can guarantee drops with it. Adding areas raises the
-          guarantee and lowers the cost per lead.
-        </p>
-        <VolumeBar
-          rate={prediction.displayRate}
-          allocation={allocation}
-          amber
-        />
-        {chips}
-        {basis}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
-      <p className="text-sm">
-        <span className="font-semibold">
-          ~{prediction.displayRate} lead
-          {prediction.displayRate === 1 ? "" : "s"}/month
-        </span>{" "}
-        {nothingSelected
-          ? "arrive across all areas and sizes — narrow your selection to see its prediction."
-          : "match this selection."}{" "}
-        {allocation > 0 && (
-          <span className="text-muted-foreground">
-            Your plan includes {allocation} leads/month.
-          </span>
-        )}
-      </p>
-      <VolumeBar
-        rate={prediction.displayRate}
-        allocation={allocation}
-        amber={false}
-      />
-      {basis}
-    </div>
-  );
-}
 
 function StatusBadge({ status }: { status: FilterStatus }) {
   if (status === "active") return <Badge variant="brand">Filter active</Badge>;
   if (status === "pending_lift")
     return <Badge variant="muted">Lift scheduled</Badge>;
   return <Badge variant="muted">No filter</Badge>;
-}
-
-function summariseBedrooms(min: number | null, max: number | null): string {
-  if (min == null && max == null) return "Any bedroom size";
-  if (min != null && max != null) {
-    return min === max
-      ? `Exactly ${min} bedroom${min === 1 ? "" : "s"}`
-      : `${min}–${max} bedrooms`;
-  }
-  if (min != null) return `${min}+ bedrooms`;
-  return `Up to ${max} bedrooms`;
 }
 
 function labelFor(area: string, options: AreaOption[]): string {

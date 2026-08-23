@@ -34,16 +34,17 @@ export interface LeadFilterView {
   radiusOutcode: string | null;
   radiusMiles: number | null;
   /**
-   * The ACCEPTED volume guarantee (0098). What the customer agreed to, not what
-   * today's volumes would quote — the two drift as ingest moves, and admin
-   * needs to see the agreement to answer questions about it.
+   * The volume forecast the customer was SHOWN (0098, renamed 0100) — not what
+   * today's volumes would quote. The two drift as ingest moves, and admin needs
+   * to see what was actually put in front of them to answer questions about it.
+   *
+   * A forecast, not a guarantee: expectedLeads is a lower bound and nothing is
+   * credited when a month falls short.
    */
-  guaranteedLeads: number | null;
-  guaranteeCostPerLeadPence: number | null;
-  guaranteeLikelihoodPct: number | null;
-  guaranteeAcceptedAt: string | null;
-  /** Leads credited so far for missed guarantees. Counts up only. */
-  guaranteeCredit: number;
+  expectedLeads: number | null;
+  forecastCostPerLeadPence: number | null;
+  forecastLikelihoodPct: number | null;
+  forecastAcknowledgedAt: string | null;
 }
 
 export function isFilterActive(status?: string | null): boolean {
@@ -78,12 +79,11 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.filter_selection_mode ?? null,
       radiusOutcode: customer.filter_radius_outcode ?? null,
       radiusMiles: customer.filter_radius_miles ?? null,
-      guaranteedLeads: customer.filter_guaranteed_leads ?? null,
-      guaranteeCostPerLeadPence:
-        customer.filter_guarantee_cost_per_lead_pence ?? null,
-      guaranteeLikelihoodPct: customer.filter_guarantee_likelihood_pct ?? null,
-      guaranteeAcceptedAt: customer.filter_guarantee_accepted_at ?? null,
-      guaranteeCredit: customer.filter_guarantee_credit ?? 0,
+      expectedLeads: customer.filter_expected_leads ?? null,
+      forecastCostPerLeadPence:
+        customer.filter_forecast_cost_per_lead_pence ?? null,
+      forecastLikelihoodPct: customer.filter_forecast_likelihood_pct ?? null,
+      forecastAcknowledgedAt: customer.filter_forecast_acknowledged_at ?? null,
     });
   }
 
@@ -99,13 +99,12 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.gr_filter_selection_mode ?? null,
       radiusOutcode: customer.gr_filter_radius_outcode ?? null,
       radiusMiles: customer.gr_filter_radius_miles ?? null,
-      guaranteedLeads: customer.gr_filter_guaranteed_leads ?? null,
-      guaranteeCostPerLeadPence:
-        customer.gr_filter_guarantee_cost_per_lead_pence ?? null,
-      guaranteeLikelihoodPct:
-        customer.gr_filter_guarantee_likelihood_pct ?? null,
-      guaranteeAcceptedAt: customer.gr_filter_guarantee_accepted_at ?? null,
-      guaranteeCredit: customer.gr_filter_guarantee_credit ?? 0,
+      expectedLeads: customer.gr_filter_expected_leads ?? null,
+      forecastCostPerLeadPence:
+        customer.gr_filter_forecast_cost_per_lead_pence ?? null,
+      forecastLikelihoodPct:
+        customer.gr_filter_forecast_likelihood_pct ?? null,
+      forecastAcknowledgedAt: customer.gr_filter_forecast_acknowledged_at ?? null,
     });
   }
 
@@ -195,16 +194,13 @@ export function filterTooltip(f: LeadFilterView): string {
     `Locations: ${locationText(f.areas)}`,
     `Set by: ${filterKindLabel(f)}`,
   ];
-  if (f.guaranteedLeads != null && f.guaranteeCostPerLeadPence != null) {
+  if (f.expectedLeads != null && f.forecastCostPerLeadPence != null) {
     parts.push(
-      `Guarantee: ${f.guaranteedLeads}/month at ${formatPence(f.guaranteeCostPerLeadPence)} a lead` +
-        (f.guaranteeLikelihoodPct != null
-          ? ` (${f.guaranteeLikelihoodPct}% likely)`
+      `Forecast: at least ${f.expectedLeads}/month at ${formatPence(f.forecastCostPerLeadPence)} a lead` +
+        (f.forecastLikelihoodPct != null
+          ? ` (${f.forecastLikelihoodPct}% likely)`
           : "")
     );
-  }
-  if (f.guaranteeCredit > 0) {
-    parts.push(`Credited for shortfalls: ${f.guaranteeCredit} leads`);
   }
   if (f.status === "pending_lift") {
     parts.push(

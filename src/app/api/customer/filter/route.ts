@@ -8,7 +8,7 @@ import {
   fetchAreaContention,
   predictMonthlyVolume,
 } from "@/lib/filterPrediction";
-import { quoteGuarantee } from "@/lib/filterGuarantee";
+import { forecastVolume } from "@/lib/filterForecast";
 import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -29,17 +29,16 @@ function cols(product: LeadType) {
       selectionMode: "gr_filter_selection_mode",
       radiusOutcode: "gr_filter_radius_outcode",
       radiusMiles: "gr_filter_radius_miles",
-      guaranteedLeads: "gr_filter_guaranteed_leads",
-      guaranteeEstimate: "gr_filter_guarantee_estimate",
-      guaranteeLikelihood: "gr_filter_guarantee_likelihood_pct",
-      guaranteeCostPence: "gr_filter_guarantee_cost_per_lead_pence",
-      guaranteePricePence: "gr_filter_guarantee_plan_price_pence",
-      guaranteeAcceptedAt: "gr_filter_guarantee_accepted_at",
+      expectedLeads: "gr_filter_expected_leads",
+      forecastEstimate: "gr_filter_forecast_estimate",
+      forecastLikelihood: "gr_filter_forecast_likelihood_pct",
+      forecastCostPence: "gr_filter_forecast_cost_per_lead_pence",
+      forecastPricePence: "gr_filter_forecast_plan_price_pence",
+      forecastAcknowledgedAt: "gr_filter_forecast_acknowledged_at",
       anchor: "gr_billing_cycle_anchor" as keyof Customer,
       balance: "gr_lead_balance" as keyof Customer,
       allocation: "gr_monthly_allocation" as keyof Customer,
       statusField: "gr_filter_status" as keyof Customer,
-      guaranteeCredit: "gr_filter_guarantee_credit" as keyof Customer,
     };
   }
   return {
@@ -52,17 +51,16 @@ function cols(product: LeadType) {
     selectionMode: "filter_selection_mode",
     radiusOutcode: "filter_radius_outcode",
     radiusMiles: "filter_radius_miles",
-    guaranteedLeads: "filter_guaranteed_leads",
-    guaranteeEstimate: "filter_guarantee_estimate",
-    guaranteeLikelihood: "filter_guarantee_likelihood_pct",
-    guaranteeCostPence: "filter_guarantee_cost_per_lead_pence",
-    guaranteePricePence: "filter_guarantee_plan_price_pence",
-    guaranteeAcceptedAt: "filter_guarantee_accepted_at",
+    expectedLeads: "filter_expected_leads",
+    forecastEstimate: "filter_forecast_estimate",
+    forecastLikelihood: "filter_forecast_likelihood_pct",
+    forecastCostPence: "filter_forecast_cost_per_lead_pence",
+    forecastPricePence: "filter_forecast_plan_price_pence",
+    forecastAcknowledgedAt: "filter_forecast_acknowledged_at",
     anchor: "billing_cycle_anchor" as keyof Customer,
     balance: "lead_balance" as keyof Customer,
     allocation: "monthly_allocation" as keyof Customer,
     statusField: "filter_status" as keyof Customer,
-    guaranteeCredit: "filter_guarantee_credit" as keyof Customer,
   };
 }
 
@@ -102,8 +100,8 @@ export async function POST(req: NextRequest) {
     selection_mode?: unknown;
     radius_outcode?: unknown;
     radius_miles?: unknown;
-    accept_guarantee?: unknown;
-    quoted_guaranteed_leads?: unknown;
+    acknowledge_forecast?: unknown;
+    quoted_expected_leads?: unknown;
   };
   try {
     body = await req.json();
@@ -165,10 +163,10 @@ export async function POST(req: NextRequest) {
       selectionMode === "radius" ? toIntOrNull(body.radius_miles) : null;
 
     // ---------------------------------------------------------------------
-    // Re-derive the guarantee HERE. The client sends intent; the server sends
+    // Re-derive the forecast HERE. The client sends intent; the server sends
     // the number.
     //
-    // The panel computes the same quote to render it, but a request can claim
+    // The panel computes the same forecast to render it, but a request can claim
     // anything, and this one sets a price. Recomputing from the server's own
     // normalised `areas` — the exact uppercased values about to be written to
     // filter_areas and matched by get_filtered_candidates_for_lead — also means
@@ -184,31 +182,37 @@ export async function POST(req: NextRequest) {
       { areas, minBedrooms: min, maxBedrooms: max },
       contention
     );
-    const quote = quoteGuarantee(prediction, allocation, product);
+    const forecast = forecastVolume(prediction, allocation, product);
 
-    // Ingest moves between the panel rendering a quote and the customer
-    // accepting it. Consent is to a SPECIFIC number — the panel already voids
-    // its own acceptance when the selection changes — so a guarantee that has
+    // Ingest moves between the panel rendering a forecast and the customer
+    // applying it. The acknowledgement is to a SPECIFIC number — the panel
+    // already voids its own when the selection changes — so a figure that has
     // shifted underneath must be re-shown rather than quietly substituted.
-    const quotedLeads = toIntOrNull(body.quoted_guaranteed_leads);
-    if (quotedLeads !== null && quotedLeads !== quote.guaranteed) {
+    //
+    // This check matters MORE now that nothing is credited, not less. When a
+    // shortfall was made good, being applied against a number you had not seen
+    // cost you nothing in the end. Now the number you were shown is the whole
+    // of what you were told, so it is the only thing there is to get right.
+    const quotedLeads = toIntOrNull(body.quoted_expected_leads);
+    if (quotedLeads !== null && quotedLeads !== forecast.expected) {
       return NextResponse.json(
         {
           error:
-            "Lead volumes moved while you were choosing. Here is the current guarantee.",
-          code: "guarantee_changed",
-          guarantee: quote,
+            "Lead volumes moved while you were choosing. Here is the current forecast.",
+          code: "forecast_changed",
+          forecast,
         },
         { status: 409 }
       );
     }
 
-    if (quote.reducesGuarantee && body.accept_guarantee !== true) {
+    if (forecast.reducesVolume && body.acknowledge_forecast !== true) {
       return NextResponse.json(
         {
-          error: "Accept the reduced volume guarantee to apply this filter.",
-          code: "guarantee_not_accepted",
-          guarantee: quote,
+          error:
+            "Confirm you've read the expected lead volume to apply this filter.",
+          code: "forecast_not_acknowledged",
+          forecast,
         },
         { status: 400 }
       );
@@ -226,18 +230,18 @@ export async function POST(req: NextRequest) {
         radiusMiles !== null && radiusMiles > 0 && radiusMiles <= 200
           ? radiusMiles
           : null,
-      // From `quote`, never from the body. Cleared when nothing is offerable so
-      // a stale guarantee cannot outlive the filter that earned it.
-      [c.guaranteedLeads]: quote.offerable ? quote.guaranteed : null,
-      [c.guaranteeEstimate]: quote.offerable ? quote.estimate : null,
-      [c.guaranteeLikelihood]: quote.offerable ? quote.likelihoodPct : null,
-      [c.guaranteeCostPence]: quote.offerable ? quote.costPerLeadPence : null,
-      [c.guaranteePricePence]: quote.offerable ? quote.planPricePence : null,
-      // Re-stamped on every apply, including an EDIT of a live filter: the
-      // areas changed, so the guarantee is a new promise about a new selection.
-      // This is why it cannot share filter_enabled_at, which is deliberately
-      // preserved across edits below.
-      [c.guaranteeAcceptedAt]: quote.offerable
+      // From `forecast`, never from the body. Cleared when nothing is offerable
+      // so a stale figure cannot outlive the filter that produced it.
+      [c.expectedLeads]: forecast.offerable ? forecast.expected : null,
+      [c.forecastEstimate]: forecast.offerable ? forecast.estimate : null,
+      [c.forecastLikelihood]: forecast.offerable ? forecast.likelihoodPct : null,
+      [c.forecastCostPence]: forecast.offerable ? forecast.costPerLeadPence : null,
+      [c.forecastPricePence]: forecast.offerable ? forecast.planPricePence : null,
+      // Re-stamped on every apply, including an EDIT of a live filter: the areas
+      // changed, so this is a new forecast about a new selection. That is why it
+      // cannot share filter_enabled_at, which is deliberately preserved across
+      // edits below.
+      [c.forecastAcknowledgedAt]: forecast.offerable
         ? new Date().toISOString()
         : null,
       updated_at: new Date().toISOString(),
@@ -246,31 +250,17 @@ export async function POST(req: NextRequest) {
     // A fresh enable (off -> active) stamps filter_enabled_at and immediately
     // forfeits any carried-forward credit surplus. Editing an already-active
     // filter keeps the original timestamp and balance.
+    //
+    // This is the plain clamp it always was. A previous version spared a
+    // portion of the balance from it, because part of the balance could be
+    // compensation we owed for missing a volume guarantee and confiscating that
+    // would have been indefensible. Nothing is owed now — a forecast creates no
+    // liability — so there is nothing to spare and the exception has gone with
+    // the column that tracked it.
     if (currentStatus === "off") {
       update[c.enabledAt] = new Date().toISOString();
       const balance = Number(customer[c.balance] ?? 0);
-      // Carried plan surplus is forfeited by choice. Compensation we OWED for
-      // missing a guarantee is not the customer's choice to forfeit, and
-      // confiscating it for an action that looks unrelated would be
-      // indefensible — so the clamp spares it.
-      //
-      // Only the EXCESS above the allocation is ever at risk, so only that has
-      // to be protected, and protecting at most the excess means this can never
-      // hand back more than the customer already had. That matters because
-      // filter_guarantee_credit is CUMULATIVE and never decrements as credits
-      // are spent: after a year it can exceed the whole balance, and treating
-      // it as "how much of today's balance is owed" would invent leads.
-      //
-      // The imprecision that remains runs in the customer's favour. A customer
-      // credited leads long ago and since spent them keeps a little plan
-      // surplus they would otherwise forfeit. Tracking it exactly would mean
-      // decrementing the counter inside assign_lead_to_customer — a privileged
-      // function whose ACL a create-or-replace would discard (§11) — which is a
-      // poor trade for a rounding error that never costs the customer.
-      const owed = Number(customer[c.guaranteeCredit] ?? 0);
-      const excess = Math.max(balance - allocation, 0);
-      const spared = Math.min(owed, excess);
-      update[c.balance] = Math.min(balance, allocation) + spared;
+      update[c.balance] = Math.min(balance, allocation);
     }
 
     const { error } = await admin
@@ -281,34 +271,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // History, best-effort. A guarantee disputed in six months should be
-    // traceable to what was actually shown and agreed — but a failure to
-    // RECORD that must never fail the apply the customer just made, so this is
+    // History, best-effort. "You told me four a month" is worth being able to
+    // answer even though the answer now carries no liability — but a failure to
+    // RECORD it must never fail the apply the customer just made, so this is
     // logged and swallowed. Nothing reads this table to decide anything.
-    if (quote.offerable) {
+    if (forecast.offerable) {
       const { error: auditError } = await admin
-        .from("filter_guarantee_acceptances")
+        .from("filter_forecast_acknowledgements")
         .insert({
           customer_id: customer.id,
           lead_type: product,
-          guaranteed_leads: quote.guaranteed,
-          estimate: quote.estimate,
-          likelihood_pct: quote.likelihoodPct,
-          cost_per_lead_pence: quote.costPerLeadPence,
-          plan_price_pence: quote.planPricePence,
+          expected_leads: forecast.expected,
+          estimate: forecast.estimate,
+          likelihood_pct: forecast.likelihoodPct,
+          cost_per_lead_pence: forecast.costPerLeadPence,
+          plan_price_pence: forecast.planPricePence,
           monthly_allocation: allocation,
           areas: areas.length > 0 ? areas : null,
           min_bedrooms: min,
           max_bedrooms: max,
           selection_mode: selectionMode,
-          accepted_by_user_id: user.id,
+          acknowledged_by_user_id: user.id,
         });
       if (auditError) {
-        console.error("guarantee acceptance audit insert failed", auditError);
+        console.error("forecast acknowledgement audit insert failed", auditError);
       }
     }
 
-    return NextResponse.json({ ok: true, status: "active", guarantee: quote });
+    return NextResponse.json({ ok: true, status: "active", forecast });
   }
 
   if (body.action === "lift") {

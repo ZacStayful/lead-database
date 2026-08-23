@@ -11,7 +11,6 @@ import {
   planForAllocation,
 } from "@/lib/plans";
 import {
-  sendFilterGuaranteeCreditEmail,
   sendFilterLiftCompletedEmail,
   sendAccountReadyEmail,
   sendSubscriptionResumedEmail,
@@ -101,75 +100,6 @@ function mapStatus(status: Stripe.Subscription.Status): string {
       return "canceled";
     default:
       return "inactive";
-  }
-}
-
-/**
- * Settle the filter volume guarantee for the cycle that just ENDED, crediting
- * any shortfall to the customer's lead balance.
- *
- * MUST BE CALLED BEFORE maybeExecuteFilterLift FOR THE SAME PRODUCT.
- * execute_filter_lift sets filter_status to 'off', and settle_filter_guarantee
- * requires 'active' or 'pending_lift'. A customer who scheduled a lift is still
- * owed the cycle they spent filtered; settling second would silently lose it
- * for every one of them, with no error anywhere.
- *
- * `periodStart` is the anchor from BEFORE the renewal update rewrites it —
- * read from the customer row this handler loaded, which still holds the
- * previous cycle's start.
- *
- * Best-effort by design. A failure here must not fail the webhook: Stripe would
- * retry, credit_invoice would correctly refuse to double-credit, and the
- * customer would be left un-promoted over a crediting nicety. The settlement's
- * own unique key makes a later retry safe, so the worst case is one cycle
- * settled late rather than a payment left unprocessed.
- */
-async function maybeSettleFilterGuarantee(
-  admin: ReturnType<typeof createAdminClient>,
-  customerId: string,
-  leadType: LeadType,
-  periodStart: string | null | undefined,
-  periodEnd: string | null | undefined,
-  invoiceId: string | null
-): Promise<void> {
-  if (!periodStart || !periodEnd) return;
-
-  const { data: credited, error } = await admin.rpc("settle_filter_guarantee", {
-    p_customer_id: customerId,
-    p_lead_type: leadType,
-    p_period_start: periodStart,
-    p_period_end: periodEnd,
-    p_invoice_id: invoiceId,
-  });
-  if (error) {
-    console.error("settle_filter_guarantee failed", error);
-    return;
-  }
-
-  const leads = Number(credited ?? 0);
-  if (leads <= 0) return;
-
-  // Telling them is half the feature. A guarantee nobody sees honoured is
-  // indistinguishable from one that was never made.
-  const { data: customer } = await admin
-    .from("customers")
-    .select("email, contact_name")
-    .eq("id", customerId)
-    .maybeSingle();
-
-  await admin.from("notifications").insert({
-    customer_id: customerId,
-    notification_type: "filter_guarantee_shortfall_credited",
-    message: `We delivered fewer leads than your filter guarantee last month, so we've added ${leads} lead${leads === 1 ? "" : "s"} to your balance. ${leads === 1 ? "It carries" : "They carry"} forward and ${leads === 1 ? "is" : "are"} yours on top of this month's allocation.`,
-  });
-
-  if (customer?.email) {
-    await sendFilterGuaranteeCreditEmail({
-      to: customer.email,
-      name: customer.contact_name ?? null,
-      leads,
-      leadTypeLabel: leadType === "guaranteed_rent" ? "Guaranteed Rent" : "Management",
-    });
   }
 }
 
@@ -715,7 +645,7 @@ export async function POST(request: NextRequest) {
             // Payment Link (0056). Match on either.
             let { data: customer } = await admin
               .from("customers")
-              .select("id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_billing_cycle_anchor")
+              .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
 
@@ -756,7 +686,7 @@ export async function POST(request: NextRequest) {
                   }
                   const { data: linked } = await admin
                     .from("customers")
-                    .select("id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_billing_cycle_anchor")
+                    .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
                     .eq("id", result.customerId)
                     .maybeSingle();
                   customer = linked ?? null;
@@ -854,17 +784,6 @@ export async function POST(request: NextRequest) {
               .update(grUpdate)
               .eq("id", customer.id);
 
-            // Settle before lifting — see maybeSettleFilterGuarantee. The
-            // pre-renewal anchor is the one on the loaded customer row.
-            await maybeSettleFilterGuarantee(
-              admin,
-              customer.id,
-              "guaranteed_rent",
-              customer.gr_billing_cycle_anchor,
-              grAnchor,
-              invoice.id ?? null
-            );
-
             // Execute a scheduled GR filter lift at this genuine renewal.
             await maybeExecuteFilterLift(admin, customer.id, "guaranteed_rent");
 
@@ -880,7 +799,7 @@ export async function POST(request: NextRequest) {
           // size the credit and detect a mismatched Stripe id.
           let { data: customer } = await admin
             .from("customers")
-            .select("id, monthly_allocation, pending_monthly_allocation, billing_cycle_anchor")
+            .select("id, monthly_allocation, pending_monthly_allocation")
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
 
@@ -936,7 +855,7 @@ export async function POST(request: NextRequest) {
                 }
                 const { data: linked } = await admin
                   .from("customers")
-                  .select("id, monthly_allocation, pending_monthly_allocation, billing_cycle_anchor")
+                  .select("id, monthly_allocation, pending_monthly_allocation")
                   .eq("id", result.customerId)
                   .maybeSingle();
                 customer = linked ?? null;
@@ -1042,19 +961,6 @@ export async function POST(request: NextRequest) {
             .from("customers")
             .update(renewalUpdate)
             .eq("id", customer.id);
-
-          // Settle the guarantee for the cycle that just ended, THEN lift.
-          // The order is load-bearing — see maybeSettleFilterGuarantee.
-          // customer.billing_cycle_anchor is the pre-renewal value: the update
-          // above wrote the new anchor to the database, not to this object.
-          await maybeSettleFilterGuarantee(
-            admin,
-            customer.id,
-            "management",
-            customer.billing_cycle_anchor,
-            renewalAnchor,
-            invoice.id ?? null
-          );
 
           // Execute a scheduled management filter lift at this genuine renewal.
           await maybeExecuteFilterLift(admin, customer.id, "management");

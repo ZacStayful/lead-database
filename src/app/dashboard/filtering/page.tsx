@@ -108,13 +108,13 @@ function panelPropsFor(
       // figure: the prediction is compared against what the plan owes.
       monthlyAllocation: customer.monthly_allocation ?? 0,
       contention: contention.management,
-      // The ACCEPTED terms. The panel renders these rather than a fresh quote —
-      // they are the agreement, and a recomputed one would drift with ingest.
-      guaranteedLeads: customer.filter_guaranteed_leads,
-      guaranteeLikelihoodPct: customer.filter_guarantee_likelihood_pct,
-      guaranteeCostPerLeadPence: customer.filter_guarantee_cost_per_lead_pence,
-      guaranteeAcceptedAt: customer.filter_guarantee_accepted_at,
-      guaranteeCredit: customer.filter_guarantee_credit ?? 0,
+      // What the customer was SHOWN. The panel renders these rather than a fresh
+      // forecast — a recomputed one drifts with ingest and would display a
+      // figure they never actually read.
+      expectedLeads: customer.filter_expected_leads,
+      forecastLikelihoodPct: customer.filter_forecast_likelihood_pct,
+      forecastCostPerLeadPence: customer.filter_forecast_cost_per_lead_pence,
+      forecastAcknowledgedAt: customer.filter_forecast_acknowledged_at,
     });
   }
 
@@ -136,11 +136,10 @@ function panelPropsFor(
       volume: volumeAggregate.guaranteed_rent,
       monthlyAllocation: customer.gr_monthly_allocation ?? 0,
       contention: contention.guaranteed_rent,
-      guaranteedLeads: customer.gr_filter_guaranteed_leads,
-      guaranteeLikelihoodPct: customer.gr_filter_guarantee_likelihood_pct,
-      guaranteeCostPerLeadPence: customer.gr_filter_guarantee_cost_per_lead_pence,
-      guaranteeAcceptedAt: customer.gr_filter_guarantee_accepted_at,
-      guaranteeCredit: customer.gr_filter_guarantee_credit ?? 0,
+      expectedLeads: customer.gr_filter_expected_leads,
+      forecastLikelihoodPct: customer.gr_filter_forecast_likelihood_pct,
+      forecastCostPerLeadPence: customer.gr_filter_forecast_cost_per_lead_pence,
+      forecastAcknowledgedAt: customer.gr_filter_forecast_acknowledged_at,
     });
   }
 

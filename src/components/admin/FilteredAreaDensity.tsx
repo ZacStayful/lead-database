@@ -9,7 +9,7 @@ import type { AreaContention } from "@/lib/filterPrediction";
  * product-wide, correctly and more carefully than anything worth replacing
  * (§18.1: supply that REFILLS sets the ceiling, supply that clears once is
  * reported beside it and never added). What they cannot answer is WHERE, and
- * that question only started mattering when filters began carrying guarantees:
+ * that question only started mattering when filters began carrying forecasts:
  * a lead reaches at most four filtered customers, so an area at the ceiling
  * cannot absorb another one at full volume however healthy the national figure
  * looks.

@@ -7,7 +7,7 @@ import { areaLabel } from "@/lib/postcode";
 import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
 import { areasWithinRadius, type AreaFeature } from "@/lib/geoRadius";
 import { predictMonthlyVolume } from "@/lib/filterPrediction";
-import { quoteGuarantee, recommendedDowngrade } from "@/lib/filterGuarantee";
+import { forecastVolume, recommendedDowngrade } from "@/lib/filterForecast";
 import { plansFor } from "@/lib/plans";
 import {
   toProductVolume,
@@ -20,10 +20,15 @@ import type { LeadType } from "@/lib/types";
  * "What would I actually get?", answered before signing up.
  *
  * Runs the SAME functions the dashboard does — predictMonthlyVolume,
- * quoteGuarantee — against a cached, already-contention-adjusted payload. That
- * parity is the point: a prospect quoted four leads a month at £25 should see
+ * forecastVolume — against a cached, already-contention-adjusted payload. That
+ * parity is the point: a prospect shown four leads a month at £25 should see
  * exactly that on their first day, or the estimator is a lie with a signup
  * button under it.
+ *
+ * ⚠️ NOTHING HERE MAY PROMISE ANYTHING. This is the surface where an
+ * over-promise is least recoverable, because a prospect quotes it back at
+ * signup. It says what they can expect and how confident we are; it never says
+ * what we would do if we fell short, because the answer is nothing.
  *
  * The markup is deliberately its own rather than shared with
  * LeadFilteringPanel. The two answer different questions — "should I buy this"
@@ -110,19 +115,19 @@ export function LeadEstimator({
       minBedrooms: null,
       maxBedrooms: null,
     });
-    // Quote against the largest plan, then step down to the cheapest one that
-    // still covers the whole guarantee — the same helper the dashboard uses to
-    // advise a downgrade, run in reverse. A prospect should land on the plan
-    // that makes their selection cheapest per lead, not the biggest one.
+    // Forecast against the largest plan, then step down to the cheapest one
+    // that still covers it — the same helper the dashboard uses to advise a
+    // downgrade, run in reverse. A prospect should land on the plan that makes
+    // their selection cheapest per lead, not the biggest one.
     const plans = Object.values(plansFor(product)).sort(
       (a, b) => b.leads - a.leads
     );
     const largest = plans[0];
-    const first = quoteGuarantee(prediction, largest.leads, product);
+    const first = forecastVolume(prediction, largest.leads, product);
     if (!first.offerable) return { quote: first, plan: largest };
-    const cheaper = recommendedDowngrade(first.guaranteed, largest.leads, product);
+    const cheaper = recommendedDowngrade(first.expected, largest.leads, product);
     const plan = cheaper ?? largest;
-    return { quote: quoteGuarantee(prediction, plan.leads, product), plan };
+    return { quote: forecastVolume(prediction, plan.leads, product), plan };
   }, [volume, hasSelection, selectedAreas, product]);
 
   if (loadFailed) return null;
@@ -133,8 +138,8 @@ export function LeadEstimator({
         See what you&rsquo;d get in your area
       </h3>
       <p className="mt-1 text-sm text-muted-foreground">
-        Pick where you work and we&rsquo;ll show you the leads a month we can
-        guarantee, and what that works out at each — before you sign up.
+        Pick where you work and we&rsquo;ll show you the leads a month you can
+        expect, and what that works out at each — before you sign up.
       </p>
 
       <div className="mt-4 flex gap-2 text-sm">
@@ -230,33 +235,31 @@ export function LeadEstimator({
                   </dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-muted-foreground">We&rsquo;d guarantee</dt>
+                  <dt className="text-muted-foreground">You could expect</dt>
                   <dd className="font-semibold tabular-nums">
-                    {quote.quote.guaranteed} a month
+                    at least {quote.quote.expected} a month
                   </dd>
                 </div>
+                {quote.quote.likelihoodPct != null && (
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt className="text-muted-foreground">Likelihood of that</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {quote.quote.likelihoodPct}%
+                    </dd>
+                  </div>
+                )}
                 <div className="flex items-baseline justify-between gap-4">
                   <dt className="text-muted-foreground">Cost per lead</dt>
                   <dd className="font-semibold tabular-nums">
                     {poundsFromPence(quote.quote.costPerLeadPence!)}
                   </dd>
                 </div>
-                {quote.quote.likelihoodPct != null && (
-                  <div className="flex items-baseline justify-between gap-4">
-                    <dt className="text-muted-foreground">
-                      Likelihood of meeting it
-                    </dt>
-                    <dd className="font-semibold tabular-nums">
-                      {quote.quote.likelihoodPct}%
-                    </dd>
-                  </div>
-                )}
               </dl>
               <p className="mt-3 text-xs text-muted-foreground">
-                On the {poundsFromPence(quote.plan.priceGbp * 100)} a month plan.
-                If we deliver fewer than {quote.quote.guaranteed} in a billing
-                month, the difference is credited to your balance and carries
-                forward.
+                On the {poundsFromPence(quote.plan.priceGbp * 100)} a month plan,
+                based on how many matching leads have actually come through these
+                areas. It is a forecast rather than a promise — some months are
+                quieter than others.
               </p>
               <Button asChild className="mt-4">
                 <a href={signupHref}>Get started</a>
@@ -265,8 +268,8 @@ export function LeadEstimator({
           ) : (
             <p className="text-sm text-muted-foreground">
               Not many leads have come through this selection yet, so we
-              can&rsquo;t put a guaranteed number on it. Try a wider radius or a
-              few more areas.
+              can&rsquo;t put a number on it. Try a wider radius or a few more
+              areas.
             </p>
           )}
         </div>
