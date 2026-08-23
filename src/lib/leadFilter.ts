@@ -33,6 +33,17 @@ export interface LeadFilterView {
   /** Radius details, only meaningful when selectionMode is "radius". */
   radiusOutcode: string | null;
   radiusMiles: number | null;
+  /**
+   * The ACCEPTED volume guarantee (0098). What the customer agreed to, not what
+   * today's volumes would quote — the two drift as ingest moves, and admin
+   * needs to see the agreement to answer questions about it.
+   */
+  guaranteedLeads: number | null;
+  guaranteeCostPerLeadPence: number | null;
+  guaranteeLikelihoodPct: number | null;
+  guaranteeAcceptedAt: string | null;
+  /** Leads credited so far for missed guarantees. Counts up only. */
+  guaranteeCredit: number;
 }
 
 export function isFilterActive(status?: string | null): boolean {
@@ -67,6 +78,12 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.filter_selection_mode ?? null,
       radiusOutcode: customer.filter_radius_outcode ?? null,
       radiusMiles: customer.filter_radius_miles ?? null,
+      guaranteedLeads: customer.filter_guaranteed_leads ?? null,
+      guaranteeCostPerLeadPence:
+        customer.filter_guarantee_cost_per_lead_pence ?? null,
+      guaranteeLikelihoodPct: customer.filter_guarantee_likelihood_pct ?? null,
+      guaranteeAcceptedAt: customer.filter_guarantee_accepted_at ?? null,
+      guaranteeCredit: customer.filter_guarantee_credit ?? 0,
     });
   }
 
@@ -82,6 +99,13 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.gr_filter_selection_mode ?? null,
       radiusOutcode: customer.gr_filter_radius_outcode ?? null,
       radiusMiles: customer.gr_filter_radius_miles ?? null,
+      guaranteedLeads: customer.gr_filter_guaranteed_leads ?? null,
+      guaranteeCostPerLeadPence:
+        customer.gr_filter_guarantee_cost_per_lead_pence ?? null,
+      guaranteeLikelihoodPct:
+        customer.gr_filter_guarantee_likelihood_pct ?? null,
+      guaranteeAcceptedAt: customer.gr_filter_guarantee_accepted_at ?? null,
+      guaranteeCredit: customer.gr_filter_guarantee_credit ?? 0,
     });
   }
 
@@ -158,6 +182,11 @@ export function filterKindLabel(f: LeadFilterView): string {
   return "Hand-picked areas";
 }
 
+/** "£21.43" from 2143. */
+export function formatPence(pence: number): string {
+  return `£${(pence / 100).toFixed(2)}`;
+}
+
 /** Untruncated description for a title attribute. */
 export function filterTooltip(f: LeadFilterView): string {
   const parts = [
@@ -166,6 +195,17 @@ export function filterTooltip(f: LeadFilterView): string {
     `Locations: ${locationText(f.areas)}`,
     `Set by: ${filterKindLabel(f)}`,
   ];
+  if (f.guaranteedLeads != null && f.guaranteeCostPerLeadPence != null) {
+    parts.push(
+      `Guarantee: ${f.guaranteedLeads}/month at ${formatPence(f.guaranteeCostPerLeadPence)} a lead` +
+        (f.guaranteeLikelihoodPct != null
+          ? ` (${f.guaranteeLikelihoodPct}% likely)`
+          : "")
+    );
+  }
+  if (f.guaranteeCredit > 0) {
+    parts.push(`Credited for shortfalls: ${f.guaranteeCredit} leads`);
+  }
   if (f.status === "pending_lift") {
     parts.push(
       f.liftDate ? `Lift scheduled for ${f.liftDate}` : "Lift scheduled"

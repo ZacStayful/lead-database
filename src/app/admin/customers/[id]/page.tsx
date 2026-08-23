@@ -20,6 +20,7 @@ import {
   bedroomPhrase,
   filterKindLabel,
   locationText,
+  formatPence,
 } from "@/lib/leadFilter";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
 import {
@@ -83,6 +84,17 @@ export default async function AdminCustomerDetailPage({
     }
   }
 
+  // Settlement history. Without it, "you credited me two leads, why?" has no
+  // answer anywhere in the product — the credit lands silently in a balance
+  // and the reason lives only in a webhook log.
+  const { data: settlementsRaw } = await admin
+    .from("filter_guarantee_settlements")
+    .select("id, lead_type, period_start, period_end, guaranteed, delivered, credited")
+    .eq("customer_id", customer.id)
+    .order("period_start", { ascending: false })
+    .limit(12);
+  const settlements = (settlementsRaw ?? []) as GuaranteeSettlement[];
+
   return (
     <div className="space-y-6">
       <div>
@@ -141,6 +153,8 @@ export default async function AdminCustomerDetailPage({
           <GrSubscriptionCard customer={customer} />
 
           <FilterCard customer={customer} volumeAggregate={volumeAggregate} />
+
+          <GuaranteeSettlementsCard settlements={settlements} />
         </div>
 
         <div className="lg:col-span-2">
@@ -224,6 +238,72 @@ export default async function AdminCustomerDetailPage({
  * priority_score (the deficit-formula value used to rank filtered candidates).
  * Never shown to the customer.
  */
+interface GuaranteeSettlement {
+  id: string;
+  lead_type: string;
+  period_start: string;
+  period_end: string;
+  guaranteed: number;
+  delivered: number;
+  credited: number;
+}
+
+/**
+ * Every settled cycle, including the ones that owed nothing.
+ *
+ * A settlement row is written whether or not there was a shortfall, so "we
+ * checked and you were fully served" is recorded rather than merely implied by
+ * absence — which is what makes this table answerable when a customer asks why
+ * a month was or was not credited.
+ */
+function GuaranteeSettlementsCard({
+  settlements,
+}: {
+  settlements: GuaranteeSettlement[];
+}) {
+  if (settlements.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Guarantee settlements</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted-foreground">
+              <th className="pb-1 font-normal">Cycle</th>
+              <th className="pb-1 font-normal">Product</th>
+              <th className="pb-1 text-right font-normal">Owed</th>
+              <th className="pb-1 text-right font-normal">Got</th>
+              <th className="pb-1 text-right font-normal">Credited</th>
+            </tr>
+          </thead>
+          <tbody>
+            {settlements.map((s) => (
+              <tr key={s.id} className="border-t-[0.5px] border-border">
+                <td className="py-1">{formatDate(s.period_start)}</td>
+                <td className="py-1 text-xs text-muted-foreground">
+                  {s.lead_type === "guaranteed_rent" ? "GR" : "Mgmt"}
+                </td>
+                <td className="py-1 text-right tabular-nums">{s.guaranteed}</td>
+                <td className="py-1 text-right tabular-nums">{s.delivered}</td>
+                <td
+                  className={
+                    "py-1 text-right tabular-nums " +
+                    (s.credited > 0 ? "font-medium text-amber-700" : "text-muted-foreground")
+                  }
+                >
+                  {s.credited > 0 ? `+${s.credited}` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
 function FilterCard({
   customer,
   volumeAggregate,
@@ -243,6 +323,10 @@ function FilterCard({
           maxBedrooms: f.maxBedrooms,
         })
       : null;
+    const balance =
+      f.leadType === "guaranteed_rent"
+        ? (customer.gr_lead_balance ?? 0)
+        : (customer.lead_balance ?? 0);
     return {
       ...f,
       priority:
@@ -251,7 +335,11 @@ function FilterCard({
           : computePacing(customer).deficit,
       prediction,
       allocation,
+      balance,
       below: prediction ? belowAllocation(prediction, allocation) : false,
+      unspendable:
+        f.guaranteedLeads != null &&
+        balance > allocation + f.guaranteedLeads,
     };
   });
 
@@ -306,12 +394,23 @@ function FilterCard({
                         <span className="font-normal text-muted-foreground">
                           ({p.prediction.matchingLeads} matches since 1 Jul)
                         </span>
-                        {p.below && (
+                        {p.below && p.guaranteedLeads == null && (
                           <span className="block text-xs font-normal text-amber-700">
-                            Below plan of {p.allocation}/month — guarantee
-                            lifted
+                            Below plan of {p.allocation}/month — no guarantee
+                            accepted
                           </span>
                         )}
+                        {/* The drift between what was AGREED and what today's
+                            volumes support is the leading indicator of an
+                            accruing liability, so both are shown together
+                            rather than one replacing the other. */}
+                        {p.guaranteedLeads != null &&
+                          p.prediction.displayRate < p.guaranteedLeads && (
+                            <span className="block text-xs font-normal text-amber-700">
+                              Now below the {p.guaranteedLeads}/month
+                              guaranteed — shortfalls will accrue
+                            </span>
+                          )}
                       </>
                     ) : (
                       <span className="font-normal text-muted-foreground">
@@ -322,6 +421,47 @@ function FilterCard({
                   </dd>
                 </div>
               )}
+              {p.guaranteedLeads != null &&
+                p.guaranteeCostPerLeadPence != null && (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">
+                      Accepted guarantee
+                    </dt>
+                    <dd className="mt-0.5 font-medium">
+                      {p.guaranteedLeads} leads/month at{" "}
+                      {formatPence(p.guaranteeCostPerLeadPence)} a lead
+                      {p.guaranteeLikelihoodPct != null && (
+                        <span className="font-normal text-muted-foreground">
+                          {" "}
+                          ({p.guaranteeLikelihoodPct}% likely)
+                        </span>
+                      )}
+                      {p.guaranteeAcceptedAt && (
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          Accepted {formatDate(p.guaranteeAcceptedAt)}
+                        </span>
+                      )}
+                      {p.guaranteeCredit > 0 && (
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          {p.guaranteeCredit} lead
+                          {p.guaranteeCredit === 1 ? "" : "s"} credited for
+                          shortfalls
+                        </span>
+                      )}
+                      {/* Banking credits a filter cannot spend: the customer is
+                          owed leads their own selection will not produce, and
+                          the balance only grows. Widening the filter or moving
+                          them down a plan is the fix, not more credit. */}
+                      {p.unspendable && (
+                        <span className="block text-xs font-normal text-red-600">
+                          Balance {p.balance} exceeds allocation +
+                          guarantee — credits are accruing faster than this
+                          filter can spend them
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                )}
               {p.status === "pending_lift" && p.liftDate && (
                 <div>
                   <dt className="text-xs text-muted-foreground">Lifts on</dt>

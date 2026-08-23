@@ -1,6 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
+import { FilteredAreaDensity } from "@/components/admin/FilteredAreaDensity";
+import { fetchAreaContention } from "@/lib/filterPrediction";
 import { planForAllocation, grPlanForAllocation } from "@/lib/plans";
 import { getCapacityStatus, getGrCapacityStatus } from "@/lib/capacity";
 import { getServiceHealth } from "@/lib/serviceHealth";
@@ -49,6 +51,11 @@ export default async function AdminOverviewPage() {
   // Guaranteed Rent is capped separately (0054) and read off its own columns:
   // gr_subscription_status for the population, gr_monthly_allocation for the
   // weight. account_status is management-only, so it cannot appear on this side.
+  const [mgmtContention, grContention] = await Promise.all([
+    fetchAreaContention(admin, "management"),
+    fetchAreaContention(admin, "guaranteed_rent"),
+  ]);
+
   const [capacity, grCapacity, health, escalationSettings] = await Promise.all([
     getCapacityStatus(),
     getGrCapacityStatus(),
@@ -242,6 +249,17 @@ export default async function AdminOverviewPage() {
           rawActiveCount={grCapacity.rawActiveCount}
           activeLabel="active guaranteed rent customer"
           initialLimit={grCapacity.limit}
+        />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <FilteredAreaDensity
+          contention={mgmtContention}
+          title="Filtered area density — Management"
+        />
+        <FilteredAreaDensity
+          contention={grContention}
+          title="Filtered area density — Guaranteed Rent"
         />
       </div>
       <FilterMixCard mix={filterMix} />
