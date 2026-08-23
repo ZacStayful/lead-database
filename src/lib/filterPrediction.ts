@@ -220,6 +220,14 @@ export interface LeadVolumeRow {
   bedrooms: string | null;
   lead_type: LeadType | string | null;
   created_at: string;
+  /**
+   * True when `lead_retired_from_allocation()` (0073) would return true — the
+   * lead was claimed from the expired pool, or pooled on the `ignored` basis.
+   * Ordinary routing will never hand it to anyone again (invariant 11), so it
+   * must not count towards a volume the guarantee is priced on. Optional so
+   * callers that cannot cheaply determine it keep today's behaviour.
+   */
+  retired?: boolean | null;
 }
 
 function emptyVolume(now: Date): ProductVolume {
@@ -236,6 +244,12 @@ function emptyVolume(now: Date): ProductVolume {
  * Pure aggregate builder — rows in, aggregate out. Rows before the epoch are
  * dropped defensively: none exist today, but a future backfill of historical
  * leads must inflate neither the rate's numerator without its denominator.
+ *
+ * Retired rows are dropped for a different reason and BEFORE `totalLeads`:
+ * a lead invariant 11 has retired is not supply that was merely unmatchable,
+ * it is supply that no longer exists. Counting it in the denominator would
+ * understate the matchable share as much as counting it in the numerator
+ * would overstate the rate.
  */
 export function buildLeadVolumeAggregate(
   rows: LeadVolumeRow[],
@@ -257,6 +271,7 @@ export function buildLeadVolumeAggregate(
     if (!row.created_at || row.created_at.slice(0, 10) < INGEST_EPOCH_ISO) {
       continue;
     }
+    if (row.retired) continue;
 
     product.totalLeads += 1;
 
@@ -276,21 +291,112 @@ export function buildLeadVolumeAggregate(
  * Fetch every lead's prediction-relevant columns (paginated — a single select
  * is capped at 1000 rows) and build the aggregate. The admin client is a
  * parameter so this module stays importable from client components.
+ *
+ * ORDER BY IS LOAD-BEARING, not tidiness. PostgREST's `.range()` is
+ * LIMIT/OFFSET, and Postgres guarantees no row order without an ORDER BY — so
+ * across pages the planner may repeat or skip rows, silently moving the number
+ * the guarantee is priced on. Harmless while one page covers the table; a
+ * stable sort is what keeps it harmless once it does not.
  */
 export async function fetchLeadVolumeAggregate(
   admin: SupabaseClient
 ): Promise<LeadVolumeAggregate> {
+  return (await fetchLeadVolumeData(admin)).aggregate;
+}
+
+export interface LeadVolumeData {
+  aggregate: LeadVolumeAggregate;
+  /**
+   * Postcode area (uppercase) -> lead count, bedroom-blind and across both
+   * products, for shading the selection map. Counts RETIRED leads too: the map
+   * answers "where do our leads come from", which is a question about the book,
+   * not about what is still routable.
+   */
+  areaCounts: Record<string, number>;
+}
+
+/**
+ * The single paginated pass over the lead book. Produces both structures the
+ * filtering surfaces need, so the customer page and the two admin pages cannot
+ * compute different numbers from the same table — the one-definition rule this
+ * module's header states. The filtering page previously ran its own copy of
+ * this loop, which is exactly how the two drifted.
+ */
+export async function fetchLeadVolumeData(
+  admin: SupabaseClient
+): Promise<LeadVolumeData> {
+  const retired = await fetchRetiredLeadIds(admin);
+
   const rows: LeadVolumeRow[] = [];
+  const areaCounts: Record<string, number> = {};
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await admin
       .from("leads")
-      .select("postcode_area, bedrooms, lead_type, created_at")
+      .select(
+        "id, postcode_area, bedrooms, lead_type, created_at, pool_expired_at, pool_entered_at, pool_entry_basis"
+      )
       .gte("created_at", INGEST_EPOCH_ISO)
+      .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error || !data || data.length === 0) break;
-    rows.push(...(data as LeadVolumeRow[]));
+    for (const r of data as RawLeadVolumeRow[]) {
+      rows.push({
+        postcode_area: r.postcode_area,
+        bedrooms: r.bedrooms,
+        lead_type: r.lead_type,
+        created_at: r.created_at,
+        retired: isRetired(r, retired),
+      });
+      const a = r.postcode_area?.trim().toUpperCase();
+      if (a) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
+    }
     if (data.length < PAGE) break;
   }
-  return buildLeadVolumeAggregate(rows);
+  return { aggregate: buildLeadVolumeAggregate(rows), areaCounts };
+}
+
+/** The `leads`-side columns `lead_retired_from_allocation()` reads. */
+interface RawLeadVolumeRow extends LeadVolumeRow {
+  id: string;
+  pool_expired_at: string | null;
+  pool_entered_at: string | null;
+  pool_entry_basis: string | null;
+}
+
+/**
+ * JS mirror of `lead_retired_from_allocation()` (0073 §9), which is
+ * `service_role`-only and cannot be called per row from PostgREST anyway.
+ * The two `leads`-column branches are evaluated here; the assignment branch
+ * needs `claimed_from_pool_at`, which is why the claimed ids are fetched once
+ * up front rather than joined per row.
+ */
+function isRetired(row: RawLeadVolumeRow, claimedLeadIds: Set<string>): boolean {
+  if (row.pool_expired_at != null) return true;
+  if (row.pool_entered_at != null && row.pool_entry_basis === "ignored") {
+    return true;
+  }
+  return claimedLeadIds.has(row.id);
+}
+
+/**
+ * Lead ids with at least one claimed-from-pool assignment. Claiming is rare by
+ * design (§19) so this set stays small, but it is paginated on the same stable
+ * sort as the main read for the same reason.
+ */
+async function fetchRetiredLeadIds(admin: SupabaseClient): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await admin
+      .from("lead_assignments")
+      .select("lead_id")
+      .not("claimed_from_pool_at", "is", null)
+      .order("lead_id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    for (const r of data as { lead_id: string }[]) ids.add(r.lead_id);
+    if (data.length < PAGE) break;
+  }
+  return ids;
 }
