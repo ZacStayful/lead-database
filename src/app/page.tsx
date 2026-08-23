@@ -54,7 +54,7 @@ function Count({ n }: { n: number }) {
 const FAQ: { q: string; a: React.ReactNode }[] = [
   {
     q: "Can you guarantee 20 leads a month?",
-    a: "We only take on customers when we know we can fill the demand. Stayful assesses available lead volume before onboarding anyone new, so what's estimated is what's delivered. In the rare event we fall short in a billing period, the shortfall is credited and those leads are owed to you — you never pay for leads you don't receive.",
+    a: "We only take on customers when we know we can fill the demand — Stayful assesses available lead volume before onboarding anyone new, so your monthly allocation is what we're working to deliver. Your subscription buys that many lead credits and they don't expire: if a quiet month delivers fewer, the unused credits carry forward to the next month rather than being lost. If you narrow your leads with a filter, the estimator above shows what that selection is expected to produce, and how likely that is, before you apply it.",
   },
   {
     q: "Are these genuinely interested landlords or just anyone who filled in a form?",
@@ -80,7 +80,7 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
   },
   {
     q: "Can I cancel? Is there a minimum commitment?",
-    a: "Cancel anytime from your billing settings. There is no minimum term and no cancellation penalty. If your monthly allocation isn't met in any billing period, the shortfall carries forward to the following month — you always receive the leads you have paid for.",
+    a: "Cancel anytime from your billing settings. There is no minimum term and no cancellation penalty. If your monthly allocation isn't met in a billing period, the unused credits carry forward to the following month and stay on your account.",
   },
   {
     q: "How is this different from running my own Google Ads?",
