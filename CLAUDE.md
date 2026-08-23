@@ -3136,3 +3136,151 @@ additive and inert on its own, and nothing in this feature writes a balance,
 counter, pacing or capacity column, so a lagging migration cannot affect lead
 allocation. 0096 (`sweep_api_tables`) follows it and is read by the pool sweep
 only — a lagging 0096 costs a day of housekeeping, nothing more.
+
+---
+
+## 28. Worked-lead conversion *(0097)* — admin only
+
+Operators report that lead quality and landlord intent are poor. The data says
+something different, and until this shipped nothing in the product said it:
+
+| Denominator | Assignments | Wins | Rate |
+|---|---|---|---|
+| Delivered | 311 | 5 | **1.6%** |
+| Contacted (`first_contacted_at` set) | 186 | 5 | 2.7% |
+| **Worked past cold** (`pipeline_stage <> 'cold'`) | **38** | **5** | **13.2%** |
+
+Leads an operator actually takes into their pipeline convert at 13.2%. Only 38 of
+311 delivered assignments got that far and 125 were never contacted at all, so
+the binding constraint is follow-through rather than landlord intent.
+
+**Nothing is granted to `authenticated`** — not the report, not the per-customer
+scoreboard, not even the pure helper. That absence is the mechanism, not an
+oversight: the sample is 5 wins across 3 operators, wins are self-reported (§10
+excluded win rate from customer benchmarks for exactly that reason), and one of
+the five carries `status = 'won'` with `pipeline_stage = 'abandoned'`. What has
+to be true before any of it is shown to a customer is listed at the end.
+
+### 28.1 — "Worked" now means two things, and they keep separate names
+
+`get_customer_scoreboard` has returned a column called `worked` since 0068,
+meaning **any** `detail_opened` / `tel_click` / `mailto_click` event, note or
+file. The new measure is a different, smaller population, and the definition
+swings the headline hard:
+
+| Definition | Worked | Wins | Rate |
+|---|---|---|---|
+| `pipeline_stage <> 'cold'` | 38 | 5 | 13.2% |
+| A contact click or a note exists | 95 | 4 | 4.2% |
+| `first_contacted_at` is set | 186 | 5 | 2.7% |
+
+So the new one is `worked_past_cold` **everywhere**, and 0068's `worked` keeps
+its name and its meaning — no figure already on `/admin/outcomes` moved. One word
+meaning two things on two panels is how two numbers stop reconciling and nobody
+can say which is wrong.
+
+**Why that denominator.** Moving a lead off `cold` is the operator declaring they
+have taken it into their pipeline. §21 warns that `status = 'contacted'` measures
+record-keeping rather than work, and stage is hand-settable through the same
+PATCH route — but the bias runs the safe way: advancing stages without doing the
+work **inflates the denominator and depresses the rate**, so 13.2% is
+conservative against padding. ⚠️ The distortion that does flatter it is the
+opposite one — an operator who works leads in their own CRM and never updates the
+stage is excluded entirely. That caveat is rendered next to the number and must
+stay there.
+
+`public.assignment_worked_past_cold(text)` is the single definition, asserted in
+both report functions and mirrored in `src/lib/workedConversion.ts`. Blank and
+null are false on **both** sides: neither can occur in the column (NOT NULL,
+defaulted, CHECK-constrained) but the TypeScript half is fed from API rows where
+they can, and two halves that disagree on any input are not one definition.
+
+### 28.2 — Cohort maturity is part of the result, not a footnote
+
+Time from assignment to win, all five: **2, 2, 10, 22, 24.** `MATURITY_DAYS` is
+30. A cohort is mature only when **every** assignment in it is at least 30 days
+old — `<=` at the boundary, because a strict comparison matures every cohort a
+day late and nobody would ever notice in the rendered output.
+
+Read raw, the two cohorts that exist say 19.0% (July) then 5.9% (August), which
+looks like a collapse and is almost entirely August being three weeks old. So
+`mature` is returned per row and callers must respect it, the same way
+`recycling_basis` distinguishes `observed` from `estimated` (§18.2).
+
+⚠️ **On today's data no cohort is mature yet** — July's newest assignment is 31
+July. That is the rule working, not a bug: the headline comes from the all-time
+total row, which is why that row covers **every** assignment rather than mature
+cohorts only. Its own `mature` flag is false whenever an open cohort contributes,
+which is what stops it being quoted as settled.
+
+`worked_past_cold` is evaluated **as of now**, not as of then, so a July lead
+worked in September counts in the July cohort and even a settled cohort's rate
+can drift upward. For a cohort keyed on delivery date that is the intended
+reading, and it is stated where the table renders.
+
+### 28.3 — `thin` is an honesty flag, not a privacy gate
+
+Below 20 worked, 3 wins or 3 distinct operators, **both rates come back NULL**
+and render as an em dash. Null rather than 0 throughout: a suppressed rate shown
+as 0% is the failure §10 named. Nothing is published, so this is about not
+quoting a rate off three rows — if this ever becomes customer-facing it needs
+§20's k-anonymity treatment as well, which is a stricter and separate question.
+
+Both live cohorts are currently `thin` (July has 4 wins across 2 operators,
+August 1 across 1); only the pooled total row clears all three floors.
+
+### 28.4 — No snapshot table, unlike 0070 / 0072 / 0081
+
+Those exist because they read live state and **cannot be backfilled** — a missed
+cron is a permanent hole. This is derived entirely from durable columns on
+`lead_assignments` (`assigned_at`, `pipeline_stage`, `status`), so any cohort can
+be recomputed at any time and the series can never develop one. A snapshot table
+plus a cron would buy nothing and add a failure mode.
+
+### 28.5 — `get_customer_scoreboard` was dropped and recreated
+
+⚠️ Adding columns to a `RETURNS TABLE` function is a return-type change and
+`create or replace` fails with **42P13**. The drop discards grants
+unconditionally (§11, the 0028 → 0038 → 0049 trap), so they are re-asserted in
+the same file. Everything else in that function is byte-identical to 0068.
+
+### What would have to be true before showing customers
+
+1. At least two **mature** cohorts, so there is a trend rather than one reading.
+2. The `thin` flag clear on the mature series.
+3. Every win corroborated — `evidence_level = 'strong'` in
+   `get_outcome_evidence()`, and the `won` + `abandoned` row resolved.
+4. A decision on the self-reporting caveat, since §10 excluded win rate from
+   customer-facing benchmarks for precisely this reason.
+
+If it ships, `/dashboard/leaderboard` is the natural home (§20) and its rule that
+**it does not rank anybody** applies unchanged.
+
+### Verification
+
+All 93 migrations applied to a scratch Postgres 16 from empty, then 0097
+re-applied for idempotency. Grants asserted on all three functions —
+`authenticated` and `anon` false, `service_role` true — **after** the
+drop/recreate. The maturity boundary was exercised at 29/30/31 days (the `<`
+version was caught this way and fixed), the helper at `cold`/blank/null/every
+real stage (the blank case was caught this way and fixed), and each of the three
+`thin` floors independently, confirming the rate goes null rather than zero. A
+GR lead in the same window was confirmed absent from the management figures
+(invariant 6).
+
+The function body was then run read-only against production and reproduces the
+table above exactly: 311 / 186 / 38 / 5, 1.6% and 13.2%, three operators, total
+row not thin, **both** cohorts open and thin.
+
+`npm run test` (80 passing, 15 new), `npm run lint`, `npm run typecheck` and
+`npm run build` all clean. The two new unit tests for the mirrored boundary and
+blank handling were confirmed to **fail** against the pre-fix implementations
+before being kept.
+
+### Deployment order — migration BEFORE code
+
+0097 first. It is purely additive — two new functions and two new columns on an
+existing report, nothing touching a balance, counter, pacing or capacity column —
+so a lagging migration cannot affect lead allocation and `/admin/outcomes`
+degrades to its unavailable state rather than erroring. Code first would query
+functions that do not exist.

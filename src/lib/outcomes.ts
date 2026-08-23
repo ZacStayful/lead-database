@@ -1,5 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { LeadType } from "@/lib/types";
+import type {
+  WorkedConversion,
+  WorkedConversionRow,
+} from "@/lib/workedConversion";
 
 /**
  * Everything the admin outcome view reads.
@@ -37,8 +41,18 @@ export interface ScoreboardRow {
   businessName: string;
   monthlyAllocation: number | null;
   delivered: number;
+  /**
+   * Any activity at all — an open, a contact click, a note or a file.
+   *
+   * NOT the same population as workedPastCold below, and deliberately kept
+   * under its original name and meaning so no figure already on this page
+   * moves. Live: 95 assignments here against 38 there. See 0097 decision 1.
+   */
   worked: number;
   workedRate: number | null;
+  /** Advanced out of cold into the operator's own pipeline. The 13.2% denominator. */
+  workedPastCold: number;
+  winsPerWorkedPastCold: number | null;
   attempted: number;
   wins: number;
   winsPerAttempted: number | null;
@@ -139,6 +153,8 @@ export async function getOutcomeOverview(): Promise<OutcomeOverview> {
       delivered: n(r.delivered),
       worked: n(r.worked),
       workedRate: nOrNull(r.worked_rate),
+      workedPastCold: n(r.worked_past_cold),
+      winsPerWorkedPastCold: nOrNull(r.wins_per_worked_past_cold),
       attempted: n(r.attempted),
       wins: n(r.wins),
       winsPerAttempted: nOrNull(r.wins_per_attempted),
@@ -315,5 +331,77 @@ export async function getPauseInsight(): Promise<PauseInsight> {
         businessName: r.business_name,
         comment: r.cancellation_comment as string,
       })),
+  };
+}
+
+/**
+ * Worked-lead conversion (0097).
+ *
+ * A SEPARATE export rather than a fifth call inside getOutcomeOverview, for the
+ * reason getPauseInsight already gives: that function's all-or-nothing
+ * Promise.all makes every panel unavailable if any one RPC fails, which is
+ * right for four things that shipped as one release and wrong for something
+ * shipping later. Bundling this in would take Wins, the scoreboard, the
+ * evidence queue and duplicates dark on any environment where 0097 has not been
+ * applied yet.
+ *
+ * Management only. The GR pipeline is a viewing-to-contract sequence with its
+ * own stages and its own economics (§14), so blending the two would produce a
+ * rate that describes neither.
+ */
+export async function getWorkedConversion(): Promise<WorkedConversion> {
+  const admin = createAdminClient();
+  const empty: WorkedConversion = {
+    unavailable: true,
+    total: null,
+    cohorts: [],
+    corroboratedWins: 0,
+  };
+
+  const [convRes, evidenceRes] = await Promise.all([
+    admin.rpc("get_worked_conversion", { p_lead_type: "management" }),
+    admin.rpc("get_outcome_evidence"),
+  ]);
+
+  if (convRes.error) {
+    console.error("[outcomes] worked conversion unavailable", convRes.error);
+    return empty;
+  }
+
+  const rows: WorkedConversionRow[] = (
+    (convRes.data ?? []) as Record<string, unknown>[]
+  ).map((r) => ({
+    cohortMonth: sOrNull(r.cohort_month),
+    delivered: n(r.delivered),
+    contacted: n(r.contacted),
+    workedPastCold: n(r.worked_past_cold),
+    won: n(r.won),
+    // nOrNull, never n(): a suppressed rate must stay null rather than
+    // collapsing to 0, which would read as "nobody converts" (§10).
+    winRateDelivered: nOrNull(r.win_rate_delivered),
+    winRateWorked: nOrNull(r.win_rate_worked),
+    operators: n(r.operators),
+    mature: Boolean(r.mature),
+    thin: Boolean(r.thin),
+  }));
+
+  // How much of the proof is actually corroborated. Wins are self-reported, and
+  // §10 excluded win rate from customer-facing benchmarks for exactly that
+  // reason — this is the number that decides when this metric is fit to show
+  // anybody. Best-effort: an evidence query that fails costs the count, not the
+  // whole panel.
+  const corroboratedWins = evidenceRes.error
+    ? 0
+    : ((evidenceRes.data ?? []) as Record<string, unknown>[]).filter(
+        (r) => r.status === "won" && r.evidence_level === "strong"
+      ).length;
+
+  return {
+    unavailable: false,
+    total: rows.find((r) => r.cohortMonth === null) ?? null,
+    cohorts: rows
+      .filter((r) => r.cohortMonth !== null)
+      .sort((a, b) => (a.cohortMonth ?? "").localeCompare(b.cohortMonth ?? "")),
+    corroboratedWins,
   };
 }

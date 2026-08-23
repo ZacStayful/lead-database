@@ -1,8 +1,16 @@
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
-import { getOutcomeOverview, getPauseInsight } from "@/lib/outcomes";
+import {
+  getOutcomeOverview,
+  getPauseInsight,
+  getWorkedConversion,
+} from "@/lib/outcomes";
 import { formatDate, formatGBP } from "@/lib/utils";
 import { pauseReasonLabel } from "@/lib/pauseOptions";
+import {
+  MATURITY_DAYS,
+  WORKED_CONVERSION_FLOORS,
+} from "@/lib/workedConversion";
 
 const PAUSE_OUTCOME_LABEL: Record<string, string> = {
   active: "Still paused",
@@ -36,11 +44,57 @@ function pct(v: number | null): string {
   return v == null ? "—" : `${Math.round(v * 100)}%`;
 }
 
+/**
+ * get_worked_conversion returns percentages already scaled 0-100, where the
+ * scoreboard's rates are 0-1 fractions. Two helpers rather than one so neither
+ * call site has to remember which shape it is holding.
+ *
+ * Null renders as an em dash, never 0% — a suppressed rate shown as zero is the
+ * failure §10 named when it explained why benchmarks are withheld at launch
+ * rather than displayed empty.
+ */
+function pct100(v: number | null): string {
+  return v == null ? "—" : `${v}%`;
+}
+
+/** One figure in the conversion funnel. Mirrors the stat tiles on /admin. */
+function Figure({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+}) {
+  return (
+    <div>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-2xl font-semibold tabular-nums">{value}</dd>
+      {note && <p className="text-xs text-muted-foreground">{note}</p>}
+    </div>
+  );
+}
+
+function cohortLabel(month: string): string {
+  const d = new Date(month);
+  return isNaN(d.getTime())
+    ? month
+    : d.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+}
+
 export default async function AdminOutcomesPage() {
   // Fetched independently: an unapplied 0077 must cost this one block, not the
   // whole page. See getPauseInsight.
-  const [{ unavailable, wins, scoreboard, needsReview, duplicates }, pauses] =
-    await Promise.all([getOutcomeOverview(), getPauseInsight()]);
+  const [
+    { unavailable, wins, scoreboard, needsReview, duplicates },
+    pauses,
+    conversion,
+  ] = await Promise.all([
+    getOutcomeOverview(),
+    getPauseInsight(),
+    getWorkedConversion(),
+  ]);
 
   if (unavailable) {
     return (
@@ -67,6 +121,142 @@ export default async function AdminOutcomesPage() {
           What happened to the leads after they were sold.
         </p>
       </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {!conversion.unavailable && conversion.total && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">
+            Do the leads convert when they are worked?
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Both rates, always. The gap between them is the finding: leads an
+            operator takes into their pipeline convert many times better than
+            the book as a whole, and very few of them get that far. Either
+            number on its own misleads in a different direction.
+          </p>
+
+          <Card>
+            <CardContent className="p-5">
+              <dl className="grid gap-4 sm:grid-cols-4">
+              <Figure label="Delivered" value={String(conversion.total.delivered)} />
+              <Figure
+                label="Contacted"
+                value={String(conversion.total.contacted)}
+                note={pct100(
+                  conversion.total.delivered > 0
+                    ? Math.round(
+                        (conversion.total.contacted /
+                          conversion.total.delivered) *
+                          1000
+                      ) / 10
+                    : null
+                )}
+              />
+              <Figure
+                label="Worked past cold"
+                value={String(conversion.total.workedPastCold)}
+                note={`win rate ${pct100(conversion.total.winRateWorked)}`}
+              />
+              <Figure
+                label="Won"
+                value={String(conversion.total.won)}
+                note={`${pct100(conversion.total.winRateDelivered)} of delivered`}
+              />
+              </dl>
+            </CardContent>
+          </Card>
+
+          <p className="text-xs text-muted-foreground">
+            &ldquo;Worked past cold&rdquo; means the operator moved the lead out
+            of <span className="font-medium">cold</span> into their own
+            pipeline. It is a different, smaller population than the{" "}
+            <span className="font-medium">Worked</span> column in the scoreboard
+            below, which counts any open, click, note or file. Advancing a stage
+            without doing the work would enlarge this denominator and{" "}
+            <em>depress</em> the rate, so it is conservative against padding —
+            but an operator who works leads in their own CRM and never updates
+            the stage is excluded from it entirely, which flatters it. Wins are
+            self-reported: {conversion.corroboratedWins} of{" "}
+            {conversion.total.won} carry strong supporting evidence.
+          </p>
+
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b-[0.5px] border-border text-xs text-muted-foreground">
+                      <th className="px-4 py-2 font-normal">Cohort</th>
+                      <th className="px-4 py-2 font-normal">Delivered</th>
+                      <th className="px-4 py-2 font-normal">Contacted</th>
+                      <th className="px-4 py-2 font-normal">Worked past cold</th>
+                      <th className="px-4 py-2 font-normal">Won</th>
+                      <th className="px-4 py-2 font-normal">Win rate of worked</th>
+                      <th className="px-4 py-2 font-normal">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {conversion.cohorts.map((c) => (
+                      <tr
+                        key={c.cohortMonth}
+                        className="border-b-[0.5px] border-border last:border-0"
+                      >
+                        <td className="px-4 py-2.5 font-medium">
+                          {cohortLabel(c.cohortMonth as string)}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums">{c.delivered}</td>
+                        <td className="px-4 py-2.5 tabular-nums">{c.contacted}</td>
+                        <td className="px-4 py-2.5 tabular-nums">
+                          {c.workedPastCold}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums font-medium">
+                          {c.won}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums">
+                          {pct100(c.winRateWorked)}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className="flex flex-wrap gap-1">
+                            {!c.mature && (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+                                Still open
+                              </span>
+                            )}
+                            {c.thin && (
+                              <span className="rounded-full bg-black/[0.06] px-2 py-0.5 text-xs text-muted-foreground">
+                                Too few to read
+                              </span>
+                            )}
+                            {c.mature && !c.thin && (
+                              <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs text-brand">
+                                Settled
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <p className="text-xs text-muted-foreground">
+            A cohort is <span className="font-medium">still open</span> until
+            every lead in it is {MATURITY_DAYS} days old — wins have taken up to
+            24 days, so a young cohort always understates itself and a raw
+            month-on-month comparison reads as a collapse that is not there. It
+            is <span className="font-medium">too few to read</span> below{" "}
+            {WORKED_CONVERSION_FLOORS.minWorked} worked,{" "}
+            {WORKED_CONVERSION_FLOORS.minWins} wins and{" "}
+            {WORKED_CONVERSION_FLOORS.minOperators} operators, where the rate is
+            withheld rather than shown. Leads are counted in the month they were
+            delivered but their status is read today, so a cohort&rsquo;s rate
+            can still rise after it settles.
+          </p>
+        </section>
+      )}
 
       {/* ---------------------------------------------------------------- */}
       {!pauses.unavailable && (
@@ -265,7 +455,10 @@ export default async function AdminOutcomesPage() {
         <p className="text-sm text-muted-foreground">
           Several columns rather than one score, on purpose: the operator who
           converts best and the one who works hardest are rarely the same person,
-          and a single ranking number would pick one without saying so.
+          and a single ranking number would pick one without saying so.{" "}
+          <span className="font-medium">Worked</span> is any activity at all;{" "}
+          <span className="font-medium">Past cold</span> is the narrower
+          measure the conversion figures above use.
         </p>
         <Card>
           <CardContent className="p-0">
@@ -276,6 +469,7 @@ export default async function AdminOutcomesPage() {
                     <th className="px-4 py-2 font-normal">Customer</th>
                     <th className="px-4 py-2 font-normal">Delivered</th>
                     <th className="px-4 py-2 font-normal">Worked</th>
+                    <th className="px-4 py-2 font-normal">Past cold</th>
                     <th className="px-4 py-2 font-normal">Attempted</th>
                     <th className="px-4 py-2 font-normal">Wins</th>
                     <th className="px-4 py-2 font-normal">Win rate</th>
@@ -301,6 +495,12 @@ export default async function AdminOutcomesPage() {
                         {r.worked}{" "}
                         <span className="text-muted-foreground">
                           ({pct(r.workedRate)})
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums">
+                        {r.workedPastCold}{" "}
+                        <span className="text-muted-foreground">
+                          ({pct(r.winsPerWorkedPastCold)} won)
                         </span>
                       </td>
                       <td className="px-4 py-2.5 tabular-nums">{r.attempted}</td>
