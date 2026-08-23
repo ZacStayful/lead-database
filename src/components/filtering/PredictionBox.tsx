@@ -94,8 +94,8 @@ export function PredictionBox({
             of {allocation}
           </span>
           . This selection is too small to support your full allocation, so the
-          number we can guarantee drops with it. Adding areas raises the
-          guarantee and lowers the cost per lead.
+          number you can expect drops with it. Adding areas raises the expected
+          volume and lowers the cost per lead.
         </p>
         <VolumeBar
           rate={prediction.displayRate}
