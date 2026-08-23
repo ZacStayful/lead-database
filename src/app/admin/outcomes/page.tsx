@@ -189,6 +189,8 @@ export default async function AdminOutcomesPage() {
                       <th className="px-4 py-2 font-normal">Cohort</th>
                       <th className="px-4 py-2 font-normal">Delivered</th>
                       <th className="px-4 py-2 font-normal">Contacted</th>
+                      <th className="px-4 py-2 font-normal">Opened (ever)</th>
+                      <th className="px-4 py-2 font-normal">Opened in 7 days</th>
                       <th className="px-4 py-2 font-normal">Worked past cold</th>
                       <th className="px-4 py-2 font-normal">Won</th>
                       <th className="px-4 py-2 font-normal">Win rate of worked</th>
@@ -206,6 +208,18 @@ export default async function AdminOutcomesPage() {
                         </td>
                         <td className="px-4 py-2.5 tabular-nums">{c.delivered}</td>
                         <td className="px-4 py-2.5 tabular-nums">{c.contacted}</td>
+                        <td className="px-4 py-2.5 tabular-nums">
+                          {pct100(c.openRateEver)}
+                          {!c.openDataComplete && (
+                            <span className="text-muted-foreground"> (floor)</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums">
+                          {pct100(c.openRatePrompt)}
+                          {!c.openDataComplete && (
+                            <span className="text-muted-foreground"> (floor)</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5 tabular-nums">
                           {c.workedPastCold}
                         </td>
@@ -254,6 +268,22 @@ export default async function AdminOutcomesPage() {
             withheld rather than shown. Leads are counted in the month they were
             delivered but their status is read today, so a cohort&rsquo;s rate
             can still rise after it settles.
+          </p>
+
+          <p className="text-xs text-muted-foreground">
+            Two open rates, because only one of them can be compared month to
+            month. <span className="font-medium">Opened (ever)</span> drifts
+            upward forever — a July lead opened in September moves July&apos;s
+            figure. <span className="font-medium">Opened in 7 days</span> has a
+            window that closes, so it settles and stays comparable, and it
+            measures responsiveness rather than accumulated curiosity. A month
+            marked <span className="font-medium">floor</span> began before
+            telemetry did on 27 July 2026: a lead delivered on the 5th could not
+            be recorded as opened until 22 days later, so it fails the 7-day
+            test however promptly it was really read. Those figures are
+            understatements, never overstatements — and never a basis for a
+            month-on-month comparison. Opening is counted from the lead page
+            only, which is why this differs from the leaderboard.
           </p>
         </section>
       )}

@@ -380,6 +380,11 @@ export async function getWorkedConversion(): Promise<WorkedConversion> {
     // collapsing to 0, which would read as "nobody converts" (§10).
     winRateDelivered: nOrNull(r.win_rate_delivered),
     winRateWorked: nOrNull(r.win_rate_worked),
+    opened: n(r.opened),
+    openRateEver: nOrNull(r.open_rate_ever),
+    openedWithin7d: n(r.opened_within_7d),
+    openRatePrompt: nOrNull(r.open_rate_prompt),
+    openDataComplete: Boolean(r.open_data_complete),
     operators: n(r.operators),
     mature: Boolean(r.mature),
     thin: Boolean(r.thin),

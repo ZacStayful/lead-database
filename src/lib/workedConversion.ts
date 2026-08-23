@@ -118,6 +118,24 @@ export interface WorkedConversionRow {
   /** Null when `thin`, or when the denominator is zero. Never 0 as a stand-in. */
   winRateDelivered: number | null;
   winRateWorked: number | null;
+  /** Ever opened. DRIFTS UPWARD — a July lead opened in September moves July. */
+  opened: number;
+  openRateEver: number | null;
+  /**
+   * Opened within 7 days of delivery. The window CLOSES, so this settles and
+   * stays comparable month to month — which the "ever" figure never can. It is
+   * also the better measure: operator responsiveness rather than accumulated
+   * curiosity. Shown beside the other under the §18.1/§21 two-numbers rule.
+   */
+  openedWithin7d: number;
+  openRatePrompt: number | null;
+  /**
+   * False for any month that began before telemetry did (27 July 2026). Both
+   * open rates are FLOORS for such a month — a lead delivered on 5 July could
+   * not be recorded as opened until 22 days later, so it fails the 7-day test
+   * however promptly it was really read. Never compute a delta across this.
+   */
+  openDataComplete: boolean;
   /** Distinct customers carrying a win in this cohort. */
   operators: number;
   mature: boolean;

@@ -44,6 +44,8 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/cron/sweep-lead-pool` | `30 10 * * *` | Expired leads pool: enter, exit, expire (§19) |
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
+| `/api/cron/monthly-insights` | `30 9 2 * *` | 2nd of the month: per-customer insight email |
+| `/api/cron/parse-income-reports` | `0 12 * * *` | Read the Stayful analysis PDFs (§25) |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
@@ -412,6 +414,12 @@ for being new with no way to earn out of it.
   `claim_denied` exist on `lead_assignments` in production but in **no
   migration** and no code — left by an abandoned branch. Do not reference them;
   a schema rebuilt from `supabase/migrations/` will not have them.
+- ⚠️ **`customer_engagement_snapshots.lifetime_revenue_pence` is per CUSTOMER,
+  written identically to BOTH product rows** — its revenue subquery is not
+  filtered by `lead_type`. Summing across products double-counts. Contrast
+  `customer_commercial_snapshots.mrr_pence` (0099), which has the same grain
+  and the OPPOSITE rule: it is genuinely per product and must be summed. Both
+  columns now carry a `comment on column` saying so.
 - **`supabase/schema.sql`** is stale. Migrations are the source of truth.
 - **Admin shows "3 / 2 assigned"** on a reclaimed lead. Truthful, looks odd; the
   Reclaim history block on the lead detail page explains it. A **claimed pool
@@ -1175,8 +1183,9 @@ capacity that evaporates the moment they engage or leave.
 
 ### Churn
 
-`customer_engagement_snapshots` (0070) — weekly, per customer per product,
-rolling window plus lifetime figures. **The only part that cannot be
+`customer_engagement_snapshots` (**0064**, not 0070 — and written **daily**,
+not weekly, by `capture_engagement_snapshots(30)` from the escalation cron) —
+per customer per product, rolling window plus lifetime figures. **The only part that cannot be
 backfilled**, which is why it shipped ahead of anything that reads it.
 `get_customer_risk()` is stated rules, not a model: zero customers have ever
 cancelled, so there is nothing to fit. Re-engagement clears a flag by
@@ -3229,7 +3238,11 @@ quoting a rate off three rows — if this ever becomes customer-facing it needs
 Both live cohorts are currently `thin` (July has 4 wins across 2 operators,
 August 1 across 1); only the pooled total row clears all three floors.
 
-### 28.4 — No snapshot table, unlike 0070 / 0072 / 0081
+### 28.4 — No snapshot table, unlike 0064 / 0072 / 0081
+
+*(This heading said 0070 when 28 shipped, inheriting the error §18 Churn carried.
+`customer_engagement_snapshots` is **0064**, and it is written **daily**, not
+weekly.)*
 
 Those exist because they read live state and **cannot be backfilled** — a missed
 cron is a permanent hole. This is derived entirely from durable columns on
@@ -3284,3 +3297,229 @@ existing report, nothing touching a balance, counter, pacing or capacity column 
 so a lagging migration cannot affect lead allocation and `/admin/outcomes`
 degrades to its unavailable state rather than erroring. Code first would query
 functions that do not exist.
+
+---
+
+## 29. Month over month *(0098–0101)* — admin only
+
+§28 answered "do the leads convert when worked" (13.2% of leads worked past cold,
+against 1.6% of everything delivered). This answers "is it moving", on the thesis
+that **platform activity predicts retention and therefore lifetime value**, and
+that the same series says how healthy the customer base is in terms of reliable
+income.
+
+`/admin/trends` — income by month and activity by month. Nothing customer-facing,
+and **no `authenticated` grant on anything in these four migrations**.
+
+### 29.1 — Derive what is recomputable; capture only what is not
+
+§28.4's rule, applied. It cuts the work in three, and **the cut is also the
+labelling scheme**:
+
+| Block | Keyed on | Derivable? | Mechanism |
+|---|---|---|---|
+| Activity in month M | `lead_events.created_at`, `lead_notes.created_at` | Yes | `get_monthly_activity()` — function |
+| Cohort delivered in month M | `assigned_at`; state read **now** | Yes | `get_worked_conversion()` — function |
+| Commercial state at month end | the month | **No** | `customer_commercial_snapshots` — table |
+
+### 29.2 — ⚠️ The hazard: a month row has two kinds of column
+
+- **Cohort** — keyed on *delivery* month, state read now. **Drifts upward
+  forever**: a July lead worked in September moves July's number (§28.2).
+- **Activity** — keyed on *when it happened*. Settles when the month ends.
+
+Drafted on live data the two halves told **opposite stories for the same months**:
+
+| Month | Delivered | Worked | Won | Opens | Operators active |
+|---|---|---|---|---|---|
+| Jul 2026 | 169 | 21 | 4 | 101 | 8 |
+| Aug 2026 | 142 | 17 | 1 | **347** | **21** |
+
+The cohort half reads as a collapse (August being three weeks old). The activity
+half shows engagement climbing steeply. One row containing both is one a reader
+averages into a single wrong impression.
+
+Three things stop that: **two functions, never one row shape** (they are never
+unioned or joined on `month_start`); a **`basis`** column per row
+(`activity_in_month` / `cohort_delivered_in_month`), mirroring `recycling_basis`
+(§18.2) so the key survives into any later combined view; and **both readings of
+the drifting signal** (§29.3).
+
+⚠️ **The halves do not even cover the same days.** First assignment 4 July; first
+`lead_events` row **27 July**. So July's cohort columns cover 27 days and its
+activity columns cover **five** — much of August's apparent 3.4× is telemetry
+starting. `activity_days_covered` is returned per month, and the page marks a
+month partial below 80% coverage.
+
+### 29.3 — Two open rates, because only one can be compared
+
+| Column | Behaviour |
+|---|---|
+| `open_rate_ever` | Ever opened. **Drifts up forever.** Useful as a total, useless as a trend. |
+| `open_rate_prompt` | Opened within **7 days** of delivery. The window closes, so it **settles** — and it measures responsiveness rather than accumulated curiosity. |
+
+Live: 57.6% ever / 37.9% prompt overall; July 50.3 / 34.9, August 66.2 / 41.5.
+
+⚠️ `open_data_complete` is false for any month that began before telemetry did. A
+lead delivered on 5 July could not be recorded as opened until 22 days later, so
+it fails the 7-day test however promptly it was really read. Both rates are then
+**floors, never overstatements** — and never a basis for a delta.
+
+⚠️ **`detail_opened` alone, never `viewed_at OR detail_opened`.** §20's
+leaderboard uses the union; §11 says never treat them as equivalent. The two
+surfaces therefore disagree about "opened", which is fine — different
+populations — and is stated on both.
+
+### 29.4 — ⚠️ 0098 is the only part that changes live behaviour
+
+`lead_events` has permitted `stage_changed` since 0044 and **nothing had ever
+written one** — production carried 0. So pipeline movement was recorded nowhere:
+`pipeline_stage` is current state and `last_status_change_at` is overwritten.
+
+A **trigger** on `lead_assignments AFTER UPDATE OF pipeline_stage`, not a route
+insert, because it catches every writer — the precedent is 0073's
+`due_to_call_date_set_at`, chosen for exactly that reason.
+
+⚠️ **The `WHEN (new.pipeline_stage is distinct from old.pipeline_stage)` clause is
+the gaming guard, not decoration.** `AFTER UPDATE OF` fires whenever the column is
+in the target list even if unchanged, and the PATCH route always writes it when
+present. Without it, re-selecting the stage you are already on emits an event and
+buys another ten days of escalation protection — the loophole 0063's header warns
+about.
+
+**Two live readers were getting zero rows and now will not:**
+
+1. `get_assignment_engagement_scores` (0063) weights `stage_moved` at 0.35 and
+   **sums** matched weights; thresholds are 0.35 (day 10) and 0.45 (day 20), and
+   `passive_only` also flips false. Leads an operator is visibly advancing stop
+   being resold.
+2. `get_service_capacity`'s recycled-supply CTEs count `stage_changed` as worked,
+   feeding `unworked_rate` → `recycled_slots_per_month` → `sustainable_customers`.
+
+Measured: management `unworked_rate` would be 99.0% → 85.7% if every off-cold
+assignment had an event. ⚠️ **But it DRIFTS, it does not step** — those CTEs window
+on each assignment's *own* first ten days, so anything already past day 10 can
+never gain a qualifying event. Anyone watching for a step will conclude the
+trigger is broken.
+
+**No backfill.** The only candidate timestamp is `last_status_change_at`, which is
+overwritten, records a *status* change not a *stage* change, and decouples exactly
+on the mid-pipeline moves that are the new information. `stage_events_from` in
+`system_settings` records the start date so an earlier month reads "not recorded"
+rather than zero — the job `reclaim_enabled_from` (§7) and `contact_gate_from`
+(0079) already do.
+
+**Escape hatch:** `update engagement_weights set weight = 0 where signal =
+'stage_moved'` — admin-editable, no deploy. ⚠️ It reverts the escalation half only;
+the capacity half hardcodes the event list in SQL.
+
+### 29.5 — One MRR definition, three populations
+
+MRR was ~20 inline lines in `admin/page.tsx`, with a second derivation in
+`serviceHealth.ts` on the same page. `src/lib/mrr.ts` is now the single pricing
+definition.
+
+⚠️ **The prices stay in TypeScript and are never copied into SQL.** 0099 ships no
+capture function: the cron computes in TS and upserts. A SQL capture would have to
+hardcode £150/£300 beside `plans.ts` — creating the duplication the convention
+exists to prevent (§1 on what three copies of a price cost).
+
+**What was duplicated was the pricing, not the population.** `serviceHealth`
+keeps its own population — "what does losing this customer cost" is a different
+question from "what are we billing" — and only calls the shared pricer.
+
+⚠️ **Fixed in passing:** `serviceHealth.monthlyValue` priced GR with
+`planForAllocation`, the *management* table. Invisible only because both tables
+are £150/£300 today. The test for it is a regression guard for after a reprice,
+not proof — while the tables agree, no value assertion can tell the two apart.
+
+### 29.6 — Cadence: the current month is upserted daily
+
+Riding `escalate-leads` (`0 11 * * *`) beside the two captures already there,
+separately fallible. A missed day degrades the closing value by a day; a missed
+month-end cron leaves a permanent hole — and `capture-leaderboard` has already
+demonstrated a weekly cron missing (2 captures against ~6 expected Mondays).
+
+`complete` = the month is over **and** a capture landed on its final day.
+⚠️ The residual: the last capture runs at 11:00 UTC on the final day, so changes
+after that land in the next month's row. Do **not** add a month-end cron to close
+it — two writers for one row is the shape §23.6 warns about.
+
+### 29.7 — Cancellations become durable
+
+`customers.cancelled_at` / `gr_cancelled_at` are **nulled by the webhook** when a
+subscription returns to active, taking the feedback with them. So cancel → return
+→ cancel loses the first departure. `subscription_cancellations` (0100) mirrors
+`subscription_pauses` but **per product** (GR cancels independently).
+
+Idempotent by a **partial unique index** on `(customer_id, lead_type) where
+reinstated_at is null` — a cancellation is a *sequence*, and
+`cancel_at_period_end: true` fires repeatedly. Claim-by-write, the
+`credit_invoice()` discipline (§19.5).
+
+⚠️ **NOTHING MAY THROW OUT OF THE WEBHOOK** (§23.6). Every path in
+`cancellationEpisodes.ts` logs and returns, and the call site wraps in try/catch
+as well. Live state stays `customers.cancelled_at`; this is reporting only.
+
+Zero customers have ever cancelled, so it ships ahead of its reader — 0064's
+reason exactly.
+
+### 29.8 — What this deliberately does not claim
+
+- **No lifetime-value figure and no correlation panel.** Zero cancellations means
+  retention has nothing to fit; the position `get_customer_risk()` and
+  `pauseOutlook.ts` already take. An empty correlation chart is §10's
+  "You: 0%, Typical operator: 0%" in a different costume — **absent, not empty**.
+- **`payments` is not used.** 22 rows, three active subscribers have none, and
+  they are the longest-standing, so it understates worst where it matters.
+- **The first genuine month-on-month reading is around November**: the commercial
+  capture starts late August, so September is the first closed month and October
+  the second. The page says so rather than drawing a two-point line.
+
+### Verification
+
+All 97 migrations applied to a scratch Postgres 16 from empty, then all four
+re-applied for idempotency. Grants asserted on every new and recreated
+function — `authenticated` and `anon` false, `service_role` true — **after** the
+`get_worked_conversion` drop/recreate, which is its second. RLS confirmed on with
+**no policies** on both new tables. Exactly one `get_worked_conversion(lead_type)`
+survives. Trigger fire order confirmed: `mark_contacted` → `mark_won` →
+`records_event`.
+
+The trigger was driven through eight cases: a real move emits exactly one event
+with `{from,to}`; **a same-value write emits none** (the gaming guard); a
+status-only update emits none; a `won` stage emits one *and* fires §6A; a
+`tel_click` still flips status and produces no stage event; and §6's contacted
+flip still fires. Both new tables' CHECKs were exercised (`account_status` on a GR
+row, `paused` on a GR row, a non-first-of-month), and the partial unique index was
+confirmed to refuse a second open episode and accept one after `reinstated_at`.
+
+`get_worked_conversion` was run read-only against production and **still returns
+311 / 186 / 38 / 5, 1.6% and 13.2%** after the rewrite. `mrrTotals()` over the
+live customer rows reproduces £3,600 management / £150 GR / £600 paused across
+17 / 1 / 4 customers — identical to the SQL reproduction of the pre-refactor
+inline arithmetic, which is the whole point of extracting it.
+
+Two real bugs were caught by the tests before shipping: `leads_opened` counted
+distinct *event* ids rather than distinct assignments, making it identical to
+`opens`; and the MRR fixture exposed that 8×£300 + 9×£150 is £3,750, not £3,600.
+
+`npm run test` (105 passing, 25 new), `npm run lint`, `npm run typecheck` and
+`npm run build` all clean.
+
+### Deployment order — 0098 ALONE first, then the rest, then code
+
+1. Apply **0098 on its own** and wait 24h. It is the only behaviour change.
+2. Measure it: `/api/cron/escalate-leads?dryRun=true` returns per-assignment
+   `score` and `signals`, so the before/after diff *names* the affected
+   assignments; `get_service_capacity()` the same for `unworked_rate`. Record both
+   as a definition break at that date — the **second** on that table after 0084.
+3. Apply 0099, 0100, 0101.
+4. Deploy the code. `/admin/trends` degrades to its unavailable state rather than
+   erroring if a migration lags.
+5. Hit `/api/cron/escalate-leads` once on an admin session to seed the first
+   commercial row.
+
+**Do not retune escalation weights or thresholds in the same change.** One
+variable at a time — 0063's header already warns that moving a weight without
+re-reading the ladder sentence breaks it.

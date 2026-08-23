@@ -158,6 +158,12 @@ export interface Customer {
   // sales board at the moment it is requested; gates nothing else.
   cancel_at_period_end: boolean;
   gr_cancel_at_period_end: boolean;
+  // Stamped by the Stripe webhook, first cancellation winning (0064) — but
+  // ⚠️ NULLED again when a subscription returns to active, so a customer who
+  // cancels, comes back and cancels again loses the first date. That erasure is
+  // why subscription_cancellations (0100) exists; these stay the LIVE state.
+  cancelled_at: string | null;
+  gr_cancelled_at: string | null;
   // Link to the item on the Monday enquiries board representing this CUSTOMER
   // (0086) — not a lead, so unrelated to leads.monday_item_id. Best-effort and
   // deliberately not unique; monday_link_state records a collision rather than

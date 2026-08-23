@@ -5,6 +5,7 @@ import { isAdminUser } from "@/lib/auth";
 import { leadPriceFor } from "@/lib/plans";
 import { selectCombinedCandidates, completeAssignment } from "@/lib/ingest";
 import type { Lead, LeadType } from "@/lib/types";
+import { captureCustomerCommercial } from "@/lib/commercialCapture";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -381,6 +382,29 @@ async function handle(request: NextRequest) {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Monthly commercial capture (0099).
+  //
+  // The third capture riding this cron, and separately fallible for the same
+  // reason as the other two: the series are independent, so one failing must
+  // not cost another its reading.
+  //
+  // Upserts the CURRENT month's row, so the month closes with the last
+  // successful capture. Written in TypeScript rather than as a SQL capture
+  // function because MRR has no SQL definition — see src/lib/commercialCapture.ts.
+  // ---------------------------------------------------------------------
+  let commercialRows: number | null = null;
+  let commercialError: string | null = null;
+  if (!dryRun) {
+    try {
+      const result = await captureCustomerCommercial(admin);
+      commercialRows = result.rows;
+    } catch (err) {
+      commercialError = err instanceof Error ? err.message : String(err);
+      console.error("[escalate] commercial capture failed", err);
+    }
+  }
+
   return NextResponse.json({
     status: "ok",
     dry_run: dryRun,
@@ -395,6 +419,8 @@ async function handle(request: NextRequest) {
     snapshot_error: snapshotError,
     capacity_snapshot_rows: capacityRows,
     capacity_snapshot_error: capacityError,
+    commercial_snapshot_rows: commercialRows,
+    commercial_snapshot_error: commercialError,
   });
 }
 

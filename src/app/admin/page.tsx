@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
-import { planForAllocation, grPlanForAllocation } from "@/lib/plans";
+import { mrrTotals, poundsFromPence } from "@/lib/mrr";
 import { getCapacityStatus, getGrCapacityStatus } from "@/lib/capacity";
 import { getServiceHealth } from "@/lib/serviceHealth";
 import { ServiceHealthPanel } from "@/components/admin/ServiceHealthPanel";
@@ -124,28 +124,20 @@ export default async function AdminOverviewPage() {
   // and someone holding both is paying both fees, so they contribute twice. The
   // GR side is keyed on gr_stripe_subscription_id for the usual reason — the
   // management subscription id says nothing about whether GR is being billed.
-  const mgmtMrr = activeManagement
-    .filter((c) => c.stripe_subscription_id)
-    .reduce(
-      (sum, c) => sum + planForAllocation(c.monthly_allocation).priceGbp,
-      0
-    );
-  const grMrr = activeGr
-    .filter((c) => c.gr_stripe_subscription_id)
-    .reduce(
-      (sum, c) => sum + grPlanForAllocation(c.gr_monthly_allocation).priceGbp,
-      0
-    );
+  //
+  // The arithmetic moved to src/lib/mrr.ts so the monthly capture (0099) writes
+  // the same figures this tile renders. Two derivations of one number is how
+  // the stored series and the live page come to disagree — the discipline
+  // customer_can_see_pool_lead (§19.4) and announcementTargetsCustomer (§22)
+  // already follow. Populations are unchanged; only the copy is gone.
+  const totals = mrrTotals(customers);
+  const mgmtMrr = poundsFromPence(totals.managementPence);
+  const grMrr = poundsFromPence(totals.grPence);
   // Revenue that comes back when the current pauses end. Reported beside MRR,
   // never added to it: a paused subscription is billing nothing today, and
   // folding it into MRR is what made the figure wrong before 0077.
-  const pausedMrr = pausedManagement
-    .filter((c) => c.stripe_subscription_id)
-    .reduce(
-      (sum, c) => sum + planForAllocation(c.monthly_allocation).priceGbp,
-      0
-    );
-  const mrr = mgmtMrr + grMrr;
+  const pausedMrr = poundsFromPence(totals.pausedPence);
+  const mrr = poundsFromPence(totals.totalPence);
   const leadsThisMonth = customers.reduce(
     (sum, c) => sum + (c.leads_received_this_month ?? 0),
     0

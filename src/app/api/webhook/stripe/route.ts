@@ -19,6 +19,10 @@ import { provisionPaidSubscriber } from "@/lib/provisioning";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 import { applyPendingPlanChange } from "@/lib/planChanges";
 import type { LeadType } from "@/lib/types";
+import {
+  recordCancellation,
+  reinstateCancellation,
+} from "@/lib/cancellationEpisodes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +31,18 @@ export const dynamic = "force-dynamic";
 function toDateString(unixSeconds: number | null | undefined): string | null {
   if (!unixSeconds) return null;
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * The same conversion keeping the time of day, for timestamptz columns.
+ *
+ * Separate from toDateString because Monday date cells take YYYY-MM-DD (§23.3)
+ * while subscription_cancellations.effective_at is a timestamptz — truncating
+ * to a date there would silently move an end-of-service moment to midnight.
+ */
+function toIsoOrNull(unixSeconds: number | null | undefined): string | null {
+  if (!unixSeconds) return null;
+  return new Date(unixSeconds * 1000).toISOString();
 }
 
 /**
@@ -572,6 +588,57 @@ export async function POST(request: NextRequest) {
         //
         // This one call covers every subscription transition: management cancelled
         // -> Cancelled; GR cancelled on a management holder -> still Management
+        // Durable cancellation history (0100).
+        //
+        // customers.cancelled_at / gr_cancelled_at are the LIVE state and are
+        // nulled by the branches above when a subscription returns to active,
+        // taking the feedback and comment with them. This keeps the episode so a
+        // cancel -> return -> cancel customer does not lose the first departure.
+        //
+        // Placed AFTER the resume-detection block, which can clear paused_at
+        // including on a cancellation (§21's third case), and BEFORE the Monday
+        // hook so a Monday outage cannot cost the episode.
+        //
+        // ⚠️ Wrapped here as well as inside the helper. §23.6: nothing may throw
+        // out of this handler, because a throw deletes the stripe_events
+        // idempotency claim and Stripe redelivers an ALREADY-CREDITED invoice.
+        // Belt and braces, exactly as setEnquiryStatus and
+        // syncCustomerMondayStatus are wrapped. Do not "simplify" it.
+        if (existing?.id) {
+          const product: LeadType = isGuaranteedRent
+            ? "guaranteed_rent"
+            : "management";
+          const pendingCancel = sub.cancel_at_period_end === true;
+          try {
+            if (status === "canceled" || pendingCancel) {
+              await recordCancellation(
+                admin,
+                existing.id,
+                product,
+                {
+                  stripeSubscriptionId: sub.id,
+                  cancelledAt: status === "canceled" ? nowIso : null,
+                  effectiveAt:
+                    toIsoOrNull(sub.cancel_at) ??
+                    toIsoOrNull(sub.ended_at) ??
+                    null,
+                  feedback: sub.cancellation_details?.feedback ?? null,
+                  comment: sub.cancellation_details?.comment ?? null,
+                },
+                "stripe"
+              );
+            } else if (status === "active" && !pendingCancel) {
+              // The same condition the branches above use to clear cancelled_at
+              // and the feedback — the only genuine change of mind. Stamping
+              // reinstated_at takes the row out of the partial unique index so a
+              // later cancellation opens a fresh episode rather than colliding.
+              await reinstateCancellation(admin, existing.id, product, "stripe");
+            }
+          } catch (err) {
+            console.error("[stripe] cancellation episode hook failed", err);
+          }
+        }
+
         // Customer; GR-only cancelled -> Cancelled; re-subscribed -> back to
         // Management Customer; resumed early through the portal -> Management
         // Customer.

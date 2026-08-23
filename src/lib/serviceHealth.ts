@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { planForAllocation } from "@/lib/plans";
+import { planPricePence, poundsFromPence } from "@/lib/mrr";
 import type { LeadType } from "@/lib/types";
 
 /**
@@ -155,6 +155,13 @@ function toBand(value: unknown): RiskBand {
  * exactly the longest-standing customers. Plan price is what they are committed
  * to pay each month, which is the number that matters for "what does losing
  * them cost".
+ *
+ * ⚠️ The POPULATION here is deliberately not the one src/lib/mrr.ts uses, and
+ * the two must not be merged. This one comes from get_customer_risk() and
+ * answers "what does losing this customer cost" — a comped account with no
+ * Stripe subscription costs something to lose and bills nothing. mrrTotals()
+ * answers "what are we billing this month". What was duplicated and drifting
+ * was the PRICING, not the population, so only the pricing is shared.
  */
 function monthlyValue(
   holdsManagement: boolean,
@@ -163,8 +170,15 @@ function monthlyValue(
   grAllocation: number | null
 ): number {
   let total = 0;
-  if (holdsManagement) total += planForAllocation(managementAllocation ?? 0).priceGbp;
-  if (holdsGr) total += planForAllocation(grAllocation ?? 0).priceGbp;
+  if (holdsManagement)
+    total += poundsFromPence(planPricePence("management", managementAllocation));
+  // ⚠️ Was planForAllocation — the MANAGEMENT table — for the GR side. A real
+  // bug, invisible only because both plan tables are £150/£300 today; the
+  // moment either reprices, "revenue at risk" goes silently wrong on the page
+  // an admin opens when something IS wrong. Routed through planPricePence so a
+  // third copy of the pricing rule cannot exist (see src/lib/mrr.ts).
+  if (holdsGr)
+    total += poundsFromPence(planPricePence("guaranteed_rent", grAllocation));
   return total;
 }
 
