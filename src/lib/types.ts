@@ -103,6 +103,19 @@ export interface Customer {
   filter_selection_mode: "areas" | "radius" | string | null;
   filter_radius_outcode: string | null;
   filter_radius_miles: number | null;
+  // The accepted volume guarantee (0098). Derived only by filterGuarantee.ts
+  // and, like the columns above, meaningful only while filter_status is
+  // 'active' or 'pending_lift'. These are the CONTRACT: the panel shows the
+  // persisted figures, never a freshly computed quote, which would drift as
+  // ingest moves and show a guarantee the customer never agreed to.
+  filter_guaranteed_leads: number | null;
+  filter_guarantee_estimate: number | null;
+  filter_guarantee_likelihood_pct: number | null;
+  filter_guarantee_cost_per_lead_pence: number | null;
+  filter_guarantee_plan_price_pence: number | null;
+  filter_guarantee_accepted_at: string | null;
+  /** Cumulative leads credited for missed guarantees. Counts up only. */
+  filter_guarantee_credit: number;
   // Lead filtering (guaranteed-rent product) — gr_ mirror of the above.
   gr_filter_status: FilterStatus | string;
   gr_filter_areas: string[] | null;
@@ -113,6 +126,13 @@ export interface Customer {
   gr_filter_selection_mode: "areas" | "radius" | string | null;
   gr_filter_radius_outcode: string | null;
   gr_filter_radius_miles: number | null;
+  gr_filter_guaranteed_leads: number | null;
+  gr_filter_guarantee_estimate: number | null;
+  gr_filter_guarantee_likelihood_pct: number | null;
+  gr_filter_guarantee_cost_per_lead_pence: number | null;
+  gr_filter_guarantee_plan_price_pence: number | null;
+  gr_filter_guarantee_accepted_at: string | null;
+  gr_filter_guarantee_credit: number;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
