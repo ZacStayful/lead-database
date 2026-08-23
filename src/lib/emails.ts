@@ -409,6 +409,52 @@ export async function sendFilterLiftCompletedEmail(params: {
 }
 
 /**
+ * Filter guarantee shortfall credited — sent when a billing cycle delivered
+ * fewer leads than the customer's filter guarantee and the difference has been
+ * added to their balance.
+ *
+ * Deliberately not framed as an apology. The guarantee anticipates lean months;
+ * a credit is the mechanism working, and saying so keeps a short month from
+ * reading as a failure the customer needs to chase.
+ */
+export async function sendFilterGuaranteeCreditEmail(params: {
+  to: string;
+  name?: string | null;
+  leads: number;
+  leadTypeLabel: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, name, leads, leadTypeLabel } = params;
+  const plural = leads === 1 ? "lead" : "leads";
+  const subject = `${leads} ${plural} added to your balance`;
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Your guarantee, honoured</h1>
+    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">${name ? `Hi ${esc(name)},` : "Hi,"}</p>
+    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">
+      Last month your ${esc(leadTypeLabel)} filter produced fewer leads than the
+      ${leads === 1 ? "number" : "number"} we guaranteed, so we've added
+      <strong>${leads} ${plural}</strong> to your balance.
+    </p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">
+      ${leads === 1 ? "It carries" : "They carry"} forward on top of this month's allocation —
+      there's nothing for you to do. If your filter is coming up short every month,
+      widening it will raise the number we can guarantee and lower your cost per lead.
+    </p>
+    ${button(`${APP_URL}/dashboard/filtering`, "Review your filter")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
  * Inactivity nudge — a (Monday) reminder that the customer has leads still
  * awaiting a first follow-up. Grouped: one email covering all N waiting leads,
  * listing up to a handful by name/address and summarising the rest.
