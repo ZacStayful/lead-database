@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cityForArea } from "@/lib/postcode";
 import { distanceToNearestKm } from "@/lib/areaCentroids";
-import type { LeadType } from "@/lib/types";
+import { CONTENDED_FILTERED_CUSTOMERS, type LeadType } from "@/lib/types";
 
 /**
  * Predicting a lead filter's monthly volume from real ingest history.
@@ -55,6 +55,56 @@ export interface FilterSelection {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+}
+
+/**
+ * How many OTHER filtered customers already cover each postcode area, and the
+ * ceiling at which a lead is shared out rather than won.
+ *
+ * A lead reaches at most `maxPerLead` filtered customers, so once more than
+ * that many compete for one area, none of them can expect all of its volume.
+ * Below the ceiling nothing changes — every filtered customer covering an area
+ * can receive every lead in it, because there are enough slots to go round.
+ *
+ * Counts FILTERED customers only. Counting unfiltered ones as competitors would
+ * be wrong and badly so: they are eligible everywhere, so every area would look
+ * saturated and every quote would collapse — when in fact the engine can serve
+ * them from anywhere and a filtered customer's areas are not really contested
+ * by that demand at all.
+ */
+export interface AreaContention {
+  /** Uppercase postcode area -> number of filtered customers covering it. */
+  filteredCustomers: Record<string, number>;
+  /** CONTENDED_FILTERED_CUSTOMERS — the assignment ceiling for one lead. */
+  maxPerLead: number;
+  /**
+   * Filtered customers with no area restriction (a bedroom-only filter). They
+   * compete in every area, including ones no explicit filter names, so they are
+   * a floor under areas absent from `filteredCustomers` too.
+   */
+  everywhere?: number;
+}
+
+/**
+ * The share of an area's volume one more filtered customer can expect.
+ *
+ * 1.0 until the ceiling, then `maxPerLead / competitors` — the fraction of
+ * leads there are slots for. `competitors` includes the customer being quoted,
+ * which is what makes this answer "if I apply this filter, what do I get"
+ * rather than "what do the incumbents get".
+ */
+export function contentionShare(
+  area: string,
+  contention: AreaContention | null | undefined,
+  includeSelf = true
+): number {
+  if (!contention) return 1;
+  const key = area.toUpperCase();
+  const existing =
+    contention.filteredCustomers[key] ?? contention.everywhere ?? 0;
+  const competitors = existing + (includeSelf ? 1 : 0);
+  if (competitors <= contention.maxPerLead) return 1;
+  return contention.maxPerLead / competitors;
 }
 
 export interface VolumePrediction {
@@ -120,7 +170,8 @@ export function weeksElapsedSince(startIso: string, now: Date = new Date()): num
  */
 export function predictMonthlyVolume(
   volume: ProductVolume,
-  sel: FilterSelection
+  sel: FilterSelection,
+  contention?: AreaContention | null
 ): VolumePrediction {
   const wantedAreas =
     sel.areas.length > 0
@@ -130,13 +181,21 @@ export function predictMonthlyVolume(
   let matchingLeads = 0;
   for (const [area, beds] of Object.entries(volume.areaBedCounts)) {
     if (wantedAreas && !wantedAreas.has(area)) continue;
+    // Applied per AREA, not to the total: a filter spanning a crowded city and
+    // an empty county is only contended in the city, and averaging the two
+    // would understate one and overstate the other.
+    const share = contentionShare(area, contention);
     for (const [bed, count] of Object.entries(beds)) {
       const b = Number(bed);
       if (sel.minBedrooms != null && b < sel.minBedrooms) continue;
       if (sel.maxBedrooms != null && b > sel.maxBedrooms) continue;
-      matchingLeads += count;
+      matchingLeads += count * share;
     }
   }
+  // Whole leads: a share can make this fractional, and every downstream
+  // consumer — the reliability floor, the guarantee's negative binomial — is
+  // counting events, not expectations.
+  matchingLeads = Math.floor(matchingLeads);
 
   const monthlyRate =
     (matchingLeads / volume.weeksElapsed) * WEEKS_PER_MONTH;
@@ -386,6 +445,85 @@ function isRetired(row: RawLeadVolumeRow, claimedLeadIds: Set<string>): boolean 
     return true;
   }
   return claimedLeadIds.has(row.id);
+}
+
+/**
+ * Count, per postcode area, the filtered customers already competing for it.
+ *
+ * POPULATION: the stable half of routing eligibility — the product's
+ * subscription is live and a filter is on. Deliberately NOT `lead_balance > 0`,
+ * which `get_filtered_candidates_for_lead` also requires: a balance empties and
+ * refills through the month, so including it would make a customer's quoted
+ * volume jitter with other people's spending. Contention is a question about
+ * who is competing for these areas, not who happens to have credit this
+ * afternoon.
+ *
+ * Per invariant 6 the two products have separate populations, and per invariant
+ * 8 the GR side must never read `account_status`, which is management-only.
+ *
+ * `excludeCustomerId` drops the customer being quoted, so re-quoting an
+ * existing filter does not count them as their own competitor — the +1 for
+ * self is added by `contentionShare`.
+ */
+export async function fetchAreaContention(
+  admin: SupabaseClient,
+  leadType: LeadType,
+  excludeCustomerId?: string | null
+): Promise<AreaContention> {
+  const isGr = leadType === "guaranteed_rent";
+  const cols = isGr
+    ? { status: "gr_filter_status", areas: "gr_filter_areas" }
+    : { status: "filter_status", areas: "filter_areas" };
+
+  let query = admin
+    .from("customers")
+    .select(`id, ${cols.areas}, ${cols.status}`)
+    .in(cols.status, ["active", "pending_lift"]);
+
+  query = isGr
+    ? query.eq("gr_subscription_status", "active")
+    : query.eq("account_status", "active").eq("subscription_status", "active");
+
+  if (excludeCustomerId) query = query.neq("id", excludeCustomerId);
+
+  const { data, error } = await query;
+  const filteredCustomers: Record<string, number> = {};
+  if (error || !data) {
+    // Fail OPEN, deliberately. An empty contention map quotes the UNSHARED
+    // volume, which is the number this feature showed before contention
+    // existed — optimistic by at most the sharing factor. Failing closed would
+    // quote zero and refuse guarantees outright on a transient read error.
+    console.error("area contention read failed; quoting unshared", error);
+    return { filteredCustomers, maxPerLead: CONTENDED_FILTERED_CUSTOMERS };
+  }
+
+  // A filter with no areas is a bedroom-only filter: that customer is eligible
+  // in EVERY area and competes everywhere. Counted as a floor under every area
+  // rather than being silently ignored.
+  let everywhere = 0;
+  const rows = data as unknown as Record<string, unknown>[];
+  for (const row of rows) {
+    const areas = row[cols.areas] as string[] | null;
+    if (!areas || areas.length === 0) {
+      everywhere += 1;
+      continue;
+    }
+    for (const a of areas) {
+      const key = a?.trim().toUpperCase();
+      if (key) filteredCustomers[key] = (filteredCustomers[key] ?? 0) + 1;
+    }
+  }
+  if (everywhere > 0) {
+    for (const key of Object.keys(filteredCustomers)) {
+      filteredCustomers[key] += everywhere;
+    }
+  }
+
+  return {
+    filteredCustomers,
+    maxPerLead: CONTENDED_FILTERED_CUSTOMERS,
+    everywhere,
+  };
 }
 
 /**

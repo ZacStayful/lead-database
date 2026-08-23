@@ -10,6 +10,7 @@ import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import { syncStoredReport } from "@/lib/incomeReportStorage";
 import {
   DEFAULT_MAX_ASSIGNMENTS,
+  CONTENDED_FILTERED_CUSTOMERS,
   type Customer,
   type Lead,
   type LeadType,
@@ -142,10 +143,13 @@ function buildGuaranteedRentInsert(
  * priority_score desc, unfiltered by deficit desc).
  *
  * Per slot:
- *   1. If the top unfiltered candidate is at/beyond the critically-behind
- *      threshold, give the slot to them (floor override).
- *   2. Otherwise give it to the top filtered candidate.
- *   3. If no filtered candidate remains, fall back to unfiltered order.
+ *   1. If the lead is CONTENDED — CONTENDED_FILTERED_CUSTOMERS or more filtered
+ *      candidates matched it — every slot goes to a filtered customer and the
+ *      floor override is suppressed.
+ *   2. Otherwise, if the top unfiltered candidate is at/beyond the
+ *      critically-behind threshold, give the slot to them (floor override).
+ *   3. Otherwise give it to the top filtered candidate.
+ *   4. If no filtered candidate remains, fall back to unfiltered order.
  * A customer belongs to exactly one pool (filter is off or active/pending), so
  * consuming from the front of each list keeps assignments unique.
  */
@@ -158,12 +162,19 @@ export function selectCombinedCandidates(
   const u = [...unfiltered];
   const result: string[] = [];
 
+  // Measured on the pool as fetched, not on what is left mid-loop: the question
+  // is how many filtered customers wanted THIS lead, and shifting entries off
+  // the front as slots fill would answer a different one and let the override
+  // back in halfway through.
+  const contended = filtered.length >= CONTENDED_FILTERED_CUSTOMERS;
+
   while (result.length < max && (f.length > 0 || u.length > 0)) {
     const topUnfiltered = u[0];
     const topFiltered = f[0];
 
     // Postgres numeric is serialised as a string by PostgREST, so coerce.
     if (
+      !contended &&
       topUnfiltered &&
       Number(topUnfiltered.deficit) >= CRITICALLY_BEHIND_DEFICIT
     ) {
@@ -419,15 +430,20 @@ export async function autoAssignLead(
   }
 
   const leadType = lead.lead_type;
+
+  // Ask for enough candidates to SEE contention, not merely enough to fill the
+  // slots we currently have. A lead with three open slots and five filtered
+  // customers wanting it is contended, and asking for three would hide that.
+  const probe = Math.max(remaining, CONTENDED_FILTERED_CUSTOMERS);
   const [filteredRes, unfilteredRes] = await Promise.all([
     supabase.rpc("get_filtered_candidates_for_lead", {
       p_lead_id: lead.id,
-      p_max: remaining,
+      p_max: probe,
       p_lead_type: leadType,
     }),
     supabase.rpc("get_unfiltered_candidates_for_lead", {
       p_lead_id: lead.id,
-      p_max: remaining,
+      p_max: probe,
       p_lead_type: leadType,
     }),
   ]);
@@ -449,7 +465,32 @@ export async function autoAssignLead(
     deficit: number;
   }[];
 
-  const customerIds = selectCombinedCandidates(filtered, unfiltered, remaining);
+  // A contended lead opens its fourth slot NOW rather than after ten days of
+  // nobody working it. Escalation raises the cap for a lead going to waste
+  // (§18); this raises it for the opposite reason — provable, matching demand
+  // already queued — and stops at 4, the same first rung, so a lead can still
+  // reach 5 by escalating afterwards but never overshoots by both routes at
+  // once. Only ever raises: a lead an admin has already lifted is left alone.
+  let slots = remaining;
+  if (filtered.length >= CONTENDED_FILTERED_CUSTOMERS) {
+    const cap = lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS;
+    if (cap < CONTENDED_FILTERED_CUSTOMERS) {
+      const { error: capErr } = await supabase
+        .from("leads")
+        .update({ max_assignments: CONTENDED_FILTERED_CUSTOMERS })
+        .eq("id", lead.id)
+        .lt("max_assignments", CONTENDED_FILTERED_CUSTOMERS);
+      if (capErr) {
+        // Not fatal: assign into the slots we already have and let the next
+        // sweep raise the cap. Losing a slot is better than losing the lead.
+        console.error("contended cap raise failed; using existing slots", capErr);
+      } else {
+        slots = CONTENDED_FILTERED_CUSTOMERS - (lead.assignment_count ?? 0);
+      }
+    }
+  }
+
+  const customerIds = selectCombinedCandidates(filtered, unfiltered, slots);
 
   const price = leadPriceFor(leadType);
 

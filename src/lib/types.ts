@@ -467,6 +467,30 @@ export type LeadEventType =
  */
 export const DEFAULT_MAX_ASSIGNMENTS = 3;
 
+/**
+ * The number of filtered customers competing for one lead at which that lead
+ * becomes CONTENDED, and filtered customers take every slot.
+ *
+ * WHY FILTERED DEMAND OUTRANKS UNFILTERED DEMAND WHEN IT IS TIGHT
+ * The two candidate pools are not symmetric. An unfiltered customer's demand is
+ * elastic — any lead in the country satisfies it, so a slot lost here is a slot
+ * found somewhere else this week. A filtered customer's demand is inelastic:
+ * they can only ever be served from the areas they chose, and once those areas
+ * carry a guarantee, a slot lost is a promise broken. So when filtered demand
+ * for one lead reaches this ceiling, the critically-behind override stands
+ * down — the unfiltered customer it would have helped has a whole marketplace
+ * to be helped from, and the filtered ones do not.
+ *
+ * Set to the escalation ladder's first rung (§18: 3 -> 4 -> 5). A contended
+ * lead skips the ten-day wait for that fourth operator, because the demand
+ * escalation exists to find is already queued and provably matching.
+ *
+ * Lives here rather than in ingest.ts so filterPrediction.ts can read it
+ * without importing server-only code — that module is imported by client
+ * components and must stay free of the admin client.
+ */
+export const CONTENDED_FILTERED_CUSTOMERS = 4;
+
 export const ENGAGEMENT_EVENT_TYPES = [
   "detail_opened",
   "tel_click",
