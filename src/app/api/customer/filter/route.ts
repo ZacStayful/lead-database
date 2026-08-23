@@ -3,6 +3,12 @@ import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendFilterLiftScheduledEmail } from "@/lib/emails";
 import { formatDate } from "@/lib/utils";
+import {
+  fetchLeadVolumeAggregate,
+  fetchAreaContention,
+  predictMonthlyVolume,
+} from "@/lib/filterPrediction";
+import { forecastVolume } from "@/lib/filterForecast";
 import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -23,6 +29,12 @@ function cols(product: LeadType) {
       selectionMode: "gr_filter_selection_mode",
       radiusOutcode: "gr_filter_radius_outcode",
       radiusMiles: "gr_filter_radius_miles",
+      expectedLeads: "gr_filter_expected_leads",
+      forecastEstimate: "gr_filter_forecast_estimate",
+      forecastLikelihood: "gr_filter_forecast_likelihood_pct",
+      forecastCostPence: "gr_filter_forecast_cost_per_lead_pence",
+      forecastPricePence: "gr_filter_forecast_plan_price_pence",
+      forecastAcknowledgedAt: "gr_filter_forecast_acknowledged_at",
       anchor: "gr_billing_cycle_anchor" as keyof Customer,
       balance: "gr_lead_balance" as keyof Customer,
       allocation: "gr_monthly_allocation" as keyof Customer,
@@ -39,6 +51,12 @@ function cols(product: LeadType) {
     selectionMode: "filter_selection_mode",
     radiusOutcode: "filter_radius_outcode",
     radiusMiles: "filter_radius_miles",
+    expectedLeads: "filter_expected_leads",
+    forecastEstimate: "filter_forecast_estimate",
+    forecastLikelihood: "filter_forecast_likelihood_pct",
+    forecastCostPence: "filter_forecast_cost_per_lead_pence",
+    forecastPricePence: "filter_forecast_plan_price_pence",
+    forecastAcknowledgedAt: "filter_forecast_acknowledged_at",
     anchor: "billing_cycle_anchor" as keyof Customer,
     balance: "lead_balance" as keyof Customer,
     allocation: "monthly_allocation" as keyof Customer,
@@ -82,6 +100,8 @@ export async function POST(req: NextRequest) {
     selection_mode?: unknown;
     radius_outcode?: unknown;
     radius_miles?: unknown;
+    acknowledge_forecast?: unknown;
+    quoted_expected_leads?: unknown;
   };
   try {
     body = await req.json();
@@ -142,6 +162,62 @@ export async function POST(req: NextRequest) {
     const radiusMiles =
       selectionMode === "radius" ? toIntOrNull(body.radius_miles) : null;
 
+    // ---------------------------------------------------------------------
+    // Re-derive the forecast HERE. The client sends intent; the server sends
+    // the number.
+    //
+    // The panel computes the same forecast to render it, but a request can claim
+    // anything, and this one sets a price. Recomputing from the server's own
+    // normalised `areas` — the exact uppercased values about to be written to
+    // filter_areas and matched by get_filtered_candidates_for_lead — also means
+    // the quote and the routing cannot disagree about what was selected.
+    // ---------------------------------------------------------------------
+    const allocation = Number(customer[c.allocation] ?? 0);
+    const [aggregate, contention] = await Promise.all([
+      fetchLeadVolumeAggregate(admin),
+      fetchAreaContention(admin, product, customer.id),
+    ]);
+    const prediction = predictMonthlyVolume(
+      aggregate[product],
+      { areas, minBedrooms: min, maxBedrooms: max },
+      contention
+    );
+    const forecast = forecastVolume(prediction, allocation, product);
+
+    // Ingest moves between the panel rendering a forecast and the customer
+    // applying it. The acknowledgement is to a SPECIFIC number — the panel
+    // already voids its own when the selection changes — so a figure that has
+    // shifted underneath must be re-shown rather than quietly substituted.
+    //
+    // This check matters MORE now that nothing is credited, not less. When a
+    // shortfall was made good, being applied against a number you had not seen
+    // cost you nothing in the end. Now the number you were shown is the whole
+    // of what you were told, so it is the only thing there is to get right.
+    const quotedLeads = toIntOrNull(body.quoted_expected_leads);
+    if (quotedLeads !== null && quotedLeads !== forecast.expected) {
+      return NextResponse.json(
+        {
+          error:
+            "Lead volumes moved while you were choosing. Here is the current forecast.",
+          code: "forecast_changed",
+          forecast,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (forecast.reducesVolume && body.acknowledge_forecast !== true) {
+      return NextResponse.json(
+        {
+          error:
+            "Confirm you've read the expected lead volume to apply this filter.",
+          code: "forecast_not_acknowledged",
+          forecast,
+        },
+        { status: 400 }
+      );
+    }
+
     const update: Record<string, unknown> = {
       [c.status]: "active",
       [c.areas]: areas.length > 0 ? areas : null,
@@ -154,16 +230,36 @@ export async function POST(req: NextRequest) {
         radiusMiles !== null && radiusMiles > 0 && radiusMiles <= 200
           ? radiusMiles
           : null,
+      // From `forecast`, never from the body. Cleared when nothing is offerable
+      // so a stale figure cannot outlive the filter that produced it.
+      [c.expectedLeads]: forecast.offerable ? forecast.expected : null,
+      [c.forecastEstimate]: forecast.offerable ? forecast.estimate : null,
+      [c.forecastLikelihood]: forecast.offerable ? forecast.likelihoodPct : null,
+      [c.forecastCostPence]: forecast.offerable ? forecast.costPerLeadPence : null,
+      [c.forecastPricePence]: forecast.offerable ? forecast.planPricePence : null,
+      // Re-stamped on every apply, including an EDIT of a live filter: the areas
+      // changed, so this is a new forecast about a new selection. That is why it
+      // cannot share filter_enabled_at, which is deliberately preserved across
+      // edits below.
+      [c.forecastAcknowledgedAt]: forecast.offerable
+        ? new Date().toISOString()
+        : null,
       updated_at: new Date().toISOString(),
     };
 
     // A fresh enable (off -> active) stamps filter_enabled_at and immediately
     // forfeits any carried-forward credit surplus. Editing an already-active
     // filter keeps the original timestamp and balance.
+    //
+    // This is the plain clamp it always was. A previous version spared a
+    // portion of the balance from it, because part of the balance could be
+    // compensation we owed for missing a volume guarantee and confiscating that
+    // would have been indefensible. Nothing is owed now — a forecast creates no
+    // liability — so there is nothing to spare and the exception has gone with
+    // the column that tracked it.
     if (currentStatus === "off") {
       update[c.enabledAt] = new Date().toISOString();
       const balance = Number(customer[c.balance] ?? 0);
-      const allocation = Number(customer[c.allocation] ?? 0);
       update[c.balance] = Math.min(balance, allocation);
     }
 
@@ -174,7 +270,35 @@ export async function POST(req: NextRequest) {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
-    return NextResponse.json({ ok: true, status: "active" });
+
+    // History, best-effort. "You told me four a month" is worth being able to
+    // answer even though the answer now carries no liability — but a failure to
+    // RECORD it must never fail the apply the customer just made, so this is
+    // logged and swallowed. Nothing reads this table to decide anything.
+    if (forecast.offerable) {
+      const { error: auditError } = await admin
+        .from("filter_forecast_acknowledgements")
+        .insert({
+          customer_id: customer.id,
+          lead_type: product,
+          expected_leads: forecast.expected,
+          estimate: forecast.estimate,
+          likelihood_pct: forecast.likelihoodPct,
+          cost_per_lead_pence: forecast.costPerLeadPence,
+          plan_price_pence: forecast.planPricePence,
+          monthly_allocation: allocation,
+          areas: areas.length > 0 ? areas : null,
+          min_bedrooms: min,
+          max_bedrooms: max,
+          selection_mode: selectionMode,
+          acknowledged_by_user_id: user.id,
+        });
+      if (auditError) {
+        console.error("forecast acknowledgement audit insert failed", auditError);
+      }
+    }
+
+    return NextResponse.json({ ok: true, status: "active", forecast });
   }
 
   if (body.action === "lift") {

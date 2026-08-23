@@ -96,6 +96,24 @@ export function grPlanForAllocation(allocation: number): Plan {
 }
 
 /**
+ * The plan a customer's allocation buys, for either product.
+ *
+ * `planForAllocation` / `grPlanForAllocation` already exist and differ only in
+ * which table they read; every caller that is generic over `lead_type` would
+ * otherwise write the same two-line branch. Both products price identically
+ * today, so this looks redundant — it is not: invariant 6 requires the seam to
+ * exist so a future divergence has one place to land rather than several.
+ */
+export function planForProductAllocation(
+  leadType: LeadType | string | undefined,
+  allocation: number
+): Plan {
+  return leadType === "guaranteed_rent"
+    ? grPlanForAllocation(allocation)
+    : planForAllocation(allocation);
+}
+
+/**
  * Resolve the Stripe Price id for a customer's allocation.
  *
  * The £300/20 plan keeps its historical env var `STRIPE_MONTHLY_PRICE_ID` for

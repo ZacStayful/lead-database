@@ -33,6 +33,18 @@ export interface LeadFilterView {
   /** Radius details, only meaningful when selectionMode is "radius". */
   radiusOutcode: string | null;
   radiusMiles: number | null;
+  /**
+   * The volume forecast the customer was SHOWN (0098, renamed 0100) — not what
+   * today's volumes would quote. The two drift as ingest moves, and admin needs
+   * to see what was actually put in front of them to answer questions about it.
+   *
+   * A forecast, not a guarantee: expectedLeads is a lower bound and nothing is
+   * credited when a month falls short.
+   */
+  expectedLeads: number | null;
+  forecastCostPerLeadPence: number | null;
+  forecastLikelihoodPct: number | null;
+  forecastAcknowledgedAt: string | null;
 }
 
 export function isFilterActive(status?: string | null): boolean {
@@ -67,6 +79,11 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.filter_selection_mode ?? null,
       radiusOutcode: customer.filter_radius_outcode ?? null,
       radiusMiles: customer.filter_radius_miles ?? null,
+      expectedLeads: customer.filter_expected_leads ?? null,
+      forecastCostPerLeadPence:
+        customer.filter_forecast_cost_per_lead_pence ?? null,
+      forecastLikelihoodPct: customer.filter_forecast_likelihood_pct ?? null,
+      forecastAcknowledgedAt: customer.filter_forecast_acknowledged_at ?? null,
     });
   }
 
@@ -82,6 +99,12 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.gr_filter_selection_mode ?? null,
       radiusOutcode: customer.gr_filter_radius_outcode ?? null,
       radiusMiles: customer.gr_filter_radius_miles ?? null,
+      expectedLeads: customer.gr_filter_expected_leads ?? null,
+      forecastCostPerLeadPence:
+        customer.gr_filter_forecast_cost_per_lead_pence ?? null,
+      forecastLikelihoodPct:
+        customer.gr_filter_forecast_likelihood_pct ?? null,
+      forecastAcknowledgedAt: customer.gr_filter_forecast_acknowledged_at ?? null,
     });
   }
 
@@ -158,6 +181,11 @@ export function filterKindLabel(f: LeadFilterView): string {
   return "Hand-picked areas";
 }
 
+/** "£21.43" from 2143. */
+export function formatPence(pence: number): string {
+  return `£${(pence / 100).toFixed(2)}`;
+}
+
 /** Untruncated description for a title attribute. */
 export function filterTooltip(f: LeadFilterView): string {
   const parts = [
@@ -166,6 +194,14 @@ export function filterTooltip(f: LeadFilterView): string {
     `Locations: ${locationText(f.areas)}`,
     `Set by: ${filterKindLabel(f)}`,
   ];
+  if (f.expectedLeads != null && f.forecastCostPerLeadPence != null) {
+    parts.push(
+      `Forecast: at least ${f.expectedLeads}/month at ${formatPence(f.forecastCostPerLeadPence)} a lead` +
+        (f.forecastLikelihoodPct != null
+          ? ` (${f.forecastLikelihoodPct}% likely)`
+          : "")
+    );
+  }
   if (f.status === "pending_lift") {
     parts.push(
       f.liftDate ? `Lift scheduled for ${f.liftDate}` : "Lift scheduled"

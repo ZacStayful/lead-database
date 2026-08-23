@@ -8,9 +8,10 @@ import {
 } from "@/components/dashboard/LeadFilteringPanel";
 import { areaLabel } from "@/lib/postcode";
 import {
-  buildLeadVolumeAggregate,
+  fetchAreaContention,
+  fetchLeadVolumeData,
+  type AreaContention,
   type LeadVolumeAggregate,
-  type LeadVolumeRow,
 } from "@/lib/filterPrediction";
 import type { Customer, FilterStatus } from "@/lib/types";
 
@@ -24,29 +25,19 @@ export default async function LeadFilteringPage() {
   const admin = createAdminClient();
 
   // One paginated pass over the lead book builds two structures: the per-area
-  // counts that shade the map (all-time, both products, bedroom-blind — as
-  // ever), and the per-product volume aggregate the prediction runs on. Rows
-  // with no postcode area are kept for the aggregate's totals (the prediction
-  // UI reports how many leads a filter can never match) and skipped for the
-  // map. Paginated: a single select is capped (Supabase default 1000 rows),
-  // which would undercount once the lead table grows past 1000.
-  const areaCounts: Record<string, number> = {};
-  const volumeRows: LeadVolumeRow[] = [];
-  const PAGE = 1000;
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await admin
-      .from("leads")
-      .select("postcode_area, bedrooms, lead_type, created_at")
-      .range(from, from + PAGE - 1);
-    if (error || !data || data.length === 0) break;
-    for (const r of data as LeadVolumeRow[]) {
-      volumeRows.push(r);
-      const a = r.postcode_area?.toUpperCase();
-      if (a) areaCounts[a] = (areaCounts[a] ?? 0) + 1;
-    }
-    if (data.length < PAGE) break;
-  }
-  const volumeAggregate = buildLeadVolumeAggregate(volumeRows);
+  // counts that shade the map (both products, bedroom-blind — as ever), and the
+  // per-product volume aggregate the prediction runs on. This page used to run
+  // its own copy of that loop; it now shares the module's, so a customer and an
+  // admin cannot be shown different numbers for the same filter.
+  const { aggregate: volumeAggregate, areaCounts } =
+    await fetchLeadVolumeData(admin);
+
+  // Per-product, and excluding this customer so re-quoting their own filter
+  // does not count them as their own competitor.
+  const [mgmtContention, grContention] = await Promise.all([
+    fetchAreaContention(admin, "management", customer.id),
+    fetchAreaContention(admin, "guaranteed_rent", customer.id),
+  ]);
 
   const availableAreas: AreaOption[] = Object.keys(areaCounts)
     .sort((a, b) => a.localeCompare(b))
@@ -61,7 +52,8 @@ export default async function LeadFilteringPage() {
     availableAreas,
     areaCounts,
     maxAreaCount,
-    volumeAggregate
+    volumeAggregate,
+    { management: mgmtContention, guaranteed_rent: grContention }
   );
 
   return (
@@ -91,7 +83,8 @@ function panelPropsFor(
   availableAreas: AreaOption[],
   areaCounts: Record<string, number>,
   maxAreaCount: number,
-  volumeAggregate: LeadVolumeAggregate
+  volumeAggregate: LeadVolumeAggregate,
+  contention: Record<"management" | "guaranteed_rent", AreaContention>
 ): FilterPanelProps[] {
   const panels: FilterPanelProps[] = [];
 
@@ -114,6 +107,14 @@ function panelPropsFor(
       // Raw allocation, deliberately not the pool-debit-adjusted effective
       // figure: the prediction is compared against what the plan owes.
       monthlyAllocation: customer.monthly_allocation ?? 0,
+      contention: contention.management,
+      // What the customer was SHOWN. The panel renders these rather than a fresh
+      // forecast — a recomputed one drifts with ingest and would display a
+      // figure they never actually read.
+      expectedLeads: customer.filter_expected_leads,
+      forecastLikelihoodPct: customer.filter_forecast_likelihood_pct,
+      forecastCostPerLeadPence: customer.filter_forecast_cost_per_lead_pence,
+      forecastAcknowledgedAt: customer.filter_forecast_acknowledged_at,
     });
   }
 
@@ -134,6 +135,11 @@ function panelPropsFor(
       maxAreaCount,
       volume: volumeAggregate.guaranteed_rent,
       monthlyAllocation: customer.gr_monthly_allocation ?? 0,
+      contention: contention.guaranteed_rent,
+      expectedLeads: customer.gr_filter_expected_leads,
+      forecastLikelihoodPct: customer.gr_filter_forecast_likelihood_pct,
+      forecastCostPerLeadPence: customer.gr_filter_forecast_cost_per_lead_pence,
+      forecastAcknowledgedAt: customer.gr_filter_forecast_acknowledged_at,
     });
   }
 

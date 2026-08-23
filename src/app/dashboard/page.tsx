@@ -388,7 +388,18 @@ function filterMessage(customer: Customer): string {
     customer.filter_min_bedrooms,
     customer.filter_max_bedrooms
   );
-  let msg = `Your filter is active — you'll receive leads matching ${areas} and ${beds} as they become available. Volume varies based on how many matching leads come through the marketplace each month.`;
+  // Give the forecast when there is one — "volume varies" is true but useless
+  // once we can put a number and a confidence on it.
+  //
+  // "At least", and no clause about what happens if we fall short: the figure
+  // is a lower bound at FORECAST_CONFIDENCE and nothing is credited back.
+  const expected = customer.filter_expected_leads;
+  const likelihood = customer.filter_forecast_likelihood_pct;
+  let msg = `Your filter is active — you'll receive leads matching ${areas} and ${beds} as they become available.`;
+  msg +=
+    expected != null && expected > 0
+      ? ` You can expect at least ${expected} lead${expected === 1 ? "" : "s"} a month on this filter${likelihood != null ? ` (${likelihood}% likely)` : ""} — some months will be quieter than others.`
+      : ` Volume varies based on how many matching leads come through the marketplace each month.`;
   if (
     customer.filter_status === "pending_lift" &&
     customer.filter_lift_effective_date

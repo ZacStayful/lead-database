@@ -43,12 +43,19 @@ export function LeadSourceMap({
   selectable,
   selected,
   onToggle,
+  caption = "Click an area to add or remove it from your filter. Darker = more leads.",
 }: {
   counts: Record<string, number>;
   maxCount: number;
   selectable: string[]; // area codes that have leads (clickable)
   selected: string[]; // currently selected filter areas
   onToggle: (area: string) => void;
+  /**
+   * Footer line under the map. Defaults to the dashboard's wording, so the
+   * panel is unaffected; the landing page says something addressed to a
+   * visitor who has not signed up and has no filter to add anything to.
+   */
+  caption?: string;
 }) {
   const [features, setFeatures] = useState<Feature[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -259,7 +266,7 @@ export function LeadSourceMap({
         )}
       </div>
       <p className="border-t-[0.5px] border-border px-3 py-1.5 text-xs text-muted-foreground">
-        Click an area to add or remove it from your filter. Darker = more leads.
+        {caption}
       </p>
     </div>
   );

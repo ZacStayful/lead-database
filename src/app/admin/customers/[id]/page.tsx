@@ -20,6 +20,7 @@ import {
   bedroomPhrase,
   filterKindLabel,
   locationText,
+  formatPence,
 } from "@/lib/leadFilter";
 import { computePacing, computeGrPacing } from "@/lib/pacing";
 import {
@@ -141,6 +142,7 @@ export default async function AdminCustomerDetailPage({
           <GrSubscriptionCard customer={customer} />
 
           <FilterCard customer={customer} volumeAggregate={volumeAggregate} />
+
         </div>
 
         <div className="lg:col-span-2">
@@ -243,6 +245,10 @@ function FilterCard({
           maxBedrooms: f.maxBedrooms,
         })
       : null;
+    const balance =
+      f.leadType === "guaranteed_rent"
+        ? (customer.gr_lead_balance ?? 0)
+        : (customer.lead_balance ?? 0);
     return {
       ...f,
       priority:
@@ -251,6 +257,7 @@ function FilterCard({
           : computePacing(customer).deficit,
       prediction,
       allocation,
+      balance,
       below: prediction ? belowAllocation(prediction, allocation) : false,
     };
   });
@@ -306,12 +313,25 @@ function FilterCard({
                         <span className="font-normal text-muted-foreground">
                           ({p.prediction.matchingLeads} matches since 1 Jul)
                         </span>
-                        {p.below && (
+                        {p.below && p.expectedLeads == null && (
                           <span className="block text-xs font-normal text-amber-700">
-                            Below plan of {p.allocation}/month — guarantee
-                            lifted
+                            Below plan of {p.allocation}/month — no forecast
+                            recorded
                           </span>
                         )}
+                        {/* The drift between what the customer was TOLD and what
+                            today's volumes support is why both are shown
+                            together rather than one replacing the other. It no
+                            longer costs us anything — nothing is credited — but
+                            it is exactly the customer who will ring up asking
+                            why the number they were quoted is not arriving. */}
+                        {p.expectedLeads != null &&
+                          p.prediction.displayRate < p.expectedLeads && (
+                            <span className="block text-xs font-normal text-amber-700">
+                              Now below the {p.expectedLeads}/month they were
+                              shown — likely to be disappointed
+                            </span>
+                          )}
                       </>
                     ) : (
                       <span className="font-normal text-muted-foreground">
@@ -322,6 +342,29 @@ function FilterCard({
                   </dd>
                 </div>
               )}
+              {p.expectedLeads != null &&
+                p.forecastCostPerLeadPence != null && (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">
+                      Forecast shown
+                    </dt>
+                    <dd className="mt-0.5 font-medium">
+                      at least {p.expectedLeads} leads/month at{" "}
+                      {formatPence(p.forecastCostPerLeadPence)} a lead
+                      {p.forecastLikelihoodPct != null && (
+                        <span className="font-normal text-muted-foreground">
+                          {" "}
+                          ({p.forecastLikelihoodPct}% likely)
+                        </span>
+                      )}
+                      {p.forecastAcknowledgedAt && (
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          Shown {formatDate(p.forecastAcknowledgedAt)}
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                )}
               {p.status === "pending_lift" && p.liftDate && (
                 <div>
                   <dt className="text-xs text-muted-foreground">Lifts on</dt>

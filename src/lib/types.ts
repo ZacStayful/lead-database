@@ -103,6 +103,23 @@ export interface Customer {
   filter_selection_mode: "areas" | "radius" | string | null;
   filter_radius_outcode: string | null;
   filter_radius_miles: number | null;
+  // The volume forecast the customer was shown and acknowledged (0098, renamed
+  // 0100). Derived only by filterForecast.ts and, like the columns above,
+  // meaningful only while filter_status is 'active' or 'pending_lift'.
+  //
+  // These are what the customer was TOLD, so every surface shows the persisted
+  // figures rather than a freshly computed one — a recomputed figure drifts as
+  // ingest moves and would display something they never saw.
+  //
+  // ⚠️ Not a commitment. filter_expected_leads is a lower bound at
+  // FORECAST_CONFIDENCE, nothing settles a shortfall against it, and no copy
+  // reading these may offer to.
+  filter_expected_leads: number | null;
+  filter_forecast_estimate: number | null;
+  filter_forecast_likelihood_pct: number | null;
+  filter_forecast_cost_per_lead_pence: number | null;
+  filter_forecast_plan_price_pence: number | null;
+  filter_forecast_acknowledged_at: string | null;
   // Lead filtering (guaranteed-rent product) — gr_ mirror of the above.
   gr_filter_status: FilterStatus | string;
   gr_filter_areas: string[] | null;
@@ -113,6 +130,12 @@ export interface Customer {
   gr_filter_selection_mode: "areas" | "radius" | string | null;
   gr_filter_radius_outcode: string | null;
   gr_filter_radius_miles: number | null;
+  gr_filter_expected_leads: number | null;
+  gr_filter_forecast_estimate: number | null;
+  gr_filter_forecast_likelihood_pct: number | null;
+  gr_filter_forecast_cost_per_lead_pence: number | null;
+  gr_filter_forecast_plan_price_pence: number | null;
+  gr_filter_forecast_acknowledged_at: string | null;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
@@ -446,6 +469,30 @@ export type LeadEventType =
  * the way the per-lead price once did.
  */
 export const DEFAULT_MAX_ASSIGNMENTS = 3;
+
+/**
+ * The number of filtered customers competing for one lead at which that lead
+ * becomes CONTENDED, and filtered customers take every slot.
+ *
+ * WHY FILTERED DEMAND OUTRANKS UNFILTERED DEMAND WHEN IT IS TIGHT
+ * The two candidate pools are not symmetric. An unfiltered customer's demand is
+ * elastic — any lead in the country satisfies it, so a slot lost here is a slot
+ * found somewhere else this week. A filtered customer's demand is inelastic:
+ * they can only ever be served from the areas they chose, and a slot lost there
+ * is a lead they will simply never get. So when filtered demand
+ * for one lead reaches this ceiling, the critically-behind override stands
+ * down — the unfiltered customer it would have helped has a whole marketplace
+ * to be helped from, and the filtered ones do not.
+ *
+ * Set to the escalation ladder's first rung (§18: 3 -> 4 -> 5). A contended
+ * lead skips the ten-day wait for that fourth operator, because the demand
+ * escalation exists to find is already queued and provably matching.
+ *
+ * Lives here rather than in ingest.ts so filterPrediction.ts can read it
+ * without importing server-only code — that module is imported by client
+ * components and must stay free of the admin client.
+ */
+export const CONTENDED_FILTERED_CUSTOMERS = 4;
 
 export const ENGAGEMENT_EVENT_TYPES = [
   "detail_opened",

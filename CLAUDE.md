@@ -3136,3 +3136,316 @@ additive and inert on its own, and nothing in this feature writes a balance,
 counter, pacing or capacity column, so a lagging migration cannot affect lead
 allocation. 0096 (`sweep_api_tables`) follows it and is read by the pool sweep
 only — a lagging 0096 costs a day of housekeeping, nothing more.
+
+---
+
+## 28. The filter volume forecast *(0097–0100)*
+
+Applying a lead filter used to say only that volume "varies": the customer
+narrowed their leads, got no number back, and paid the same. They are now told
+what to expect from the selection, how confident we are, and what it works out
+at per lead — acknowledged explicitly before the filter applies.
+
+`src/lib/filterForecast.ts` is the only place any of those numbers are derived.
+The customer panel, the route that re-derives them, both admin surfaces and the
+public estimator all call it.
+
+### ⚠️ 28.0 — It was a GUARANTEE for one commit, and that was wrong
+
+0098 shipped this as a priced commitment: a guaranteed number of leads, with any
+shortfall credited back to `lead_balance` at each paid invoice. **0100 withdrew
+the promise and kept everything else.**
+
+The reason is arithmetic, not squeamishness. The figure is the largest N with
+`P(X >= N) >= 0.83` — so it is missed **about one month in six by construction**,
+and 0098's own §28.7 recorded that as a known gap while the UI called it a
+guarantee. A number you have already calculated you will miss is not a guarantee;
+it is a guarantee you have decided to break. Everything the model does is useful,
+and only the word and the payout were wrong.
+
+What that means for anyone changing this:
+
+- **`filter_expected_leads` is a LOWER BOUND, not a mean.** Every surface words
+  it "**at least** N · P% likely". Calling a P83 figure "expected" without that
+  qualifier invites the reader to treat it as the middle of the range when it is
+  deliberately the pessimistic end.
+- **Nothing settles a shortfall.** `settle_filter_guarantee`,
+  `filter_guarantee_settlements` and `filter_guarantee_credit` were dropped by
+  0100. No copy anywhere may offer to make a short month good.
+- **Do not lower `FORECAST_CONFIDENCE` to 0.5** to make "expected" literally
+  true. A central estimate is wrong half the time, which would make the
+  cost-per-lead figure beside it worthless. The honesty lives in the wording.
+- The re-apply balance clamp went back to the plain `Math.min(balance,
+  allocation)` it always was — the exception existed only to protect
+  compensation we owed, and nothing is owed.
+
+### 28.1 — Fixed confidence, not a fixed margin
+
+`FORECAST_CONFIDENCE = 0.83`. The forecast is the largest number we can deliver
+with at least that confidence, capped at the plan allocation.
+
+The obvious design instead subtracts a fixed margin — `estimate - sqrt(estimate)`,
+one sigma. The variance model behind it is right (per-filter monthly variance
+really does track `1/sqrt(lambda)`, measured), but it makes the DISPLAYED
+likelihood move against filter quality: an estimate of 3 shows 92% where an
+estimate of 6 shows 80%, because a smaller number is proportionally easier to
+hit. A customer comparing two filters by that percentage picks the worse one
+every time — fewer leads, higher price, better-looking number.
+
+Fixing the confidence and letting the number move makes both figures the
+customer decides on monotone in filter breadth: **widening a filter can only
+raise the expected volume and lower the cost per lead.** That property is
+asserted across estimates 0..300 for both plans and is the regression that would
+catch a reversion. Do not "simplify" this back to a fixed margin.
+
+0.83 is calibrated so an estimate of 5/month forecasts 3 — the worked example the
+pricing was agreed on. It is the one risk dial: raising it lowers every forecast
+and raises every cost per lead. It survived 0100 unchanged, which is the point of
+§28.0: the model was never the problem.
+
+### 28.2 — Negative binomial, and why not Poisson
+
+Poisson answers "how often would we hit this if the estimate were exactly
+right". The estimate is inferred from a few weeks of history and carries real
+error, and a percentage in front of a customer is close to a contractual claim.
+
+A Jeffreys Gamma prior on the weekly arrival rate makes next month's count
+`NegBinomial(r = m + 0.5, p = w / (w + WEEKS_PER_MONTH))` for `m` matching leads
+over `w` weeks. Variance is inflated over Poisson's by `(w + 4.33) / w` — about
+1.6x at a couple of months of history. As history accumulates `p -> 1`, it
+converges to Poisson and forecasts rise on their own, so there is no haircut
+anyone has to remember to remove.
+
+Evaluated by the recurrence `P(0) = p^r`, `P(k) = P(k-1)(k+r-1)/k(1-p)` — no
+log-gamma, no overflow. Cross-checked against an independent evaluation in SQL.
+
+**Apply the allocation cap BEFORE reading the likelihood.** An estimate of
+48/month on a 10-lead plan reads "38 leads, 79%" uncapped and "10 leads, 99%"
+capped, and only one of those is a promise anyone made.
+
+### 28.3 — Revenue is held constant
+
+`costPerLeadPence = ceil(planPricePence / expected)`, from the LIST plan price
+for the allocation, never the customer's actual Stripe price — discounts exist,
+and every other price derivation goes through `planForAllocation`. Ceil, not
+round, so `expected * costPerLead >= planPrice` always holds.
+
+The bill does not change. Only what we tell them to expect for it.
+
+`recommendedDowngrade` surfaces the cheapest plan that still covers the whole
+forecast. The `expected <= plan.leads` test is what makes it safe to show
+automatically: taking the advice can never cost a lead, only price.
+
+⚠️ **This matters MORE since 0100, not less.** While a shortfall was credited
+back, a customer over-planned for their filter at least got the difference in
+leads. Nothing is credited now, so this advice is the only thing between them and
+paying twice the going rate indefinitely. `repriceFilterForecast` in
+`planChanges.ts` keeps the stored cost per lead honest when the plan actually
+changes — the count is deliberately not recomputed, only the price it is divided
+into.
+
+### 28.4 — There is no settlement, and that is the design
+
+~~Settlement rides invoice.paid, and the order is load-bearing.~~ **Removed by
+0100 along with the guarantee it settled.** The figure is a forecast; a quiet
+month is simply a quiet month.
+
+Recorded because the removed machinery is worth not rebuilding by accident:
+0098 hooked `settle_filter_guarantee` into both halves of `invoice.paid`, before
+`maybeExecuteFilterLift`, with a unique `(customer_id, lead_type, period_start)`
+as its idempotency claim. If a credit-back is ever wanted again, that shape was
+correct — `invoice.paid` is the real per-customer cycle boundary, because
+`reset_monthly_counts` is a privileged create-or-replace target (§11) and
+`leads_received_this_month` is not a faithful delivery count (0006 decrements it
+on reject, while invariant 4 says a rejected lead was still delivered). The
+settle-before-lift ordering was load-bearing and would be again.
+
+**But do not reinstate it without also changing the confidence.** At 0.83 a
+shortfall is designed in one month in six, so an automatic credit is a standing
+liability that accrues fastest against exactly the filters that can least fill
+it — which is what §28.7's accrual warning was about.
+
+### 28.5 — Contention: four filtered customers to a lead
+
+`CONTENDED_FILTERED_CUSTOMERS = 4`, in `types.ts` beside
+`DEFAULT_MAX_ASSIGNMENTS` so `filterPrediction.ts` can read it without importing
+server-only code.
+
+The two candidate pools are not symmetric. Unfiltered demand is elastic — any
+lead satisfies it, so a slot lost here is found elsewhere this week. Filtered
+demand is inelastic: those customers can only be served from the areas they
+chose, so a slot lost there is a lead they will simply never get. So at
+four or more filtered candidates the critically-behind override stands down and
+filtered customers take every slot, and the lead opens its fourth slot
+immediately rather than after ten days of nobody working it (§18 raises the cap
+for a lead going to waste; this raises it for demand already queued). It stops
+at 4 so a lead can still escalate to 5 but never overshoots by both routes.
+
+**The estimate must agree with the router**, or the number quoted is one the
+engine was never going to deliver. `predictMonthlyVolume` shares each area's leads by
+`4 / competitors` past the ceiling, per area rather than across the filter.
+
+Count FILTERED customers only. Counting unfiltered ones saturates every area and
+collapses every quote — the engine serves them from anywhere. **A bedroom-only
+filter names no areas but competes in all of them**, so it is a floor under
+every area; missing that was the mistake that made an "it ships inert"
+prediction wrong in review.
+
+The contention read fails OPEN: an empty map quotes the unshared volume, which
+is what the feature showed before contention existed.
+
+### 28.6 — The public estimator publishes shares, not counts
+
+`public_filter_volume` (0099) is a single-row cache on the
+`public_activity_stats` pattern — lazy rebuild behind an atomic staleness claim,
+because `fetchLeadVolumeData` pages the whole leads table and that is a lever
+anyone can pull on an unauthenticated endpoint.
+
+Contention is applied when the payload is BUILT. Shipping raw counts plus a
+contention map would quote the same number and hand anyone with devtools our
+per-area customer counts. The payload does still expose per-area, per-bedroom
+lead volume — the minimum an honest estimate needs; bucket it in
+`applyContention` if that trade ever looks wrong.
+
+#### The estimator is the panel's components, not a copy of them
+
+`LeadEstimator` composes `AreaPicker`, `RadiusControls`, `BedroomRange`,
+`PredictionBox`, `VolumeBar`, `resolveRadius` and `LeadSourceMap` — the same
+modules `LeadFilteringPanel` renders, extracted to `src/components/filtering/`.
+
+A first cut shared only the MATHS and reimplemented a thinner UI, which is worse
+than it sounds: the visitor could not filter by bedrooms at all (it hardcoded
+`minBedrooms: null`), saw bare area codes with no lead counts, got no widening
+suggestions, and was never told when their selection priced badly. Extract by
+pure move — the panel's diff for the whole exercise is imports and prop passes
+only, no authored JSX, which is the check to repeat if more is shared later.
+
+`PredictionBox` is passed **the plan the estimator would sell them** (the
+cheapest covering the forecast), not 0. `VolumeBar` then reads as progress
+toward that plan and the amber "adding areas raises the volume" variant fires
+where it should.
+
+#### ⚠️ The boundary file must not load on mount
+
+`public/data/uk-postcode-areas.geojson` is ~562 KB. The first cut gated its fetch
+on `mode !== "radius"` and commented that it loaded "only if the visitor actually
+uses radius mode" — but **radius is the default mode**, so it fired for every
+visitor to both landing pages whether or not they touched the estimator.
+
+The gate is now genuine intent: a postcode typed, the map opened, or a switch to
+hand-picking. The map itself sits behind a **Show map** button, because it is
+orientation rather than part of the estimate. Verified in Chromium against both
+pages: **zero geojson requests on load, one after typing a postcode.** The
+dashboard keeps its old behaviour — a customer who opened the filtering page is
+already committed.
+
+#### The map's counts are contention-scaled, and the dashboard's are not
+
+Per-area totals for the public map are summed from the payload's bed buckets,
+which `applyContention` has already scaled. So the same component shades by
+"what you would get" here and by raw national volume on the dashboard. That is
+the more honest number for a prospect and it IS a different number from one
+component — noted here so nobody later "fixes" the discrepancy.
+
+#### `areasInPayload` is scoped per product
+
+It unioned both products, which put areas with **zero GR leads** in front of a
+GR prospect: they pick one, are told there is not enough data to forecast it, and
+reasonably conclude the product is empty in their patch. The two books genuinely
+differ in coverage and the picker is the wrong place to blur that. Asserted in
+`publicFilterVolume.test.ts` in both directions.
+
+### 28.7 — Gaps, all deliberate
+
+Every gap in the 0098 version of this list was about **crediting** — discard
+deleting the `lead_assignments` row and inflating a shortfall, pause voiding the
+invoice the settlement rode on, cancellation stranding a final partial cycle's
+credits, and `filter_guarantee_credit` being cumulative so it could exceed the
+balance it was meant to protect. **0100 removed all four with the payout.** They
+are recorded in §28.4 rather than here, because they are the reason a credit-back
+is harder than it looks if anyone wants one again.
+
+What remains:
+
+- **The forecast is a lower bound presented as an expectation.** At 0.83 it is
+  missed about one month in six by construction. A customer reading it as a mean
+  will think us pessimistic, which is the safe direction — and is exactly why the
+  copy says "at least N" rather than "N". Change that wording and the gap stops
+  being safe.
+- **A customer whose supply genuinely drops is told nothing until they look.**
+  Nothing recomputes the stored figure between applies, so the number on their
+  dashboard is what the volumes supported the day they applied. The admin
+  FilterCard shows the persisted figure beside today's live prediction for
+  exactly this reason: the drift is the leading indicator of a customer about to
+  ring up disappointed. It costs us nothing now, which makes it easier to ignore
+  and no less worth watching.
+- **`recommendedDowngrade` is now the only protection** for a customer over-planned
+  for their filter (§28.3). Do not make it harder to find.
+
+### 28.8 — 0097 is a data repair, not an ingest fix
+
+137 leads carried no `postcode_area`, making them invisible to every filtered
+customer and absent from every prediction — management matchable leads were 27%
+low, GR 61%. `extractPostcode` already handled every format in the data; the
+parser simply shipped on 2026-07-21 and every recoverable row predates it. **Do
+not "fix" the parser.**
+
+The Postgres spelling of "last regex match" matters: a greedy `.*` prefix eats
+as much as it can, leaving `[A-Z]{1,2}` matching one letter, so every two-letter
+area loses its first character — "BS14 0GG" becomes "S14 0GG", filing Bristol
+under Sheffield. Enumerate matches with the `g` flag and take the highest
+ordinality. This was caught by diffing against the real parser row by row, which
+is the check to repeat if the backfill is ever rerun.
+
+`fetchLeadVolumeAggregate` also gained a stable `.order()` — `.range()` is
+LIMIT/OFFSET and Postgres guarantees no row order without ORDER BY, so pages
+could repeat or skip rows once the table passes 1000 — and now excludes leads
+`lead_retired_from_allocation()` has retired (invariant 11), which it was
+counting as deliverable supply.
+
+### 28.9 — 0100 renames live columns, which is normally wrong
+
+Renaming a column a deployed reader selects breaks it the moment the name
+changes. That risk was **absent here and verified rather than assumed**: 0098
+reached the database but its code never reached production (`main` selects none
+of these columns), so at apply time all 14 columns were NULL across all 38
+customers and both new tables were empty. No reader, no data to migrate.
+
+Leaving `filter_guaranteed_leads` in the schema to mean "expected" would have
+been a permanent lie in the hardest place to correct later, so the rename was the
+cheaper of the two.
+
+| From | To |
+|---|---|
+| `filter_guaranteed_leads` | `filter_expected_leads` |
+| `filter_guarantee_estimate` | `filter_forecast_estimate` |
+| `filter_guarantee_likelihood_pct` | `filter_forecast_likelihood_pct` |
+| `filter_guarantee_cost_per_lead_pence` | `filter_forecast_cost_per_lead_pence` |
+| `filter_guarantee_plan_price_pence` | `filter_forecast_plan_price_pence` |
+| `filter_guarantee_accepted_at` | `filter_forecast_acknowledged_at` |
+| `filter_guarantee_acceptances` (table) | `filter_forecast_acknowledgements` |
+
+Dropped: `(gr_)filter_guarantee_credit`, `filter_guarantee_settlements`,
+`settle_filter_guarantee()`.
+
+**The acknowledgement table survives the promise.** A customer is still shown
+specific figures when they apply and still ticks to say they have read them, and
+"you told me four a month" is worth being able to answer even when the answer
+carries no liability. Same best-effort discipline as before: a failed insert must
+never fail the apply, RLS on with no policy, nothing reads it to decide anything.
+
+Two traps the migration itself hit, both worth keeping:
+
+- **`alter … rename column` has no `if not exists`.** Guarding on the old name
+  alone is not enough for a re-run: after the first pass the old name is gone and
+  the new one is present. Each rename checks for **both**.
+- **Drop the CHECK before re-adding it.** §1 drops the guarantee-named
+  constraint; §4 must also drop the forecast-named one or a second apply fails
+  with "constraint already exists". This was caught by the repo's re-apply
+  convention and by nothing else.
+
+**Deployment order — migration BEFORE code**, as ever. 0100 was applied to
+`znlfwbnvhlacwzgfalcf` after all 96 migrations were applied to a scratch Postgres
+16 from empty, three applies proving idempotency, and the CHECK exercised on 11
+cases (negative counts, likelihood 101/-1/0/100, zero prices, the GR mirror, and
+all-null). Production was then verified to match scratch exactly.

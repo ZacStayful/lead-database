@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { planForProductAllocation } from "@/lib/plans";
 import type { LeadType } from "@/lib/types";
 
 /**
@@ -154,6 +155,85 @@ export async function recordPlanChange(
  * Returns the allocation to credit: the new one if it applied, otherwise the
  * caller's current value untouched.
  */
+/**
+ * Re-price an in-force filter forecast after the allocation changes.
+ *
+ * A downgrade taken on our own advice keeps the SAME expected leads — that is
+ * the condition under which it is recommended at all — but the cost per lead is
+ * planPrice / expected, and the plan price just halved. Leaving the stored
+ * figure alone would show a customer £50 a lead on a £150 plan for a month
+ * after their bill dropped, which is the one number this feature exists to get
+ * right.
+ *
+ * The expected COUNT is deliberately not recomputed. It was struck against the
+ * volumes of the day, and a plan change is not the customer's cue to be
+ * re-quoted; only the cap could move it, and a downgrade is only ever
+ * recommended when the forecast already fits under the smaller plan. An upgrade
+ * can leave the forecast below the new allocation, which is correct: they bought
+ * more capacity than this filter can currently fill, and the panel will say so
+ * next time they look.
+ *
+ * Best-effort. A stale price is a display bug; a thrown error here would strand
+ * the plan change itself, which has real money behind it.
+ */
+async function repriceFilterForecast(
+  admin: SupabaseClient,
+  customerId: string,
+  leadType: LeadType,
+  allocation: number,
+  source: string
+): Promise<void> {
+  const g = forecastColumns(leadType);
+  const { data, error } = await admin
+    .from("customers")
+    .select(`${g.status}, ${g.expected}`)
+    .eq("id", customerId)
+    .maybeSingle();
+  if (error || !data) return;
+
+  const row = data as unknown as Record<string, unknown>;
+  const status = String(row[g.status] ?? "off");
+  const expected = Number(row[g.expected] ?? 0);
+  if (!["active", "pending_lift"].includes(status) || expected <= 0) return;
+
+  const plan = planForProductAllocation(leadType, allocation);
+  const planPricePence = Math.round(plan.priceGbp * 100);
+  // Capped at the new allocation, for the same reason forecastVolume caps: a
+  // figure above what the plan sells is not deliverable, so quoting it would
+  // price the customer's leads against volume they have not bought.
+  const capped = Math.min(expected, allocation);
+
+  const { error: updateError } = await admin
+    .from("customers")
+    .update({
+      [g.expected]: capped,
+      [g.planPrice]: planPricePence,
+      // Ceil, as filterForecast.ts does, so expected * cost >= plan price.
+      [g.costPerLead]: Math.ceil(planPricePence / capped),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", customerId);
+  if (updateError) {
+    console.error(`[${source}] forecast reprice failed`, updateError);
+  }
+}
+
+function forecastColumns(leadType: LeadType) {
+  return leadType === "guaranteed_rent"
+    ? {
+        status: "gr_filter_status",
+        expected: "gr_filter_expected_leads",
+        costPerLead: "gr_filter_forecast_cost_per_lead_pence",
+        planPrice: "gr_filter_forecast_plan_price_pence",
+      }
+    : {
+        status: "filter_status",
+        expected: "filter_expected_leads",
+        costPerLead: "filter_forecast_cost_per_lead_pence",
+        planPrice: "filter_forecast_plan_price_pence",
+      };
+}
+
 export async function applyPendingPlanChange(
   admin: SupabaseClient,
   params: {
@@ -201,6 +281,8 @@ export async function applyPendingPlanChange(
     "applied_at",
     source
   );
+
+  await repriceFilterForecast(admin, params.customerId, params.leadType, pendingAllocation, source);
 
   console.log(
     `[${source}] applied pending plan change for customer ${params.customerId}: ` +
