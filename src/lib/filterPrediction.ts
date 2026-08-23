@@ -66,6 +66,14 @@ export interface VolumePrediction {
   displayRate: number;
   /** matchingLeads >= MIN_RELIABLE_MATCHES. */
   reliable: boolean;
+  /**
+   * The observation window the rate was measured over, carried through from
+   * `ProductVolume`. The guarantee needs the raw (count, exposure) pair rather
+   * than the rate alone — a rate of 5/month means something very different
+   * measured over one week than over one year, and the guarantee's confidence
+   * is exactly that difference (see filterGuarantee.ts).
+   */
+  weeksElapsed: number;
 }
 
 export interface ExpansionSuggestion {
@@ -137,6 +145,7 @@ export function predictMonthlyVolume(
     monthlyRate,
     displayRate: Math.round(monthlyRate),
     reliable: matchingLeads >= MIN_RELIABLE_MATCHES,
+    weeksElapsed: volume.weeksElapsed,
   };
 }
 
