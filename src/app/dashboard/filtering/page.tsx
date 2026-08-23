@@ -8,7 +8,9 @@ import {
 } from "@/components/dashboard/LeadFilteringPanel";
 import { areaLabel } from "@/lib/postcode";
 import {
+  fetchAreaContention,
   fetchLeadVolumeData,
+  type AreaContention,
   type LeadVolumeAggregate,
 } from "@/lib/filterPrediction";
 import type { Customer, FilterStatus } from "@/lib/types";
@@ -30,6 +32,13 @@ export default async function LeadFilteringPage() {
   const { aggregate: volumeAggregate, areaCounts } =
     await fetchLeadVolumeData(admin);
 
+  // Per-product, and excluding this customer so re-quoting their own filter
+  // does not count them as their own competitor.
+  const [mgmtContention, grContention] = await Promise.all([
+    fetchAreaContention(admin, "management", customer.id),
+    fetchAreaContention(admin, "guaranteed_rent", customer.id),
+  ]);
+
   const availableAreas: AreaOption[] = Object.keys(areaCounts)
     .sort((a, b) => a.localeCompare(b))
     .map((area) => ({ area, label: areaLabel(area) }));
@@ -43,7 +52,8 @@ export default async function LeadFilteringPage() {
     availableAreas,
     areaCounts,
     maxAreaCount,
-    volumeAggregate
+    volumeAggregate,
+    { management: mgmtContention, guaranteed_rent: grContention }
   );
 
   return (
@@ -73,7 +83,8 @@ function panelPropsFor(
   availableAreas: AreaOption[],
   areaCounts: Record<string, number>,
   maxAreaCount: number,
-  volumeAggregate: LeadVolumeAggregate
+  volumeAggregate: LeadVolumeAggregate,
+  contention: Record<"management" | "guaranteed_rent", AreaContention>
 ): FilterPanelProps[] {
   const panels: FilterPanelProps[] = [];
 
@@ -96,6 +107,14 @@ function panelPropsFor(
       // Raw allocation, deliberately not the pool-debit-adjusted effective
       // figure: the prediction is compared against what the plan owes.
       monthlyAllocation: customer.monthly_allocation ?? 0,
+      contention: contention.management,
+      // The ACCEPTED terms. The panel renders these rather than a fresh quote —
+      // they are the agreement, and a recomputed one would drift with ingest.
+      guaranteedLeads: customer.filter_guaranteed_leads,
+      guaranteeLikelihoodPct: customer.filter_guarantee_likelihood_pct,
+      guaranteeCostPerLeadPence: customer.filter_guarantee_cost_per_lead_pence,
+      guaranteeAcceptedAt: customer.filter_guarantee_accepted_at,
+      guaranteeCredit: customer.filter_guarantee_credit ?? 0,
     });
   }
 
@@ -116,6 +135,12 @@ function panelPropsFor(
       maxAreaCount,
       volume: volumeAggregate.guaranteed_rent,
       monthlyAllocation: customer.gr_monthly_allocation ?? 0,
+      contention: contention.guaranteed_rent,
+      guaranteedLeads: customer.gr_filter_guaranteed_leads,
+      guaranteeLikelihoodPct: customer.gr_filter_guarantee_likelihood_pct,
+      guaranteeCostPerLeadPence: customer.gr_filter_guarantee_cost_per_lead_pence,
+      guaranteeAcceptedAt: customer.gr_filter_guarantee_accepted_at,
+      guaranteeCredit: customer.gr_filter_guarantee_credit ?? 0,
     });
   }
 

@@ -388,7 +388,15 @@ function filterMessage(customer: Customer): string {
     customer.filter_min_bedrooms,
     customer.filter_max_bedrooms
   );
-  let msg = `Your filter is active — you'll receive leads matching ${areas} and ${beds} as they become available. Volume varies based on how many matching leads come through the marketplace each month.`;
+  // Name the guarantee when one is in force. "Volume varies" was true when a
+  // filter voided the guarantee outright; now there is a number, and the
+  // dashboard should not be the one surface still implying otherwise.
+  const guaranteed = customer.filter_guaranteed_leads;
+  let msg = `Your filter is active — you'll receive leads matching ${areas} and ${beds} as they become available.`;
+  msg +=
+    guaranteed != null && guaranteed > 0
+      ? ` We guarantee ${guaranteed} lead${guaranteed === 1 ? "" : "s"} a month on this filter; if we fall short, the difference is credited to your lead balance.`
+      : ` Volume varies based on how many matching leads come through the marketplace each month.`;
   if (
     customer.filter_status === "pending_lift" &&
     customer.filter_lift_effective_date

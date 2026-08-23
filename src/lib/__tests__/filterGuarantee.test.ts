@@ -158,6 +158,29 @@ describe("cost per lead", () => {
   });
 });
 
+// The panel gates its apply button on both flags, and only renders the
+// extra-confirm checkbox inside the reduced-guarantee block. If a quote could
+// ever require the confirmation without reducing the guarantee, that checkbox
+// would have nowhere to appear and the customer would be locked out.
+describe("requiresExtraConfirm is always reachable in the UI", () => {
+  it("never requires confirmation without also reducing the guarantee", () => {
+    for (const allocation of [10, 20]) {
+      for (let m = 0; m <= 300; m++) {
+        const q = quoteGuarantee(pred(m), allocation, "management");
+        if (q.requiresExtraConfirm) {
+          expect(q.offerable).toBe(true);
+          expect(q.reducesGuarantee).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("never sets the flag when nothing is offerable", () => {
+    expect(quoteGuarantee(pred(2), 10, "management").requiresExtraConfirm).toBe(false);
+    expect(quoteGuarantee(pred(50), 0, "management").requiresExtraConfirm).toBe(false);
+  });
+});
+
 describe("when no guarantee can be offered", () => {
   it("refuses to promise off a sample too thin to predict", () => {
     const q = quoteGuarantee(pred(4), 10, "management");

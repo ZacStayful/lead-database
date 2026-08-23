@@ -15,11 +15,17 @@ import {
   belowAllocation,
   expansionSuggestions,
   predictMonthlyVolume,
+  type AreaContention,
   type ExpansionSuggestion,
   type FilterSelection,
   type ProductVolume,
   type VolumePrediction,
 } from "@/lib/filterPrediction";
+import {
+  quoteGuarantee,
+  recommendedDowngrade,
+  type GuaranteeQuote,
+} from "@/lib/filterGuarantee";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export interface AreaOption {
@@ -44,13 +50,37 @@ export interface FilterPanelProps {
   // The plan's monthly lead allocation for this product — what a selection is
   // judged "too small" against.
   monthlyAllocation: number;
+  // How many other filtered customers already compete for each area, so the
+  // draft quote matches what routing will actually deliver.
+  contention?: AreaContention | null;
+  // The ACCEPTED guarantee, as persisted. The summary view renders these, never
+  // a freshly computed quote: the stored figures are the contract, and a
+  // recomputed one would drift with ingest and show terms nobody agreed to.
+  guaranteedLeads?: number | null;
+  guaranteeLikelihoodPct?: number | null;
+  guaranteeCostPerLeadPence?: number | null;
+  guaranteeAcceptedAt?: string | null;
+  /** Leads credited so far for missed guarantees. */
+  guaranteeCredit?: number;
 }
 
-const CONSENT =
-  "Applying a filter means we can't guarantee lead volume — you may receive fewer leads some months. Your monthly subscription amount stays the same regardless.";
+/** "£21.43" from 2143. */
+function poundsFromPence(pence: number): string {
+  return `£${(pence / 100).toFixed(2)}`;
+}
+
+// Shown when a filter is wide enough that the full allocation is still
+// guaranteed — the reassuring case, and no consent is needed for it.
+const CONSENT_FULL =
+  "This selection is big enough that we can still guarantee your full monthly allocation, at your usual price per lead. Nothing about your subscription changes.";
+
+// The one remaining case where the guarantee really is lifted: too little
+// history through these areas to promise anything yet.
+const CONSENT_UNRELIABLE =
+  "Too few leads have come through this selection for us to predict its volume, so we can't put a guarantee on it yet. You may receive fewer leads some months, and your monthly subscription amount stays the same regardless. Once enough leads have come through these areas, we'll offer you a guaranteed number.";
 
 const MINI_GUIDE =
-  "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts. From that date, you'll return to the standard guaranteed lead allocation.";
+  "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range, and the guarantee you accept is the one that applies from then on. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts. From that date, your filter guarantee ends and you return to the standard full allocation.";
 
 export function LeadFilteringPanel(props: FilterPanelProps) {
   const router = useRouter();
@@ -73,7 +103,13 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [areaQuery, setAreaQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmedRisk, setConfirmedRisk] = useState(false);
+  const [acceptedGuarantee, setAcceptedGuarantee] = useState(false);
+  // A second, explicit step for a poor offer. Separate from the acceptance so
+  // ticking one does not imply the other.
+  const [acknowledgedPoorValue, setAcknowledgedPoorValue] = useState(false);
+  // The server's quote when it disagreed with ours (409) — volumes moved while
+  // the customer was choosing.
+  const [restatedQuote, setRestatedQuote] = useState<GuaranteeQuote | null>(null);
 
   // How the customer picks locations: hand-pick areas, or a radius around
   // their own postcode that resolves to the areas the circle touches. Radius
@@ -109,10 +145,33 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [selectedAreas, minBeds, maxBeds]
   );
   const prediction = useMemo(
-    () => predictMonthlyVolume(props.volume, draftSelection),
-    [props.volume, draftSelection]
+    () => predictMonthlyVolume(props.volume, draftSelection, props.contention),
+    [props.volume, draftSelection, props.contention]
   );
+  const quote = useMemo(
+    () => quoteGuarantee(prediction, props.monthlyAllocation, product),
+    [prediction, props.monthlyAllocation, product]
+  );
+  // A cheaper plan that still covers the whole guarantee. Only ever suggested
+  // when it cannot cost the customer a lead, so it is advice, not a trade-off.
+  const downgrade = useMemo(
+    () =>
+      quote.offerable
+        ? recommendedDowngrade(quote.guaranteed, props.monthlyAllocation, product)
+        : null,
+    [quote, props.monthlyAllocation, product]
+  );
+  // The expansion chips still key off "too small for your plan" — that is the
+  // question they answer, and it is not the same question as whether the
+  // guarantee is reduced.
   const isBelow = belowAllocation(prediction, props.monthlyAllocation);
+  // The gate. Note this is NOT `isBelow`: a filter estimated at exactly the
+  // allocation raises no "too small" warning yet still carries a reduced
+  // guarantee, and that reduction is a term the customer has to agree to.
+  const needsAcceptance = quote.offerable && quote.reducesGuarantee;
+  const blocked =
+    (needsAcceptance && !acceptedGuarantee) ||
+    (quote.requiresExtraConfirm && !acknowledgedPoorValue);
   // Nearest-area chips belong to hand-picking; in radius mode the "widen
   // search" line is the expansion mechanic, and a chip toggle would be undone
   // by the radius-to-selection sync anyway.
@@ -128,21 +187,39 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // Keyed on the raw inputs, not the memoised object — React may recompute a
   // useMemo without its inputs changing, which must not untick the box.
   useEffect(() => {
-    setConfirmedRisk(false);
+    setAcceptedGuarantee(false);
+    setAcknowledgedPoorValue(false);
+    setRestatedQuote(null);
   }, [selectedAreas, minBeds, maxBeds]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
   // number the admin surfaces show for this customer.
   const savedPrediction = useMemo(
     () =>
-      predictMonthlyVolume(props.volume, {
-        areas: props.areas,
-        minBedrooms: props.minBedrooms,
-        maxBedrooms: props.maxBedrooms,
-      }),
-    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms]
+      predictMonthlyVolume(
+        props.volume,
+        {
+          areas: props.areas,
+          minBedrooms: props.minBedrooms,
+          maxBedrooms: props.maxBedrooms,
+        },
+        props.contention
+      ),
+    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms, props.contention]
   );
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
+  // What was ACCEPTED, not what today's data would quote. The two drift as
+  // ingest moves, and only one of them is the agreement.
+  const acceptedLeads = props.guaranteedLeads ?? null;
+  const acceptedCostPence = props.guaranteeCostPerLeadPence ?? null;
+  const acceptedLikelihood = props.guaranteeLikelihoodPct ?? null;
+  const savedDowngrade = useMemo(
+    () =>
+      acceptedLeads != null
+        ? recommendedDowngrade(acceptedLeads, props.monthlyAllocation, product)
+        : null,
+    [acceptedLeads, props.monthlyAllocation, product]
+  );
 
   // Radius mode: resolve the typed postcode + radius to the postcode areas
   // the circle touches, and work out the smallest widening that would add
@@ -259,6 +336,14 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       });
       const data = await res.json();
       if (!res.ok) {
+        // The server re-derives the guarantee and refuses if ours is stale
+        // (409) or unaccepted (400). Both carry the current quote, so show
+        // that rather than the number the customer was looking at.
+        if (data?.guarantee) {
+          setRestatedQuote(data.guarantee as GuaranteeQuote);
+          setAcceptedGuarantee(false);
+          setAcknowledgedPoorValue(false);
+        }
         setError(data.error ?? "Something went wrong.");
         return false;
       }
@@ -286,6 +371,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       selection_mode: fromRadius ? "radius" : "areas",
       radius_outcode: fromRadius ? radius.outcode : null,
       radius_miles: fromRadius ? radiusMiles : null,
+      accept_guarantee: acceptedGuarantee,
+      // The number on screen. If the server derives a different one, it
+      // refuses and restates rather than binding the customer to terms they
+      // never saw.
+      quoted_guaranteed_leads: quote.offerable ? quote.guaranteed : null,
     });
     if (ok) setEditing(false);
   }
@@ -293,7 +383,9 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   async function lift() {
     if (
       !window.confirm(
-        "This returns you to the standard guaranteed lead allocation. Continue?"
+        acceptedLeads != null
+          ? `This ends your filter guarantee of ${acceptedLeads} leads a month and returns you to the standard full allocation. Continue?`
+          : "This returns you to the standard guaranteed lead allocation. Continue?"
       )
     ) {
       return;
@@ -364,11 +456,57 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                   — too little data to predict monthly volume reliably.
                 </p>
               )}
-              {savedBelow && (
-                <p className="text-xs text-amber-700">
-                  Below your plan of {props.monthlyAllocation} leads/month —
-                  the volume guarantee is lifted while this filter is active.
-                </p>
+              {acceptedLeads != null && acceptedCostPence != null ? (
+                <div className="space-y-1 rounded-md border-[0.5px] border-border bg-muted/40 px-3 py-2">
+                  <p className="text-xs">
+                    We guarantee{" "}
+                    <span className="font-semibold">
+                      {acceptedLeads} lead{acceptedLeads === 1 ? "" : "s"} a month
+                    </span>{" "}
+                    on this filter, at{" "}
+                    <span className="font-semibold">
+                      {poundsFromPence(acceptedCostPence)}
+                    </span>{" "}
+                    per guaranteed lead
+                    {acceptedLikelihood != null && (
+                      <> — {acceptedLikelihood}% likely to be met</>
+                    )}
+                    .
+                    {props.guaranteeAcceptedAt && (
+                      <> Accepted {formatDate(props.guaranteeAcceptedAt)}.</>
+                    )}
+                  </p>
+                  {(props.guaranteeCredit ?? 0) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {props.guaranteeCredit} lead
+                      {props.guaranteeCredit === 1 ? "" : "s"} credited to your
+                      balance so far for months we fell short.
+                    </p>
+                  )}
+                  {savedDowngrade && (
+                    <p className="text-xs text-amber-700">
+                      On the {poundsFromPence(savedDowngrade.priceGbp * 100)}{" "}
+                      plan you would get the same {acceptedLeads} guaranteed
+                      lead{acceptedLeads === 1 ? "" : "s"} at{" "}
+                      {poundsFromPence(
+                        Math.ceil((savedDowngrade.priceGbp * 100) / acceptedLeads)
+                      )}{" "}
+                      each.{" "}
+                      <a href="/dashboard/settings" className="underline">
+                        Change your plan
+                      </a>
+                      .
+                    </p>
+                  )}
+                </div>
+              ) : (
+                savedBelow && (
+                  <p className="text-xs text-amber-700">
+                    Below your plan of {props.monthlyAllocation} leads/month —
+                    too little history through these areas to guarantee a
+                    number yet.
+                  </p>
+                )
               )}
             </div>
 
@@ -418,9 +556,10 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               <p className="text-sm text-muted-foreground">
                 Lead filtering lets you receive only leads in the locations and
                 bedroom sizes you choose. It's useful if you focus on particular
-                cities or property sizes — you trade the volume guarantee for
-                relevance. Leave a control open to accept anything for that
-                dimension.
+                cities or property sizes. Narrowing your selection can mean
+                fewer leads a month — we'll tell you the number we can guarantee
+                and what that works out at per lead before you apply. Leave a
+                control open to accept anything for that dimension.
               </p>
             )}
 
@@ -727,69 +866,148 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               onAddArea={toggleArea}
             />
 
-            {isBelow ? (
+            {quote.offerable && quote.reducesGuarantee ? (
               <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <p>
-                  {prediction.reliable ? (
-                    <>
-                      This selection is predicted to deliver about{" "}
-                      <span className="font-semibold">
-                        {prediction.displayRate} lead
-                        {prediction.displayRate === 1 ? "" : "s"} a month
-                      </span>{" "}
-                      against the{" "}
-                      <span className="font-semibold">
-                        {props.monthlyAllocation} leads a month
-                      </span>{" "}
-                      your plan includes. Applying it lifts the volume
-                      guarantee, and your subscription amount stays the same
-                      regardless of how many leads arrive.
-                    </>
-                  ) : (
-                    <>
-                      Too few matching leads have arrived to predict this
-                      selection reliably — volume is likely to be well below
-                      the{" "}
-                      <span className="font-semibold">
-                        {props.monthlyAllocation} leads a month
-                      </span>{" "}
-                      your plan includes. Applying it lifts the volume
-                      guarantee, and your subscription amount stays the same
-                      regardless of how many leads arrive.
-                    </>
+                <dl className="space-y-1">
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt>This selection is worth about</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {quote.estimate} lead{quote.estimate === 1 ? "" : "s"} a month
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt>We guarantee</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {quote.guaranteed} lead{quote.guaranteed === 1 ? "" : "s"} a month
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt>Cost per guaranteed lead</dt>
+                    <dd className="font-semibold tabular-nums">
+                      {poundsFromPence(quote.costPerLeadPence!)}
+                    </dd>
+                  </div>
+                  {quote.likelihoodPct != null && (
+                    <div className="flex items-baseline justify-between gap-4">
+                      <dt>Likelihood of meeting it</dt>
+                      <dd className="font-semibold tabular-nums">
+                        {quote.likelihoodPct}%
+                      </dd>
+                    </div>
                   )}
+                </dl>
+                <p className="text-xs">
+                  Based on your plan price of{" "}
+                  {poundsFromPence(quote.planPricePence)} a month for{" "}
+                  {quote.allocation} leads. If we deliver fewer than{" "}
+                  {quote.guaranteed} in a billing month, we add the difference to
+                  your lead balance and it carries forward — your subscription
+                  amount does not change.
                 </p>
+
+                {downgrade && (
+                  <p className="rounded-md bg-amber-100/70 px-3 py-2 text-xs">
+                    On the {poundsFromPence(downgrade.priceGbp * 100)} plan you
+                    would get the same {quote.guaranteed} guaranteed lead
+                    {quote.guaranteed === 1 ? "" : "s"} at{" "}
+                    <span className="font-semibold">
+                      {poundsFromPence(
+                        Math.ceil((downgrade.priceGbp * 100) / quote.guaranteed)
+                      )}
+                    </span>{" "}
+                    each instead of{" "}
+                    {poundsFromPence(quote.costPerLeadPence!)}.{" "}
+                    <a href="/dashboard/settings" className="underline">
+                      Change your plan
+                    </a>{" "}
+                    — it takes effect at your next billing cycle.
+                  </p>
+                )}
+
                 <label className="flex cursor-pointer items-start gap-2">
                   <input
                     type="checkbox"
-                    checked={confirmedRisk}
-                    onChange={(e) => setConfirmedRisk(e.target.checked)}
+                    checked={acceptedGuarantee}
+                    onChange={(e) => setAcceptedGuarantee(e.target.checked)}
                     className="mt-0.5 h-4 w-4 shrink-0"
                   />
                   <span>
-                    I understand this filter is predicted to deliver fewer
-                    leads than my plan includes, and I want to apply it at my
-                    own risk.
+                    I accept a guarantee of {quote.guaranteed} lead
+                    {quote.guaranteed === 1 ? "" : "s"} a month for this filter,
+                    at {poundsFromPence(quote.costPerLeadPence!)} per guaranteed
+                    lead.
                   </span>
                 </label>
+
+                {/* A poor offer is still shown — the customer may have good
+                    reasons — but it gets a second, separate step, and the
+                    thing that actually helps sits next to it. */}
+                {quote.requiresExtraConfirm && (
+                  <div className="space-y-2 rounded-md border-[0.5px] border-amber-400 bg-amber-100/70 px-3 py-2">
+                    <p className="text-xs">
+                      That is a high price per lead. Widening your selection is
+                      usually the better move: a bigger area raises the number
+                      we can guarantee and brings the cost per lead down.
+                      {suggestions.length > 0 && " Nearby areas are suggested above."}
+                    </p>
+                    <label className="flex cursor-pointer items-start gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={acknowledgedPoorValue}
+                        onChange={(e) =>
+                          setAcknowledgedPoorValue(e.target.checked)
+                        }
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                      <span>
+                        I have seen the suggestions and want this selection
+                        anyway.
+                      </span>
+                    </label>
+                  </div>
+                )}
               </div>
+            ) : quote.reason === "unreliable" ? (
+              <p className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {CONSENT_UNRELIABLE}
+              </p>
             ) : (
               <p className="rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                {CONSENT}
+                {quote.offerable
+                  ? CONSENT_FULL
+                  : "Choose at least one area or a bedroom range to see what we can guarantee."}
+              </p>
+            )}
+
+            {/* Volumes moved between rendering the quote and accepting it. The
+                server refused rather than substituting a number the customer
+                never saw. */}
+            {restatedQuote && (
+              <p className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Lead volumes have moved since this was quoted. We can now
+                guarantee{" "}
+                <span className="font-semibold">
+                  {restatedQuote.guaranteed} lead
+                  {restatedQuote.guaranteed === 1 ? "" : "s"} a month
+                </span>
+                {restatedQuote.costPerLeadPence != null && (
+                  <>
+                    {" "}
+                    at {poundsFromPence(restatedQuote.costPerLeadPence)} each
+                  </>
+                )}
+                . Review the figures above and accept again to continue.
               </p>
             )}
 
             {error && <p className="text-sm text-amber-600">{error}</p>}
 
             <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={apply}
-                disabled={busy || (isBelow && !confirmedRisk)}
-              >
+              <Button onClick={apply} disabled={busy || blocked}>
                 {busy
                   ? "Saving…"
-                  : isBelow
-                    ? "Apply anyway at my own risk"
+                  : needsAcceptance
+                    ? "Accept and apply"
                     : props.status === "off"
                       ? "Apply filter"
                       : "Save changes"}
@@ -940,9 +1158,9 @@ function PredictionBox({
             {prediction.displayRate === 1 ? "" : "s"}/month — below your plan
             of {allocation}
           </span>
-          . This area is too small to support your allocation, so your volume
-          guarantee is lifted while a filter is active. Consider adding more
-          areas.
+          . This selection is too small to support your full allocation, so the
+          number we can guarantee drops with it. Adding areas raises the
+          guarantee and lowers the cost per lead.
         </p>
         <VolumeBar
           rate={prediction.displayRate}
