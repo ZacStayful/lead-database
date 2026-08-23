@@ -8,6 +8,7 @@ import { BucketChart } from "@/components/landing/BucketChart";
 import { RevenueChart } from "@/components/landing/RevenueChart";
 import LiveActivity from "@/components/landing/LiveActivity";
 import { QualificationProcess } from "@/components/landing/QualificationProcess";
+import { LeadEstimator } from "@/components/marketing/LeadEstimator";
 
 // Local copy of the dark-green wordmark (sourced from the Squarespace CDN).
 const LOGO = "/logo.png";
@@ -1620,6 +1621,12 @@ export default function LandingPage() {
 
       {/* ============ PRICING ============ */}
       <section id="pricing" style={{ padding: "88px 32px" }}>
+        {/* Sits at the top of pricing because "what would this cost me per
+            lead" is the question a visitor is already asking here, and it is
+            the one the estimator answers with their own postcode. */}
+        <div style={{ maxWidth: 640, margin: "0 auto 56px" }}>
+          <LeadEstimator product="management" signupHref="#signup" />
+        </div>
         <div style={{ maxWidth: 1040, margin: "0 auto", textAlign: "center" }}>
           <Eyebrow center color="var(--sf-green)">
             Pricing

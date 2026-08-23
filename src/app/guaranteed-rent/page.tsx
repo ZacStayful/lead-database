@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { GuaranteedRentNav } from "@/components/landing/GuaranteedRentNav";
+import { LeadEstimator } from "@/components/marketing/LeadEstimator";
 
 // Operator-facing landing page for the Guaranteed Rent (rent-to-rent) product.
 //
@@ -907,6 +908,11 @@ export default function GuaranteedRentPage() {
 
       {/* ============ 7. PRICING ============ */}
       <section id="pricing" style={{ padding: "88px 32px" }}>
+        {/* GR has far more idle supply than management, so this section is
+            where a prospect finds that out in their own postcode. */}
+        <div style={{ maxWidth: 640, margin: "0 auto 56px" }}>
+          <LeadEstimator product="guaranteed_rent" signupHref="/signup?product=guaranteed_rent" />
+        </div>
         <div style={{ maxWidth: 1040, margin: "0 auto", textAlign: "center" }}>
           <Eyebrow>Pricing</Eyebrow>
           <h2
