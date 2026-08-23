@@ -13,6 +13,9 @@ import type { AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import { PredictionBox } from "@/components/filtering/PredictionBox";
 import { VolumeBar } from "@/components/filtering/VolumeBar";
+import { AreaPicker, labelFor, type AreaOption } from "@/components/filtering/AreaPicker";
+import { BedroomRange } from "@/components/filtering/BedroomRange";
+import { RadiusControls } from "@/components/filtering/RadiusControls";
 import { resolveRadius } from "@/components/filtering/radiusSearch";
 import {
   bedroomInputValue,
@@ -36,10 +39,7 @@ import {
 } from "@/lib/filterForecast";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
-export interface AreaOption {
-  area: string;
-  label: string;
-}
+export type { AreaOption } from "@/components/filtering/AreaPicker";
 
 export interface FilterPanelProps {
   product: LeadType;
@@ -271,15 +271,6 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       prev.join(",") === coveredKey ? prev : coveredKey === "" ? [] : coveredKey.split(",")
     );
   }, [locationMode, coveredKey]);
-
-  const visibleAreas = useMemo(() => {
-    const q = areaQuery.trim().toLowerCase();
-    if (!q) return availableAreas;
-    return availableAreas.filter(
-      (a) =>
-        a.area.toLowerCase().includes(q) || a.label.toLowerCase().includes(q)
-    );
-  }, [availableAreas, areaQuery]);
 
   function toggleArea(area: string) {
     setSelectedAreas((prev) =>
@@ -586,242 +577,39 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                     </div>
                   )}
                   {locationMode === "areas" && (
-                  <>
-                  <Input
-                    className="mt-2"
-                    placeholder="Search areas…"
-                    value={areaQuery}
-                    onChange={(e) => setAreaQuery(e.target.value)}
-                  />
-                  <div className="mt-2 grid max-h-64 grid-cols-1 gap-1 overflow-y-auto rounded-md border-[0.5px] border-border p-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {visibleAreas.map((a) => {
-                      const checked = selectedAreas.includes(a.area);
-                      return (
-                        <label
-                          key={a.area}
-                          className={
-                            "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm " +
-                            (checked ? "bg-brand/10" : "hover:bg-accent")
-                          }
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleArea(a.area)}
-                            className="h-4 w-4 shrink-0"
-                          />
-                          <span className="truncate">{a.label}</span>
-                          {areaCounts[a.area] != null && (
-                            <span className="ml-auto shrink-0 tabular-nums text-xs text-muted-foreground">
-                              {areaCounts[a.area]}
-                            </span>
-                          )}
-                        </label>
-                      );
-                    })}
-                    {visibleAreas.length === 0 && (
-                      <p className="px-2 py-1.5 text-sm text-muted-foreground">
-                        No areas match “{areaQuery}”.
-                      </p>
-                    )}
-                  </div>
-                  {selectedAreas.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {selectedAreas.map((a) => (
-                        <span
-                          key={a}
-                          className="inline-flex items-center gap-1 rounded bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand"
-                        >
-                          {labelFor(a, availableAreas)}
-                          <button
-                            type="button"
-                            onClick={() => toggleArea(a)}
-                            aria-label={`Remove ${a}`}
-                            className="text-brand/70 hover:text-brand"
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  </>
+                    <AreaPicker
+                      availableAreas={availableAreas}
+                      areaCounts={areaCounts}
+                      selected={selectedAreas}
+                      query={areaQuery}
+                      onQueryChange={setAreaQuery}
+                      onToggle={toggleArea}
+                    />
                   )}
 
                   {locationMode === "radius" && (
-                    <div className="mt-2 space-y-3">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                        <div className="flex-1">
-                          <label
-                            htmlFor={`${product}-radius-postcode`}
-                            className="block text-xs text-muted-foreground"
-                          >
-                            Your business postcode
-                          </label>
-                          <Input
-                            id={`${product}-radius-postcode`}
-                            value={radiusPostcode}
-                            onChange={(e) => setRadiusPostcode(e.target.value)}
-                            placeholder="e.g. LE67 8QN"
-                            autoComplete="postal-code"
-                          />
-                        </div>
-                        <div>
-                          <label
-                            htmlFor={`${product}-radius-miles`}
-                            className="block text-xs text-muted-foreground"
-                          >
-                            Radius
-                          </label>
-                          <select
-                            id={`${product}-radius-miles`}
-                            value={radiusMiles}
-                            onChange={(e) =>
-                              setRadiusMiles(parseInt(e.target.value, 10))
-                            }
-                            className="h-10 rounded-md border-[0.5px] border-border bg-background px-3 text-sm"
-                          >
-                            {[5, 10, 15, 20, 25, 30, 40, 50].map((m) => (
-                              <option key={m} value={m}>
-                                {m} miles
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      {geoFailed && (
-                        <p className="text-sm text-amber-600">
-                          The area boundaries could not be loaded, so radius
-                          search is unavailable right now. You can still pick
-                          areas by hand.
-                        </p>
-                      )}
-                      {!geoFeatures && !geoFailed && (
-                        <p className="text-sm text-muted-foreground">
-                          Loading area boundaries…
-                        </p>
-                      )}
-                      {radius &&
-                        radius.outcode === null &&
-                        radiusPostcode.trim() !== "" && (
-                          <p className="text-sm text-amber-600">
-                            We don't recognise that postcode — check it, or
-                            try just its first half (e.g. LE67).
-                          </p>
-                        )}
-
-                      {radius && radius.outcode !== null && (
-                        <div className="space-y-2">
-                          <p className="text-sm">
-                            Within {radiusMiles} miles of{" "}
-                            <span className="font-semibold">
-                              {radius.outcode}
-                            </span>{" "}
-                            you'd receive leads from:{" "}
-                            {radius.covered.length > 0 ? (
-                              <span className="font-medium">
-                                {radius.covered
-                                  .map((a) => cityForArea(a) ? `${a} — ${cityForArea(a)}` : a)
-                                  .join(", ")}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">
-                                no postcode areas — widen the radius.
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            Leads are matched by postcode area, so your filter
-                            covers each of these areas in full — including the
-                            parts beyond your radius.
-                          </p>
-                          {radius.upside && (
-                            <p className="text-sm">
-                              Widening to{" "}
-                              <span className="font-semibold">
-                                {radiusMiles + radius.upside.extraMiles} miles
-                              </span>{" "}
-                              would add{" "}
-                              {radius.upside.newAreas
-                                .map((a) => cityForArea(a) || a)
-                                .join(", ")}{" "}
-                              — about{" "}
-                              <span className="font-semibold">
-                                +{radius.upside.extraRate} lead
-                                {radius.upside.extraRate === 1 ? "" : "s"}
-                                /month
-                              </span>
-                              .{" "}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setRadiusMiles(
-                                    radiusMiles + radius.upside!.extraMiles
-                                  )
-                                }
-                                className="font-medium text-brand hover:underline"
-                              >
-                                Widen search
-                              </button>
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    <RadiusControls
+                      idPrefix={product}
+                      postcode={radiusPostcode}
+                      miles={radiusMiles}
+                      onPostcodeChange={setRadiusPostcode}
+                      onMilesChange={setRadiusMiles}
+                      geoFailed={geoFailed}
+                      geoLoading={!geoFeatures}
+                      resolution={radius}
+                    />
                   )}
                 </>
               )}
             </div>
 
-            <div>
-              <label className="text-sm font-medium">Bedroom range</label>
-              <p className="text-xs text-muted-foreground">
-                Leave both blank to accept any bedroom size. Setting the minimum
-                and maximum to the same number requests an exact bedroom count.
-              </p>
-              <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start">
-                <div className="flex-1">
-                  <label
-                    htmlFor={`${product}-min`}
-                    className="block text-xs text-muted-foreground"
-                  >
-                    Minimum bedrooms
-                  </label>
-                  <Input
-                    id={`${product}-min`}
-                    type="number"
-                    min={0}
-                    inputMode="numeric"
-                    value={minBeds}
-                    onChange={(e) => setMinBeds(e.target.value)}
-                    placeholder="Any"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label
-                    htmlFor={`${product}-max`}
-                    className="block text-xs text-muted-foreground"
-                  >
-                    Maximum bedrooms
-                  </label>
-                  <Input
-                    id={`${product}-max`}
-                    type="number"
-                    min={0}
-                    inputMode="numeric"
-                    value={maxBeds}
-                    onChange={(e) => setMaxBeds(e.target.value)}
-                    placeholder="Any"
-                  />
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Requesting bedroom sizes beyond 5 will reduce the accuracy of
-                    comparable data, as properties of this size are rarer to come
-                    across.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <BedroomRange
+              idPrefix={product}
+              min={minBeds}
+              max={maxBeds}
+              onMinChange={setMinBeds}
+              onMaxChange={setMaxBeds}
+            />
 
             <PredictionBox
               prediction={prediction}
@@ -1036,6 +824,3 @@ function StatusBadge({ status }: { status: FilterStatus }) {
   return <Badge variant="muted">No filter</Badge>;
 }
 
-function labelFor(area: string, options: AreaOption[]): string {
-  return options.find((o) => o.area === area)?.label ?? area;
-}

@@ -52,8 +52,22 @@ describe("toProductVolume", () => {
 });
 
 describe("areasInPayload", () => {
-  it("unions both products and sorts", () => {
-    expect(areasInPayload(payload)).toEqual(["BD", "LS", "M"]);
+  it("returns only that product's areas, sorted", () => {
+    expect(areasInPayload(payload, "management")).toEqual(["BD", "LS"]);
+    expect(areasInPayload(payload, "guaranteed_rent")).toEqual(["M"]);
+  });
+
+  // Unioning the two put areas with zero GR leads in front of a GR prospect,
+  // who picks one and is told there is not enough data to forecast it. The two
+  // books really do differ in coverage; the picker must not blur that.
+  it("never offers one product's areas to the other", () => {
+    expect(areasInPayload(payload, "guaranteed_rent")).not.toContain("LS");
+    expect(areasInPayload(payload, "management")).not.toContain("M");
+  });
+
+  it("survives a payload with no product block", () => {
+    const empty = { generatedAt: "" } as unknown as PublicFilterVolume;
+    expect(areasInPayload(empty, "management")).toEqual([]);
   });
 });
 

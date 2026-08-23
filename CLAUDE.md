@@ -3307,6 +3307,54 @@ per-area customer counts. The payload does still expose per-area, per-bedroom
 lead volume — the minimum an honest estimate needs; bucket it in
 `applyContention` if that trade ever looks wrong.
 
+#### The estimator is the panel's components, not a copy of them
+
+`LeadEstimator` composes `AreaPicker`, `RadiusControls`, `BedroomRange`,
+`PredictionBox`, `VolumeBar`, `resolveRadius` and `LeadSourceMap` — the same
+modules `LeadFilteringPanel` renders, extracted to `src/components/filtering/`.
+
+A first cut shared only the MATHS and reimplemented a thinner UI, which is worse
+than it sounds: the visitor could not filter by bedrooms at all (it hardcoded
+`minBedrooms: null`), saw bare area codes with no lead counts, got no widening
+suggestions, and was never told when their selection priced badly. Extract by
+pure move — the panel's diff for the whole exercise is imports and prop passes
+only, no authored JSX, which is the check to repeat if more is shared later.
+
+`PredictionBox` is passed **the plan the estimator would sell them** (the
+cheapest covering the forecast), not 0. `VolumeBar` then reads as progress
+toward that plan and the amber "adding areas raises the volume" variant fires
+where it should.
+
+#### ⚠️ The boundary file must not load on mount
+
+`public/data/uk-postcode-areas.geojson` is ~562 KB. The first cut gated its fetch
+on `mode !== "radius"` and commented that it loaded "only if the visitor actually
+uses radius mode" — but **radius is the default mode**, so it fired for every
+visitor to both landing pages whether or not they touched the estimator.
+
+The gate is now genuine intent: a postcode typed, the map opened, or a switch to
+hand-picking. The map itself sits behind a **Show map** button, because it is
+orientation rather than part of the estimate. Verified in Chromium against both
+pages: **zero geojson requests on load, one after typing a postcode.** The
+dashboard keeps its old behaviour — a customer who opened the filtering page is
+already committed.
+
+#### The map's counts are contention-scaled, and the dashboard's are not
+
+Per-area totals for the public map are summed from the payload's bed buckets,
+which `applyContention` has already scaled. So the same component shades by
+"what you would get" here and by raw national volume on the dashboard. That is
+the more honest number for a prospect and it IS a different number from one
+component — noted here so nobody later "fixes" the discrepancy.
+
+#### `areasInPayload` is scoped per product
+
+It unioned both products, which put areas with **zero GR leads** in front of a
+GR prospect: they pick one, are told there is not enough data to forecast it, and
+reasonably conclude the product is empty in their patch. The two books genuinely
+differ in coverage and the picker is the wrong place to blur that. Asserted in
+`publicFilterVolume.test.ts` in both directions.
+
 ### 28.7 — Gaps, all deliberate
 
 Every gap in the 0098 version of this list was about **crediting** — discard

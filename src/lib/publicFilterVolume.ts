@@ -139,13 +139,24 @@ export function toProductVolume(
   };
 }
 
-/** Every area the payload knows about, for the picker. */
-export function areasInPayload(payload: PublicFilterVolume): string[] {
-  const set = new Set<string>();
-  for (const product of [payload?.management, payload?.guaranteed_rent]) {
-    for (const area of Object.keys(product?.areaBedCounts ?? {})) set.add(area);
-  }
-  return Array.from(set).sort();
+/**
+ * Every area THIS PRODUCT has leads in, for the picker.
+ *
+ * ⚠️ Scoped per product deliberately. A first cut unioned both, which put areas
+ * with zero guaranteed-rent leads in front of a GR prospect: they would pick
+ * one, get "not enough data to forecast this", and reasonably conclude the
+ * product is empty in their patch. The two books genuinely differ in coverage,
+ * and the picker is the wrong place to hide that.
+ */
+export function areasInPayload(
+  payload: PublicFilterVolume,
+  leadType: LeadType
+): string[] {
+  const product =
+    leadType === "guaranteed_rent"
+      ? payload?.guaranteed_rent
+      : payload?.management;
+  return Object.keys(product?.areaBedCounts ?? {}).sort();
 }
 
 export type { LeadVolumeAggregate };
