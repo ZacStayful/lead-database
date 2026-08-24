@@ -289,15 +289,25 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
           <Row label="Leads this month">
             {customer.leads_received_this_month} of {customer.monthly_allocation}
           </Row>
-          <div className="pt-2">
-            <Button
-              variant="outline"
-              onClick={openPortal}
-              disabled={portalLoading}
-            >
-              {portalLoading ? "Opening…" : "Manage billing"}
-            </Button>
-          </div>
+          {/* A hand-provisioned account has no Stripe customer, so there is no
+              billing portal to open — a button that always errors reads as a
+              bug (and did, the day this shipped). Say so instead. */}
+          {customer.stripe_customer_id || customer.gr_stripe_customer_id ? (
+            <div className="pt-2">
+              <Button
+                variant="outline"
+                onClick={openPortal}
+                disabled={portalLoading}
+              >
+                {portalLoading ? "Opening…" : "Manage billing"}
+              </Button>
+            </div>
+          ) : (
+            <p className="pt-2 text-xs text-muted-foreground">
+              Your account is billed manually, so there is no card or invoice
+              portal to open. Contact support for any billing question.
+            </p>
+          )}
 
           {/* One tier switcher per product actually held. The rows above are
               management-only, so a GR-only subscriber saw nothing about their
