@@ -481,11 +481,16 @@ for being new with no way to earn out of it.
   an EMPTY list, the id itself returned "No such configuration", and customers
   reported the portal offered no way to cancel — which is what prompted §29.
   Either the config was deleted since this was written or the id was recorded
-  wrong. The portal must be (re)configured in the Stripe Dashboard — Settings →
-  Billing → Customer portal: enable "Cancel subscriptions", **at period end**,
-  with reason collection — and the resulting configuration id set as
-  `STRIPE_PORTAL_CONFIGURATION_ID` in Vercel so `/api/billing/portal` pins it
-  (§29). Unset, the route falls back to a bare session exactly as before.
+  wrong. **Resolved on 2026-08-24**: saving the Customer portal settings page in
+  the Dashboard created live configuration `bpc_1U7tJSBcGEHkDHo9FK2EnInH`
+  (`is_default: true`, `subscription_cancel` enabled at `at_period_end`, reason
+  collection on with all 8 options) — verified over the API. The likely
+  explanation for the original state: the settings page RENDERS the template
+  defaults (Cancel = On) even when no configuration object has ever been saved,
+  so it looks configured while the hosted portal serves nothing. Because the
+  config is the account default, `STRIPE_PORTAL_CONFIGURATION_ID` is optional
+  belt-and-braces: set it in Vercel to pin `/api/billing/portal` to this exact
+  config; unset, the route's bare session already gets it as the default.
 - Rehearse the §29 cancel flow in Stripe **test mode** (the same standing item
   as §24's tier swap): the API path `subscriptions.update({
   cancel_at_period_end: true, cancellation_details })` has not been exercised
@@ -3579,9 +3584,10 @@ the subscription record dies.
 `/api/billing/portal` now falls back to `gr_stripe_customer_id` (a GR-only
 Payment-Link customer previously got a 404 — no billing management at all) and
 pins `configuration: STRIPE_PORTAL_CONFIGURATION_ID` when the env var is set,
-degrading to a bare session when not. The configuration itself must be created
-in the Stripe Dashboard (§12) — the MCP tooling available to the build session
-exposed no write operation for portal configurations. Portal cancellations
+degrading to a bare session when not. The configuration was created from the
+Stripe Dashboard on 2026-08-24 — `bpc_1U7tJSBcGEHkDHo9FK2EnInH`, the account
+default, cancel at period end with reason collection (§12) — so the bare
+session already serves cancel and the env var is optional. Portal cancellations
 produce the same webhook shape as in-app ones and need no code of their own;
 they simply skip the audit row and our confirmation email, which is why the
 settings page steers to the in-app flow.
