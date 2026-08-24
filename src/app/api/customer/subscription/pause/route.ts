@@ -174,6 +174,9 @@ export async function POST(req: NextRequest) {
     .update({
       paused_at: now.toISOString(),
       pause_resumes_at: resumesAt.toISOString(),
+      // A fresh pause gets its own "ending soon" notice (0101) — the stamp from
+      // any previous pause must not suppress it.
+      pause_ending_notice_sent_at: null,
       pause_count: (customer.pause_count ?? 0) + 1,
       updated_at: now.toISOString(),
     })

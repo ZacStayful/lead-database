@@ -589,6 +589,132 @@ export async function sendSubscriptionResumedEmail(params: {
   }
 }
 
+/**
+ * Confirmation that a subscription is scheduled to cancel at period end.
+ *
+ * THIS EMAIL IS THE EVIDENCE TRAIL. It states, in writing, on the day the
+ * customer asked: that they cancelled, that they will not be billed again, and
+ * the exact date service ends. "You said you'd cancelled but kept billing me"
+ * is the complaint the whole cancellation feature exists to make unanswerable,
+ * and this message plus the subscription_cancellations row is the answer.
+ * When endDateIso is null (Stripe returned no period end) the copy falls back
+ * to "at the end of your current billing period" rather than guessing a date —
+ * a wrong stated date is worse than an unstated one.
+ */
+export async function sendSubscriptionCancelledEmail(params: {
+  to: string;
+  contactName: string;
+  /** Product as the customer knows it, e.g. "Management leads". */
+  productName: string;
+  endDateIso: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, productName, endDateIso } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const endPhrase = endDateIso
+    ? `<strong style="color:#1a1a1a">${esc(ukLongDate(endDateIso))}</strong>`
+    : "the end of your current billing period";
+  const subject = "Your Stayful cancellation is confirmed";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Your cancellation is confirmed, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your ${esc(productName)} subscription is scheduled to cancel. Here is what that means:</p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      <li><strong style="color:#1a1a1a">You will not be billed again.</strong></li>
+      <li>Your subscription ends on ${endPhrase} — you keep your access and any remaining leads until then.</li>
+      <li>Nothing else is charged and there is nothing more you need to do.</li>
+      <li>Changed your mind? Choose <strong style="color:#1a1a1a">Keep my subscription</strong> in Settings any time before your end date and everything continues as it was.</li>
+    </ul>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">We are sorry to see you go. If anything about the service fell short, replying to this email goes straight to us.</p>
+    ${button(`${APP_URL}/dashboard/settings`, "View settings")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * Confirmation that a pending cancellation has been withdrawn — the evidence
+ * trail in the other direction, so "I never asked to stay" is answerable too.
+ */
+export async function sendSubscriptionKeptEmail(params: {
+  to: string;
+  contactName: string;
+  productName: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, productName } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const subject = "Your Stayful subscription will continue";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Good to have you staying, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your cancellation has been withdrawn. Your ${esc(productName)} subscription continues as it was — billing carries on at your usual date and your leads keep arriving.</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">If you did not ask for this change, reply to this email and we will put it right.</p>
+    ${button(`${APP_URL}/dashboard/settings`, "View settings")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * Advance warning that a pause is about to end and billing will resume — sent
+ * ~7 days ahead by the resume cron, once per pause.
+ *
+ * This is the direct fix for the complaint the pause design invites: billing
+ * restarting automatically on someone who had decided they were done. The
+ * customer is told the exact date and given every exit while there is still
+ * time to take one — including cancelling so billing never restarts.
+ */
+export async function sendPauseEndingSoonEmail(params: {
+  to: string;
+  contactName: string;
+  resumeDateIso: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, resumeDateIso } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const resumeDate = ukLongDate(resumeDateIso);
+  const subject = `Your Stayful pause ends on ${resumeDate}`;
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Your pause ends soon, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your Stayful subscription is due to resume on <strong style="color:#1a1a1a">${esc(resumeDate)}</strong>. From that date billing restarts and new leads begin arriving again, with any preserved credits ready to spend.</p>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">If that suits you, there is nothing to do. If not, everything is in Settings:</p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      <li><strong style="color:#1a1a1a">Carry on</strong> — do nothing, and leads restart on ${esc(resumeDate)}.</li>
+      <li><strong style="color:#1a1a1a">Change plan</strong> — drop to a smaller package before billing restarts.</li>
+      <li><strong style="color:#1a1a1a">Cancel</strong> — cancel before ${esc(resumeDate)} and billing never restarts. Nothing further is charged.</li>
+    </ul>
+    ${button(`${APP_URL}/dashboard/settings`, "Review your subscription")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Join phrases as "a", "a and b", or "a, b and c". */
 function joinWithAnd(parts: string[]): string {
   if (parts.length <= 1) return parts[0] ?? "";

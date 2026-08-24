@@ -79,7 +79,8 @@ Also: `notification_preferences` (jsonb, 0034), `sms_alerts_enabled`,
 pause columns (0038 — see §21), goal columns (0051 — see §13), `pool_debit` /
 `gr_pool_debit` (0073 — see §19), `cancellation_feedback` /
 `cancellation_comment` (0084 — Stripe's cancellation reason, management-only,
-first cancellation wins like `cancelled_at`), and the Monday link columns
+first cancellation wins like `cancelled_at`), `cancel_effective_at` /
+`gr_cancel_effective_at` and `pause_ending_notice_sent_at` (0101 — see §29), and the Monday link columns
 (0086 — `monday_item_id` / `monday_board_id` / `monday_link_state` /
 `monday_link_matched_by` / `monday_status_label` / `monday_status_synced_at` /
 `monday_status_error`, see §23; `monday_item_id` is a pointer at the item
@@ -285,7 +286,9 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/assignments/[id]` (PATCH), `/api/customer/notes`,
 `/api/customer/files`, `/api/customer/settings`,
 `/api/customer/settings/notifications`, `/api/customer/goal` (§13),
-`/api/customer/subscribe` (§17), `/api/leads/[id]/reject`,
+`/api/customer/subscribe` (§17), `/api/customer/subscription/pause` (§21),
+`/api/customer/subscription/plan` (§24),
+`/api/customer/subscription/cancel` (§29), `/api/leads/[id]/reject`,
 `/api/leads/[id]/discard`, `/api/leads/[id]/close`,
 `/api/leads/[id]/report` (§25 — the stored analysis PDF),
 `/api/customer/presentation/[leadId]` (§26),
@@ -472,11 +475,27 @@ for being new with no way to earn out of it.
   They are stated guesses (§21) and `get_pause_outcomes()` is what will let them
   be checked against what actually happened.
 - ~~Enable cancellation-reason collection on the Stripe billing portal.~~
-  **Already enabled** — verified on the live configuration
-  (`bpc_1Tz1VxCpQPIFzv4r`): `subscription_cancel.cancellation_reason.enabled` is
-  true with options `too_expensive`, `switched_service`, `unused`, `other`. The
-  `feedback_options` list is empty, so those four are what a leaving customer
-  sees. Nothing to do; noted because it is easy to assume the opposite.
+  ⚠️ **This entry claimed it was already enabled on live configuration
+  `bpc_1Tz1VxCpQPIFzv4r`. During the 0101 work that configuration could not be
+  found**: `GET /v1/billing_portal/configurations` on the live account returned
+  an EMPTY list, the id itself returned "No such configuration", and customers
+  reported the portal offered no way to cancel — which is what prompted §29.
+  Either the config was deleted since this was written or the id was recorded
+  wrong. **Resolved on 2026-08-24**: saving the Customer portal settings page in
+  the Dashboard created live configuration `bpc_1U7tJSBcGEHkDHo9FK2EnInH`
+  (`is_default: true`, `subscription_cancel` enabled at `at_period_end`, reason
+  collection on with all 8 options) — verified over the API. The likely
+  explanation for the original state: the settings page RENDERS the template
+  defaults (Cancel = On) even when no configuration object has ever been saved,
+  so it looks configured while the hosted portal serves nothing. Because the
+  config is the account default, `STRIPE_PORTAL_CONFIGURATION_ID` is optional
+  belt-and-braces: set it in Vercel to pin `/api/billing/portal` to this exact
+  config; unset, the route's bare session already gets it as the default.
+- Rehearse the §29 cancel flow in Stripe **test mode** (the same standing item
+  as §24's tier swap): the API path `subscriptions.update({
+  cancel_at_period_end: true, cancellation_details })` has not been exercised
+  end to end against a real subscription, only the webhook's handling of the
+  resulting event shape has been reasoned through.
 
 ---
 
@@ -1532,6 +1551,23 @@ comment rather than changing behaviour. `pause_count` gates nothing.
 Both are guarded on `.not("paused_at","is",null)` so only the writer that
 actually flips the column sends the email, and both close the episode through
 `stampEpisodeEnded()`.
+
+Two 0101 additions to path 1, both in service of §29:
+
+- **The cron skips customers with a pending cancellation**
+  (`cancel_at_period_end = true`). A customer who cancelled while paused has
+  said they are done — un-pausing them would email "billing has restarted" to
+  somebody who asked to leave and put them back into routing. They stay paused
+  until Stripe deletes the subscription, and the third case below clears the
+  pause. Self-healing: "Keep my subscription" clears the flag and the next
+  daily run resumes them normally.
+- **A "your pause ends soon" notice** goes ~7 days before `pause_resumes_at`,
+  once per pause, stating the exact date billing restarts with resume / change
+  plan / cancel all pointed at Settings. Dedup is `pause_ending_notice_sent_at`,
+  claimed by a guarded write BEFORE the send (the `credit_invoice` discipline)
+  so a re-run cannot double-send; the stamp is nulled when a new pause starts
+  and when a pause clears (all three clearers). Pending cancellations are
+  skipped — "billing resumes" would be false for them.
 
 That helper stamps the **latest** open episode by id, not every open one.
 Because the stamp is best-effort and allowed to fail, a customer can carry an
@@ -3449,3 +3485,130 @@ Two traps the migration itself hit, both worth keeping:
 16 from empty, three applies proving idempotency, and the CHECK exercised on 11
 cases (negative counts, likelihood 101/-1/0/100, zero prices, the GR mirror, and
 all-null). Production was then verified to match scratch exactly.
+
+---
+
+## 29. Self-serve cancellation *(0101)*
+
+Until this shipped a customer had **no working way to cancel**. The settings
+page said "To cancel entirely, use Manage billing above", and the billing
+portal it opened offered no cancel: the live account's portal configuration
+list came back EMPTY over the API, despite §12's old note claiming cancellation
+was verified enabled (see the corrected §12 entry). The exposure was worst
+around pause: a pause re-bills automatically when it ends, so a customer who
+wanted OUT but could only pause was re-billed against their wishes — the exact
+shape of a chargeback or a legal complaint. This section is the evidence trail
+that closes it.
+
+`POST /api/customer/subscription/cancel` · `CancelSubscriptionCard` in
+Settings · both products (invariant 6) · `subscription_cancellations` audit
+table.
+
+### What a cancellation is
+
+`cancel_at_period_end: true` on the Stripe subscription — **never an immediate
+deletion**. The customer paid for the current period and keeps it (invariant 4:
+no refunds); billing simply never happens again. This matches the portal's
+`at_period_end` mode, so the webhook sees one event shape whichever door the
+customer leaves through. The route sends `cancellation_details` (feedback
+mapped onto Stripe's enum by `stripeFeedbackFor()`, comment composed from the
+full reason list + note), which is what lets the webhook's EXISTING capture
+(0084) store the reason with zero new webhook code.
+
+**One route for do and undo** (§24's rule): `action: "keep"` sets
+`cancel_at_period_end: false` and the webhook's change-of-mind branch clears
+everything. The pending state renders in Settings with the exact end date and a
+"Keep my subscription" button.
+
+### The ordering rule, and why it inverts §24's
+
+Stripe first, then the row — **and no Stripe rollback on a DB failure**, where
+the plan route swaps the price back. Once Stripe has accepted the customer's
+instruction to cancel, undoing it because OUR cache write failed would
+manufacture exactly the "I cancelled but you kept billing me" incident this
+exists to prevent. The route's row write (`(gr_)cancel_at_period_end` +
+`(gr_)cancel_effective_at`) is UI freshness only; the webhook event our own
+update fires is the source of truth and converges the row seconds later.
+
+### The evidence trail
+
+Four records per cancellation, none load-bearing for behaviour:
+
+1. `subscription_cancellations` — reasons (CHECK matches `cancelOptions.ts`
+   character-for-character, and `cancelOptions.test.ts` enforces it
+   mechanically), note, the single Stripe feedback value, the subscription id,
+   `effective_at`, and `confirmation_email_id`. **The only place a GR
+   customer's reason survives** — the webhook's feedback capture is
+   management-only (0084). RLS on, no policies. `reverted_at` is stamped on
+   "keep", latest-open-row-only (`stampEpisodeEnded`'s reasoning). Live state
+   is `customers.(gr_)cancel_at_period_end`, never this table.
+2. `sendSubscriptionCancelledEmail` — "you will not be billed again" and the
+   exact end date, in the customer's inbox on the day they asked. The Resend id
+   is written back onto the audit row. `sendSubscriptionKeptEmail` is the same
+   in the other direction.
+3. Stripe's own record (`cancellation_details`, `cancel_at`).
+4. The Monday board flips to `Cancelled` with the end date immediately — the
+   route calls `syncCustomerMondayStatus` itself; the label rule already reads
+   the stored flags (0087) so the webhook's later push is a cache no-op.
+
+### Guards, and the one deliberately absent
+
+`holdsProduct` (403) → per-product subscription id (409, support copy) →
+already-pending / not-pending vs action (409). **No `paused_at` guard**: a
+paused customer deciding not to return is the single most important caller.
+They stay paused (invoices voided) until the subscription deletes; §21's third
+case then clears the pause. `past_due` may also cancel — a failing card must
+not trap someone in a subscription.
+
+### The pause-instead interstitial
+
+Cancelling an unpaused management subscription NEVER goes straight to the
+reason form: a required first screen compares pausing (billing stops now,
+credits kept, place reserved, auto-restart with 7 days' email warning, cancel
+still available) against cancelling (ends for good at period end, return needs
+a new signup), with "Pause instead" primary and "No thanks, continue to
+cancel" quieter. One click each way — a save offer, not an obstacle. GR and
+already-paused customers skip it (no pause product / already seen it).
+
+### `(gr_)cancel_effective_at`
+
+0087 stored WHETHER a cancellation is pending; these store WHEN. Written by the
+route and by the webhook (`cancel_at` falling back to `subscriptionPeriodEnd`,
+the Monday endDate fallback order), cleared by the same change-of-mind rule,
+read only for display. For a paused customer the figure is Stripe's rolling
+period end, not "when billing stops" — billing already stopped; it is the date
+the subscription record dies.
+
+### The portal, fixed alongside
+
+`/api/billing/portal` now falls back to `gr_stripe_customer_id` (a GR-only
+Payment-Link customer previously got a 404 — no billing management at all) and
+pins `configuration: STRIPE_PORTAL_CONFIGURATION_ID` when the env var is set,
+degrading to a bare session when not. The configuration was created from the
+Stripe Dashboard on 2026-08-24 — `bpc_1U7tJSBcGEHkDHo9FK2EnInH`, the account
+default, cancel at period end with reason collection (§12) — so the bare
+session already serves cancel and the env var is optional. Portal cancellations
+produce the same webhook shape as in-app ones and need no code of their own;
+they simply skip the audit row and our confirmation email, which is why the
+settings page steers to the in-app flow.
+
+### Verification
+
+All migrations applied to a scratch Postgres 16 from empty, 0101 re-applied to
+prove idempotency; every CHECK exercised (empty reasons, NULL element, invalid
+reason, `other` without and with a blank note, 501-char note, bad lead_type);
+RLS confirmed on with zero policies; both indexes present; FK cascade confirmed
+on customer delete. 0101 was then applied to `znlfwbnvhlacwzgfalcf` and the
+same assertions re-run (0 pending cancellations, 4 paused customers at apply
+time). `cancelOptions` went through 20 vitest cases including the mechanical
+CHECK-vs-lib equality; the full suite is 167 green and `next build` passes.
+**Not rehearsed against a live Stripe subscription** — see §12's test-mode
+item before leaning on it.
+
+### Deployment order — migration BEFORE code
+
+0101 first (done). The webhook writes `(gr_)cancel_effective_at` on every
+`customer.subscription.*` event, so code arriving before the columns would
+fail those updates. The portal configuration + env var can land any time —
+the route degrades gracefully without them. Nothing here touches a balance,
+counter, pacing or capacity column.
