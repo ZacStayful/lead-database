@@ -68,6 +68,9 @@ export interface Customer {
   paused_at: string | null;
   pause_resumes_at: string | null;
   pause_count: number;
+  /** When the "pause ends soon, billing resumes" email went for the CURRENT
+   *  pause (0101). Nulled when a new pause starts and when a pause clears. */
+  pause_ending_notice_sent_at: string | null;
   // Stripe cancellation_details, captured at cancellation (0077). First
   // cancellation wins, matching cancelled_at. Management-only.
   cancellation_feedback: string | null;
@@ -181,6 +184,12 @@ export interface Customer {
   // sales board at the moment it is requested; gates nothing else.
   cancel_at_period_end: boolean;
   gr_cancel_at_period_end: boolean;
+  // When the pending cancellation takes effect (0101) — Stripe's cancel_at,
+  // falling back to the period end. Written by the cancel route and the
+  // webhook, cleared by the same change-of-mind rule as the flags above.
+  // Display only; gates nothing.
+  cancel_effective_at: string | null;
+  gr_cancel_effective_at: string | null;
   // Link to the item on the Monday enquiries board representing this CUSTOMER
   // (0086) — not a lead, so unrelated to leads.monday_item_id. Best-effort and
   // deliberately not unique; monday_link_state records a collision rather than

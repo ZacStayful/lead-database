@@ -9,6 +9,10 @@ import { planForAllocation } from "@/lib/plans";
 import { PRODUCT_COPY, holdsProduct } from "@/lib/products";
 import { PlanChangeCard } from "@/components/dashboard/PlanChangeCard";
 import {
+  CancelSubscriptionCard,
+  type CancelProductState,
+} from "@/components/dashboard/CancelSubscriptionCard";
+import {
   PAUSE_MONTHS_OPTIONS,
   PAUSE_NOTE_MAX_LENGTH,
   PAUSE_REASONS,
@@ -215,6 +219,48 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     customer.subscription_status === "active";
   const isPaused = Boolean(pausedAt);
 
+  // One cancel section per held product. Deliberately NOT gated on
+  // managementActive or the pause state — a paused customer deciding not to
+  // return is the most important person this flow serves, and a GR-only
+  // customer (who cannot even open the billing portal without a
+  // stripe_customer_id) has no other route out.
+  const cancelProducts: CancelProductState[] = (
+    ["management", "guaranteed_rent"] as LeadType[]
+  )
+    .filter((leadType) => holdsProduct(customer, leadType))
+    .map((leadType) => ({
+      leadType,
+      name: PRODUCT_COPY[leadType].name,
+      pending:
+        leadType === "guaranteed_rent"
+          ? customer.gr_cancel_at_period_end
+          : customer.cancel_at_period_end,
+      effectiveAt:
+        leadType === "guaranteed_rent"
+          ? customer.gr_cancel_effective_at
+          : customer.cancel_effective_at,
+      hasSubscription: Boolean(
+        leadType === "guaranteed_rent"
+          ? customer.gr_stripe_subscription_id
+          : customer.stripe_subscription_id
+      ),
+      // The pause-instead interstitial: management only (GR has no pause
+      // product), and only when a pause is actually available right now.
+      offerPauseFirst:
+        leadType === "management" && managementActive && !isPaused,
+    }));
+
+  function pauseInstead() {
+    setShowPauseForm(true);
+    // The pause card sits above the cancel card; bring it into view once the
+    // form has rendered.
+    setTimeout(() => {
+      document
+        .getElementById("pause-subscription-card")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }
+
   // Mirrors the route's date maths exactly (new Date(now).setMonth(+months)),
   // including its roll-over on short months, so the date shown here is the date
   // the server will actually store rather than an optimistic approximation.
@@ -297,7 +343,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
       </Card>
 
       {managementActive && (
-        <Card>
+        <Card id="pause-subscription-card">
           <CardHeader>
             <CardTitle>Pause subscription</CardTitle>
           </CardHeader>
@@ -314,9 +360,13 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
                     <span className="font-medium">
                       {formatLongDate(pauseResumesAt)}
                     </span>
-                    .
+                    , when billing restarts.
                   </p>
                 )}
+                <p className="text-xs text-muted-foreground">
+                  Decided not to return? You can cancel below at any time — then
+                  billing never restarts.
+                </p>
               </>
             ) : (
               <>
@@ -338,7 +388,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
                       Pause subscription
                     </Button>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      To cancel entirely, use Manage billing above.
+                      To cancel entirely, see Cancel subscription below.
                     </p>
                   </div>
                 ) : (
@@ -453,6 +503,11 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
           </CardContent>
         </Card>
       )}
+
+      <CancelSubscriptionCard
+        products={cancelProducts}
+        onPauseInstead={pauseInstead}
+      />
 
       <Card>
         <CardHeader>

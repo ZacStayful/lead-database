@@ -376,6 +376,21 @@ export async function POST(request: NextRequest) {
         // genuinely wrong.
         const nowIso = new Date().toISOString();
 
+        // When a pending cancellation lands (0101): Stripe's cancel_at, falling
+        // back to the current period end — the same fallback the Monday endDate
+        // below uses. Null whenever no cancellation is pending, including once
+        // it has actually happened (cancelled_at carries the fact then), so the
+        // column clears on a change of mind by the same rule as the 0087 flags.
+        const cancellationScheduled =
+          status !== "canceled" && sub.cancel_at_period_end === true;
+        const cancelEffectiveSeconds = cancellationScheduled
+          ? sub.cancel_at ?? subscriptionPeriodEnd(sub)
+          : null;
+        const cancelEffectiveIso =
+          cancelEffectiveSeconds != null
+            ? new Date(cancelEffectiveSeconds * 1000).toISOString()
+            : null;
+
         if (isGuaranteedRent) {
           update.gr_subscription_status = status;
           update.gr_stripe_subscription_id = sub.id;
@@ -436,8 +451,8 @@ export async function POST(request: NextRequest) {
           // along — see the migration header. Cleared on the same condition the
           // management side clears cancellation_feedback: active AND no longer
           // scheduled to cancel, which is the only genuine change of mind.
-          update.gr_cancel_at_period_end =
-            status !== "canceled" && sub.cancel_at_period_end === true;
+          update.gr_cancel_at_period_end = cancellationScheduled;
+          update.gr_cancel_effective_at = cancelEffectiveIso;
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
@@ -503,8 +518,8 @@ export async function POST(request: NextRequest) {
           // False once the cancellation has actually happened — status 'canceled'
           // is the stronger signal at that point and the flag would just be a
           // second thing to keep true.
-          update.cancel_at_period_end =
-            status !== "canceled" && sub.cancel_at_period_end === true;
+          update.cancel_at_period_end = cancellationScheduled;
+          update.cancel_effective_at = cancelEffectiveIso;
 
           if (anchor) update.billing_cycle_anchor = anchor;
         }
@@ -532,6 +547,9 @@ export async function POST(request: NextRequest) {
             .update({
               paused_at: null,
               pause_resumes_at: null,
+              // The pause-ending notice stamp belongs to the pause it was sent
+              // for (0101); a cleared pause means a future pause gets its own.
+              pause_ending_notice_sent_at: null,
               billing_cycle_anchor: new Date().toISOString().slice(0, 10),
               leads_received_this_month: 0,
               updated_at: new Date().toISOString(),

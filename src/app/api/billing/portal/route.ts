@@ -21,11 +21,17 @@ export async function POST() {
   const admin = createAdminClient();
   const { data: customer } = await admin
     .from("customers")
-    .select("stripe_customer_id")
+    .select("stripe_customer_id, gr_stripe_customer_id")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  if (!customer?.stripe_customer_id) {
+  // A GR-only customer who bought through a Payment Link has no
+  // stripe_customer_id at all — their Stripe customer is gr_stripe_customer_id
+  // (0062). Before this fallback they could not open billing management at all.
+  const stripeCustomerId =
+    customer?.stripe_customer_id ?? customer?.gr_stripe_customer_id ?? null;
+
+  if (!stripeCustomerId) {
     return NextResponse.json(
       { error: "No Stripe customer on file" },
       { status: 404 }
@@ -34,8 +40,15 @@ export async function POST() {
 
   const stripe = getStripe();
   const session = await stripe.billingPortal.sessions.create({
-    customer: customer.stripe_customer_id,
+    customer: stripeCustomerId,
     return_url: `${APP_URL}/dashboard/settings`,
+    // Pin the portal configuration that has subscription cancellation enabled
+    // (mode at_period_end, matching the webhook's documented assumption).
+    // Unset, the session falls back to the account's dashboard default exactly
+    // as before — so a missing env var degrades, never breaks.
+    ...(process.env.STRIPE_PORTAL_CONFIGURATION_ID
+      ? { configuration: process.env.STRIPE_PORTAL_CONFIGURATION_ID }
+      : {}),
   });
 
   return NextResponse.json({ url: session.url });
