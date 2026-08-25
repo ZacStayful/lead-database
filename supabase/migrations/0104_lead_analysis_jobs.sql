@@ -351,9 +351,8 @@ begin
     return;
   end if;
 
-  select count(*) filter (where r.status = 'succeeded'),
-         count(*) filter (where r.status <> 'succeeded' and r.chargeable)
-    into v_succeeded, v_failed
+  select count(*) filter (where r.status = 'succeeded')
+    into v_succeeded
     from public.lead_analysis_rows r
    where r.job_id = p_job_id;
 
@@ -363,6 +362,22 @@ begin
               when v_job.row_count > 0 then v_job.amount_pence / v_job.row_count
               else 0
             end;
+
+  -- ── What is owed back is what was PAID FOR and not DELIVERED ──────
+  --
+  -- Deliberately `row_count - succeeded` rather than a count of failed rows,
+  -- and the difference is a row that is no longer there.
+  --
+  -- lead_analysis_rows.lead_id cascades from leads, so a customer who deletes
+  -- one of their own leads in the half hour between paying and it running takes
+  -- its row with it. Counting failures then finds nothing to refund: they paid
+  -- for three, received two, and were owed nothing — the money quietly kept for
+  -- work never done. Counting what was paid for and subtracting what was
+  -- delivered cannot miss a row, because it never looks at the rows at all.
+  --
+  -- failed_count is reported the same way, so the figure in the email agrees
+  -- with the refund beside it.
+  v_failed := greatest(v_job.row_count - v_succeeded, 0);
   v_refund := least(v_failed * v_unit, v_job.amount_pence);
 
   update public.lead_analysis_jobs

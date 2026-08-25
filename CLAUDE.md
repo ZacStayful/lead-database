@@ -45,6 +45,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
+| `/api/cron/run-lead-analysis` | `*/5 * * * *` | Drain the paid lead-analysis queue (§31) — **the first sub-daily cron in this repo** |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The account is
@@ -149,7 +150,8 @@ file_added, stage_changed, nudge_sent`.
 
 Other tables: `notifications`, `payments`, `lead_notes`, `lead_files`,
 `stripe_events`, `system_settings`, `post_call_offers`, `lead_topup_tokens`,
-`testimonials`, `public_activity_stats`, `lead_imports` (§30).
+`testimonials`, `public_activity_stats`, `lead_imports` (§30),
+`lead_analysis_jobs` / `lead_analysis_rows` / `lead_analysis_tokens` (§31).
 
 ---
 
@@ -2683,6 +2685,18 @@ passes an explicit `limit`. Caught during the launch backfill, not by the test
 suite — the same lesson as §23.10: the tests covered the parser and the picker,
 and nothing covered the shape of the API response around them.
 
+### ⚠️ There is now a THIRD writer of these columns *(§31)*
+
+This section describes two writers — ingest and the daily sweep — and both read
+a PDF from a lead's **Monday item**. Paid lead analysis (§31) writes the same
+columns for a lead that has no Monday item at all, by calling the analyser
+directly and building an `IncomeReportOutcome` from its reply.
+
+It goes through `incomeReportPatch()` and `syncStoredReport()` unchanged, so
+everything below about how the file follows the figures still governs it. What
+is no longer true is "only the sweep keeps existing leads up to date": for an
+owned lead the sweep is structurally blind (§30.8), and §31 is the only route.
+
 ### Two writers, and only one of them refreshes
 
 - **`ingestLead()`, created leads only.** `fetchMondayLeads` now asks for
@@ -3937,3 +3951,265 @@ schema without it would fail every leads read. `ANTHROPIC_API_KEY` can land any
 time; the import degrades to heuristic mapping without it. Nothing here writes a
 balance, counter, pacing or capacity column, so a lagging migration cannot
 affect lead allocation.
+
+---
+
+## 31. Paid lead analysis *(0104, 0105)*
+
+A customer pays **£3 a lead** to have their **own** leads (§30) run through the
+Stayful property analyser. The result is a lead that is indistinguishable from
+one that came through the marketplace: projected occupancy, nightly rate, gross
+income, the management fee, and the full analysis PDF.
+
+`/api/customer/lead-analysis` (+ `GET /[jobId]`) · `/api/cron/run-lead-analysis`
+· `POST /api/internal/analyse` on the analyser app.
+
+### 31.1 — Why the gap existed at all
+
+§25's figures come from parsing a PDF attached to a lead's **Monday item**. An
+owned lead has no Monday item — 0102's CHECK says so explicitly — so the one
+path that produces those figures could never fire for the leads this feature is
+about. A customer importing two hundred leads got two hundred rows with a name,
+an address and nothing to decide with.
+
+### 31.2 — The insight the whole design rests on
+
+**Almost none of the write path needed writing.** `IncomeReportOutcome`
+(`incomeReport.ts`) already carries every figure column *and* `bytes` for the
+PDF; `incomeReportPatch()` produces the column patch and `syncStoredReport()` is
+the only writer to the `lead-reports` bucket. So the worker's entire database job
+is to build one `IncomeReportOutcome` from the analyser's JSON and hand it to the
+two functions the Monday sweep already hands it to.
+
+That is what makes an analysed owned lead render identically with **no display
+code at all**: it is not *like* a parsed lead, it **is** one. Every piece of UI in
+this feature sells the analysis; none of it shows it.
+
+`NO_FIGURES` is exported for the same reason it exists — there are now two
+producers of `IncomeReportOutcome`, and a figure added to one has to reach both
+or the other quietly starts reporting stale values.
+
+### 31.3 — The analyser call, and how Monday is kept out of it
+
+`POST /api/internal/analyse` on the analyser repo, gated on `x-internal-secret`
+(404 when unset, the `reports/count` fail-closed pattern). It wraps
+`runAnalysis()` — the same function the public form and the admin bulk upload
+use — and renders the PDF itself.
+
+**Nothing reaches Monday, and that is enforced by omission rather than a flag.**
+`persistAndSync()` returns before any Monday work when it has no email, phone or
+item id, so the request carries **none of the three** and the route rebuilds the
+body field by field rather than forwarding it. A caller cannot reintroduce a
+signal by sending one. It is also why no landlord PII leaves this app: the
+analyser is sent the property and nothing else.
+
+The `analyser_reports` insert sits *before* that early return, so the run is
+still persisted and attributable as `source: 'lead_db'`.
+
+**No `sideEffectGate` is passed** — a gate vetoes a CRM write and there is none.
+The same verdict is computed and returned as `quality_ok`, because the caller is
+about to charge somebody and refunds a row that comes back false.
+`getShortLetData()` swallows upstream failures and returns a *plausible synthetic
+estimate*, so that flag is what stands between an Airbtics outage and a customer
+paying for a page of invented valuations.
+
+### 31.4 — ⚠️ Occupancy is a fraction there and a whole percent here
+
+`ShortLetData.occupancyRate` is **0–1**. `leads.occupancy_rate` is the percentage
+as printed (63, not 0.63) and its CHECK is `>= 0 and <= 100` — **which `0.63`
+passes silently.** A lost multiplication writes a believable wrong number that no
+constraint catches, and the only visible symptom is `incomeBasis()` quietly
+switching to the comp-set wording.
+
+The conversion therefore happens **once**, in `toOccupancyPercent()` on the
+analyser side, and is **re-asserted** on this side in
+`buildOutcomeFromAnalyserResponse`. It refuses a value already in percent rather
+than passing it through: tolerating both units is how
+`analyser_reports.occupancy` came to hold both. Rate and occupancy are stored as
+a pair or not at all (0091).
+
+Two other guards there exist because the column cannot catch them itself:
+`monthly_revenue_profile` has a `cardinality = 12` CHECK that aborts the **whole
+lead update**, not just its own column; and a zero-length PDF is never a
+legitimate state — 159 of them once shipped as reports operators could open
+(§25).
+
+### 31.5 — Nothing is analysed before it is paid for
+
+A job is created `awaiting_payment`, and `claim_lead_analysis_rows` only ever
+looks at jobs that are `running`. The **only** thing that makes that transition
+is `record_lead_analysis_success`. So the money gate is a property of the schema
+rather than a rule somebody has to remember in a route.
+
+The charge is a **sibling** of the top-up, not a copy. `chargeIntent.ts` now
+holds the Stripe mechanics for both, and the doctrine is unchanged: **never
+finalise a claim as failed unless the outcome is DEFINITIVE**, because a
+connection error can be thrown after the money was taken. On an indeterminate
+outcome the claim is released and the idempotency key makes a retry return the
+original intent.
+
+Three things differ deliberately:
+
+| | Top-up | Lead analysis |
+|---|---|---|
+| Active-token index | `(customer_id, lead_type)` | **`(job_id)`** — a customer may hold an unredeemed top-up offer *and* buy analysis, and may buy two batches ten minutes apart |
+| Credit | `+5` to `(gr_)lead_balance` | **nothing** — `credits_added: 0`. This buys analysis of leads already owned; crediting would hand them marketplace leads nobody paid for and move the pacing counters §13 measures delivery by |
+| Eligibility | "never sell credit the customer cannot spend", so a **paused** customer is refused | a paused customer **may** buy: nothing here depends on assignment, and the figures land whatever their subscription is doing. Holding the product is still required |
+
+**A £600 off-session charge nobody is present for is what issuers decline**, so
+above `HOSTED_CHECKOUT_THRESHOLD_PENCE` the saved card is skipped entirely and
+the flow goes to Stripe's hosted page, where a 3-D Secure prompt can actually be
+answered. `forceHosted` is a real field on `ChargeSpec` — it was briefly passed
+through an object spread, where excess-property checking does not apply, and so
+silently did nothing.
+
+### 31.6 — The late-succeeding charge, which is the subtle one
+
+`record_lead_analysis_failure` cancels the job when a charge is definitively
+declined. A `payment_intent.succeeded` can still arrive afterwards, for an intent
+that settled late — and the money is then genuinely gone from the customer's
+account.
+
+`record_lead_analysis_success` therefore **revives a cancelled job and its rows**,
+not merely an `awaiting_payment` one. Without that the first version recorded the
+payment and left the batch closed: charged, and nothing done. A **completed** job
+is still never revived — it already ran, and its refund may already have been
+paid.
+
+### 31.7 — What is owed back, and why it is not a count of failures
+
+A row is refundable when it is terminally dead: attempts exhausted, or figures
+the analyser told us not to trust. The refund is issued **once per job**, at the
+end of a worker run, with an idempotency key derived from the job.
+
+**The doctrine inverts here.** A charge whose outcome is unknown releases; a
+refund whose outcome is unknown is **left `due`** and re-attempted. Worst case we
+refund twice, which the idempotency key and `uq_payments_stripe_refund` both
+prevent anyway. The failure that must never happen is marking a refund done that
+never was, because nothing looks at it again.
+
+⚠️ **`finalise_lead_analysis_job` computes the refund as `row_count -
+succeeded`, NOT as a count of failed rows**, and that is a fix rather than a
+style. `lead_analysis_rows.lead_id` cascades from `leads`, so a customer who
+deletes one of their own leads in the half hour between paying and it running
+takes its row with it. Counting failures then found nothing to refund: paid for
+three, received two, owed nothing. Counting what was paid for and subtracting
+what was delivered cannot miss a row, because it never looks at the rows at all.
+
+### 31.8 — The worker
+
+Five-minute cron plus a best-effort kick after a purchase. **`after()` from
+`next/server` is Next 15+ and this app is 14.2.15**, so the analyser's
+chain-ahead trick cannot be copied; nothing is lost, because rows are durable and
+claims expire, so the queue drains whether or not a kick lands. This is the
+repo's first sub-daily cron — Pro is already proven by
+`parse-income-reports`'s `maxDuration = 300`.
+
+`claim_lead_analysis_rows` is a transcription of the analyser repo's
+`claim_bulk_rows`. `p_max_inflight` (default 3) is a **spend-rate throttle, not a
+latency knob**: every in-flight row is an external report we pay for whether or
+not we keep the answer. `attempts` increments **at claim**, so a row that
+hard-kills its worker burns an attempt rather than looping forever buying the
+same report.
+
+Failures are sorted by whose fault they are. A rejected input or a property that
+will not geocode is terminal. A 5xx, a dropped connection or a timeout is
+retryable — a timeout especially, since the analyser may well have finished and
+paid for the report after we stopped listening, and its 24-hour cache means the
+retry does not buy it twice. A missing or refused secret, or a 429, is
+**blocked**: the row hands its attempt back and the run stops rather than
+marching the rest of a paid batch into the same wall.
+
+### 31.9 — Where it sells
+
+The bulk offer sits **after the import commits**, which is the design and not an
+accident of layout: that is the first moment we know which rows became *real*
+leads, so quoting earlier would bill for duplicates — which `create_customer_leads`
+creates nothing for — and for blank rows. It also means a declined card costs
+nothing, because the leads are already in.
+
+The mapping screen carries a **non-binding** estimate so the price is seen before
+committing to anything. It is computed **server-side over every row**: the client
+holds only the ten preview rows, and "8 of 10 look ready" for a two-hundred-row
+sheet is a wrong number dressed as a precise one. It hides itself the moment a
+mapping it depends on changes, rather than restating a stale figure.
+
+Arm-then-confirm everywhere, never a modal — the repo vendors no dialog
+primitive, and a single click must never move £552.
+
+**The postcode became an import target of its own** (`leadImport.ts`). It used to
+be a synonym for `address`, and since `address` is single-claim, a sheet with
+both an Address and a Postcode column had them fight: the loser was folded into
+`lead_profile` as prose. That cost nothing while the postcode was only ever read
+back out of the address, and is the difference between an analysable lead and an
+unanalysable one now the analyser is sent it as a field. `toRpcRow` prefers an
+explicit postcode and appends it to the address when the address lacks it.
+
+### 31.10 — Guaranteed Rent
+
+**In scope, with the fee line suppressed.** `IncomeProjection` used to refuse a
+non-management lead outright, which was right when nothing could produce figures
+for a GR lead and wrong now that this can. What was always true is that the FEE
+is what a *management* operator earns: a GR operator earns the margin between the
+rent they guarantee and what the property makes, so a management fee is a **wrong**
+number for them rather than a missing one.
+
+So gross, nightly rate and occupancy render for GR — they are exactly what a GR
+operator prices their guarantee against — and the fee half does not. **Do not
+restore the early return**: it would now silently hide figures somebody paid for.
+
+### Verification
+
+**100 migrations applied to a scratch Postgres 16 from empty**, 0104 and 0105
+each re-applied twice. Every CHECK exercised; RLS confirmed on with zero policies
+on all three tables; ACLs audited with `has_function_privilege` on all seven new
+functions, and invariant 7 re-checked on the four that must stay
+`authenticated`-executable.
+
+The claim RPC was driven under contention: an unpaid job's rows refusing to be
+claimed; the in-flight cap taking 3 then 0; attempts incrementing at claim; a row
+abandoned by a killed worker reclaimed after the stale window and one that had
+burned both attempts never reclaimed again; **eight concurrent claimers taking
+twelve rows with twelve distinct ids and no double-claim.**
+
+The money path: two concurrent submits claiming one token with the second getting
+nothing; success flipping the job to `running` with `credits_added` 0 and every
+balance untouched; a replay adding no second payment row; a release letting the
+same token retry while a paid one is never reopened; a definitive decline
+cancelling the job and its rows; and the late-payment promotion reviving all three
+rows into a claimable state.
+
+**Regressions, on a fresh database:** a marketplace lead still not retired, not
+pool-barred, still returning a candidate, still allocating and spending exactly
+one credit, and still deduping. An owned lead still retired, still pool-barred,
+absent from pool and escalation candidates, and refused by **both** assign
+functions when a *second* customer asks for it. And the one that matters most —
+`find_duplicate_lead` returning null for a landlord who exists only as somebody's
+private copy, so an owned lead still cannot poison ingest (§30.1).
+
+**The seam drive**, against a real analyser (`PIPELINE_FAKE=1`, so £0) and a real
+Postgres holding the real schema: occupancy stored as 55 and not 0.55;
+`rate × 365 × occupancy` reconciling with gross to 0.65%, so the lead reads
+"Based on £159 a night at 55% occupancy" rather than falling back to the comp-set
+wording; both management-fee derivations agreeing exactly; twelve monthly values;
+every CHECK satisfied; **the PDF 20,416 bytes at the analyser, 20,416 decoded and
+20,416 handed to storage, byte-identical and still beginning `%PDF-`**; no
+customer counter moving across the write; the lead still carrying no Monday item;
+and not one Monday line in the analyser's log.
+
+**Not exercised against live Stripe.** The charge, the hosted-checkout fallback
+and the refund have been driven only against stubs and the RPCs. Rehearse them in
+test mode before relying on them — the same standing item §12 records for the
+tier swap and the cancel flow.
+
+### Deployment order — migrations BEFORE code
+
+0104 first, then 0105, then the code. Both are inert on their own: nothing
+selects from these tables until the worker lands, and no row can be worked until
+a charge lands. Code arriving first would query tables that do not exist on every
+import commit, which now quotes the offer.
+
+`ANALYSER_API_URL` and `ANALYSER_INTERNAL_SECRET` can land any time — without
+them the queue simply does not drain, which is the safe direction: nothing is
+charged for work that cannot happen. `INTERNAL_API_SECRET` must hold the **same
+value** on the analyser app.
