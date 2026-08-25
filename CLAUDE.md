@@ -3954,7 +3954,7 @@ affect lead allocation.
 
 ---
 
-## 31. Paid lead analysis *(0104, 0105)*
+## 31. Paid lead analysis *(0104, 0105, 0106)*
 
 A customer pays **£3 a lead** to have their **own** leads (§30) run through the
 Stayful property analyser. The result is a lead that is indistinguishable from
@@ -4202,9 +4202,38 @@ and the refund have been driven only against stubs and the RPCs. Rehearse them i
 test mode before relying on them — the same standing item §12 records for the
 tier swap and the cancel flow.
 
+### 31.11 — Where admin sees it *(0106)*
+
+`/admin/imported-leads`. Customer-owned leads are excluded from every
+marketplace counter (§30.8), which is right — they are not our supply — and
+left them invisible rather than merely uncounted: nothing anywhere could answer
+"how many leads have customers brought in".
+
+Three readings of one population, because they answer different questions: all
+time (is the feature used), by month (is it growing), by customer (is it one
+operator or forty). Each row links through to the lead list filtered to it.
+"Analysed" counts a non-null `gross_annual_income` — deliberately not
+`income_report_status = 'parsed'`, which is also true of a marketplace lead read
+off Monday and would quietly start counting something else if the two
+populations ever met.
+
+**Counted in SQL, not by counting rows in the page.** The admin leads page reads
+every lead with no limit and gets away with it at ~430; this is the population
+that grows in 2,000-row steps. `idx_leads_owner_customer` already indexes
+exactly these rows. The lead list itself is filtered in the query and capped,
+and says so when it truncates.
+
+⚠️ **Months are cut in Europe/London, not UTC**, and `src/lib/importedLeadMonths.ts`
+exists to make the page agree with the SQL. A lead added at 00:30 BST on the 1st
+of August is 23:30 UTC on the 31st of July: a naive cut would count it in July
+while the list beside it printed August, and clicking a month would fetch a
+window an hour out at each end. The helpers are unit-tested across both clock
+changes, and were cross-checked instant by instant against `date_trunc(... at
+time zone 'Europe/London')` in Postgres.
+
 ### Deployment order — migrations BEFORE code
 
-0104 first, then 0105, then the code. Both are inert on their own: nothing
+0104 first, then 0105, then 0106, then the code. Both are inert on their own: nothing
 selects from these tables until the worker lands, and no row can be worked until
 a charge lands. Code arriving first would query tables that do not exist on every
 import commit, which now quotes the offer.
