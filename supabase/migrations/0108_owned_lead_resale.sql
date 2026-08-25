@@ -143,11 +143,28 @@ begin
     v_key := public.lead_identity_key(v_name, v_email, v_phone);
 
     if v_key is not null then
+      --
+      -- ⚠️ The `exists` is not decoration. The question this asks is "does the
+      -- customer ALREADY HAVE this landlord", and `owner_customer_id` alone
+      -- stopped answering it once delete gained its copy-only mode (0107): a
+      -- lead sold on and then removed by its uploader keeps `owner_customer_id`
+      -- for ever — that column is the provenance and the never-sell-it-back
+      -- rule — while the uploader can no longer see it under
+      -- `leads_select_assigned`.
+      --
+      -- Without this clause they could never re-add that landlord: the import
+      -- would report "duplicate" against a row invisible to them, with nothing
+      -- on any screen to explain it. Holding an assignment is what "have" means.
       select l.id into v_existing
       from public.leads l
       where l.owner_customer_id = p_customer_id
         and l.lead_type = p_lead_type
         and public.lead_identity_key(l.lead_name, l.email, l.phone) = v_key
+        and exists (
+          select 1 from public.lead_assignments la
+          where la.lead_id = l.id
+            and la.customer_id = p_customer_id
+        )
       order by l.created_at
       limit 1;
 

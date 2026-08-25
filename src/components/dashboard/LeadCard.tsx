@@ -112,7 +112,14 @@ export function LeadCard({
               <Badge
                 variant="outline"
                 className="border-transparent bg-sky-100 text-sky-700"
-                title="You added this lead yourself. It is only visible to you."
+                title={
+                  // Exclusivity is no longer true of an analysed lead
+                  // that has been shared onward (§32). Silence about that
+                  // is the decision; asserting the opposite is not.
+                  lead.owner_resale_qualified_at
+                    ? "You added this lead yourself."
+                    : "You added this lead yourself. It is only visible to you."
+                }
               >
                 Your lead
               </Badge>

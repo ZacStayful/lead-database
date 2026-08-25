@@ -44,11 +44,23 @@ export async function PATCH(
   // one buyer (§32) — and this is the one place an admin could raise that by
   // hand. Every SQL path is guarded (0107); this is the last one, and it is
   // outside SQL.
-  const { data: owned } = await admin
+  //
+  // FAILS CLOSED. This is the only guard on a path that writes max_assignments
+  // directly, so a dropped error would read as "not owned" and let the write
+  // through — the one outcome that cannot be undone by retrying.
+  const { data: owned, error: ownedError } = await admin
     .from("leads")
     .select("owner_customer_id")
     .eq("id", params.id)
     .maybeSingle();
+
+  if (ownedError) {
+    console.error("admin lead PATCH: ownership lookup failed", params.id, ownedError);
+    return NextResponse.json(
+      { error: "Could not check this lead. Please try again." },
+      { status: 500 }
+    );
+  }
 
   if ((owned as { owner_customer_id?: string | null } | null)?.owner_customer_id) {
     return NextResponse.json(

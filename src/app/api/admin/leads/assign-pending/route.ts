@@ -60,7 +60,13 @@ async function handle(request: NextRequest) {
   // analysis came back with trustworthy figures is sellable to exactly one
   // further operator, and the analysis worker offers it the moment it
   // qualifies. If that call found no candidate — everybody at quota, which is
-  // ordinary — this is the backstop that picks it up.
+  // ordinary — this is where it gets picked up.
+  //
+  // ⚠️ A MANUAL backstop. This route has no `vercel.json` cron entry, so a
+  // qualified owned lead that found nobody on its one offer waits for an admin
+  // to press the button. Marketplace leads are re-offered by the daily Monday
+  // sync's top-up branch; an owned lead has no Monday item and so is never in
+  // that sweep. Worth a scheduled caller if resale volume ever makes it matter.
   //
   // Deliberately reopening what §30.8 closed, and only for qualified leads. The
   // cap still holds: assign_lead_to_customer refuses a third holder under the
