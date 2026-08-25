@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDateTime } from "@/lib/utils";
+import { leadSourceLabel } from "@/lib/customerLeads";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 
@@ -66,8 +67,9 @@ export async function GET() {
     // Where the lead came from. "Allocated" covers ordinary routing, the
     // inactivity ladder and admin force-assign alike — from the customer's side
     // those are the same event, a lead arriving. A claim is the one they chose
-    // and paid for themselves, which is the distinction worth exporting.
-    Source: a.claimed_from_pool_at ? "Claimed from expired leads" : "Allocated",
+    // and paid for themselves, and "Added by you" is one they brought in
+    // (0102), which is the distinction worth exporting.
+    Source: leadSourceLabel(a),
     Notes: (notesByAssignment.get(a.id) ?? [])
       .map((n) => `[${formatDateTime(n.created_at)}] ${n.body}`)
       .join("\n"),

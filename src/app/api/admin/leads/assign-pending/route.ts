@@ -53,9 +53,13 @@ async function handle(request: NextRequest) {
 
   // Column-vs-column comparisons aren't expressible in PostgREST, so pull the
   // leads and filter the shortfall in JS (open leads are a few hundred at most).
+  // Customer-owned leads are never topped up: they are not ours to place, and
+  // this sweep is the one path that would otherwise hand one to another
+  // customer at full price the day after it was imported.
   let query = admin
     .from("leads")
     .select("*")
+    .is("owner_customer_id", null)
     .order("created_at", { ascending: true });
   if (leadType) query = query.eq("lead_type", leadType);
 

@@ -99,6 +99,15 @@ async function handle(request: NextRequest) {
   const select =
     "id, monday_item_id, income_report_status, income_report_asset_id, income_report_path";
 
+  // Every query below is filtered `owner_customer_id is null`. A
+  // customer-owned lead has NO Monday item, and each candidate's
+  // monday_item_id is fed straight into Monday's items(ids:) lookup — so an
+  // owned lead would resolve to nothing, be marked failed, and come back
+  // tomorrow, occupying batch capacity for ever. They are seeded 'no_report'
+  // at creation, which is true and keeps them out of the backlog; these
+  // filters are what keep them out of the 30-day re-check, which selects
+  // exactly the recently-created 'no_report' rows they would be.
+
   // Two plain queries rather than one `.or()` carrying a nested `and()`. The
   // backlog is the job; the no_report re-check is a courtesy that only runs on
   // leftover batch capacity, and separating them says so — as well as keeping
@@ -110,6 +119,7 @@ async function handle(request: NextRequest) {
     .from("leads")
     .select(select)
     .eq("lead_type", "management")
+    .is("owner_customer_id", null)
     .in("income_report_status", ["pending", "failed"])
     .order("created_at", { ascending: true })
     .limit(BATCH_SIZE);
@@ -133,6 +143,7 @@ async function handle(request: NextRequest) {
       .from("leads")
       .select(select)
       .eq("lead_type", "management")
+      .is("owner_customer_id", null)
       .eq("income_report_status", "no_report")
       .gte("created_at", recheckFrom)
       .order("created_at", { ascending: false })
@@ -163,6 +174,7 @@ async function handle(request: NextRequest) {
       .from("leads")
       .select(select)
       .eq("lead_type", "management")
+      .is("owner_customer_id", null)
       .eq("income_report_status", "parsed")
       .not("income_report_asset_id", "is", null)
       // EITHER gap: no stored file, or none of the 0093 presentation figures.
@@ -369,6 +381,7 @@ async function countOutstanding(
     .from("leads")
     .select("id", { count: "exact", head: true })
     .eq("lead_type", "management")
+    .is("owner_customer_id", null)
     .in("income_report_status", ["pending", "failed"]);
   return count ?? 0;
 }
@@ -381,6 +394,7 @@ async function countUnbackfilled(
     .from("leads")
     .select("id", { count: "exact", head: true })
     .eq("lead_type", "management")
+    .is("owner_customer_id", null)
     .eq("income_report_status", "parsed")
     .not("income_report_asset_id", "is", null)
     .or("income_report_path.is.null,platform_fee_pct.is.null");

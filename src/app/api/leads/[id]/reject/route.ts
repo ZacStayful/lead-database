@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  OWNED_LEAD_OUTCOME_REFUSAL,
+  getAssignmentLeadOwnership,
+} from "@/lib/customerLeads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +53,17 @@ export async function POST(req: NextRequest) {
     .single();
   if (customerError || !customer) {
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+  }
+
+  // A lead the customer added themselves cannot be rejected: rejection is a
+  // settled, chargeable outcome on a lead WE sold them (0019), and nothing was
+  // sold here. Delete is the verb for their own leads.
+  const ownership = await getAssignmentLeadOwnership(admin, assignment_id);
+  if (ownership?.ownerCustomerId) {
+    return NextResponse.json(
+      { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
+      { status: 400 }
+    );
   }
 
   // Atomic status flip. Fails (400) if the assignment is not owned by this

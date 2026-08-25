@@ -93,7 +93,12 @@ export default async function GoalsPage() {
     .select("id, leads!inner(lead_type)", { count: "exact", head: true })
     .eq("customer_id", customer.id)
     .eq("status", "won")
-    .eq("leads.lead_type", "management");
+    .eq("leads.lead_type", "management")
+    // The goal is signed clients won FROM THE MARKETPLACE — it is what the
+    // subscription is for, and the pipeline estimate beside it is modelled on
+    // leads we deliver. A customer who imported fifty existing clients and
+    // marked them won would otherwise "achieve" the goal on their own book.
+    .is("leads.owner_customer_id", null);
 
   const goal = customer.management_customer_goal;
   const won = wonCount ?? 0;
