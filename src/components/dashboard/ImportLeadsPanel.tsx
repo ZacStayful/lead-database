@@ -9,6 +9,8 @@ import { ProductChooser } from "./AddLeadsPanel";
 import {
   IMPORT_TARGETS,
   TARGET_LABELS,
+  normaliseRow,
+  resolveDuplicateClaims,
   type ImportTarget,
   type NormalisedRow,
 } from "@/lib/leadImport";
@@ -30,7 +32,8 @@ interface PreviewResponse {
   mapping_source: "claude" | "heuristic";
   header_row_found: boolean;
   columns: PreviewColumn[];
-  preview_rows: NormalisedRow[];
+  /** Raw cells, so the preview can be re-derived as the mapping changes. */
+  preview_rows: string[][];
 }
 
 interface ImportResult {
@@ -135,11 +138,23 @@ export function ImportLeadsPanel({ available }: { available: LeadType[] }) {
     }
   }
 
-  /** Re-derived live so the preview table reflects the dropdowns as they change. */
-  const previewRows = useMemo(() => {
+  /**
+   * Re-derived from the raw rows on every mapping change, using the same
+   * normaliseRow the commit route will run server-side. The point of this
+   * screen is to let the customer disagree with our guess, so the preview has
+   * to answer "what would this actually import" for THEIR mapping, not ours.
+   */
+  const previewRows: NormalisedRow[] = useMemo(() => {
     if (!preview) return [];
-    return preview.preview_rows;
-  }, [preview]);
+    const columns = preview.columns.map((c) => ({
+      index: c.index,
+      header: c.header,
+      target: mapping[c.index] ?? "ignore",
+      confidence: c.confidence,
+    }));
+    const resolved = resolveDuplicateClaims(columns);
+    return preview.preview_rows.map((row) => normaliseRow(row, resolved));
+  }, [preview, mapping]);
 
   const mappedTargets = Object.values(mapping);
   const hasContactField = mappedTargets.some(

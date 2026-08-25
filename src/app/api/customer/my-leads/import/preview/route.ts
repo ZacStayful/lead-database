@@ -7,7 +7,6 @@ import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
   detectHeaderRow,
-  normaliseRow,
   syntheticHeaders,
   trimTrailingBlankRows,
   type SheetRows,
@@ -185,9 +184,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const previewRows = dataRows
-    .slice(0, PREVIEW_ROWS)
-    .map((row) => normaliseRow(row, proposal.columns));
+  // The RAW rows go back alongside the proposal so the confirmation screen can
+  // re-derive its preview as the customer changes a dropdown. Sending only the
+  // normalised rows would freeze the preview at our first guess, which is the
+  // one thing that screen exists to let them disagree with.
+  const rawPreviewRows = dataRows.slice(0, PREVIEW_ROWS);
 
   return NextResponse.json({
     ok: true,
@@ -204,6 +205,6 @@ export async function POST(request: NextRequest) {
         .map((row) => String(row?.[c.index] ?? "").trim())
         .filter(Boolean),
     })),
-    preview_rows: previewRows,
+    preview_rows: rawPreviewRows,
   });
 }

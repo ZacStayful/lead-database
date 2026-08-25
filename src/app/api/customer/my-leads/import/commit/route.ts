@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   IMPORT_TARGETS,
   normaliseRow,
+  resolveDuplicateClaims,
   type ColumnMapping,
   type ImportTarget,
   type SheetRows,
@@ -119,12 +120,19 @@ export async function POST(request: NextRequest) {
     submitted.set(entry.index, entry.target as ImportTarget);
   }
 
-  const mapping: ColumnMapping[] = headers.map((header, index) => ({
-    index,
-    header,
-    target: submitted.get(index) ?? "ignore",
-    confidence: 1,
-  }));
+  // The single-claim rule is enforced here, not just proposed in the UI: the
+  // customer can set two columns to Phone by hand, and `normaliseRow` would
+  // then take the first and silently drop the second. Demoting the loser to
+  // `ignore` means it is folded into the lead profile as "Header: value"
+  // instead — the data survives where it would otherwise vanish.
+  const mapping: ColumnMapping[] = resolveDuplicateClaims(
+    headers.map((header, index) => ({
+      index,
+      header,
+      target: submitted.get(index) ?? "ignore",
+      confidence: 1,
+    }))
+  );
 
   const normalised = rows.map((row) => normaliseRow(row, mapping));
 
