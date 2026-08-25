@@ -196,6 +196,10 @@ comment on table public.lead_analysis_rows is
 create or replace function public.touch_lead_analysis_updated_at()
 returns trigger
 language plpgsql
+-- Pinned even though this is SECURITY INVOKER and needs a trigger context to
+-- do anything: Supabase's linter flags a mutable search_path on any function
+-- (0011), and leaving a new one warning teaches everyone to ignore the list.
+set search_path = public
 as $$
 begin
   new.updated_at := now();

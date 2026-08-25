@@ -4275,7 +4275,29 @@ time zone 'Europe/London')` in Postgres.
 
 ### Deployment order — migrations BEFORE code
 
-0104 first, then 0105, then 0106, then the code. Both are inert on their own: nothing
+**0104, 0105 and 0106 are applied to `znlfwbnvhlacwzgfalcf` (2026-08-25)**,
+ahead of the code this time rather than after it — §30's own account of what
+the other order costs was enough of an argument.
+
+Pre-apply: no name collision on any of the three tables, eleven functions or the
+`payments.stripe_refund_id` column. Post-apply: 432 leads and 39 customers
+untouched, three tables with RLS on and zero policies, and **all eleven function
+bodies byte-identical to `supabase/migrations/`** by `md5(prosrc)` — the check
+§11 says not to assume. Migrations were applied with their outer comment blocks
+stripped, which was proven schema-identical first: same `prosrc` md5, same
+columns, same constraints, against a scratch build from the full files.
+
+Supabase's linter then flagged one thing that was ours —
+`touch_lead_analysis_updated_at` with a mutable `search_path`. Pinned in both
+places. It is SECURITY INVOKER and needs a trigger context to do anything, so
+that is hardening rather than a hole; the reason to fix it anyway is that a new
+warning left in the list is how the list stops being read. `prosrc` is unchanged
+by it — `search_path` lives in `proconfig`.
+
+The remaining `rls_enabled_no_policy` notices on the three new tables are the
+deliberate deny-all posture, shared with twenty-odd existing tables.
+
+Then the code. Both are inert on their own: nothing
 selects from these tables until the worker lands, and no row can be worked until
 a charge lands. Code arriving first would query tables that do not exist on every
 import commit, which now quotes the offer.
