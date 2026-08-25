@@ -12,24 +12,35 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Vercel Pro allows 300 (§2), and /api/cron/parse-income-reports already runs
- * at it. A ceiling rather than a reservation: a run with nothing to do finishes
- * in milliseconds.
+ * ⚠️ 60, because this Vercel account is on HOBBY.
+ *
+ * CLAUDE.md §2 says the account is on Pro and /api/cron/parse-income-reports
+ * ships maxDuration = 300 on that basis. The Vercel API reports this team as
+ * `hobby`, whose function ceiling is 60 seconds — so 300 would be a number that
+ * reads like a guarantee and is not one.
+ *
+ * This is why the worker CHAINS rather than looping: one invocation does one
+ * row and hands off, instead of one long invocation doing twenty. See
+ * kickSelf below.
  */
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 /**
- * Stop claiming here and leave the rest for the next run. Comfortably under
- * maxDuration so the worker reports what it did rather than being killed with a
- * row claimed, an external report paid for, and nothing written about it.
+ * Stop claiming here and hand off to the next invocation. Under maxDuration
+ * with room to spare, so the worker records what it did rather than being
+ * killed with a row claimed, an external report already paid for, and nothing
+ * written about it.
  */
-const WALL_CLOCK_BUDGET_MS = 240_000;
+const WALL_CLOCK_BUDGET_MS = 50_000;
 
 /**
- * Reserved for the row already in flight when the budget runs out — a row can
- * take 70 seconds on its own.
+ * Reserved for the row already in flight when the budget runs out.
+ *
+ * A row is 20-30s typically. With a 45s per-row timeout (below) an invocation
+ * that has already spent 5s must not claim another, because it could not
+ * finish it — and a row killed mid-flight has still cost us its report.
  */
-const RESERVE_MS = 80_000;
+const RESERVE_MS = 46_000;
 
 /**
  * Rows running at once across EVERY worker, enforced inside the claim function.
@@ -41,7 +52,14 @@ const RESERVE_MS = 80_000;
  */
 const MAX_INFLIGHT = Number(process.env.ANALYSIS_MAX_INFLIGHT ?? 3);
 
-const ROW_TIMEOUT_MS = Number(process.env.ANALYSIS_ROW_TIMEOUT_MS ?? 90_000);
+/**
+ * Must stay comfortably under maxDuration: we need to still be alive to WRITE
+ * the row's outcome after giving up on it. A row that times out silently, with
+ * the function killed before it records anything, is one that stays 'running'
+ * until the stale window reclaims it — ten minutes of an in-flight slot doing
+ * nothing.
+ */
+const ROW_TIMEOUT_MS = Number(process.env.ANALYSIS_ROW_TIMEOUT_MS ?? 45_000);
 
 /**
  * Consecutive dead rows before the run gives up.
@@ -106,6 +124,7 @@ async function handle(request: NextRequest) {
   const touchedJobs = new Set<string>();
   let consecutiveFailures = 0;
   let stoppedBecause: string | null = null;
+  let chainedAhead = false;
 
   while (Date.now() - startedAt < WALL_CLOCK_BUDGET_MS - RESERVE_MS) {
     const claimToken = randomUUID();
@@ -132,6 +151,26 @@ async function handle(request: NextRequest) {
     for (const row of rows) {
       counts.claimed += 1;
       touchedJobs.add(row.job_id);
+
+      // ── Chain ahead, BEFORE doing the work ────────────────────
+      //
+      // At a 60-second ceiling one invocation is one row, so the queue drains
+      // by handing off rather than by looping. Fired immediately after the
+      // claim and before the analysis, so the successor is already on its way
+      // while this row runs — and so an invocation killed mid-row cannot take
+      // the chain down with it.
+      //
+      // Overlap is harmless: claiming is atomic and the in-flight cap is
+      // enforced inside the claim function, so a successor that arrives early
+      // simply finds nothing to claim and exits.
+      //
+      // Once per invocation. The analyser's worker uses after() from
+      // next/server for this; that is Next 15+ and this app is 14.2.15, so the
+      // request goes out during the handler instead.
+      if (!chainedAhead) {
+        chainedAhead = true;
+        kickSelf(request);
+      }
 
       await admin
         .from("lead_analysis_rows")
@@ -269,13 +308,41 @@ async function handle(request: NextRequest) {
     console.error("run-lead-analysis: refund sweep failed", err);
   }
 
+  // Nothing was claimable this time round, but rows may have been RELEASED for
+  // retry during it — so hand off once more rather than leaving them for the
+  // daily cron.
+  if (counts.retried > 0 && !chainedAhead) kickSelf(request);
+
   return NextResponse.json({
     ...counts,
     finalisedJobs: finalised.length,
     refundedPence: refunded,
     refundsDeferred,
+    chainedAhead,
     stoppedBecause,
     elapsedMs: Date.now() - startedAt,
+  });
+}
+
+/**
+ * Hand the queue to a fresh invocation.
+ *
+ * Fire-and-forget and never awaited: the rows are durable in Postgres, so a
+ * kick that does not land costs latency and nothing else — the daily cron and
+ * the progress panel's poll both pick the queue back up.
+ */
+function kickSelf(request: NextRequest): void {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return;
+  const base =
+    process.env.NEXT_PUBLIC_APP_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : request.nextUrl.origin);
+  void fetch(`${base}/api/cron/run-lead-analysis`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secret}` },
+    cache: "no-store",
+  }).catch(() => {
+    /* durability is the queue, not this request */
   });
 }
 

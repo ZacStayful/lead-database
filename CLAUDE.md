@@ -45,12 +45,20 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
-| `/api/cron/run-lead-analysis` | `*/5 * * * *` | Drain the paid lead-analysis queue (§31) — **the first sub-daily cron in this repo** |
+| `/api/cron/run-lead-analysis` | `0 6 * * *` | **Backstop only** for the paid lead-analysis queue (§31). The queue is driven by the purchase, a self-chain and the progress poll; this catches the case where all three failed |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
-— removed in `173a746` when the plan was Hobby (daily-cron cap). The account is
-now on Pro. The route needs ~15-minute cadence to hit its 12h/4h/1h windows and
-is currently driven by nothing. See §12.
+— removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
+~15-minute cadence to hit its 12h/4h/1h windows and is currently driven by
+nothing. See §12.
+
+⚠️ **"The account is now on Pro" was wrong.** The Vercel API reports this team as
+`hobby`, and the owner confirmed it (2026-08-25). Hobby allows **2 crons, daily
+only**, and caps functions at **60 seconds** — against the **11** crons declared
+above and the `maxDuration = 300` on `parse-income-reports` and the 0092
+backfill. So an unknown number of the jobs in this table may never fire, and
+those two routes are being cut short at 60s. Not investigated further here;
+§31.8 records what it cost the one feature that had to design around it.
 
 **Cron auth pattern** — copy this exactly for new jobs:
 
@@ -4096,14 +4104,48 @@ takes its row with it. Counting failures then found nothing to refund: paid for
 three, received two, owed nothing. Counting what was paid for and subtracting
 what was delivered cannot miss a row, because it never looks at the rows at all.
 
-### 31.8 — The worker
+### 31.8 — The worker, and ⚠️ the plan this repo thinks it is on
 
-Five-minute cron plus a best-effort kick after a purchase. **`after()` from
-`next/server` is Next 15+ and this app is 14.2.15**, so the analyser's
-chain-ahead trick cannot be copied; nothing is lost, because rows are durable and
-claims expire, so the queue drains whether or not a kick lands. This is the
-repo's first sub-daily cron — Pro is already proven by
-`parse-income-reports`'s `maxDuration = 300`.
+**§2 says "The account is now on Pro". The Vercel API reports this team as
+`hobby`**, and the owner confirmed it. That matters more than a doc correction:
+
+| | Hobby | What this repo does |
+|---|---|---|
+| Function ceiling | **60s** | `parse-income-reports` and the 0092 backfill both ship `maxDuration = 300` |
+| Crons | **2, daily only** | `vercel.json` declares **11** |
+
+So some existing crons may not be firing at all, and any route relying on more
+than 60 seconds is being cut short. **Neither is caused by this feature and
+neither is fixed here** — recorded because the next person to trust §2's Pro
+claim will size something against 300 seconds and be wrong.
+
+What this feature does is stop depending on either. The worker is
+`maxDuration = 60` with a 50-second claim budget and a 46-second reserve, and it
+**chains rather than loops**: one invocation does one row and hands off to a
+fresh one, fired immediately after the claim and before the analysis, so a
+successor is already on its way while the row runs and an invocation killed
+mid-row cannot take the chain down. Overlap is harmless — claiming is atomic and
+the in-flight cap lives inside the claim function, so an early successor finds
+nothing and exits.
+
+`after()` from `next/server` would be the right way to defer that until the
+response has flushed, as the analyser's bulk worker does; it is Next 15+ and this
+app is 14.2.15, so the request goes out during the handler instead.
+
+The cron is therefore a **daily backstop**, not the driver. Three things start
+the queue: the purchase itself, the chain, and the progress panel's poll. The
+cron exists for the case where all three failed.
+
+`ANALYSIS_ROW_TIMEOUT_MS` is **45s** and must stay under the ceiling — we have to
+still be alive to record the outcome after giving up on a row, or it sits
+`running` until the stale window reclaims it. A worst-case 70-second property
+will be killed; that is survivable rather than ignored, because the client treats
+a timeout as retryable and the analyser's durable report cache means the retry
+re-reads the report already paid for.
+
+**On Pro, three numbers change together**: `maxDuration` to 300 on both this
+worker and the analyser's `/api/internal/analyse`, the budget to ~240s, and the
+row timeout to 90s. The chain can stay — it costs nothing.
 
 `claim_lead_analysis_rows` is a transcription of the analyser repo's
 `claim_bulk_rows`. `p_max_inflight` (default 3) is a **spend-rate throttle, not a
