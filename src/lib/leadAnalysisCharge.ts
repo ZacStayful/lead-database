@@ -18,6 +18,7 @@ import { createHash, randomBytes } from "crypto";
 import type Stripe from "stripe";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { chargeClaimedIntent, type ChargeOutcome } from "@/lib/chargeIntent";
+import { availableLeadTypes } from "@/lib/products";
 import { APP_URL } from "@/lib/env";
 import { HOSTED_CHECKOUT_THRESHOLD_PENCE, formatPence } from "@/lib/leadAnalysis";
 import type { Customer, LeadType } from "@/lib/types";
@@ -57,7 +58,11 @@ export const ANALYSIS_TOKEN_TTL_MS = 60 * 60 * 1000;
 /** The customer fields the eligibility rule reads. */
 export type AnalysisCustomerFields = Pick<
   Customer,
-  "account_status" | "subscription_status" | "gr_subscription_status"
+  | "account_status"
+  | "subscription_status"
+  | "gr_subscription_status"
+  | "cancelled_at"
+  | "gr_cancelled_at"
 >;
 
 /**
@@ -74,29 +79,22 @@ export type AnalysisCustomerFields = Pick<
  * customer may not buy a top-up. Blocking them would be refusing money for a
  * service we can deliver.
  *
- * What is still required is that they HOLD the product, because an owned lead
- * belongs to one product's pipeline and a customer who never had that product
- * has no such leads to analyse.
+ * What is still required is that they hold — or once held — the product,
+ * because an owned lead belongs to one product's pipeline and a customer who
+ * never had that product has no such leads to analyse. A CANCELLED customer
+ * keeps the database and keeps adding leads to it (§32), so they keep the paid
+ * analysis that goes with those leads; the same argument that admits a paused
+ * customer admits them, and `availableLeadTypes` is the single definition of
+ * which pipelines are theirs.
  */
 export function analysisIneligibilityReason(
   customer: AnalysisCustomerFields,
   leadType: LeadType
 ): string | null {
-  if (leadType === "guaranteed_rent") {
-    if (
-      customer.gr_subscription_status !== "active" &&
-      customer.gr_subscription_status !== "past_due"
-    ) {
-      return "You don't currently hold Guaranteed Rent, so there are no GR leads to analyse.";
-    }
-    return null;
-  }
-  // Management: account_status stays 'active' while paused, which is exactly
-  // the case this rule means to allow.
-  if (customer.account_status !== "active" && customer.subscription_status !== "active") {
-    return "You don't currently hold Management, so there are no management leads to analyse.";
-  }
-  return null;
+  if (availableLeadTypes(customer).includes(leadType)) return null;
+  return leadType === "guaranteed_rent"
+    ? "You don't currently hold Guaranteed Rent, so there are no GR leads to analyse."
+    : "You don't currently hold Management, so there are no management leads to analyse.";
 }
 
 async function release(supabase: Admin, tokenId: string): Promise<void> {

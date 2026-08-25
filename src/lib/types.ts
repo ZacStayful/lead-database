@@ -75,6 +75,16 @@ export interface Customer {
   // cancellation wins, matching cancelled_at. Management-only.
   cancellation_feedback: string | null;
   cancellation_comment: string | null;
+  /**
+   * When the management subscription was first cancelled (0064). Stamped by the
+   * Stripe webhook, first cancellation winning, and cleared only on a genuine
+   * change of mind (active and no longer scheduled to cancel).
+   *
+   * Non-null is the durable record that this customer once PAID for management,
+   * which is what `previouslyHeldProduct()` reads to tell a returning customer
+   * apart from a waitlisted prospect who never subscribed.
+   */
+  cancelled_at: string | null;
   first_login_at: string | null;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;
@@ -86,6 +96,9 @@ export interface Customer {
    *  `stripe_customer_id` — i.e. a GR Payment Link purchase (0056). NULL means
    *  GR shares the management Stripe customer. */
   gr_stripe_customer_id: string | null;
+  /** gr_ mirror of cancelled_at (0064). GR has no `account_status`, so this is
+   *  the only durable record that a customer once held Guaranteed Rent. */
+  gr_cancelled_at: string | null;
   gr_monthly_allocation: number;
   /** gr_ mirror of pending_monthly_allocation (0088). */
   gr_pending_monthly_allocation: number | null;
