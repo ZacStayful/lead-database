@@ -1054,17 +1054,20 @@ export async function POST(request: NextRequest) {
       }
 
       case "checkout.session.completed": {
-        // Only the lead top-up fallback path uses hosted Checkout (payment mode);
-        // subscriptions are created via subscription-mode Checkout/Payment Links
-        // and credited through invoice.paid, not here. Gate strictly on our own
-        // metadata so no other checkout completion is ever mistaken for a top-up.
+        // Two things use hosted Checkout in payment mode: the lead top-up
+        // fallback, and paid lead analysis (always, above its soft ceiling, and
+        // otherwise only when there is no reusable card). Subscriptions are
+        // created via subscription-mode Checkout/Payment Links and credited
+        // through invoice.paid, not here. Gate strictly on our own metadata so
+        // no other checkout completion is ever mistaken for either.
         const session = event.data.object as Stripe.Checkout.Session;
-        if (session.metadata?.kind !== "lead_topup") break;
+        const sessionKind = session.metadata?.kind;
+        if (sessionKind !== "lead_topup" && sessionKind !== "lead_analysis") break;
         if (session.payment_status !== "paid") break;
 
-        const tokenId = session.metadata.token_id;
+        const tokenId = session.metadata?.token_id;
         if (!tokenId) {
-          console.error("lead_topup checkout.session.completed missing token_id");
+          console.error(`${sessionKind} checkout.session.completed missing token_id`);
           break;
         }
 
@@ -1073,25 +1076,31 @@ export async function POST(request: NextRequest) {
             ? session.payment_intent
             : (session.payment_intent?.id ?? null);
 
-        // Idempotent, token-keyed credit: +5 to the matching balance and a
-        // 'topup' payment row, in one transaction. A replayed delivery is a
-        // no-op, so a failure after this line can be retried safely.
-        const { data: credited, error: creditError } = await admin.rpc(
-          "record_lead_topup_success",
-          { p_token_id: tokenId, p_payment_intent_id: paymentIntentId }
-        );
+        // Idempotent, token-keyed finalisation, in one transaction:
+        //   lead_topup    → +5 to the matching balance and a 'topup' row
+        //   lead_analysis → a 'lead_analysis' row with credits_added 0, and the
+        //                   job flipped to running, which is what makes its
+        //                   rows claimable by the worker
+        // A replayed delivery is a no-op either way, so a failure after this
+        // line can be retried safely.
+        const rpc =
+          sessionKind === "lead_analysis"
+            ? "record_lead_analysis_success"
+            : "record_lead_topup_success";
+        const { data: credited, error: creditError } = await admin.rpc(rpc, {
+          p_token_id: tokenId,
+          p_payment_intent_id: paymentIntentId,
+        });
         if (creditError) {
-          throw new Error(
-            `record_lead_topup_success failed: ${creditError.message}`
-          );
+          throw new Error(`${rpc} failed: ${creditError.message}`);
         }
-        // false = we declined to credit (unknown token, or already paid). On a
-        // session we know was paid, that is a money-moved-but-no-credit event —
-        // log it loudly as the reconciliation tripwire rather than silently
-        // acknowledging.
+        // false = we declined (unknown token, or already finalised). On a
+        // session we know was paid, that is a money-moved-but-nothing-happened
+        // event — log it loudly as the reconciliation tripwire rather than
+        // silently acknowledging.
         if (credited === false) {
           console.error(
-            "lead_topup checkout paid but credit skipped (already paid or unknown token)",
+            `${sessionKind} checkout paid but finalisation skipped (already done or unknown token)`,
             { tokenId, paymentIntentId }
           );
         }
@@ -1100,28 +1109,36 @@ export async function POST(request: NextRequest) {
 
       case "payment_intent.succeeded": {
         // Safety net for the off-session path. If the charge was captured but
-        // our request died before we could credit (connection reset, timeout,
-        // an intent that settled asynchronously), this is what still credits
-        // the customer. record_lead_topup_success promotes a token previously
-        // marked 'failed' and is a no-op once 'paid', so this is safe to run on
-        // every delivery and can never double-credit.
+        // our request died before we could finalise (connection reset, timeout,
+        // an intent that settled asynchronously), this is what still delivers
+        // what the customer paid for. Both RPCs promote a token previously
+        // marked 'failed' and are no-ops once 'paid', so this is safe to run on
+        // every delivery and can never deliver twice.
+        //
+        // For lead_analysis the promotion also REVIVES a job that was cancelled
+        // when the charge looked declined — otherwise the money would be gone
+        // and the batch would sit closed, which is the exact shape of failure
+        // this net exists for.
         const intent = event.data.object as Stripe.PaymentIntent;
-        if (intent.metadata?.kind !== "lead_topup") break;
+        const intentKind = intent.metadata?.kind;
+        if (intentKind !== "lead_topup" && intentKind !== "lead_analysis") break;
 
-        const tokenId = intent.metadata.token_id;
+        const tokenId = intent.metadata?.token_id;
         if (!tokenId) {
-          console.error("lead_topup payment_intent.succeeded missing token_id");
+          console.error(`${intentKind} payment_intent.succeeded missing token_id`);
           break;
         }
 
-        const { error: creditError } = await admin.rpc(
-          "record_lead_topup_success",
-          { p_token_id: tokenId, p_payment_intent_id: intent.id }
-        );
+        const recoveryRpc =
+          intentKind === "lead_analysis"
+            ? "record_lead_analysis_success"
+            : "record_lead_topup_success";
+        const { error: creditError } = await admin.rpc(recoveryRpc, {
+          p_token_id: tokenId,
+          p_payment_intent_id: intent.id,
+        });
         if (creditError) {
-          throw new Error(
-            `record_lead_topup_success (recovery) failed: ${creditError.message}`
-          );
+          throw new Error(`${recoveryRpc} (recovery) failed: ${creditError.message}`);
         }
         break;
       }
