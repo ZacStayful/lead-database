@@ -17,6 +17,8 @@ import { runLeadAnalysis } from "./analyserClient";
 import { incomeReportPatch } from "./incomeReport";
 import { syncStoredReport } from "./incomeReportStorage";
 import { analysability, buildOutcomeFromAnalyserResponse } from "./leadAnalysis";
+import { autoAssignLead } from "./ingest";
+import type { Lead } from "./types";
 
 /** A claimed row, joined to the lead it is about. */
 export interface ClaimedAnalysisRow {
@@ -141,5 +143,68 @@ export async function processAnalysisRow(
     return { kind: "retry", errorCode: "write_failed", message: writeError.message };
   }
 
+  // ── The lead is now analysed, which is what makes it sellable ─────
+  //
+  // A customer's own lead goes to exactly one other operator once a PAID
+  // analysis has returned figures we trust (§32). Everything above is that
+  // condition: a `quality_ok = false` run — the analyser's tell-tale for a
+  // synthetic estimate — and every other failure returned long before here, so
+  // reaching this line IS the qualification.
+  //
+  // NEITHER OF THE TWO STEPS MAY FAIL THE ROW. The customer paid for figures
+  // and has them; the row is a success whatever happens next. A missed
+  // qualification costs a resale we were never owed, and the RPC is idempotent
+  // so a later re-run picks it up.
+  await qualifyAndRoute(admin, typed.id);
+
   return { kind: "succeeded" };
+}
+
+/**
+ * Mark an analysed owned lead sellable, then offer it — immediately.
+ *
+ * "Immediately" is the design: there is no head-start window, so the moment the
+ * figures land the lead enters ordinary routing for its single further operator.
+ * This is the only automatic driver of that. `assign-pending` is an admin
+ * button and is not in `vercel.json`, and the two `autoAssignLead` calls in
+ * `ingest.ts` are both inside `ingestLead`, which never sees an owned lead —
+ * they have no Monday item by construction (0102's CHECK).
+ *
+ * Best-effort throughout, and deliberately so: see the caller.
+ */
+async function qualifyAndRoute(admin: SupabaseClient, leadId: string): Promise<void> {
+  const { data: qualified, error } = await admin.rpc(
+    "qualify_owned_lead_for_resale",
+    { p_lead_id: leadId }
+  );
+
+  if (error) {
+    console.error("leadAnalysisRun: qualify failed", leadId, error);
+    return;
+  }
+
+  // False is the ordinary case, not a fault: every marketplace lead read off
+  // Monday comes through here too, and so does a paid RE-RUN of a lead already
+  // qualified. The RPC's own predicates decide, and it is idempotent.
+  if (!qualified) return;
+
+  const { data: lead, error: readError } = await admin
+    .from("leads")
+    .select("*")
+    .eq("id", leadId)
+    .maybeSingle();
+
+  if (readError || !lead) {
+    console.error("leadAnalysisRun: could not re-read qualified lead", leadId, readError);
+    return;
+  }
+
+  try {
+    await autoAssignLead(admin, lead as Lead);
+  } catch (err) {
+    // A lead that finds no candidate today is not an error — every subscriber
+    // may be at quota, and banked leads are inventory rather than a backlog
+    // (§4). A thrown error is, but not one worth failing a paid row over.
+    console.error("leadAnalysisRun: routing a qualified lead threw", leadId, err);
+  }
 }

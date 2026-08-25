@@ -327,6 +327,21 @@ export interface Lead {
   owner_customer_id: string | null;
   /** How an owned lead arrived. Always null exactly when owner_customer_id is. */
   owner_source: "import" | "manual" | null;
+  /**
+   * Whether this owned lead MAY become sellable to one other operator (0108).
+   *
+   * Consent, stamped true at creation and never changed. False on every lead
+   * uploaded before 0108, which is the whole of the new-uploads-only rule —
+   * those can never become sellable however they are analysed later.
+   */
+  owner_resale_allowed: boolean;
+  /**
+   * When a paid analysis returned trustworthy figures and this owned lead became
+   * sellable (0108). Non-null IS the sellable state: it is what
+   * `lead_retired_from_allocation` reads, and `max_assignments` went to 2 in the
+   * same statement that stamped it.
+   */
+  owner_resale_qualified_at: string | null;
   lead_name: string;
   address: string | null;
   phone: string | null;

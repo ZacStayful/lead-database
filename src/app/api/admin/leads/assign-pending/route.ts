@@ -53,13 +53,22 @@ async function handle(request: NextRequest) {
 
   // Column-vs-column comparisons aren't expressible in PostgREST, so pull the
   // leads and filter the shortfall in JS (open leads are a few hundred at most).
-  // Customer-owned leads are never topped up: they are not ours to place, and
-  // this sweep is the one path that would otherwise hand one to another
-  // customer at full price the day after it was imported.
+  //
+  // Customer-owned leads are not ours to place, and this sweep is the one path
+  // that would otherwise hand one to another customer at full price the day
+  // after it was imported — WITH ONE EXCEPTION since §32. A lead whose paid
+  // analysis came back with trustworthy figures is sellable to exactly one
+  // further operator, and the analysis worker offers it the moment it
+  // qualifies. If that call found no candidate — everybody at quota, which is
+  // ordinary — this is the backstop that picks it up.
+  //
+  // Deliberately reopening what §30.8 closed, and only for qualified leads. The
+  // cap still holds: assign_lead_to_customer refuses a third holder under the
+  // row lock whatever this query returns.
   let query = admin
     .from("leads")
     .select("*")
-    .is("owner_customer_id", null)
+    .or("owner_customer_id.is.null,owner_resale_qualified_at.not.is.null")
     .order("created_at", { ascending: true });
   if (leadType) query = query.eq("lead_type", leadType);
 
