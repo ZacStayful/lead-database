@@ -18,6 +18,12 @@ import type { AssignmentWithLead } from "@/lib/types";
  */
 type Filter = "all" | "new" | "viewed" | "contacted" | "won";
 type TypeFilter = "all" | "management" | "guaranteed_rent";
+/**
+ * Where the lead came from. Only offered once the customer actually has some of
+ * their own, so a customer who has never imported anything never sees a filter
+ * whose second option would always be empty.
+ */
+type SourceFilter = "all" | "stayful" | "mine";
 
 export function LeadsList({
   assignments,
@@ -28,6 +34,7 @@ export function LeadsList({
   const [filter, setFilter] = useState<Filter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
 
   // Only offer the product filter when the customer actually holds both types.
   const hasBothTypes = useMemo(() => {
@@ -41,15 +48,25 @@ export function LeadsList({
     return false;
   }, [assignments]);
 
-  // Which chips exist follows the product filter only — not the search box, so
-  // the row doesn't reflow while the customer is typing in it.
-  const typeScoped = useMemo(
-    () =>
+  const hasOwnLeads = useMemo(
+    () => assignments.some((a) => Boolean(a.lead?.owner_customer_id)),
+    [assignments]
+  );
+
+  // Which chips exist follows the product and source filters only — not the
+  // search box, so the row doesn't reflow while the customer is typing in it.
+  const typeScoped = useMemo(() => {
+    const byType =
       typeFilter === "all"
         ? assignments
-        : assignments.filter((a) => productOf(a) === typeFilter),
-    [assignments, typeFilter]
-  );
+        : assignments.filter((a) => productOf(a) === typeFilter);
+    if (sourceFilter === "all") return byType;
+    return byType.filter((a) =>
+      sourceFilter === "mine"
+        ? Boolean(a.lead?.owner_customer_id)
+        : !a.lead?.owner_customer_id
+    );
+  }, [assignments, typeFilter, sourceFilter]);
 
   // Everything except the stage filter, so stage counts reflect the other
   // filters in force.
@@ -92,6 +109,12 @@ export function LeadsList({
     { key: "viewed", label: "Viewed" },
     { key: "contacted", label: "Contacted" },
     { key: "won", label: "Won" },
+  ];
+
+  const sourceFilters: { key: SourceFilter; label: string }[] = [
+    { key: "all", label: "All sources" },
+    { key: "stayful", label: "From Stayful" },
+    { key: "mine", label: "Your leads" },
   ];
 
   const typeFilters: { key: TypeFilter; label: string }[] = [
@@ -142,6 +165,28 @@ export function LeadsList({
               className={
                 "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
                 (typeFilter === f.key
+                  ? "bg-brand text-brand-foreground"
+                  : "text-muted-foreground hover:bg-accent")
+              }
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {hasOwnLeads && (
+        <div className="flex gap-1">
+          {sourceFilters.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => {
+                setSourceFilter(f.key);
+                setStageFilter("all");
+              }}
+              className={
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+                (sourceFilter === f.key
                   ? "bg-brand text-brand-foreground"
                   : "text-muted-foreground hover:bg-accent")
               }

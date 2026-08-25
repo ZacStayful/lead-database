@@ -79,6 +79,7 @@ export function LeadDetail({
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [showCloseOptions, setShowCloseOptions] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [celebrateOpen, setCelebrateOpen] = useState(false);
@@ -141,6 +142,28 @@ export function LeadDetail({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+  }
+
+  /**
+   * Remove a lead the customer added themselves. Deletes the lead outright —
+   * with it go the assignment, notes and files, by the cascade. Nothing was
+   * charged for it and it was never offered to anyone else, so there is no
+   * record worth preserving once they say it is gone.
+   */
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/customer/my-leads/${lead.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("delete failed");
+      router.push("/dashboard/leads");
+      router.refresh();
+    } catch {
+      setBusy(false);
+      setShowDeleteConfirm(false);
+      alert("Could not delete that lead. Please try again.");
+    }
   }
 
   async function handleAccept() {
@@ -284,7 +307,16 @@ export function LeadDetail({
   }
 
   const badge = statusBadge(status);
-  const canDiscard = status === "new" && !hasNotes;
+
+  // A lead the customer added themselves. The three marketplace exits below
+  // make no sense for one: reject is a chargeable outcome on a lead we sold,
+  // close tells us not to re-offer the landlord to anybody else, and discard
+  // would strand the leads row with no assignment at all — invisible to its
+  // owner under RLS and unreachable by any control. Delete is the verb for a
+  // lead you own, and the API refuses the other three regardless of this.
+  const isOwnLead = Boolean(lead.owner_customer_id);
+
+  const canDiscard = status === "new" && !hasNotes && !isOwnLead;
 
   // Once this customer has rejected the lead the stage is read-only. Rejection
   // is their own settled decision on their own assignment — another operator
@@ -298,8 +330,14 @@ export function LeadDetail({
   // click). Terminal outcomes are excluded: rejecting a signed lead would
   // destroy a conversion record. Mirrors reject_lead_assignment exactly.
   const canReject =
-    pipelineStage === "cold" && status !== "won" && status !== "rejected";
+    pipelineStage === "cold" &&
+    status !== "won" &&
+    status !== "rejected" &&
+    !isOwnLead;
 
+  // Unchanged by ownership: the block also carries "Mark as contacted", which
+  // an owned lead wants exactly as much as an allocated one. Reject and discard
+  // inside it are gated individually.
   const showActions = status === "new" || canReject;
 
   return (
@@ -354,6 +392,15 @@ export function LeadDetail({
             </p>
           </div>
           <div className="flex flex-col items-end gap-2">
+            {isOwnLead && (
+              <Badge
+                variant="outline"
+                className="border-transparent bg-sky-100 text-sky-700"
+                title="You added this lead yourself. It is only visible to you."
+              >
+                Your lead
+              </Badge>
+            )}
             <Badge variant="outline" className={badge.className}>
               {badge.label}
             </Badge>
@@ -672,13 +719,57 @@ export function LeadDetail({
           </div>
         )}
 
+        {/* Delete — only for a lead the customer added themselves, and the
+            only exit they get. It replaces reject/discard/close rather than
+            joining them: those three are all statements about a lead WE
+            supplied, and the API refuses them here regardless. */}
+        {isOwnLead && (
+          <div className="mt-3">
+            {!showDeleteConfirm ? (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                disabled={busy}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-black/10 px-6 py-2.5 text-sm font-medium text-[#898781] transition-colors hover:bg-gray-50 disabled:opacity-60"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete this lead
+              </button>
+            ) : (
+              <div className="rounded-xl border border-black/10 bg-white p-4">
+                <p className="mb-3 text-sm text-[#52514e]">
+                  Delete this lead for good? You added it yourself, so it is
+                  only in your database — its notes and files go with it, and it
+                  cannot be undone.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleDelete()}
+                    disabled={busy}
+                    className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                  >
+                    Delete lead
+                  </button>
+                  <button
+                    onClick={() => setShowDeleteConfirm(false)}
+                    disabled={busy}
+                    className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Didn't work out. Deliberately sits beside "Mark as signed" and is
             available from any working state, including 'new' — an operator can
             ring a landlord without the status ever moving, and that is exactly
             the case the other two exits refuse. */}
-        {(status === "new" ||
-          status === "contacted" ||
-          status === "in_discussion") && (
+        {!isOwnLead &&
+          (status === "new" ||
+            status === "contacted" ||
+            status === "in_discussion") && (
           <div className="mt-3">
             {!showCloseOptions ? (
               <button

@@ -58,7 +58,9 @@ type AnalyticsAssignment = {
   income_estimate: number | null;
   // Set only on leads the customer took out of the expired pool themselves.
   claimed_from_pool_at: string | null;
-  lead: { lead_type: LeadType } | null;
+  // owner_customer_id is non-null only on leads the customer added themselves
+  // (imported or typed in), which are visible to nobody else.
+  lead: { lead_type: LeadType; owner_customer_id: string | null } | null;
 };
 
 export default async function AnalyticsPage() {
@@ -73,7 +75,7 @@ export default async function AnalyticsPage() {
   const { data: rows } = await admin
     .from("lead_assignments")
     .select(
-      "status, pipeline_stage, viewed_at, first_contacted_at, income_estimate, claimed_from_pool_at, lead:leads(lead_type)"
+      "status, pipeline_stage, viewed_at, first_contacted_at, income_estimate, claimed_from_pool_at, lead:leads(lead_type, owner_customer_id)"
     )
     .eq("customer_id", customer.id);
 
@@ -244,6 +246,14 @@ function ProductAnalytics({
   // comparison that says whether the pool is worth working.
   const claimed = assignments.filter((a) => a.claimed_from_pool_at !== null);
   const allocated = assignments.filter((a) => a.claimed_from_pool_at === null);
+
+  // Leads the customer added themselves, on the same principle as the claimed
+  // split above: counted in every figure, shown separately because they are a
+  // different population. These came from the operator's own sourcing, so the
+  // comparison says something about their channel against ours — which is
+  // exactly the question somebody importing their own book is asking.
+  const ownLeads = assignments.filter((a) => Boolean(a.lead?.owner_customer_id));
+  const fromStayful = assignments.filter((a) => !a.lead?.owner_customer_id);
   const rate = (rows: AnalyticsAssignment[]) =>
     rows.length
       ? Math.round(
@@ -276,6 +286,43 @@ function ProductAnalytics({
               </Card>
             ))}
           </div>
+
+          {ownLeads.length > 0 && (
+            <Card>
+              <CardContent className="pt-6">
+                <h3 className="mb-1 text-base font-semibold">
+                  Leads you added yourself
+                </h3>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Counted in the figures above. Shown separately because you
+                  sourced these, so it is worth seeing how they convert against
+                  the ones we send you.
+                </p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      Added by you
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold">
+                      {ownLeads.length}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {rate(ownLeads)}% won
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">From Stayful</p>
+                    <p className="mt-1 text-2xl font-semibold">
+                      {fromStayful.length}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {rate(fromStayful)}% won
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {claimed.length > 0 && (
             <Card>

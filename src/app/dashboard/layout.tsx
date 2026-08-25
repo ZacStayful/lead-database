@@ -57,6 +57,10 @@ export default async function DashboardLayout({
       items: [
         { href: "/dashboard/leads", label: "All leads" },
         { href: "/dashboard/leads/priority", label: "Priority" },
+        // The customer's own leads, imported or typed in. Ungated on product
+        // here for the same reason as Expired leads below: the page resolves
+        // which products they hold and explains itself when the answer is none.
+        { href: "/dashboard/leads/add", label: "Add your own leads" },
         // Shown to every subscriber, not gated on holding a particular
         // product: the page resolves which pools the customer can see and
         // renders its own explanation when the answer is none.
