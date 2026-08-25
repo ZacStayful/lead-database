@@ -3,7 +3,10 @@ import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
+import { getStripe } from "@/lib/stripe";
 import { processAnalysisRow, type ClaimedAnalysisRow } from "@/lib/leadAnalysisRun";
+import { settleDueRefunds } from "@/lib/leadAnalysisRefund";
+import { sendAnalysisReadyEmail } from "@/lib/emails";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -236,14 +239,79 @@ async function handle(request: NextRequest) {
       continue;
     }
     const row = Array.isArray(data) ? data[0] : data;
-    if (row?.finalised) finalised.push(jobId);
+    if (row?.finalised) {
+      finalised.push(jobId);
+      // The customer paid up front and then waited — a 200-lead batch is about
+      // half an hour — so telling them it is done is part of what they bought.
+      // Never allowed to fail the run: the figures are already written and the
+      // refund is already owed whether or not an email lands.
+      try {
+        await notifyJobFinished(admin, jobId, row);
+      } catch (err) {
+        console.error("run-lead-analysis: completion email failed", jobId, err);
+      }
+    }
+  }
+
+  // Settle what is owed back. Deliberately NOT limited to the jobs this run
+  // touched: anything a previous run left deferred is picked up here too, which
+  // is what makes "leave it due and try again" a real recovery rather than a
+  // hope. Never throws — a refund problem must not take down a run that has
+  // just produced somebody else's figures.
+  let refunded = 0;
+  let refundsDeferred = 0;
+  try {
+    for (const r of await settleDueRefunds(admin, getStripe())) {
+      if (r.status === "refunded") refunded += r.amountPence ?? 0;
+      if (r.status === "deferred") refundsDeferred += 1;
+    }
+  } catch (err) {
+    console.error("run-lead-analysis: refund sweep failed", err);
   }
 
   return NextResponse.json({
     ...counts,
     finalisedJobs: finalised.length,
+    refundedPence: refunded,
+    refundsDeferred,
     stoppedBecause,
     elapsedMs: Date.now() - startedAt,
+  });
+}
+
+/**
+ * Tell the customer their batch is done.
+ *
+ * Sent once, from the one place a job is finalised, so it cannot be sent twice
+ * for the same job: finalise_lead_analysis_job only returns finalised: true on
+ * the transition.
+ */
+async function notifyJobFinished(
+  admin: ReturnType<typeof createAdminClient>,
+  jobId: string,
+  tally: { succeeded_count?: number; failed_count?: number; refund_pence?: number }
+): Promise<void> {
+  const { data: job } = await admin
+    .from("lead_analysis_jobs")
+    .select("customer_id")
+    .eq("id", jobId)
+    .maybeSingle();
+  const customerId = (job as { customer_id: string } | null)?.customer_id;
+  if (!customerId) return;
+
+  const { data: customer } = await admin
+    .from("customers")
+    .select("email")
+    .eq("id", customerId)
+    .maybeSingle();
+  const email = (customer as { email: string } | null)?.email;
+  if (!email) return;
+
+  await sendAnalysisReadyEmail({
+    to: email,
+    succeeded: tally.succeeded_count ?? 0,
+    failed: tally.failed_count ?? 0,
+    refundPence: tally.refund_pence ?? 0,
   });
 }
 
