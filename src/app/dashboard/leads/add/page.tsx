@@ -10,10 +10,16 @@ export const dynamic = "force-dynamic";
 /**
  * Bring your own leads: a spreadsheet import, or one at a time by hand.
  *
- * The leads created here belong to this customer alone. They are never pooled,
- * never escalated and never offered to another operator (enforced in the
- * database by migration 0102), which is what makes the platform usable as the
- * customer's own lead database rather than only a delivery channel.
+ * The leads created here belong to this customer. They are never pooled and
+ * never escalated (enforced in the database by 0102 and 0107), which is what
+ * makes the platform usable as the customer's own lead database rather than
+ * only a delivery channel.
+ *
+ * ⚠️ "never offered to another operator" was true until §32. One that has been
+ * through a PAID analysis and come back with trustworthy figures is offered to
+ * exactly ONE further operator — never back to the person who added it, and
+ * never into the pool. Their own working notes do not travel with it: see
+ * `viewerScopedLead`.
  */
 export default async function AddLeadsPage() {
   const { user, customer } = await getCurrentCustomer();

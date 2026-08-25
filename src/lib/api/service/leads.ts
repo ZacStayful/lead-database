@@ -151,7 +151,7 @@ export async function listAssignments(
   }
 
   return ok({
-    data: page.map(serializeAssignment),
+    data: page.map((row) => serializeAssignment(row, caller.customerId)),
     next_cursor: nextCursor,
   });
 }
@@ -180,7 +180,12 @@ export async function getAssignment(
   }
   if (!data) return notFound();
 
-  return ok(serializeAssignment(data as unknown as Record<string, unknown>));
+  return ok(
+    serializeAssignment(
+      data as unknown as Record<string, unknown>,
+      caller.customerId
+    )
+  );
 }
 
 /**

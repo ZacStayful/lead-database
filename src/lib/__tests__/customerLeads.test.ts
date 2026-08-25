@@ -121,7 +121,30 @@ describe("isOwnedLead", () => {
 describe("viewerScopedLead", () => {
   it("hides another customer's id from the reader", () => {
     const scoped = viewerScopedLead({ id: "l1", owner_customer_id: "c1" }, "c2");
-    expect(scoped).toEqual({ id: "l1", owner_customer_id: null });
+    expect(scoped).toEqual({ id: "l1", owner_customer_id: null, lead_profile: null });
+  });
+
+  it("withholds the uploader's own working material from a buyer", () => {
+    // lead_profile on an IMPORTED lead is whatever their spreadsheet had left
+    // over — leadImport folds every unmapped column into it as "Header: value".
+    // Margins, source attribution, "will take 12%, spoke to Dave". Handing that
+    // to a competing operator is a different act from handing over a phone
+    // number, and we cannot tell the useful lines from the private ones.
+    const scoped = viewerScopedLead(
+      { id: "l1", owner_customer_id: "c1", lead_profile: "Margin: 14%\nSource: Dave" },
+      "c2"
+    );
+    expect(scoped?.lead_profile).toBeNull();
+  });
+
+  it("leaves the profile intact for the uploader and on a marketplace lead", () => {
+    const mine = { id: "l1", owner_customer_id: "c1", lead_profile: "my notes" };
+    expect(viewerScopedLead(mine, "c1")?.lead_profile).toBe("my notes");
+
+    // Ours is written to be read by whoever holds the lead — that is the point
+    // of it, and it must not be collateral damage.
+    const market = { id: "l2", owner_customer_id: null, lead_profile: "qualified by us" };
+    expect(viewerScopedLead(market, "c2")?.lead_profile).toBe("qualified by us");
   });
 
   it("leaves the owner's own lead, and a marketplace lead, untouched", () => {
@@ -141,6 +164,7 @@ describe("viewerScopedLead", () => {
     expect(viewerScopedLead({ id: "l1", owner_customer_id: "c1" }, null)).toEqual({
       id: "l1",
       owner_customer_id: null,
+      lead_profile: null,
     });
   });
 

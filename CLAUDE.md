@@ -4590,11 +4590,32 @@ for**. Three of those are on the first screen.
 `customer_id` it belongs to. A resold lead reads **"Allocated"** to its buyer —
 true, and silent about the operator who brought it in (§19.7).
 
-**`viewerScopedLead()` nulls another customer's id at the page boundary.** The
-customer lead surfaces select `lead:leads(*)`, so a resold lead would otherwise
-ship the uploader's primary key to the buyer's browser. It does **not** replace
-the viewer argument: server-side callers read the column directly and must never
-depend on a sanitisation step having run upstream.
+**`viewerScopedLead()` nulls another customer's id at the page boundary**, and
+**their `lead_profile` with it.** The customer lead surfaces select
+`lead:leads(*)`, so a resold lead would otherwise ship the uploader's primary key
+to the buyer's browser. It does **not** replace the viewer argument: server-side
+callers read the columns directly and must never depend on a sanitisation step
+having run upstream — which is why the export and `serializeAssignment` call it
+explicitly, the latter taking the viewer as a REQUIRED parameter because
+`customer_id` is in `NEVER_EXPOSED` and therefore never selected.
+
+⚠️ **The profile is the half that matters.** On a marketplace lead that column is
+our own qualification blurb, written to be read by whoever holds the lead. On an
+IMPORTED one it is whatever the spreadsheet had left over: `leadImport.ts` folds
+every column it could not map into it as `Header: value`, plus every column
+mapped to notes. That is the uploader's own working material — margins, source
+attribution, "will take 12%, spoke to Dave" — and handing it to a competing
+operator is a different act from handing over the landlord's phone number. We
+cannot tell the useful lines from the private ones, so the buyer gets none of
+them; they still receive the contact details, the address, the bedrooms and the
+full analysis, which is everything needed to price a call.
+
+⚠️ **It is a presentation control, not a security boundary.**
+`leads_select_assigned` (0014) grants any holder `select` on the whole `leads`
+row, so a buyer with their own Supabase session can read both columns from the
+browser directly. What that yields is an opaque customer UUID that resolves to
+nothing (`customers` is select-own) and text they were arguably sold. Anything
+that must be genuinely unreachable needs RLS or a column that is never selected.
 
 Reject and close now refuse only when the caller **is** the owner. **Discard
 stays refused for both parties**, for different reasons — for the uploader it

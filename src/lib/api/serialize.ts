@@ -11,6 +11,7 @@
  * the output keys are exactly the spec keys — an omission is impossible by
  * construction, and an addition has to be made deliberately in schema.ts.
  */
+import { viewerScopedLead } from "@/lib/customerLeads";
 import {
   ASSIGNMENT_FIELDS,
   LEAD_FIELDS,
@@ -92,9 +93,22 @@ export function serializeLead(row: Row | null | undefined): Row | null {
   return serializeWith(LEAD_FIELDS, row);
 }
 
-export function serializeAssignment(row: Row): Row {
+export function serializeAssignment(row: Row, viewerCustomerId: string): Row {
   const out = serializeWith(ASSIGNMENT_FIELDS, row);
-  out.lead = serializeLead(row.lead as Row | null);
+  // Scoped before serializing. A lead resold from another operator (§32) carries
+  // THEIR leftover spreadsheet material in lead_profile, which is not part of
+  // what this caller bought — the same rule the dashboard and the export apply.
+  // `owner_customer_id` is in NEVER_EXPOSED, so only the profile is at stake.
+  //
+  // The viewer is a REQUIRED parameter rather than read off the row, because
+  // `customer_id` is in NEVER_EXPOSED and therefore never selected — taking it
+  // from the row would silently be undefined and redact the caller's OWN
+  // imported leads. Every caller has `caller.customerId` to hand.
+  const lead = viewerScopedLead(
+    row.lead as ({ owner_customer_id?: string | null; lead_profile?: string | null } & Row) | null,
+    viewerCustomerId
+  );
+  out.lead = serializeLead(lead as Row | null);
   return out;
 }
 

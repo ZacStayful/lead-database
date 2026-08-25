@@ -103,18 +103,38 @@ export function leadSourceLabel(assignment: {
  * client component's `Boolean(lead.owner_customer_id)` becomes correct without
  * needing to know the viewer.
  *
+ * ⚠️ **`lead_profile` goes too, and that is the more important half.** On a
+ * marketplace lead that column is our own qualification blurb, written to be
+ * read by whoever holds the lead. On an IMPORTED one it is whatever the
+ * customer's spreadsheet had left over: `leadImport.ts` folds every column it
+ * could not map into it as `Header: value`, plus every column mapped to notes.
+ * That is the uploader's own working material — margins, source attribution,
+ * "will take 12%, spoke to Dave" — and handing it to a competing operator is a
+ * different act from handing over the landlord's phone number. We cannot tell
+ * the useful lines from the private ones, so the buyer gets none of them. They
+ * still receive the name, address, bedrooms, contact details and the full
+ * analysis, which is everything needed to price a call.
+ *
  * This does NOT replace `isOwnedLead`'s viewer argument. Server-side callers —
- * the export, analytics, goals, the API routes — read the column directly and
- * must never depend on a sanitisation step having been run somewhere upstream.
+ * analytics, goals, the API routes — read the columns directly and must never
+ * depend on a sanitisation step having been run somewhere upstream.
+ *
+ * ⚠️ Nor is it a security boundary. `leads_select_assigned` (0014) grants any
+ * holder `select` on the whole row, so a buyer with their own Supabase session
+ * can read `owner_customer_id` and `lead_profile` from the browser directly.
+ * What that yields is an opaque customer UUID that resolves to nothing
+ * (`customers` is select-own) and text they were arguably sold — this is a
+ * presentation control that keeps another operator's material out of the
+ * product, not a wall. Anything that must be unreachable needs RLS or a column
+ * that is never selected.
  */
-export function viewerScopedLead<T extends { owner_customer_id?: string | null }>(
-  lead: T | null | undefined,
-  viewerCustomerId: string | null | undefined
-): T | null {
+export function viewerScopedLead<
+  T extends { owner_customer_id?: string | null; lead_profile?: string | null },
+>(lead: T | null | undefined, viewerCustomerId: string | null | undefined): T | null {
   if (!lead) return null;
   if (!lead.owner_customer_id) return lead;
   if (viewerCustomerId && lead.owner_customer_id === viewerCustomerId) return lead;
-  return { ...lead, owner_customer_id: null };
+  return { ...lead, owner_customer_id: null, lead_profile: null };
 }
 
 /**
