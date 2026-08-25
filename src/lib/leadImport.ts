@@ -35,6 +35,7 @@ export type ImportTarget =
   | "email"
   | "phone"
   | "address"
+  | "postcode"
   | "bedrooms"
   | "notes"
   | "ignore";
@@ -44,6 +45,7 @@ export const IMPORT_TARGETS: ImportTarget[] = [
   "email",
   "phone",
   "address",
+  "postcode",
   "bedrooms",
   "notes",
   "ignore",
@@ -55,6 +57,7 @@ export const TARGET_LABELS: Record<ImportTarget, string> = {
   email: "Email",
   phone: "Phone",
   address: "Address",
+  postcode: "Postcode",
   bedrooms: "Bedrooms",
   notes: "Notes / lead profile",
   ignore: "Don't import",
@@ -70,6 +73,7 @@ const SINGLE_CLAIM_TARGETS: ImportTarget[] = [
   "email",
   "phone",
   "address",
+  "postcode",
   "bedrooms",
 ];
 
@@ -86,6 +90,16 @@ export interface NormalisedRow {
   email: string | null;
   phone: string | null;
   address: string | null;
+  /**
+   * A postcode column of its own, when the sheet keeps one.
+   *
+   * Separate from `address` because the analyser needs the postcode as a field,
+   * and because a customer whose sheet plainly HAS a postcode column should not
+   * be told their leads cannot be analysed. Where both exist the address is the
+   * street and this is the postcode; where only the address exists this is null
+   * and the postcode is read back out of it downstream.
+   */
+  postcode: string | null;
   bedrooms: string | null;
   profile: string | null;
 }
@@ -114,7 +128,17 @@ const SYNONYMS: Record<Exclude<ImportTarget, "ignore">, string[]> = {
   address: [
     "address", "propertyaddress", "property", "fulladdress", "addressline1",
     "addressline", "location", "street", "streetaddress", "houseaddress",
-    "postcode", "propertylocation",
+    "propertylocation",
+  ],
+  // "postcode" used to live in the address list above, which meant a sheet with
+  // BOTH an Address and a Postcode column had them fight over one single-claim
+  // target: the loser was demoted to `ignore` and folded into the lead profile
+  // as a "Postcode: BS1 5TR" line. Harmless while the postcode was only ever
+  // read back out of the address — and the difference between a lead that can
+  // be analysed and one that cannot, now that it is a field in its own right.
+  postcode: [
+    "postcode", "postcodes", "postal", "postalcode", "poscode", "pcode",
+    "zip", "zipcode", "outcode", "outwardcode",
   ],
   bedrooms: [
     "bedrooms", "beds", "bedroom", "noofbedrooms", "numberofbedrooms", "br",
@@ -138,6 +162,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 // uses in the database (0070), so the two agree about what could be a number.
 const PHONE_RE = /^[+()\d][\d\s()+.-]{5,}$/;
 const POSTCODE_IN_TEXT = /[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}/i;
+// Anchored: the WHOLE cell is a postcode and nothing else. That is what
+// separates a postcode column from an address column, which merely contains one.
+const POSTCODE_ONLY = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
 const BEDROOM_RE = /^\s*\d{1,2}\s*(bed|beds|bedroom|bedrooms)?\s*$/i;
 
 /**
@@ -165,8 +192,16 @@ export function scoreColumnContent(values: string[]): Partial<Record<ImportTarge
   );
   if (phoneShare > 0.5) scores.phone = phoneShare;
 
-  const postcodeShare = share((v) => POSTCODE_IN_TEXT.test(v));
-  if (postcodeShare > 0.4) scores.address = Math.max(postcodeShare, 0.6);
+  // Checked BEFORE the address test, and exclusive of it. A column of bare
+  // postcodes satisfies both, so scoring it for both would leave the winner to
+  // whichever key happened to come out of Object.entries first.
+  const postcodeOnlyShare = share((v) => POSTCODE_ONLY.test(v));
+  if (postcodeOnlyShare > 0.7) {
+    scores.postcode = postcodeOnlyShare;
+  } else {
+    const postcodeShare = share((v) => POSTCODE_IN_TEXT.test(v));
+    if (postcodeShare > 0.4) scores.address = Math.max(postcodeShare, 0.6);
+  }
 
   const bedroomShare = share((v) => BEDROOM_RE.test(v));
   if (bedroomShare > 0.7) scores.bedrooms = bedroomShare;
@@ -374,6 +409,7 @@ export function normaliseRow(
     email: pick("email"),
     phone: pick("phone"),
     address: pick("address"),
+    postcode: pick("postcode"),
     bedrooms: pick("bedrooms"),
     profile: profileParts.length ? profileParts.join("\n") : null,
   };
