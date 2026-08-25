@@ -17,6 +17,9 @@ interface LeadQueryRow {
   assignment_count: number;
   max_assignments: number;
   created_at: string;
+  owner_customer_id: string | null;
+  owner_source: "import" | "manual" | null;
+  owner: { business_name: string } | null;
   lead_assignments: {
     customers: { business_name: string } | null;
   }[];
@@ -27,7 +30,7 @@ export default async function AdminLeadsPage() {
   const { data } = await admin
     .from("leads")
     .select(
-      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, lead_assignments(customers(business_name))"
+      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, owner_customer_id, owner_source, owner:customers!leads_owner_customer_id_fkey(business_name), lead_assignments(customers(business_name))"
     )
     .order("created_at", { ascending: false });
 
@@ -40,15 +43,22 @@ export default async function AdminLeadsPage() {
     assignment_count: l.assignment_count,
     max_assignments: l.max_assignments,
     created_at: l.created_at,
+    owner_customer_id: l.owner_customer_id,
+    owner_source: l.owner_source,
+    owner_name: l.owner?.business_name ?? null,
     recipients: l.lead_assignments
       .map((a) => a.customers?.business_name)
       .filter((n): n is string => Boolean(n)),
   }));
 
-  const pendingCount = leads.filter(
+  // Customer-owned leads are listed but never counted as work awaiting an
+  // admin: nobody can assign them, so including them would report a backlog
+  // that no action could ever clear.
+  const assignable = leads.filter((l) => !l.owner_customer_id);
+  const pendingCount = assignable.filter(
     (l) => l.assignment_count < l.max_assignments
   ).length;
-  const unassignedCount = leads.filter((l) => l.assignment_count === 0).length;
+  const unassignedCount = assignable.filter((l) => l.assignment_count === 0).length;
 
   // Approved (real) customers — the pool the bulk assigner offers, with their
   // per-product credit counts for context.
@@ -95,7 +105,7 @@ export default async function AdminLeadsPage() {
       label: "Management",
       buyers: mgmt.length,
       credits: mgmt.reduce((s, c) => s + c.lead_balance, 0),
-      waiting: leads.filter(
+      waiting: assignable.filter(
         (l) =>
           l.lead_type !== "guaranteed_rent" &&
           l.assignment_count < l.max_assignments
@@ -105,7 +115,7 @@ export default async function AdminLeadsPage() {
       label: "Guaranteed Rent",
       buyers: gr.length,
       credits: gr.reduce((s, c) => s + c.gr_lead_balance, 0),
-      waiting: leads.filter(
+      waiting: assignable.filter(
         (l) =>
           l.lead_type === "guaranteed_rent" &&
           l.assignment_count < l.max_assignments
