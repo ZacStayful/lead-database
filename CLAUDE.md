@@ -3907,6 +3907,30 @@ exercised end to end.
 
 ### Deployment order — migration BEFORE code
 
+**0102 is applied to `znlfwbnvhlacwzgfalcf` (2026-08-25).** It went on AFTER the
+code reached a preview deployment rather than before, which is how the ordering
+rule gets its evidence: the preview returned "Could not find the function
+public.create_customer_leads … in the schema cache" on every manual add, and
+`/dashboard/analytics`, `/dashboard/goals`, `/admin/leads` and
+`assign-pending` all failed alongside it. Two failed *silently* and are the
+reason the rule is worth keeping: `fetchLeadVolumeData`'s paging loop breaks on
+the error and returns an empty result, so the filter forecast quotes ZERO
+volume, and the admin awaiting-assignment tile swallows its error into
+`data: null` and reads 0. Production on `main` was unaffected throughout, since
+`main` carried none of this code.
+
+Before applying, production's live `prosrc` for all four rewritten functions
+(`lead_pool_barred`, `lead_retired_from_allocation`, `admin_assign_lead`,
+`find_duplicate_lead`) was diffed against the migration-file bodies they are
+copied from and found identical — worth doing rather than assuming, because §11
+records that production has drifted from `supabase/migrations/` before. After
+applying: all 430 existing leads untouched and none owned, both CHECKs and the
+partial index present, `lead_imports` RLS on with zero policies, and the ACL
+audit clean — including that `get_engagement_benchmarks`,
+`get_operator_proof`, `get_recent_wins_anonymised` and
+`set_management_customer_goal` all remain `authenticated`-executable
+(invariant 7).
+
 0102 first. It is inert on its own — every new filter matches nothing until code
 starts writing owned leads — while code selecting `owner_customer_id` against a
 schema without it would fail every leads read. `ANTHROPIC_API_KEY` can land any
