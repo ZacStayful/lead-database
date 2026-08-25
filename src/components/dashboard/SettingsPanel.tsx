@@ -20,6 +20,7 @@ import {
   type PauseMonths,
   type PauseReason,
 } from "@/lib/pauseOptions";
+import { KEEP_CRM_POINTS, KEEP_CRM_SUMMARY } from "@/lib/retentionCopy";
 
 /** Missing / unset keys default to true — an opt-out is only an explicit false. */
 function prefOn(
@@ -375,7 +376,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
                 )}
                 <p className="text-xs text-muted-foreground">
                   Decided not to return? You can cancel below at any time — then
-                  billing never restarts.
+                  billing never restarts. {KEEP_CRM_SUMMARY}
                 </p>
               </>
             ) : (
@@ -388,6 +389,20 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
                   automatically at the end of the pause — or sooner if you decide
                   to start paying again.
                 </p>
+
+                {/* Said before the form is even armed, not after: the point of
+                    this block is to change what someone decides, which it can
+                    only do if they read it before deciding. */}
+                <div className="rounded-md border bg-muted/40 p-3">
+                  <p className="text-sm font-medium">
+                    Your database stays open while you are paused
+                  </p>
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+                    {KEEP_CRM_POINTS.map((point) => (
+                      <li key={point}>{point}</li>
+                    ))}
+                  </ul>
+                </div>
 
                 {!showPauseForm ? (
                   <div className="pt-2">

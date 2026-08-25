@@ -9,6 +9,7 @@ import {
   CANCEL_REASONS,
   type CancelReason,
 } from "@/lib/cancelOptions";
+import { KEEP_CRM_POINTS, KEEP_CRM_SUMMARY } from "@/lib/retentionCopy";
 
 export interface CancelProductState {
   leadType: LeadType;
@@ -215,6 +216,7 @@ function ProductSection({
             remaining leads until the end of the period you have already paid
             for.
           </p>
+          <p className="text-sm text-muted-foreground">{KEEP_CRM_SUMMARY}</p>
           <div className="pt-1">
             <Button
               variant="outline"
@@ -252,9 +254,21 @@ function ProductSection({
               <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
                 <li>Billing stops at the end of your current period.</li>
                 <li>Your subscription ends for good and lead delivery stops on that date.</li>
-                <li>Coming back later needs a new signup.</li>
+                <li>Your database stays open and free — see below.</li>
+                <li>You can subscribe again yourself whenever you want to.</li>
               </ul>
             </div>
+          </div>
+          {/* Below both columns rather than inside either, because it is
+              equally true of pausing and of cancelling. Put in one column it
+              reads as a point scored for that option. */}
+          <div className="rounded-md border bg-muted/40 p-3">
+            <p className="text-sm font-medium">Either way, you keep your database</p>
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+              {KEEP_CRM_POINTS.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
+            </ul>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Button
@@ -333,7 +347,9 @@ function ProductSection({
             Your subscription will end at the end of your current billing period.
             You keep your access and any remaining leads until then, you will not
             be billed again, and there are no refunds for time already paid. We
-            will email you a confirmation with the exact end date.
+            will email you a confirmation with the exact end date. After that
+            date your database stays open and free: you keep everything in it and
+            can carry on adding your own leads.
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
