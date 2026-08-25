@@ -1,12 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  sendPauseEndingSoonEmail,
-  sendSubscriptionResumedEmail,
-} from "@/lib/emails";
-import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
-import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
+import { sendPauseEndingSoonEmail } from "@/lib/emails";
+import { resumePausedCustomer } from "@/lib/resumePause";
 
 /** How far ahead of pause_resumes_at the "billing resumes soon" email goes. */
 const PAUSE_ENDING_NOTICE_DAYS = 7;
@@ -86,119 +81,27 @@ async function handle(request: NextRequest) {
   const errors: string[] = [];
 
   for (const customer of (rows ?? []) as PausedCustomer[]) {
-    // Resume Stripe collection first. An empty pause_collection unpauses the
-    // subscription (per Stripe: set pause_collection to empty to resume).
-    if (customer.stripe_subscription_id) {
-      try {
-        const stripe = getStripe();
-        await stripe.subscriptions.update(customer.stripe_subscription_id, {
-          pause_collection: "",
-        });
-      } catch (err) {
-        stripeErrors += 1;
-        const message = err instanceof Error ? err.message : "stripe error";
-        errors.push(`${customer.id}: ${message}`);
-        console.error("[resume-paused-subscriptions] Stripe resume failed", {
-          customer: customer.id,
-          error: message,
-        });
-        // Leave the row paused so the next daily run retries.
-        continue;
-      }
-    }
+    // Everything a resume does lives in resumePausedCustomer (Stripe first,
+    // then the guarded clear that decides who sends the email, the pacing
+    // re-baseline, the episode stamp and the Monday push). The customer-facing
+    // resume route calls the same function, so an early resume and a scheduled
+    // one cannot behave differently.
+    const result = await resumePausedCustomer(admin, customer, {
+      source: "resume-paused-subscriptions",
+    });
 
-    // Guarded clear: only the writer that actually flips paused_at → null sends
-    // the email. If the Stripe resume above already triggered the webhook and it
-    // cleared the pause first, this returns no row and we skip the email — so a
-    // customer never gets two "you're back" emails.
-    //
-    // Re-baseline pacing on resume (anchor = today, monthly counter = 0), the
-    // same reset execute_filter_lift does when a customer re-enters the
-    // guarantee system. Without it, the stale (months-old) billing_cycle_anchor
-    // plus a zeroed monthly counter would read as a maximal deficit and dump a
-    // flood of leads on the customer the instant they resume. lead_balance is
-    // deliberately NOT touched — credits carry forward.
-    const { data: cleared, error: clearError } = await admin
-      .from("customers")
-      .update({
-        paused_at: null,
-        pause_resumes_at: null,
-        // The notice stamp belongs to the pause it was sent for (0101).
-        pause_ending_notice_sent_at: null,
-        billing_cycle_anchor: new Date().toISOString().slice(0, 10),
-        leads_received_this_month: 0,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", customer.id)
-      .not("paused_at", "is", null)
-      .select("id")
-      .maybeSingle();
-
-    if (clearError) {
-      errors.push(`${customer.id}: ${clearError.message}`);
-      console.error("[resume-paused-subscriptions] clear pause failed", {
-        customer: customer.id,
-        error: clearError.message,
-      });
+    if (result.outcome === "stripe_failed") {
+      stripeErrors += 1;
+      errors.push(`${customer.id}: ${result.error ?? "stripe error"}`);
       continue;
     }
-
-    if (!cleared) {
-      // Already resumed elsewhere (webhook) — Stripe is unpaused, DB is clear,
-      // and the email was sent there. Nothing more to do.
+    if (result.outcome === "db_failed") {
+      errors.push(`${customer.id}: ${result.error ?? "db error"}`);
+      continue;
+    }
+    if (result.outcome === "already_resumed") {
       alreadyResumed += 1;
       continue;
-    }
-
-    // Close the pause episode (0077). Best-effort and deliberately not retried:
-    // this stamp is REPORTING ONLY. Nothing reads ended_at to decide whether a
-    // customer is paused — customers.paused_at is the authority, and it has just
-    // been cleared above — so a missed stamp is a gap in the churn history, not
-    // a stuck pause. Placed inside the `cleared` branch so it fires exactly once
-    // per pause, for the same reason the email does.
-    //
-    // Stamps the LATEST open episode by id rather than every open one. Because
-    // the stamp is allowed to fail, a customer can carry an older un-stamped
-    // episode from a previous pause; a blanket update would then close it with
-    // today's date and give get_pause_outcomes a window that never happened.
-    await stampEpisodeEnded(admin, customer.id, "resume-paused-subscriptions");
-
-    const { error: emailError } = await sendSubscriptionResumedEmail({
-      to: customer.email,
-      contactName: customer.contact_name ?? customer.email,
-    });
-    if (emailError) {
-      console.error("[resume-paused-subscriptions] email failed", {
-        customer: customer.id,
-        error: emailError,
-      });
-    }
-
-    // Take the customer back off "Paused" on the Monday sales board. Inside the
-    // `cleared` branch so it fires exactly once per pause, like the email and the
-    // episode stamp — the webhook's early-resume path pushes from its own hook.
-    //
-    // Their Customer start date is NOT re-stamped by this: the sync only writes
-    // that cell when it is empty. The board automation that used to set it on
-    // every entry into Management Customer is what made that rule necessary.
-    try {
-      const push = await syncCustomerMondayStatus(admin, customer.id, {
-        reason: "resume-paused-subscriptions",
-      });
-      // Skip codes are logged too — see the same note in the pause route.
-      if (
-        push.error ||
-        push.skipped === "board_unreadable" ||
-        push.skipped === "unlinked"
-      ) {
-        console.error("[resume-paused-subscriptions] Monday push did not land", {
-          customer: customer.id,
-          skipped: push.skipped,
-          error: push.error,
-        });
-      }
-    } catch (err) {
-      console.error("[resume-paused-subscriptions] Monday push threw", err);
     }
 
     resumed += 1;

@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PackageUpsellCard } from "@/components/dashboard/PackageUpsellCard";
 import { PlanChangeCard } from "@/components/dashboard/PlanChangeCard";
-import { PRODUCT_COPY, holdsProduct } from "@/lib/products";
+import { PRODUCT_COPY, holdsProduct, previouslyHeldProduct } from "@/lib/products";
 import type { LeadType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -37,9 +37,17 @@ export default async function PackagesPage({
   const held = order.filter((t) => holdsProduct(customer, t));
   const notHeld = order.filter((t) => !holdsProduct(customer, t));
 
-  // A customer holding neither is waitlisted: they see what the products are,
-  // but checkout is not theirs to start (the subscribe route refuses them too).
-  const canSubscribe = held.length > 0;
+  // Who may start a checkout, mirroring /api/customer/subscribe exactly — an
+  // offered button that 403s reads as a bug, and a hidden one reads as a missing
+  // feature (§18E).
+  //
+  // PER PRODUCT, not per page. Holding the other product buys you either; having
+  // once held THIS one buys you only this one back. So a customer who cancelled
+  // management sees a checkout for management and support copy for guaranteed
+  // rent, because buying GR would be acquisition and that stays retired (§17).
+  const canSubscribeTo = (leadType: LeadType) =>
+    held.length > 0 || previouslyHeldProduct(customer, leadType);
+  const canSubscribeAny = notHeld.some(canSubscribeTo);
 
   const checkout = searchParams?.checkout;
   const boughtName =
@@ -156,13 +164,13 @@ export default async function PackagesPage({
       {notHeld.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            {canSubscribe ? "Also available to you" : "Our lead packages"}
+            {canSubscribeAny ? "Also available to you" : "Our lead packages"}
           </h2>
           {notHeld.map((leadType) => (
             <PackageUpsellCard
               key={leadType}
               product={PRODUCT_COPY[leadType]}
-              canSubscribe={canSubscribe}
+              canSubscribe={canSubscribeTo(leadType)}
             />
           ))}
         </div>

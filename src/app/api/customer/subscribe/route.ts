@@ -11,7 +11,7 @@ import {
   toGrPlanKey,
   toPlanKey,
 } from "@/lib/plans";
-import { holdsProduct, toLeadType } from "@/lib/products";
+import { holdsProduct, previouslyHeldProduct, toLeadType } from "@/lib/products";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   const { data: customer } = await admin
     .from("customers")
     .select(
-      "id, email, business_name, contact_name, phone, stripe_customer_id, account_status, subscription_status, gr_subscription_status"
+      "id, email, business_name, contact_name, phone, stripe_customer_id, account_status, subscription_status, gr_subscription_status, cancelled_at, gr_cancelled_at"
     )
     .eq("user_id", user.id)
     .maybeSingle();
@@ -87,11 +87,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // This route is an upsell to an existing customer, not an entry point. A
-  // customer holding neither product is waitlisted and must come through the
-  // normal invite.
+  // This route is an upsell to an existing customer, or a way back for one who
+  // has left — never an entry point. Self-serve ACQUISITION stays retired (§17):
+  // a waitlisted account holding neither product would be jumping the queue by
+  // checking out here, and still gets support instead.
+  //
+  // The returning-customer exception is safe on exactly that distinction.
+  // `previouslyHeldProduct` reads cancelled_at / gr_cancelled_at, which the
+  // Stripe webhook only ever stamps on a real cancellation, so a prospect who
+  // never subscribed can never satisfy it. Somebody who paid us before and
+  // wants to come back is not a queue-jumper, and until now had no route at all:
+  // this route refused them, and the admin invite (§18E) needed an admin.
+  //
+  // Their unused credits are untouched and are spent first when leads resume —
+  // they paid for those, and confiscating them on return would be the
+  // surprising behaviour (§18E).
   const otherType = leadType === "management" ? "guaranteed_rent" : "management";
-  if (!holdsProduct(customer, otherType)) {
+  const returning = previouslyHeldProduct(customer, leadType);
+  if (!holdsProduct(customer, otherType) && !returning) {
     return NextResponse.json(
       {
         error:

@@ -84,6 +84,9 @@ function formatLongDate(iso: string): string {
 export function SettingsPanel({ customer }: { customer: Customer }) {
   const [portalLoading, setPortalLoading] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
+  const [showResumeConfirm, setShowResumeConfirm] = useState(false);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const [pausedAt, setPausedAt] = useState<string | null>(customer.paused_at);
   const [pauseResumesAt, setPauseResumesAt] = useState<string | null>(
     customer.pause_resumes_at
@@ -209,6 +212,29 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
       );
     } finally {
       setPauseLoading(false);
+    }
+  }
+
+  async function resumeSubscription() {
+    setResumeError(null);
+    setResumeLoading(true);
+    try {
+      const res = await fetch("/api/customer/subscription/resume", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Could not resume.");
+      setPausedAt(null);
+      setPauseResumesAt(null);
+      setShowResumeConfirm(false);
+    } catch (err) {
+      setResumeError(
+        err instanceof Error
+          ? err.message
+          : "Could not restart your subscription. Please try again."
+      );
+    } finally {
+      setResumeLoading(false);
     }
   }
 
@@ -373,6 +399,60 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
                     </span>
                     , when billing restarts.
                   </p>
+                )}
+                {/* Arm-then-confirm, mirroring the pause form above it. A
+                    single click must not restart somebody's billing. */}
+                {customer.cancel_at_period_end ? (
+                  <p className="text-sm text-muted-foreground">
+                    Your subscription is scheduled to cancel, so it will not
+                    restart. Choose{" "}
+                    <span className="font-medium">Keep my subscription</span>{" "}
+                    below first if you want your leads to start again.
+                  </p>
+                ) : !showResumeConfirm ? (
+                  <div className="pt-1">
+                    <Button onClick={() => setShowResumeConfirm(true)}>
+                      Start my leads again
+                    </Button>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      You do not have to wait for the pause to end.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 rounded-lg border p-4">
+                    <p className="text-sm font-medium">
+                      Start receiving leads again now?
+                    </p>
+                    {/* Leads restart today; billing does NOT. A void pause
+                        leaves Stripe's cycle running underneath and resuming
+                        only stops the voiding, so the next real charge lands at
+                        the next normal billing date (§11). Saying "you will be
+                        charged now" here would be false. */}
+                    <p className="text-sm text-muted-foreground">
+                      Your pause ends straight away and leads start arriving
+                      again. Billing restarts at your next normal billing date —
+                      nothing is charged today. Your unused lead credits are
+                      still here and will be spent first.
+                    </p>
+                    {resumeError && (
+                      <p className="text-sm text-red-600">{resumeError}</p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={resumeSubscription} disabled={resumeLoading}>
+                        {resumeLoading ? "Restarting…" : "Yes, start my leads"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setShowResumeConfirm(false);
+                          setResumeError(null);
+                        }}
+                        disabled={resumeLoading}
+                      >
+                        Not yet
+                      </Button>
+                    </div>
+                  </div>
                 )}
                 <p className="text-xs text-muted-foreground">
                   Decided not to return? You can cancel below at any time — then

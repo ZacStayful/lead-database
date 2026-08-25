@@ -5,6 +5,7 @@ import {
   previouslyHeldProduct,
   type ProductHistoryFields,
 } from "../products";
+import type { LeadType } from "../types";
 
 /**
  * A customer row carrying only the columns these predicates read. Defaults are
@@ -140,5 +141,76 @@ describe("availableLeadTypes", () => {
     expect(
       availableLeadTypes(customer({ gr_subscription_status: "past_due" }))
     ).toEqual(["guaranteed_rent"]);
+  });
+});
+
+describe("the /api/customer/subscribe gate", () => {
+  /**
+   * Mirrors the route's two guards exactly. If this drifts from
+   * subscribe/route.ts the test is worthless, so it is written as the same
+   * expression rather than as a description of it.
+   */
+  function mayCheckOut(c: ProductHistoryFields, leadType: LeadType): boolean {
+    if (holdsProduct(c, leadType)) return false; // 409, already has it
+    const other: LeadType =
+      leadType === "management" ? "guaranteed_rent" : "management";
+    return holdsProduct(c, other) || previouslyHeldProduct(c, leadType);
+  }
+
+  it("refuses a waitlisted prospect — self-serve acquisition stays retired", () => {
+    expect(mayCheckOut(customer(), "management")).toBe(false);
+    expect(mayCheckOut(customer(), "guaranteed_rent")).toBe(false);
+  });
+
+  it("refuses an invited prospect who has not paid yet", () => {
+    expect(mayCheckOut(customer({ account_status: "invited" }), "management")).toBe(
+      false
+    );
+  });
+
+  it("admits a cancelled management customer coming back", () => {
+    expect(
+      mayCheckOut(
+        customer({ account_status: "cancelled", cancelled_at: "2026-01-01T00:00:00Z" }),
+        "management"
+      )
+    ).toBe(true);
+  });
+
+  it("admits a cancelled GR customer coming back", () => {
+    expect(
+      mayCheckOut(customer({ gr_cancelled_at: "2026-01-01T00:00:00Z" }), "guaranteed_rent")
+    ).toBe(true);
+  });
+
+  it("does not let coming back to one product buy the other", () => {
+    // A cancelled management-only customer holds neither product, so buying GR
+    // here would be acquisition — exactly what the §17 guard exists to refuse.
+    const left = customer({
+      account_status: "cancelled",
+      cancelled_at: "2026-01-01T00:00:00Z",
+    });
+    expect(mayCheckOut(left, "management")).toBe(true);
+    expect(mayCheckOut(left, "guaranteed_rent")).toBe(false);
+  });
+
+  it("still admits the ordinary cross-sell", () => {
+    // Holding the other product buys either — the original §17 behaviour,
+    // unchanged.
+    expect(
+      mayCheckOut(
+        customer({ account_status: "active", subscription_status: "active" }),
+        "guaranteed_rent"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a product the customer already holds", () => {
+    expect(
+      mayCheckOut(
+        customer({ account_status: "active", subscription_status: "active" }),
+        "management"
+      )
+    ).toBe(false);
   });
 });
