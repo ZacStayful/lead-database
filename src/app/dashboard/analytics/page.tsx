@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { isOwnedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -149,6 +150,7 @@ export default async function AnalyticsPage() {
           product={product}
           assignments={byProduct(product)}
           showLabel={showProductLabels}
+          customerId={customer.id}
         />
       ))}
 
@@ -175,10 +177,13 @@ function ProductAnalytics({
   product,
   assignments,
   showLabel,
+  customerId,
 }: {
   product: LeadType;
   assignments: AnalyticsAssignment[];
   showLabel: boolean;
+  /** Who is reading. Ownership is relative to them — see the split below. */
+  customerId: string;
 }) {
   const total = assignments.length;
   const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
@@ -252,8 +257,15 @@ function ProductAnalytics({
   // different population. These came from the operator's own sourcing, so the
   // comparison says something about their channel against ours — which is
   // exactly the question somebody importing their own book is asking.
-  const ownLeads = assignments.filter((a) => Boolean(a.lead?.owner_customer_id));
-  const fromStayful = assignments.filter((a) => !a.lead?.owner_customer_id);
+  //
+  // Compared against THIS customer's id, not against null. Since §32 a lead
+  // with an owner can be one they BOUGHT from another operator — that arrived
+  // through ordinary routing at the ordinary price, so it belongs in "from
+  // Stayful". Counting it as their own sourcing would be exactly backwards.
+  const ownLeads = assignments.filter((a) =>
+    isOwnedLead(a.lead, customerId)
+  );
+  const fromStayful = assignments.filter((a) => !isOwnedLead(a.lead, customerId));
   const rate = (rows: AnalyticsAssignment[]) =>
     rows.length
       ? Math.round(

@@ -56,13 +56,19 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Best-effort tidy-up of any files attached to the assignment. Storage
-  // objects do not cascade with the row, and the lead is about to stop
-  // existing, so nothing will ever reference them again.
+  // Best-effort tidy-up of any files attached to THIS customer's assignment.
+  // Storage objects do not cascade with the row, so nothing else will ever
+  // remove them.
+  //
+  // ⚠️ Scoped to the caller, because since §32 this lead may also be held by an
+  // operator who bought it. Their files hang off their own assignment and must
+  // survive — deleting by lead id alone would take the buyer's attachments with
+  // the uploader's.
   const { data: files } = await admin
     .from("lead_files")
-    .select("storage_path, lead_assignments!inner(lead_id)")
-    .eq("lead_assignments.lead_id", params.id);
+    .select("storage_path, lead_assignments!inner(lead_id, customer_id)")
+    .eq("lead_assignments.lead_id", params.id)
+    .eq("lead_assignments.customer_id", (customer as Customer).id);
 
   const paths = ((files ?? []) as { storage_path?: string }[])
     .map((f) => f.storage_path)
@@ -78,11 +84,30 @@ export async function DELETE(
     }
   }
 
-  const { error } = await admin.from("leads").delete().eq("id", params.id);
+  // Two modes, chosen under a row lock inside the function (0107).
+  //
+  // Nobody else holds it → the lead goes, as it always did. Somebody bought it
+  // → only the uploader's own copy goes, and the buyer keeps the lead they paid
+  // £15 for along with their notes, files and stages. Deleting the `leads` row
+  // outright at that point would cascade all of it away.
+  //
+  // The choice is made in SQL rather than here because reading "does anyone
+  // else hold this?" and then deleting leaves a window for a resale to land in
+  // between.
+  const { data: outcome, error } = await admin.rpc("delete_owner_lead_copy", {
+    p_lead_id: params.id,
+    p_customer_id: (customer as Customer).id,
+  });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  return NextResponse.json({ ok: true });
+  // Same indistinguishable 404 as above. The row could have been deleted, or
+  // sold, between the ownership check and the lock.
+  if (outcome === "not_found") {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  return NextResponse.json({ ok: true, outcome });
 }

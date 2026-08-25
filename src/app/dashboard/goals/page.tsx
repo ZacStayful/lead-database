@@ -98,7 +98,16 @@ export default async function GoalsPage() {
     // subscription is for, and the pipeline estimate beside it is modelled on
     // leads we deliver. A customer who imported fifty existing clients and
     // marked them won would otherwise "achieve" the goal on their own book.
-    .is("leads.owner_customer_id", null);
+    //
+    // Excludes leads THIS customer owns, not every lead with an owner. Since
+    // §32 a lead they bought from another operator carries that operator's id,
+    // and it reached them through ordinary routing at the ordinary price — it
+    // is marketplace supply and it counts, exactly like any other delivered
+    // lead. The argument above is about their own book, not somebody else's.
+    .or(
+      `owner_customer_id.is.null,owner_customer_id.neq.${customer.id}`,
+      { referencedTable: "leads" }
+    );
 
   const goal = customer.management_customer_goal;
   const won = wonCount ?? 0;

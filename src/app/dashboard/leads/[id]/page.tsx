@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { viewerScopedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/dashboard/LeadDetail";
@@ -30,7 +31,12 @@ export default async function LeadDetailPage({
     notFound();
   }
 
-  const assignment = data as AssignmentWithLead;
+  const assignment = {
+    ...(data as AssignmentWithLead),
+    // As on the feed: a resold lead's owner id belongs to the operator who
+    // uploaded it, not to the customer reading this page.
+    lead: viewerScopedLead((data as AssignmentWithLead).lead, customer.id),
+  } as AssignmentWithLead;
 
   // How many landlords this customer has already signed — powers the "your Nth
   // sign-up" celebration when they mark this lead as signed.

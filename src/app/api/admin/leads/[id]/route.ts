@@ -39,6 +39,27 @@ export async function PATCH(
   }
 
   const admin = createAdminClient();
+
+  // A customer's own lead has a hard reach of two — its uploader plus at most
+  // one buyer (§32) — and this is the one place an admin could raise that by
+  // hand. Every SQL path is guarded (0107); this is the last one, and it is
+  // outside SQL.
+  const { data: owned } = await admin
+    .from("leads")
+    .select("owner_customer_id")
+    .eq("id", params.id)
+    .maybeSingle();
+
+  if ((owned as { owner_customer_id?: string | null } | null)?.owner_customer_id) {
+    return NextResponse.json(
+      {
+        error:
+          "This lead was added by a customer. Its reach is fixed at the customer who added it plus at most one other operator, and cannot be raised.",
+      },
+      { status: 400 }
+    );
+  }
+
   const { data, error } = await admin
     .from("leads")
     .update({ max_assignments: body.max_assignments })

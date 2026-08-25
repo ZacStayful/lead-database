@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { Info } from "lucide-react";
+import { viewerScopedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadsList } from "@/components/dashboard/LeadsList";
@@ -21,7 +22,12 @@ export default async function LeadsPage() {
     .eq("customer_id", customer.id)
     .order("assigned_at", { ascending: false });
 
-  const assignments = (data ?? []) as AssignmentWithLead[];
+  // See the note on /dashboard: another operator's customer id never reaches
+  // the browser.
+  const assignments = ((data ?? []) as AssignmentWithLead[]).map((a) => ({
+    ...a,
+    lead: viewerScopedLead(a.lead, customer.id),
+  })) as AssignmentWithLead[];
 
   return (
     <div className="space-y-6">

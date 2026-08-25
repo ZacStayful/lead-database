@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { hasAnyContactDetail, leadSourceLabel, toRpcRow } from "../customerLeads";
+import {
+  hasAnyContactDetail,
+  isOwnedLead,
+  leadSourceLabel,
+  toRpcRow,
+  viewerScopedLead,
+} from "../customerLeads";
 
 describe("toRpcRow", () => {
   it("reads the postcode out of the address, as it always has", () => {
@@ -66,11 +72,79 @@ describe("hasAnyContactDetail", () => {
 });
 
 describe("leadSourceLabel", () => {
-  it("names an owned lead as the customer's own", () => {
-    expect(leadSourceLabel({ lead: { owner_customer_id: "c1" } })).toBe("Added by you");
-    expect(leadSourceLabel({ claimed_from_pool_at: "2026-01-01", lead: null })).toBe(
-      "Claimed from expired leads"
-    );
-    expect(leadSourceLabel({ lead: null })).toBe("Allocated");
+  it("names a lead the reader added as their own", () => {
+    expect(
+      leadSourceLabel({ customer_id: "c1", lead: { owner_customer_id: "c1" } })
+    ).toBe("Added by you");
+  });
+
+  it("names a lead the reader BOUGHT as allocated", () => {
+    // THE regression this whole change exists to prevent. Since §32 an analysed
+    // owned lead can be sold to one other operator, and read as a bare null
+    // check the buyer would be told "Added by you" about a lead they paid £15
+    // for — and told, in the badge's tooltip, that it is visible only to them.
+    // "Allocated" is both true and silent about who brought it in (§19.7).
+    expect(
+      leadSourceLabel({ customer_id: "c2", lead: { owner_customer_id: "c1" } })
+    ).toBe("Allocated");
+  });
+
+  it("still names a pool claim and an ordinary allocation", () => {
+    expect(
+      leadSourceLabel({ customer_id: "c1", claimed_from_pool_at: "2026-01-01", lead: null })
+    ).toBe("Claimed from expired leads");
+    expect(leadSourceLabel({ customer_id: "c1", lead: null })).toBe("Allocated");
+  });
+
+  it("does not claim ownership when the reader is unknown", () => {
+    // A missing customer_id must not resolve to "yours". Fails safe toward the
+    // label that reveals nothing.
+    expect(leadSourceLabel({ lead: { owner_customer_id: "c1" } })).toBe("Allocated");
+  });
+});
+
+describe("isOwnedLead", () => {
+  it("is true only for the customer who added the lead", () => {
+    expect(isOwnedLead({ owner_customer_id: "c1" }, "c1")).toBe(true);
+    expect(isOwnedLead({ owner_customer_id: "c1" }, "c2")).toBe(false);
+  });
+
+  it("is false for a marketplace lead and for missing input", () => {
+    expect(isOwnedLead({ owner_customer_id: null }, "c1")).toBe(false);
+    expect(isOwnedLead(null, "c1")).toBe(false);
+    expect(isOwnedLead(undefined, "c1")).toBe(false);
+    expect(isOwnedLead({ owner_customer_id: "c1" }, null)).toBe(false);
+    expect(isOwnedLead({ owner_customer_id: "c1" }, undefined)).toBe(false);
+  });
+});
+
+describe("viewerScopedLead", () => {
+  it("hides another customer's id from the reader", () => {
+    const scoped = viewerScopedLead({ id: "l1", owner_customer_id: "c1" }, "c2");
+    expect(scoped).toEqual({ id: "l1", owner_customer_id: null });
+  });
+
+  it("leaves the owner's own lead, and a marketplace lead, untouched", () => {
+    const mine = { id: "l1", owner_customer_id: "c1" };
+    expect(viewerScopedLead(mine, "c1")).toBe(mine);
+    const market = { id: "l2", owner_customer_id: null };
+    expect(viewerScopedLead(market, "c1")).toBe(market);
+  });
+
+  it("does not mutate the row it was given", () => {
+    const original = { id: "l1", owner_customer_id: "c1" };
+    viewerScopedLead(original, "c2");
+    expect(original.owner_customer_id).toBe("c1");
+  });
+
+  it("hides the id when the reader is unknown", () => {
+    expect(viewerScopedLead({ id: "l1", owner_customer_id: "c1" }, null)).toEqual({
+      id: "l1",
+      owner_customer_id: null,
+    });
+  });
+
+  it("passes a null lead straight through", () => {
+    expect(viewerScopedLead(null, "c1")).toBeNull();
   });
 });
