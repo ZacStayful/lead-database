@@ -1023,3 +1023,68 @@ export async function sendAnnouncementEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * A paid analysis batch has finished.
+ *
+ * Sent once per job, by the worker, because the customer paid up front and then
+ * waited: 200 leads at three in flight is around half an hour, and "we'll email
+ * you" is the promise the purchase screen makes. Saying nothing would leave
+ * them refreshing a page.
+ *
+ * The refund is stated plainly rather than buried. A customer who paid for
+ * twelve and got nine should learn the difference from us, in the same message,
+ * not from their statement a week later.
+ */
+export async function sendAnalysisReadyEmail(params: {
+  to: string;
+  succeeded: number;
+  failed: number;
+  refundPence: number;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, succeeded, failed, refundPence } = params;
+  const leadWord = (n: number) => `${n} lead${n === 1 ? "" : "s"}`;
+
+  const allFailed = succeeded === 0;
+  const subject = allFailed
+    ? "We couldn't run the figures on those leads"
+    : `The figures are ready on ${leadWord(succeeded)}`;
+
+  const headline = allFailed
+    ? "We couldn't run those figures"
+    : `Your figures are ready`;
+
+  const body = allFailed
+    ? `We weren't able to produce trustworthy figures for any of those properties, so nothing has been added to them and you have been refunded in full.`
+    : `${leadWord(succeeded)} now show projected occupancy, nightly rate, gross income and your management fee — with the full Stayful analysis attached, exactly like a lead that came from us.`;
+
+  const refundLine =
+    refundPence > 0 && !allFailed
+      ? `<div style="background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:10px;padding:14px;margin:0 0 18px;font-size:14px;color:#6b706a">We couldn't get trustworthy figures for ${leadWord(
+          failed
+        )}, so <strong>${formatGbp(refundPence)}</strong> has been refunded to your card. You are only charged for figures you actually got.</div>`
+      : refundPence > 0
+        ? `<div style="background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:10px;padding:14px;margin:0 0 18px;font-size:14px;color:#6b706a"><strong>${formatGbp(
+            refundPence
+          )}</strong> has been refunded to your card.</div>`
+        : "";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">${esc(headline)}</h1>
+    <p style="margin:0 0 16px;color:#6b706a;font-size:14px">${body}</p>
+    ${refundLine}
+    ${button(`${APP_URL}/dashboard/leads`, "See your leads")}
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}

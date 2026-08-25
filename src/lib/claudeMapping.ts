@@ -87,6 +87,7 @@ function systemPrompt(): string {
     "- `notes` is the catch-all for free text about the lead or property (comments, requirements, background). Several columns may map to `notes`.",
     "- Every other target may be used at most once. If two columns could be the phone, pick the one that looks like the primary contact and ignore the other.",
     "- Judge by the DATA as much as the header. Headers are often wrong or missing: a column called `Contact` holding `07700 900123` is a phone, not a name.",
+    "- `address` and `postcode` are separate targets and a sheet may carry both. A cell that IS a postcode and nothing else (`BS4 3AA`) is `postcode`; a cell that merely contains one inside a full address is `address`. Where a sheet has only one column, map it to `address` even if it is headed Postcode.",
     "- `header_row_index` is the row holding the column names. Spreadsheets often open with a title and a blank line, so it is not always row 0. Return null if the sheet has no header row at all and row 0 is already data.",
   ].join("\n");
 }

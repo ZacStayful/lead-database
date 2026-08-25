@@ -33,6 +33,27 @@ export function extractPostcode(address?: string | null): string | null {
   return `${last[1]} ${last[2]}`;
 }
 
+/**
+ * Every distinct postcode in a free-text address, in order of appearance.
+ *
+ * `extractPostcode` takes the last match, which is right for an address that
+ * ends in its postcode. This exists for the one case where that is not enough:
+ * deciding whether a cell holds ONE property or two, before we spend money
+ * analysing whichever the regex happened to reach last.
+ */
+export function extractAllPostcodes(address?: string | null): string[] {
+  if (!address) return [];
+  const text = address.toUpperCase();
+  const seen: string[] = [];
+  let match: RegExpExecArray | null;
+  POSTCODE_RE.lastIndex = 0;
+  while ((match = POSTCODE_RE.exec(text)) !== null) {
+    const value = `${match[1]} ${match[2]}`;
+    if (!seen.includes(value)) seen.push(value);
+  }
+  return seen;
+}
+
 /** The postcode area — the letters before the first digit of the outward code. */
 export function postcodeArea(postcode?: string | null): string | null {
   if (!postcode) return null;

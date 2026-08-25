@@ -24,6 +24,12 @@ export interface OwnedLeadInput {
   email?: string | null;
   phone?: string | null;
   address?: string | null;
+  /**
+   * A postcode the customer supplied separately from the address — a spreadsheet
+   * column of its own, or the manual form's postcode field. Optional: where it
+   * is absent the postcode is read out of the address as it always was.
+   */
+  postcode?: string | null;
   bedrooms?: string | null;
   profile?: string | null;
 }
@@ -73,17 +79,33 @@ function clean(value: string | null | undefined): string {
 }
 
 /**
- * Shape one row for the RPC, deriving the postcode from the address.
+ * Shape one row for the RPC, resolving the postcode.
  *
  * Postcode derivation happens HERE rather than in SQL because
  * `extractPostcode`/`postcodeArea` are the app's single implementation
  * (src/lib/postcode.ts) and a second one in Postgres would eventually give a
  * different answer for the same address. 0097 is the record of what that
  * costs: a subtly different regex filed every Bristol lead under Sheffield.
+ *
+ * An EXPLICIT postcode wins over one found in the address, because a customer
+ * who keeps a postcode column meant it. The address is only searched as a
+ * fallback — and the two are then RECONCILED: where a separate postcode column
+ * exists and the address does not already carry it, it is appended to the
+ * address. A stored address missing its own postcode reads as incomplete to the
+ * operator working the lead, and every other consumer in the app finds a
+ * postcode by looking in the address.
  */
 export function toRpcRow(row: OwnedLeadInput): Record<string, string> {
-  const address = clean(row.address);
-  const postcode = extractPostcode(address);
+  const rawAddress = clean(row.address);
+  const explicit = extractPostcode(clean(row.postcode));
+  const fromAddress = extractPostcode(rawAddress);
+  const postcode = explicit ?? fromAddress;
+
+  const address =
+    explicit && !fromAddress && rawAddress
+      ? `${rawAddress}, ${explicit}`
+      : rawAddress || explicit || "";
+
   return {
     name: clean(row.name),
     email: clean(row.email),

@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: OwnedLeadInput & { lead_type?: string };
+  let body: OwnedLeadInput & { lead_type?: string; run_analysis?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -97,5 +97,56 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  return NextResponse.json({ ok: true, lead_id: result.leadIds[0] ?? null });
+  const leadId = result.leadIds[0] ?? null;
+
+  // ── The upsell, strictly after the lead exists ────────────────────
+  //
+  // The lead is created free and is already theirs by the time anything is
+  // charged, so a declined card costs them nothing but the figures. The
+  // analysis result is REPORTED, never thrown: "lead added, payment didn't go
+  // through" is a true and useful sentence, where failing the whole request
+  // would lose them a lead they had just typed out.
+  let analysis: { status: string; message?: string; url?: string } | null = null;
+  if (leadId && body.run_analysis === true) {
+    analysis = await startAnalysis(request, leadId, leadType);
+  }
+
+  return NextResponse.json({ ok: true, lead_id: leadId, analysis });
+}
+
+/**
+ * Buy analysis for the lead just created, by calling the one purchase route.
+ *
+ * Deliberately an internal HTTP call rather than a second copy of that route's
+ * logic: it re-derives eligibility and the price from the leads themselves,
+ * claims a token, charges and starts the job, and none of that should exist
+ * twice. The session cookie is forwarded so it authenticates as the same
+ * customer.
+ *
+ * Never throws. The lead is already added.
+ */
+async function startAnalysis(
+  request: NextRequest,
+  leadId: string,
+  leadType: LeadType
+): Promise<{ status: string; message?: string; url?: string }> {
+  try {
+    const res = await fetch(`${request.nextUrl.origin}/api/customer/lead-analysis`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: request.headers.get("cookie") ?? "",
+      },
+      body: JSON.stringify({ lead_ids: [leadId], lead_type: leadType, source: "manual" }),
+      cache: "no-store",
+    });
+    const body = await res.json();
+    return { status: body.status ?? "failed", message: body.message, url: body.url };
+  } catch (err) {
+    console.error("my-leads: analysis purchase failed", err);
+    return {
+      status: "failed",
+      message: "The lead was added, but we couldn't start the figures. You can run them from the lead itself.",
+    };
+  }
 }

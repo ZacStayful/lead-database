@@ -18,6 +18,8 @@ import { LeadNotes } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
+import { AnalysisOfferPanel } from "@/components/dashboard/AnalysisOfferPanel";
+import { LEAD_ANALYSIS_PRICE_PENCE, analysability } from "@/lib/leadAnalysis";
 import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import type {
   AssignmentWithLead,
@@ -536,6 +538,27 @@ export function LeadDetail({
           sizeBytes={lead.income_report_size_bytes}
           className="mt-3"
         />
+
+        {/*
+          Buying the figures for a lead the customer added earlier.
+          Where the two above render what a lead HAS, this is how it gets it.
+
+          Only on a lead they own: a marketplace lead's analysis comes from the
+          Monday item we hold, and selling somebody figures for a lead we
+          supplied without one would be charging them to fill our own gap.
+        */}
+        {isOwnLead && !lead.gross_annual_income && analysability(lead).ok && (
+          <AnalysisOfferPanel
+            offer={{
+              eligible_lead_ids: [lead.id],
+              amount_pence: LEAD_ANALYSIS_PRICE_PENCE,
+              ineligible: [],
+            }}
+            leadType={lead.lead_type}
+            source="detail"
+            heading="Run the figures on this property"
+          />
+        )}
 
         {lead.lead_profile && (
           <div className="mt-4 rounded-md bg-muted/50 p-3 text-sm">

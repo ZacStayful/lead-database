@@ -6,6 +6,8 @@ import { AlertTriangle, Sparkles, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ProductChooser } from "./AddLeadsPanel";
+import { AnalysisOfferPanel, SheetHelp, type AnalysisOffer } from "./AnalysisOfferPanel";
+import { formatPence } from "@/lib/leadAnalysis";
 import {
   IMPORT_TARGETS,
   TARGET_LABELS,
@@ -34,6 +36,12 @@ interface PreviewResponse {
   columns: PreviewColumn[];
   /** Raw cells, so the preview can be re-derived as the mapping changes. */
   preview_rows: string[][];
+  /**
+   * Non-binding, computed over every row under the mapping we proposed. Hidden
+   * as soon as the customer changes a mapping it depends on — see
+   * `estimateStale`.
+   */
+  analysis_estimate: { runnable: number; blocked: number; amount_pence: number } | null;
 }
 
 interface ImportResult {
@@ -41,6 +49,12 @@ interface ImportResult {
   duplicates: number;
   empty: number;
   total: number;
+  /**
+   * What running the figures on the leads just created would cost, priced by
+   * the server. Null when nothing was created, or when the quote failed — an
+   * upsell that cannot be priced is simply not offered.
+   */
+  analysis: AnalysisOffer | null;
 }
 
 /** Below this the mapping is flagged for a look rather than presented as settled. */
@@ -64,6 +78,7 @@ export function ImportLeadsPanel({ available }: { available: LeadType[] }) {
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [mapping, setMapping] = useState<Record<number, ImportTarget>>({});
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [showSheetHelp, setShowSheetHelp] = useState(false);
 
   async function onFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -156,6 +171,27 @@ export function ImportLeadsPanel({ available }: { available: LeadType[] }) {
     return preview.preview_rows.map((row) => normaliseRow(row, resolved));
   }, [preview, mapping]);
 
+  /**
+   * Has the customer changed a mapping that the estimate depends on?
+   *
+   * The estimate comes from the server, computed over EVERY row under the
+   * mapping we proposed — a ten-row sample cannot honestly report on a
+   * two-hundred-row sheet. So the moment they move Address, Postcode or
+   * Bedrooms it is stale, and a stale number stated precisely is worse than no
+   * number at all. It is hidden rather than recomputed: the binding quote comes
+   * after the import anyway, priced against the leads actually created.
+   */
+  const estimateStale = useMemo(() => {
+    if (!preview) return false;
+    return preview.columns.some((c) => {
+      const chosen = mapping[c.index] ?? "ignore";
+      if (chosen === c.target) return false;
+      const affects = (t: ImportTarget) =>
+        t === "address" || t === "postcode" || t === "bedrooms";
+      return affects(chosen) || affects(c.target);
+    });
+  }, [preview, mapping]);
+
   const mappedTargets = Object.values(mapping);
   const hasContactField = mappedTargets.some(
     (t) => t === "name" || t === "email" || t === "phone" || t === "address"
@@ -174,6 +210,26 @@ export function ImportLeadsPanel({ available }: { available: LeadType[] }) {
             .
           </p>
         </div>
+        {/*
+          THE OFFER SITS HERE, after the import has committed, and that
+          placement is the design rather than an accident of layout.
+
+          This is the first moment we know which rows became REAL leads.
+          Offering before the commit would quote for duplicates — which
+          create_customer_leads creates nothing for — and for blank rows.
+
+          It also means a declined card costs the customer nothing: their
+          leads are already in, exactly as they would be if they had never
+          been offered this at all.
+        */}
+        {result.analysis && result.analysis.eligible_lead_ids.length > 0 && (
+          <AnalysisOfferPanel
+            offer={result.analysis}
+            leadType={leadType}
+            source="import"
+          />
+        )}
+
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => router.push("/dashboard/leads")}>
             View your leads
@@ -216,6 +272,59 @@ export function ImportLeadsPanel({ available }: { available: LeadType[] }) {
               file does have headings, check they line up below.
             </span>
           </p>
+        )}
+
+        {/*
+          A NON-BINDING estimate, so the customer sees the price before
+          committing to anything at all — which is what the brief asked for.
+          The binding offer comes after the import (see the result screen),
+          because only then do we know which rows became real leads.
+
+          Re-derived from the live mapping, so changing a dropdown to Postcode
+          and watching the runnable count rise is the fastest way to understand
+          why a row could not be run.
+        */}
+        {preview.analysis_estimate && !estimateStale && (
+          <div className="rounded-lg border-[0.5px] border-border bg-muted/30 p-3 text-sm">
+            <p>
+              <span className="font-medium">
+                {preview.analysis_estimate.runnable} of{" "}
+                {preview.analysis_estimate.runnable + preview.analysis_estimate.blocked}{" "}
+                lead
+                {preview.analysis_estimate.runnable +
+                  preview.analysis_estimate.blocked ===
+                1
+                  ? ""
+                  : "s"}{" "}
+                could have the figures run
+              </span>
+              {preview.analysis_estimate.runnable > 0 && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  — that would be{" "}
+                  {formatPence(preview.analysis_estimate.amount_pence)}, at £3 a
+                  lead. You&rsquo;ll be asked after the import; importing on its own is
+                  free.
+                </span>
+              )}
+            </p>
+            {preview.analysis_estimate.blocked > 0 && (
+              <p className="mt-1 text-muted-foreground">
+                {preview.analysis_estimate.blocked}{" "}
+                {preview.analysis_estimate.blocked === 1 ? "lead is" : "leads are"}{" "}
+                missing a postcode or a bedroom count, and you are never charged
+                for a lead we can&rsquo;t run.{" "}
+                <button
+                  type="button"
+                  onClick={() => setShowSheetHelp((v) => !v)}
+                  className="underline underline-offset-2"
+                >
+                  {showSheetHelp ? "Hide" : "How to fix this"}
+                </button>
+              </p>
+            )}
+            {showSheetHelp && <SheetHelp />}
+          </div>
         )}
 
         <div className="overflow-x-auto">

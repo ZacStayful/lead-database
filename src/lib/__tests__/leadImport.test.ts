@@ -197,12 +197,12 @@ describe("normaliseRow", () => {
 
 describe("isEmptyRow", () => {
   it("treats a row with any contact detail as real", () => {
-    expect(isEmptyRow({ name: null, email: null, phone: "07700 900123", address: null, bedrooms: null, profile: null })).toBe(false);
-    expect(isEmptyRow({ name: "Jane", email: null, phone: null, address: null, bedrooms: null, profile: null })).toBe(false);
+    expect(isEmptyRow({ name: null, email: null, phone: "07700 900123", address: null, postcode: null, bedrooms: null, profile: null })).toBe(false);
+    expect(isEmptyRow({ name: "Jane", email: null, phone: null, address: null, postcode: null, bedrooms: null, profile: null })).toBe(false);
   });
 
   it("treats a notes-only row as empty — there is nobody to ring", () => {
-    expect(isEmptyRow({ name: null, email: null, phone: null, address: null, bedrooms: "3", profile: "Nice place" })).toBe(true);
+    expect(isEmptyRow({ name: null, email: null, phone: null, address: null, postcode: null, bedrooms: "3", profile: "Nice place" })).toBe(true);
   });
 });
 
@@ -219,5 +219,72 @@ describe("syntheticHeaders", () => {
     expect(headers[0]).toBe("Column A");
     expect(headers[25]).toBe("Column Z");
     expect(headers[26]).toBe("Column AA");
+  });
+});
+
+// ─── The postcode column ──────────────────────────────────────────
+//
+// "postcode" used to be a synonym for the ADDRESS target, so a sheet carrying
+// both an Address and a Postcode column had them fight over one single-claim
+// target and the loser was folded into the lead profile as prose. That cost
+// nothing while the postcode was only ever read back out of the address; it is
+// the difference between an analysable lead and an unanalysable one now that
+// the analyser is sent the postcode as a field.
+
+describe("postcode as a target of its own", () => {
+  it("maps a separate Postcode column without taking the address with it", () => {
+    const headers = ["Landlord", "Address", "Postcode", "Beds"];
+    const rows = [
+      ["Jane Fry", "12 Bourneside Road, Bristol", "BS4 3AA", "3"],
+      ["Sam Ali", "9 Elm Street, Bristol", "BS7 8PL", "2"],
+    ];
+    const mapping = proposeMapping(headers, rows);
+    expect(mapping.map((m) => m.target)).toEqual(["name", "address", "postcode", "bedrooms"]);
+
+    const row = normaliseRow(rows[0], mapping);
+    expect(row.address).toBe("12 Bourneside Road, Bristol");
+    expect(row.postcode).toBe("BS4 3AA");
+    expect(row.profile).toBeNull();
+  });
+
+  it("recognises a column of bare postcodes whatever it is called", () => {
+    const headers = ["Landlord", "Property Address", "Column C"];
+    const rows = [
+      ["Jane", "12 Bourneside Road, Bristol", "BS4 3AA"],
+      ["Sam", "9 Elm Street, Bristol", "BS7 8PL"],
+      ["Ann", "4 Oak Lane, Bristol", "BS1 5TR"],
+    ];
+    const mapping = proposeMapping(headers, rows);
+    expect(mapping[2].target).toBe("postcode");
+    expect(mapping[1].target).toBe("address");
+  });
+
+  it("does not mistake a column of full addresses for a postcode column", () => {
+    // Every one of these CONTAINS a postcode. Only a cell that IS a postcode
+    // and nothing else counts, which is what the anchored regex is for.
+    const headers = ["Column A"];
+    const rows = [
+      ["12 Bourneside Road, Bristol BS4 3AA"],
+      ["9 Elm Street, Bristol BS7 8PL"],
+      ["4 Oak Lane, Bristol BS1 5TR"],
+    ];
+    expect(proposeMapping(headers, rows)[0].target).toBe("address");
+  });
+
+  it("still treats an address column containing postcodes as the address", () => {
+    const headers = ["Column A"];
+    const rows = [
+      ["12 Bourneside Road, Bristol BS4 3AA"],
+      ["9 Elm Street, Bristol BS7 8PL"],
+    ];
+    expect(proposeMapping(headers, rows)[0].target).toBe("address");
+  });
+
+  it("lets only one column be the postcode", () => {
+    const headers = ["Postcode", "Post Code"];
+    const rows = [["BS4 3AA", "BS7 8PL"]];
+    const targets = proposeMapping(headers, rows).map((m) => m.target);
+    expect(targets.filter((t) => t === "postcode")).toHaveLength(1);
+    expect(targets).toContain("ignore");
   });
 });

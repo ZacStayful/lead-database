@@ -501,10 +501,16 @@ const DOWNLOAD_TIMEOUT_MS = 8000;
  * rather than repeated, so adding a fourth figure to the type cannot leave one
  * branch behind still reporting a stale value.
  *
+ * Exported because there is now a SECOND producer of IncomeReportOutcome —
+ * src/lib/leadAnalysis.ts, which builds one from the analyser's JSON rather
+ * than from a Monday PDF. It must share this constant for exactly the reason
+ * above: a figure added here has to reach both producers or one of them starts
+ * quietly reporting stale values.
+ *
  * `bytes` belongs here for the same reason: a branch that forgot to null it
  * would hand a truncated or unreadable download to the storage layer.
  */
-const NO_FIGURES = {
+export const NO_FIGURES = {
   grossAnnualIncome: null,
   avgNightlyRate: null,
   occupancyRate: null,

@@ -7,11 +7,14 @@ import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
   detectHeaderRow,
+  normaliseRow,
   syntheticHeaders,
   trimTrailingBlankRows,
+  type ColumnMapping,
   type SheetRows,
 } from "@/lib/leadImport";
 import { proposeMappingWithClaude } from "@/lib/claudeMapping";
+import { analysisQuote } from "@/lib/leadAnalysis";
 import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -206,5 +209,32 @@ export async function POST(request: NextRequest) {
         .filter(Boolean),
     })),
     preview_rows: rawPreviewRows,
+    /**
+     * What running the figures on this file would cost, over EVERY row rather
+     * than the ten sampled above — a ten-row sample would report "8 of 10 look
+     * ready" for a two-hundred-row sheet, which is a wrong number dressed as a
+     * precise one.
+     *
+     * Non-binding, and stated as such: it is computed under the mapping we are
+     * PROPOSING, so the confirmation screen hides it the moment the customer
+     * changes a dropdown that could affect it. The binding quote is priced
+     * after the import, against the leads that were actually created.
+     */
+    analysis_estimate: estimateAnalysis(dataRows, proposal.columns),
   });
+}
+
+function estimateAnalysis(
+  dataRows: SheetRows,
+  columns: ColumnMapping[]
+): { runnable: number; blocked: number; amount_pence: number } {
+  const rows = dataRows
+    .map((row) => normaliseRow(row, columns))
+    .filter((r) => r.name || r.email || r.phone || r.address);
+  const quote = analysisQuote(rows);
+  return {
+    runnable: quote.eligible.length,
+    blocked: quote.ineligible.length,
+    amount_pence: quote.amountPence,
+  };
 }
