@@ -26,9 +26,20 @@ import type { LeadType } from "@/lib/types";
  * lead with no analysis should look like a lead from before this existed, not
  * like a property worth nothing.
  *
- * Management only. A Guaranteed Rent operator earns the margin between the rent
- * they pay and what the property makes, so a management fee is not their
- * revenue and showing it would be a wrong number, not a missing one.
+ * ⚠️ THE FEE HALF IS MANAGEMENT ONLY, and it always was — this used to refuse
+ * a Guaranteed Rent lead outright. A GR operator earns the margin between the
+ * rent they pay and what the property makes, so a management fee is not their
+ * revenue: showing it would be a WRONG number, not a missing one.
+ *
+ * What changed is that a GR lead can now HAVE figures. Nothing produced them
+ * before — the Monday sweep is management-only — so refusing the whole
+ * component cost nothing. Paid analysis (0104/0105) produces them for either
+ * product, and gross income, nightly rate and occupancy are exactly as true for a
+ * GR property as a management one: they are what the operator prices their
+ * guaranteed rent against.
+ *
+ * So the fee half is suppressed for GR and the rest renders. Do not restore the
+ * early return: it would silently hide figures a customer has paid for.
  */
 export function IncomeProjection({
   lead,
@@ -44,10 +55,11 @@ export function IncomeProjection({
   variant?: "full" | "compact";
   className?: string;
 }) {
-  if (lead.lead_type !== "management") return null;
-
   const p = buildIncomeProjection(lead);
   if (!p) return null;
+
+  // See the header: the fee is what a MANAGEMENT operator earns.
+  const showFee = lead.lead_type === "management";
 
   const grossYear = `${formatGBP(p.grossAnnualLow)} – ${formatGBP(p.grossAnnualHigh)}`;
   const grossMonth = `${formatGBP(p.grossMonthlyLow)} – ${formatGBP(p.grossMonthlyHigh)}`;
@@ -74,8 +86,10 @@ export function IncomeProjection({
         <p className="text-sm">
           <span className="text-muted-foreground">Est. gross</span>{" "}
           <span className="font-medium">{grossYear}</span>
-          <span className="text-muted-foreground"> a year · your fee </span>
-          <span className="font-medium">{feeYear}</span>
+          <span className="text-muted-foreground">
+            {showFee ? " a year · your fee " : " a year"}
+          </span>
+          {showFee && <span className="font-medium">{feeYear}</span>}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {figures ? (
@@ -84,8 +98,16 @@ export function IncomeProjection({
               {figures}.{" "}
             </>
           ) : null}
-          Fee assumes a {MANAGEMENT_FEE_LABEL}; both shown 10% either side of
-          Stayful&rsquo;s estimate for this property.
+          {showFee ? (
+            <>
+              Fee assumes a {MANAGEMENT_FEE_LABEL}; both shown 10% either side of
+              Stayful&rsquo;s estimate for this property.
+            </>
+          ) : (
+            <>
+              Shown 10% either side of Stayful&rsquo;s estimate for this property.
+            </>
+          )}
         </p>
       </div>
     );
@@ -99,13 +121,15 @@ export function IncomeProjection({
           <p className="mt-0.5 text-sm font-semibold">{grossYear} a year</p>
           <p className="text-xs text-muted-foreground">{grossMonth} a month</p>
         </div>
-        <div>
-          <p className="text-xs text-muted-foreground">
-            What it earns a management company
-          </p>
-          <p className="mt-0.5 text-sm font-semibold">{feeYear} a year</p>
-          <p className="text-xs text-muted-foreground">{feeMonth} a month</p>
-        </div>
+        {showFee && (
+          <div>
+            <p className="text-xs text-muted-foreground">
+              What it earns a management company
+            </p>
+            <p className="mt-0.5 text-sm font-semibold">{feeYear} a year</p>
+            <p className="text-xs text-muted-foreground">{feeMonth} a month</p>
+          </div>
+        )}
       </div>
       {figures && (
         <p className="mt-3 text-sm">
@@ -117,9 +141,19 @@ export function IncomeProjection({
         </p>
       )}
       <p className="mt-3 text-xs text-muted-foreground">
-        Management revenue is based on a {MANAGEMENT_FEE_LABEL}. Gross is
-        Stayful&rsquo;s short-term-let projection for this property, shown as a range
-        10% either side of the estimate.
+        {showFee ? (
+          <>
+            Management revenue is based on a {MANAGEMENT_FEE_LABEL}. Gross is
+            Stayful&rsquo;s short-term-let projection for this property, shown as a
+            range 10% either side of the estimate.
+          </>
+        ) : (
+          <>
+            Gross is Stayful&rsquo;s short-term-let projection for this property,
+            shown as a range 10% either side of the estimate. What you earn
+            depends on the rent you guarantee, so no fee is shown.
+          </>
+        )}
       </p>
     </div>
   );

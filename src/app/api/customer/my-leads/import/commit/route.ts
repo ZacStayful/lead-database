@@ -10,6 +10,7 @@ import {
   type SheetRows,
 } from "@/lib/leadImport";
 import { createOwnedLeads } from "@/lib/customerLeads";
+import { analysisQuote, describeIneligibility } from "@/lib/leadAnalysis";
 import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -166,11 +167,72 @@ export async function POST(request: NextRequest) {
     })
     .eq("id", staged.id);
 
+  // ── The analysis offer ────────────────────────────────────────────
+  //
+  // Quoted HERE rather than on the client, and only now, because this is the
+  // first moment we know which rows became REAL leads. Quoting before the
+  // commit would bill for duplicates (create_customer_leads creates nothing for
+  // those) and for blank rows.
+  //
+  // Best-effort in the strictest sense: the import has already succeeded and
+  // the leads are already the customer's. A failure to price the upsell must
+  // never turn that into an error — they simply do not see the offer.
+  const analysis = await quoteAnalysis(admin, result.leadIds);
+
   return NextResponse.json({
     ok: true,
     imported: result.created,
     duplicates: result.duplicates,
     empty: result.empty,
     total: rows.length,
+    analysis,
   });
+}
+
+/**
+ * What running the figures on the leads just created would cost.
+ *
+ * Returns null on any failure. The import is done and paid-for by nobody; an
+ * upsell that cannot be priced is an upsell that is not offered, not an error.
+ */
+async function quoteAnalysis(
+  admin: ReturnType<typeof createAdminClient>,
+  leadIds: string[]
+): Promise<{
+  eligible_lead_ids: string[];
+  amount_pence: number;
+  ineligible: Array<{ lead_name: string; reason: string }>;
+} | null> {
+  if (!leadIds.length) return null;
+  try {
+    const { data, error } = await admin
+      .from("leads")
+      .select("id, lead_name, lead_type, address, postcode, bedrooms, gross_annual_income")
+      .in("id", leadIds);
+    if (error || !data) return null;
+
+    const quote = analysisQuote(
+      data as Array<{
+        id: string;
+        lead_name: string;
+        lead_type: LeadType;
+        address: string | null;
+        postcode: string | null;
+        bedrooms: string | null;
+        gross_annual_income: number | null;
+      }>
+    );
+
+    return {
+      eligible_lead_ids: quote.eligible.map((l) => l.id),
+      amount_pence: quote.amountPence,
+      ineligible: quote.ineligible.map((x) => ({
+        lead_name: x.lead.lead_name,
+        reason: describeIneligibility(x.code),
+      })),
+    };
+  } catch (err) {
+    console.error("import/commit: analysis quote failed", err);
+    return null;
+  }
 }

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ProductChooser } from "./AddLeadsPanel";
+import { analysability, describeIneligibility } from "@/lib/leadAnalysis";
 import type { LeadType } from "@/lib/types";
 
 interface FormState {
@@ -47,6 +48,7 @@ export function ManualLeadForm({ available }: { available: LeadType[] }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedCount, setSavedCount] = useState(0);
+  const [runAnalysis, setRunAnalysis] = useState(false);
 
   const update =
     (key: keyof FormState) =>
@@ -59,6 +61,19 @@ export function ManualLeadForm({ available }: { available: LeadType[] }) {
     form.name.trim() || form.email.trim() || form.phone.trim() || form.address.trim()
   );
 
+  /**
+   * Can the analyser price this property, as the form stands right now?
+   *
+   * `analysability` is a pure function of the same fields the server will
+   * check, so the checkbox enables and disables live as they type — and when it
+   * is disabled it says exactly which field is missing rather than leaving them
+   * to guess. Both helpers it uses are pure and safe on the client.
+   */
+  const analysable = useMemo(
+    () => analysability({ address: form.address, bedrooms: form.bedrooms }),
+    [form.address, form.bedrooms]
+  );
+
   async function submit(event: React.FormEvent, thenAnother: boolean) {
     event.preventDefault();
     setSaving(true);
@@ -68,7 +83,14 @@ export function ManualLeadForm({ available }: { available: LeadType[] }) {
       const res = await fetch("/api/customer/my-leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, lead_type: leadType }),
+        body: JSON.stringify({
+          ...form,
+          lead_type: leadType,
+          // Only ever sent when the form itself says the property is runnable —
+          // the server re-checks, but asking for something we already know will
+          // be refused is a worse experience than not offering it.
+          run_analysis: runAnalysis && analysable.ok,
+        }),
       });
       const data = await res.json();
 
@@ -77,8 +99,37 @@ export function ManualLeadForm({ available }: { available: LeadType[] }) {
         return;
       }
 
+      // The lead is added at this point, whatever the analysis did.
+      const outcome = data.analysis as
+        | { status: string; message?: string; url?: string }
+        | null
+        | undefined;
+
+      if (outcome?.status === "redirect" && outcome.url) {
+        // No reusable card. Stripe's own page takes it from here; the lead is
+        // already added and stays added whether or not they complete it.
+        window.location.href = outcome.url;
+        return;
+      }
+
+      if (outcome && outcome.status !== "success") {
+        // Say what happened rather than swallowing it: the lead IS added, and
+        // pretending the figures are running when they are not would be worse
+        // than a plain sentence.
+        setError(
+          outcome.message
+            ? `Lead added, but the figures didn't start: ${outcome.message} You can run them from the lead itself.`
+            : "Lead added, but the figures didn't start. You can run them from the lead itself."
+        );
+        setForm(EMPTY);
+        setRunAnalysis(false);
+        setSavedCount((n) => n + 1);
+        return;
+      }
+
       if (thenAnother) {
         setForm(EMPTY);
+        setRunAnalysis(false);
         setSavedCount((n) => n + 1);
       } else if (data.lead_id) {
         router.push(`/dashboard/leads/${data.lead_id}`);
@@ -150,6 +201,45 @@ export function ManualLeadForm({ available }: { available: LeadType[] }) {
           <p className="text-xs text-muted-foreground">
             Include the postcode if you have it — we use it to work out the area.
           </p>
+        </div>
+
+        {/*
+          The upsell, directly under the two fields it depends on, so the
+          reason it is disabled is next to the thing that would enable it.
+          The lead is created FREE either way and before any charge is
+          attempted, so a declined card never costs them the lead.
+        */}
+        <div className="sm:col-span-2">
+          <label
+            className={`flex items-start gap-2.5 rounded-lg border-[0.5px] p-3 ${
+              analysable.ok
+                ? "cursor-pointer border-border hover:bg-muted/40"
+                : "border-border/60 opacity-70"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={runAnalysis && analysable.ok}
+              disabled={!analysable.ok}
+              onChange={(e) => setRunAnalysis(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-input"
+            />
+            <span className="text-sm">
+              <span className="font-medium">
+                Run the estimated figures for this lead — £3
+              </span>
+              <span className="block text-muted-foreground">
+                Projected occupancy, nightly rate, gross income and your
+                management fee, with the full property analysis attached — the
+                same figures a lead from us arrives with.
+              </span>
+              {!analysable.ok && (
+                <span className="mt-1 block text-xs text-amber-700">
+                  {describeIneligibility(analysable.code)}
+                </span>
+              )}
+            </span>
+          </label>
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="lead-profile">Notes</Label>
