@@ -405,6 +405,11 @@ export async function fetchLeadVolumeData(
       .select(
         "id, postcode_area, bedrooms, lead_type, created_at, pool_expired_at, pool_entered_at, pool_entry_basis"
       )
+      // Customer-owned leads are not marketplace supply. Counting them here
+      // would inflate the volume figure we QUOTE to a customer applying a
+      // filter (§28) — a number we would then fail to deliver, using leads they
+      // brought in themselves as the evidence we could.
+      .is("owner_customer_id", null)
       .gte("created_at", INGEST_EPOCH_ISO)
       .order("id", { ascending: true })
       .range(from, from + PAGE - 1);

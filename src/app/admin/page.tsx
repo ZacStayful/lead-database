@@ -159,9 +159,12 @@ export default async function AdminOverviewPage() {
   );
 
   // Leads received but not yet fully assigned (assignment_count < max_assignments).
+  // Customer-owned leads are excluded: they are nobody's to assign, so counting
+  // them would report work awaiting an admin that no admin can ever do.
   const { data: openLeads } = await admin
     .from("leads")
-    .select("id, assignment_count, max_assignments");
+    .select("id, assignment_count, max_assignments")
+    .is("owner_customer_id", null);
   const notFullyAssigned = (openLeads ?? []).filter(
     (l: { assignment_count: number; max_assignments: number }) =>
       (l.assignment_count ?? 0) < (l.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS)

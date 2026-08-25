@@ -108,6 +108,15 @@ export function LeadCard({
             >
               {pipelineStatusText(assignment.pipeline_stage)}
             </Badge>
+            {lead.owner_customer_id && (
+              <Badge
+                variant="outline"
+                className="border-transparent bg-sky-100 text-sky-700"
+                title="You added this lead yourself. It is only visible to you."
+              >
+                Your lead
+              </Badge>
+            )}
             {assignment.due_to_call_date && (
               <Badge
                 variant="outline"

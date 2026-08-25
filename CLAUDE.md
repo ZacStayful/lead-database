@@ -99,7 +99,12 @@ ordinary assignment. The default applies to newly ingested leads only — leads
 ingested before 0055 keep the 2 they were created with, so a lead's reach is
 whatever its own row says, never a global constant. `DEFAULT_MAX_ASSIGNMENTS`
 in `types.ts` mirrors the DB default and is only a null fallback.
-`lead_type` selects the product. Idempotent on `monday_item_id`.
+`lead_type` selects the product. Idempotent on `monday_item_id` — which is
+**nullable since 0102**, because a customer-owned lead has no Monday item; a
+CHECK requires `monday_item_id is not null or owner_customer_id is not null`,
+and the UNIQUE constraint is unaffected (Postgres allows many nulls).
+`owner_customer_id` / `owner_source` mark a lead a customer added themselves,
+which retires it from all allocation, escalation and pooling (§30).
 
 Pool columns (0073, 0076): `pool_entered_at` is the **current** tenancy and is
 cleared on exit; `pool_first_entered_at` is stamped once and never cleared,
@@ -144,7 +149,7 @@ file_added, stage_changed, nudge_sent`.
 
 Other tables: `notifications`, `payments`, `lead_notes`, `lead_files`,
 `stripe_events`, `system_settings`, `post_call_offers`, `lead_topup_tokens`,
-`testimonials`, `public_activity_stats`.
+`testimonials`, `public_activity_stats`, `lead_imports` (§30).
 
 ---
 
@@ -293,7 +298,9 @@ its single reclaim on a day when nobody had credit.
 `/api/leads/[id]/report` (§25 — the stored analysis PDF),
 `/api/customer/presentation/[leadId]` (§26),
 `/api/customer/settings/presentation` (§26),
-`/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`.
+`/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`,
+`/api/customer/my-leads` (+ `/import/preview`, `/import/commit`, and
+`DELETE /[id]`) — customer-owned leads (§30).
 
 `/api/customer/goal` is the **only** customer route with no admin client at
 all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
@@ -344,8 +351,9 @@ session by definition; see §15 for why it exists at all.
    the allocation gate nor a pacing counter (§13).
 10. **No code path may ask Supabase to send an email.** Links are minted with
     `generateLink` and delivered through Resend (§15).
-11. A lead that has been **claimed from the expired pool**, or that pooled on the
-    `ignored` basis, is never re-allocated by ordinary routing (§19).
+11. A lead that has been **claimed from the expired pool**, that pooled on the
+    `ignored` basis, or that a **customer added themselves** (§30), is never
+    re-allocated by ordinary routing (§19).
     `lead_retired_from_allocation()` is the single expression of this and is
     asserted in all three candidate functions, in `get_escalation_candidates`,
     and inside `assign_lead_to_customer` under its row lock. A lead pooled on
@@ -3612,3 +3620,320 @@ item before leaning on it.
 fail those updates. The portal configuration + env var can land any time —
 the route degrades gracefully without them. Nothing here touches a balance,
 counter, pacing or capacity column.
+
+---
+
+## 30. Customer-owned leads *(0102)*
+
+A customer can bring their **own** leads into the database — by uploading a
+spreadsheet or typing one in — and work them alongside the leads we sell them.
+Free, unlimited, and visible to that customer and admin alone.
+
+`/dashboard/leads/add` · `POST /api/customer/my-leads` (+ `/import/preview`,
+`/import/commit`) · `DELETE /api/customer/my-leads/[id]`.
+
+Until now every row in `leads` was ours: sourced from Monday, sold to up to
+`max_assignments` operators, escalated when ignored, pooled at day 25. An owned
+lead is the same row shape with one column set, and that column is the whole
+feature.
+
+### 30.1 — The rule, and where it is enforced
+
+**An owned lead is never given to anybody else.** Not by ordinary routing, not
+by escalation, not by the pool, not by an admin force-assign.
+
+That is enforced in the two functions the codebase already treats as the single
+expression of "may this lead be handed out" (invariant 11), each gaining one
+`owner_customer_id is not null` branch:
+
+| Function | What the one branch covers |
+|---|---|
+| `lead_retired_from_allocation()` | all three candidate functions, `get_next_customers_for_lead`, `get_escalation_candidates`, and `assign_lead_to_customer` under its row lock |
+| `lead_pool_barred()` | `get_pool_entry_candidates` and the daily sweep |
+
+Two paths consult **neither** and so are guarded directly:
+
+- **`admin_assign_lead`** (body last touched in 0053) checks the duplicate, the
+  capacity and the pause, then assigns. Without a guard an admin could hand one
+  customer's private lead to another from the admin UI.
+- **`find_duplicate_lead` (0070) — the dangerous one.** It matches a landlord
+  across every lead of a product, and `ingestLead` treats a hit as
+  "duplicate, skip". Without `owner_customer_id is null`, a customer importing
+  their contact list would **silently poison ingest**: if landlord X sits in
+  somebody's spreadsheet and X later enquires through Monday, the real sellable
+  enquiry is discarded as a duplicate of a private copy. No error, no lead, and
+  invisible on both sides. The two populations must not see each other here at
+  all — a customer's private copy says nothing about whether we may sell that
+  landlord. `get_duplicate_leads` (the admin *report*) stays inclusive, because a
+  customer holding a private copy of a lead we also sell is worth seeing.
+
+Belt and braces: owned leads are seeded `max_assignments = 1,
+assignment_count = 1`, so a caller that consults nothing computes no free slots.
+`autoAssignLead` also returns early — stated explicitly because the contention
+branch (§28.5) can *raise* `max_assignments`, so "it has no free slots" is a
+fact about today's code, not a guarantee.
+
+### 30.2 — Visibility needs no RLS change
+
+0014's `leads_select_assigned` exposes a lead only where a `lead_assignments`
+row joins it to the caller's customer. So the owner's own assignment row is
+**both** what shows them the lead and what hides it from everyone else, and the
+realtime feed, the detail page, notes, files, stages and telemetry all work
+unmodified. This is why `create_customer_leads` must insert the lead and the
+assignment together (below): a lead without one is invisible to the person who
+just added it while still being a row every sweep can see.
+
+### 30.3 — `create_customer_leads()` and what it deliberately does not do
+
+One transaction per batch, `service_role` only. Per row it returns `created`,
+`duplicate` or `empty`.
+
+- **It spends no credit and bumps no counter** — not `lead_balance`, not
+  `leads_received_this_month`, not `management_lifetime_leads_received`. The
+  odometer means "leads Stayful delivered" (§13) and these were not delivered by
+  us. Charging for a customer's own contact list would be absurd, and quietly
+  advancing their pacing counters would starve them of the marketplace leads
+  they actually pay for.
+- **It does not call `assign_lead_to_customer`.** That is the single money path
+  and gates on balance, subscription and pause, none of which should stand
+  between a customer and their own data — and it would refuse these outright now
+  via `lead_retired_from_allocation`.
+- **`price_paid = 0`**, which reads against invariant 4. That invariant is about
+  leads *we* deliver; nothing was sold here.
+- `income_report_status` is seeded `'no_report'` — true (there is no Monday item
+  to carry an analysis) and it keeps owned leads out of the income-report
+  backlog by construction rather than by a query filter.
+
+**`lead_name` stays NOT NULL.** The form promises no required fields, so the
+name is derived — name → email → phone → address → `'Untitled lead'` — rather
+than weakening the column for a UI promise. `monday_item_id` **does** drop its
+NOT NULL, replaced by a CHECK that every lead is either Monday's or a
+customer's; the UNIQUE constraint stays, and Postgres allows unlimited nulls in
+a unique index, so ingest idempotency (invariant 5) is untouched.
+
+Dedupe reuses the DB's own `lead_identity_key()` (0070) **scoped to this owner
+and product**, so "the same landlord" has one definition repo-wide. It needs all
+three of name, email and phone, so a partial row never matches — under-matching
+costs a duplicate, over-matching would silently discard a real lead.
+
+### 30.4 — Parsing is tolerant because the confirmation makes it safe
+
+`src/lib/leadImport.ts`. A real lead list has a title row above the headings, or
+no headings at all, or a column called "Tel", or a "Notes from viewing" column
+we have nowhere to put. None of that is a malformed file.
+
+- `detectHeaderRow` scans the first ten rows and returns **null** for a
+  genuinely headerless sheet, rather than eating its first lead as column names.
+- Mapping is by header synonym first, then by **content** — a column of things
+  containing "@" is an email column whatever it is called. Where a header
+  disagrees with its own data ("Contact" full of phone numbers) the data wins.
+- Single-claim targets (name/email/phone/address/bedrooms) may be used once;
+  `notes` may be used many times, because a sheet often has several comment
+  columns.
+- **Unmapped columns are folded into `lead_profile` as `Header: value` lines**,
+  so nothing on the spreadsheet is lost. That was the brief.
+- `raw: false` on `sheet_to_json` is load-bearing: it yields Excel's own
+  formatted text, so a phone stored as a number keeps its leading zero.
+  Everything is stored as text.
+
+**The confirmation screen is never skipped**, even when every column resolves
+confidently. It is what licenses all of the above: a wrong guess costs one
+dropdown change, where a silent import puts a landlord's phone number in the
+address field of two hundred leads.
+
+`enquiry_date` is deliberately not a mapping target — it is displayed nowhere
+(§11), so offering it would let a customer believe a date they can see in their
+sheet will appear somewhere it never does.
+
+### 30.5 — The first model call in this codebase
+
+`src/lib/claudeMapping.ts` asks Claude to map columns the heuristics could not.
+It is structured so that adding a model dependency does not make the feature
+depend on one:
+
+1. **It only ever proposes** — the customer confirms.
+2. **It is asked only when there is real doubt** (`mappingNeedsHelp`): an
+   unplaced column that still holds data, or no header row found. A clean sheet
+   costs nothing.
+3. **Nothing it returns is trusted.** `validateMappingResponse` rejects unknown
+   targets and out-of-range indices, clamps confidence, enforces the
+   single-claim rule the prompt merely asks for, and leaves an unmentioned
+   column alone rather than shifting the others along.
+4. **Every failure returns the heuristic mapping** — missing `ANTHROPIC_API_KEY`,
+   timeout, API error, malformed JSON. The import works with the model
+   unavailable.
+
+`claude-opus-5`, structured output via `zodOutputFormat`, `effort: "low"` (a
+column mapping is a small judgement and the customer is waiting), 20s timeout.
+`ANTHROPIC_API_KEY` is a **new env var** and `@anthropic-ai/sdk` + `zod` are new
+dependencies; both are optional at runtime.
+
+⚠️ **PII**: the preview sends up to 20 raw rows — real landlord names, emails
+and phones — to the Anthropic API. Deliberate, and the reason the call is
+skipped whenever the heuristics already suffice. Redacting the samples, or a
+per-customer opt-out, is a one-line change if it is ever wanted.
+
+### 30.6 — Two requests, and the staging table between them
+
+`lead_imports` holds the parsed rows between preview and commit, so the commit
+works from the bytes we parsed rather than anything the browser hands back — the
+"client proposes, server re-derives" discipline `/api/customer/filter` uses for
+the volume forecast. RLS on with **no policies**, as `subscription_pauses`: the
+payload is the customer's raw spreadsheet, which must never be one missing
+policy away from another customer.
+
+`status = 'pending_mapping'` is the **idempotency claim**. A double-clicked
+button or a stale tab finds the batch already `imported` and gets its tally back
+rather than a second copy of every lead.
+
+Uploads are multipart `formData`, not the browser→Storage pattern: that exists
+for files that must *persist* (lead attachments), where a spreadsheet is needed
+only for as long as it takes to parse. Caps are **2,000 rows / 4 MB**, and an
+over-cap file is **rejected, not truncated** — importing the first 2,000 rows of
+a longer file is the kind of loss nobody notices until they go looking for a
+landlord who was never there. Both import routes set `maxDuration = 60`.
+
+### 30.7 — Delete, and why the other three exits are refused
+
+Reject, discard and close are all statements about a lead **we** supplied, and
+all three now refuse an owned lead **server-side**, not merely in the UI.
+
+**Discard is the one that matters.** It deletes the assignment row and
+decrements `assignment_count` to return the lead to circulation. On an owned
+lead that would leave the `leads` row alive with **no assignment at all** —
+invisible to its owner under `leads_select_assigned`, absent from their feed,
+and unreachable by the delete control, which resolves the lead through that same
+assignment. A permanently orphaned row created by the one path that destroys the
+evidence.
+
+`DELETE /api/customer/my-leads/[id]` removes the lead itself and lets the 0001
+cascade take the assignment, notes, files, events and notifications. Nothing was
+charged and it was never offered to anyone, so there is no record to preserve.
+"No such lead", "not yours" and "not an owned lead" all return one
+indistinguishable 404.
+
+**`Mark as contacted` is deliberately still offered** on an owned lead, which is
+why `showActions` in `LeadDetail` is unchanged rather than narrowed — narrowing
+it would have hidden that button from a *marketplace* lead carrying notes at a
+non-cold stage.
+
+### 30.8 — Kept out of everything the marketplace measures
+
+Owned leads are in the customer's own figures and out of ours. Each exclusion
+has a specific consequence, which is why they are listed rather than summarised:
+
+| Where | What it would otherwise do |
+|---|---|
+| `fetchLeadVolumeData` (§28) | inflate the volume figure we **quote** a customer applying a filter — a number we would then fail to deliver |
+| `publicStats` (count + ticker) | overstate a public claim about our own supply |
+| `/api/admin/leads/assign-pending` | sell an imported lead to another customer within a day |
+| `/api/cron/parse-income-reports` (**all five** queries) | feed a null `monday_item_id` into Monday's `items(ids:)`; they would fail nightly for ever, occupying batch capacity. The `no_report` seeding keeps them out of the backlog, but the 30-day re-check selects exactly the recently-created `no_report` rows they are |
+| `/admin` awaiting-assignment, `/admin/leads` counters and waiting figures | report a backlog no admin action could ever clear |
+| Goals won count (§13) | let a customer import fifty existing clients, mark them won, and "achieve" a marketplace goal on their own book |
+
+**Deliberately NOT excluded:** the inactivity nudge and the weekly progress
+report. Those describe the customer's own pipeline and should cover every lead
+they are working — which is the point of the feature. Recorded here so nobody
+later "fixes" the asymmetry.
+
+**Still outstanding (0103):** the cross-customer aggregates that compare
+operators — `get_customer_engagement_scores`, `get_engagement_benchmarks`,
+`get_wins` / `get_customer_scoreboard` / `get_assignments_awaiting_outcome`,
+`capture_operator_proof` **and** `get_operator_proof` (which duplicate one
+population and must change together, §20), and the leads-scanning CTEs in
+`get_service_capacity`. All need `l.owner_customer_id is null`. They were held
+back from 0102 deliberately: they are eight large function bodies, all
+reporting, and rewriting them beside the safety-critical work above would have
+put a transcription slip in a reporting CTE next to the code that stops a lead
+being sold twice. **Until 0103 lands, a customer's own leads dilute their
+engagement score and their standing on the leaderboard**, and read as
+marketplace supply in the capacity panel.
+
+### 30.9 — Where it shows
+
+Entry sits **beside the Export button**, in both places `ExportButton` renders
+(`/dashboard` and `/dashboard/leads`), plus the Leads nav group. That is where a
+customer is already thinking about their leads as a spreadsheet.
+
+A "Your lead" badge on the card and the detail page; a source filter in
+`LeadsList` shown only once the customer has any; `"Added by you"` in the export
+Source column (`leadSourceLabel()` is the one definition); and an analytics
+breakout on the §19.9 claimed-leads pattern — counted in every figure, shown
+separately, because how their own sourcing converts against ours is exactly the
+question somebody importing their book is asking.
+
+Admin lists them with a Source column naming the owner, and excludes them from
+bulk-assign selection and every counter. The lead detail page swaps the override
+controls for a line saying who added it — `admin_assign_lead` refuses them
+anyway, and an offered control that 400s reads as a bug.
+
+### Verification
+
+All 98 migrations applied to a scratch **Postgres 16** from empty, 0102
+re-applied twice for idempotency. Every CHECK exercised: bad `owner_source`,
+both halves of a half-owned row, a lead with neither identity, and a valid owned
+lead with a null `monday_item_id`; `monday_item_id` UNIQUE confirmed still
+enforced for real ids. The partial index and the FK cascade confirmed.
+
+Behaviour, against seeded rows: `create_customer_leads` returning
+created/duplicate/empty correctly, deriving a lead name from a phone-only row,
+seeding the flags, writing `price_paid = 0`, and **touching no customer
+counter**. The owned lead then absent from `lead_retired_from_allocation`
+(true), `lead_pool_barred` (true), `get_next_customers_for_lead` (0),
+`get_pool_entry_candidates` (0), `get_escalation_candidates` (0) and
+`find_duplicate_lead` (null); both assign functions raising.
+
+**The regression that mattered**: a marketplace lead still allocating normally,
+still deduping, and still returning candidates. ACLs re-asserted and audited
+with `has_function_privilege` on all five redefined functions, including that
+`get_engagement_benchmarks` remains `authenticated`-executable (invariant 7).
+
+The import **seam** was then driven end to end, which is the check the unit
+tests structurally cannot make (§23.10, §25): a generated xlsx carrying a title
+row and a blank line above the headings, "Landlord"/"Mobile No."/"E-Mail"
+spellings, a phone Excel stores as a number, an unmapped notes column, a blank
+spacer row, a notes-only row and an in-batch duplicate — through the real
+parse → detect → map → normalise → RPC path. Header found at row 2, all six
+columns mapped, **the leading zero survived the real xlsx round-trip**, the
+unmapped column landed on the lead profile, both empty rows skipped, the
+duplicate caught, no counter moved.
+
+203 vitest cases green (36 new), `npm run build` passes. **The Claude mapping
+call itself has not been exercised against the live API** — no key was available
+in the build session — only its validation and fallback paths, which are unit
+tested. Set `ANTHROPIC_API_KEY` and run one messy sheet through before relying
+on it; without the key the heuristic path is what runs, and that *has* been
+exercised end to end.
+
+### Deployment order — migration BEFORE code
+
+**0102 is applied to `znlfwbnvhlacwzgfalcf` (2026-08-25).** It went on AFTER the
+code reached a preview deployment rather than before, which is how the ordering
+rule gets its evidence: the preview returned "Could not find the function
+public.create_customer_leads … in the schema cache" on every manual add, and
+`/dashboard/analytics`, `/dashboard/goals`, `/admin/leads` and
+`assign-pending` all failed alongside it. Two failed *silently* and are the
+reason the rule is worth keeping: `fetchLeadVolumeData`'s paging loop breaks on
+the error and returns an empty result, so the filter forecast quotes ZERO
+volume, and the admin awaiting-assignment tile swallows its error into
+`data: null` and reads 0. Production on `main` was unaffected throughout, since
+`main` carried none of this code.
+
+Before applying, production's live `prosrc` for all four rewritten functions
+(`lead_pool_barred`, `lead_retired_from_allocation`, `admin_assign_lead`,
+`find_duplicate_lead`) was diffed against the migration-file bodies they are
+copied from and found identical — worth doing rather than assuming, because §11
+records that production has drifted from `supabase/migrations/` before. After
+applying: all 430 existing leads untouched and none owned, both CHECKs and the
+partial index present, `lead_imports` RLS on with zero policies, and the ACL
+audit clean — including that `get_engagement_benchmarks`,
+`get_operator_proof`, `get_recent_wins_anonymised` and
+`set_management_customer_goal` all remain `authenticated`-executable
+(invariant 7).
+
+0102 first. It is inert on its own — every new filter matches nothing until code
+starts writing owned leads — while code selecting `owner_customer_id` against a
+schema without it would fail every leads read. `ANTHROPIC_API_KEY` can land any
+time; the import degrades to heuristic mapping without it. Nothing here writes a
+balance, counter, pacing or capacity column, so a lagging migration cannot
+affect lead allocation.

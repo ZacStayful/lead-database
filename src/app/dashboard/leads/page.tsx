@@ -4,6 +4,7 @@ import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadsList } from "@/components/dashboard/LeadsList";
 import { ExportButton } from "@/components/dashboard/ExportButton";
+import { AddLeadsButton } from "@/components/dashboard/AddLeadsButton";
 import type { AssignmentWithLead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +32,10 @@ export default async function LeadsPage() {
             {assignments.length} lead{assignments.length === 1 ? "" : "s"} received
           </p>
         </div>
-        <ExportButton />
+        <div className="flex items-center gap-2">
+          <AddLeadsButton />
+          <ExportButton />
+        </div>
       </div>
 
       {/* Why keeping records current matters, stated once where the leads are.

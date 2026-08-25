@@ -79,6 +79,10 @@ export async function generatePublicStats(
   const { count, error: countError } = await supabase
     .from('leads')
     .select('*', { count: 'exact', head: true })
+    // Customer-owned leads (0102) are not leads we passed into the database —
+    // the customer brought them. Counting them would overstate a public claim
+    // about our own supply.
+    .is('owner_customer_id', null)
     .gte('created_at', SINCE_DATE);
   if (countError) throw new Error(countError.message);
 
@@ -91,6 +95,8 @@ export async function generatePublicStats(
   const { data: recent, error: recentError } = await supabase
     .from('leads')
     .select('created_at, address, bedrooms')
+    // As above: the public ticker shows marketplace arrivals only.
+    .is('owner_customer_id', null)
     .gte('created_at', SINCE_DATE)
     .order('created_at', { ascending: false })
     .limit(150);

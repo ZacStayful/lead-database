@@ -298,7 +298,22 @@ export interface PoolLead {
 
 export interface Lead {
   id: string;
-  monday_item_id: string;
+  /**
+   * Null for a customer-owned lead (0102): it came from a spreadsheet import or
+   * a manual form and has no Monday item behind it. Still the ingest
+   * idempotency key for every marketplace lead, and still UNIQUE — Postgres
+   * allows many nulls in a unique index.
+   */
+  monday_item_id: string | null;
+  /**
+   * The customer who added this lead themselves, or null for a marketplace
+   * lead. Non-null retires the lead from all allocation, escalation and pooling
+   * (see lead_retired_from_allocation / lead_pool_barred), and it is visible
+   * only to this customer and to admin.
+   */
+  owner_customer_id: string | null;
+  /** How an owned lead arrived. Always null exactly when owner_customer_id is. */
+  owner_source: "import" | "manual" | null;
   lead_name: string;
   address: string | null;
   phone: string | null;

@@ -26,6 +26,10 @@ export interface LeadRow {
   max_assignments: number;
   created_at: string;
   recipients: string[];
+  /** Non-null when a customer added this lead themselves — never assignable. */
+  owner_customer_id: string | null;
+  owner_source: "import" | "manual" | null;
+  owner_name: string | null;
 }
 
 export interface CustomerRow {
@@ -121,11 +125,14 @@ export function AdminLeadsTable({
     });
   }
 
-  // Only leads still below capacity can take another recipient.
+  // Only leads still below capacity can take another recipient — and a lead a
+  // customer added themselves can never take one at all. admin_assign_lead
+  // refuses it outright (0102), so offering the checkbox would only produce an
+  // error the admin cannot act on.
   const selectableIds = useMemo(
     () =>
       leads
-        .filter((l) => l.assignment_count < l.max_assignments)
+        .filter((l) => !l.owner_customer_id && l.assignment_count < l.max_assignments)
         .map((l) => l.id),
     [leads]
   );
@@ -303,13 +310,15 @@ export function AdminLeadsTable({
               <TableHead>Address</TableHead>
               <TableHead>Assigned</TableHead>
               <TableHead>Recipients</TableHead>
+              <TableHead>Source</TableHead>
               <TableHead>Received</TableHead>
               <TableHead className="text-right">View</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {leads.map((l) => {
-              const full = l.assignment_count >= l.max_assignments;
+              const owned = Boolean(l.owner_customer_id);
+              const full = l.assignment_count >= l.max_assignments || owned;
               const none = l.assignment_count === 0;
               const checked = selectedLeads.has(l.id);
               return (
@@ -351,6 +360,21 @@ export function AdminLeadsTable({
                   <TableCell className="max-w-[200px] truncate text-muted-foreground">
                     {l.recipients.length ? l.recipients.join(", ") : "—"}
                   </TableCell>
+                  <TableCell className="max-w-[200px] text-muted-foreground">
+                    {owned ? (
+                      <span className="truncate">
+                        <Badge
+                          variant="muted"
+                          className="border-sky-300 bg-sky-50 text-sky-700"
+                        >
+                          {l.owner_source === "manual" ? "Added by hand" : "Imported"}
+                        </Badge>{" "}
+                        {l.owner_name ?? "a customer"}
+                      </span>
+                    ) : (
+                      "Stayful"
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatDate(l.created_at)}
                   </TableCell>
@@ -368,7 +392,7 @@ export function AdminLeadsTable({
             {leads.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={8}
+                  colSpan={9}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No leads yet.

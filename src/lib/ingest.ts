@@ -393,6 +393,15 @@ export async function autoAssignLead(
   supabase: ReturnType<typeof createAdminClient>,
   lead: Lead
 ): Promise<number> {
+  // A customer-owned lead belongs to the person who added it and is never
+  // routed to anyone. The database enforces this too (0102 —
+  // lead_retired_from_allocation, asserted inside assign_lead_to_customer), and
+  // such a lead is seeded full at 1/1 so the shortfall below is already zero.
+  // Stated explicitly all the same: the contention branch further down can
+  // RAISE max_assignments, so "it has no free slots" is a fact about today's
+  // code rather than a guarantee.
+  if (lead.owner_customer_id) return 0;
+
   const remaining =
     (lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS) - (lead.assignment_count ?? 0);
   if (remaining <= 0) return 0;

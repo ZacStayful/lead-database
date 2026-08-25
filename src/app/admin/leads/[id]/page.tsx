@@ -55,6 +55,17 @@ export default async function AdminLeadDetailPage({
     .select("*")
     .eq("is_active", true)
     .order("business_name");
+  // Who added it, when it is a customer's own lead.
+  let ownerName: string | null = null;
+  if (lead.owner_customer_id) {
+    const { data: owner } = await admin
+      .from("customers")
+      .select("business_name")
+      .eq("id", lead.owner_customer_id)
+      .maybeSingle();
+    ownerName = (owner as { business_name?: string } | null)?.business_name ?? null;
+  }
+
   const isGuaranteedRent = lead.lead_type === "guaranteed_rent";
   const creditsOf = (c: Customer) =>
     isGuaranteedRent ? c.gr_lead_balance : c.lead_balance;
@@ -228,17 +239,33 @@ export default async function AdminLeadDetailPage({
         <div className="lg:col-span-1">
           <Card>
             <CardHeader>
-              <CardTitle>Override controls</CardTitle>
+              <CardTitle>
+                {lead.owner_customer_id ? "Customer's own lead" : "Override controls"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <AdminLeadControls
-                leadId={lead.id}
-                maxAssignments={lead.max_assignments}
-                assignmentCount={lead.assignment_count}
-                customers={availableCustomers}
-                overrideCustomers={overrideCustomers}
-                leadType={lead.lead_type}
-              />
+              {lead.owner_customer_id ? (
+                // No controls at all. admin_assign_lead refuses an owned lead
+                // (0102), so a form here could only produce an error — and the
+                // lead is not ours to place in the first place.
+                <p className="text-sm text-muted-foreground">
+                  {ownerName ?? "A customer"} added this lead themselves
+                  {lead.owner_source === "manual"
+                    ? " by hand"
+                    : " by importing a spreadsheet"}
+                  . It is visible only to them, is never pooled or escalated,
+                  and cannot be assigned to anyone else.
+                </p>
+              ) : (
+                <AdminLeadControls
+                  leadId={lead.id}
+                  maxAssignments={lead.max_assignments}
+                  assignmentCount={lead.assignment_count}
+                  customers={availableCustomers}
+                  overrideCustomers={overrideCustomers}
+                  leadType={lead.lead_type}
+                />
+              )}
             </CardContent>
           </Card>
         </div>

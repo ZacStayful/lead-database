@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  OWNED_LEAD_OUTCOME_REFUSAL,
+  getAssignmentLeadOwnership,
+} from "@/lib/customerLeads";
 import { CLOSE_REASONS, isCloseReason } from "@/lib/closeReasons";
 
 export const runtime = "nodejs";
@@ -62,6 +66,18 @@ export async function POST(req: NextRequest) {
     .single();
   if (customerError || !customer) {
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+  }
+
+  // Closing states that the LANDLORD is out, which is why a closed lead is
+  // never offered to anyone else. On a lead only its owner holds there is
+  // nobody else to protect, and the status dropdown already records the
+  // outcome; delete covers the rest.
+  const ownership = await getAssignmentLeadOwnership(admin, assignment_id);
+  if (ownership?.ownerCustomerId) {
+    return NextResponse.json(
+      { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
+      { status: 400 }
+    );
   }
 
   const { error: closeError } = await admin.rpc("close_lead_assignment", {

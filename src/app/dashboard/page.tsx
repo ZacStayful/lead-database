@@ -9,6 +9,7 @@ import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
 import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
 import { computeWorkSummary } from "@/lib/workSummary";
 import { ExportButton } from "@/components/dashboard/ExportButton";
+import { AddLeadsButton } from "@/components/dashboard/AddLeadsButton";
 import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
 import { fetchBannerAnnouncement, paragraphs } from "@/lib/announcements";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
@@ -174,7 +175,10 @@ export default async function DashboardPage() {
           </h1>
           <p className="text-sm text-muted-foreground">{customer.business_name}</p>
         </div>
-        <ExportButton />
+        <div className="flex items-center gap-2">
+          <AddLeadsButton />
+          <ExportButton />
+        </div>
       </div>
 
       {banner && (

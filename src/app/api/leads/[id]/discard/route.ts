@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  OWNED_LEAD_OUTCOME_REFUSAL,
+  getLeadOwnership,
+} from "@/lib/customerLeads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +70,20 @@ export async function POST(
   if ((noteCount ?? 0) > 0) {
     return NextResponse.json(
       { error: "A lead with notes cannot be discarded" },
+      { status: 400 }
+    );
+  }
+
+  // THE IMPORTANT ONE. Discard deletes the assignment row and decrements
+  // assignment_count to put the lead back into circulation. On a lead the
+  // customer owns that would leave the `leads` row alive with NO assignment —
+  // invisible to its owner under leads_select_assigned, gone from their feed,
+  // and unreachable by the delete control, which resolves the lead through the
+  // owner's assignment. Refused here rather than relying on the UI hiding it.
+  const ownership = await getLeadOwnership(admin, params.id);
+  if (ownership?.ownerCustomerId) {
+    return NextResponse.json(
+      { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
       { status: 400 }
     );
   }
