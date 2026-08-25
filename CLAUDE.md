@@ -735,6 +735,13 @@ paying, already on a Stripe customer record. Two guards keep it that way:
    waitlisted accounts, and checkout here would be a way to jump the queue.
    They still see the descriptions; the call to action is support.
 
+⚠️ **Guard 2 gained one exception in §32.3**: a customer who once HELD this
+product may buy it back. `previouslyHeldProduct()` reads `cancelled_at` /
+`gr_cancelled_at`, which only a real cancellation ever stamps, so a waitlisted
+prospect still cannot satisfy it — self-serve **acquisition** stays retired, and
+that is now structural rather than a matter of care. The exception is per
+product: having once held management buys management back, not GR.
+
 **Nothing in the route grants a product.** The Stripe webhook does that, routing
 by price id: `invoice.paid` credits the leads and promotes `account_status` out
 of `invited`/`waitlisted`. So a self-serve buyer lands in exactly the same state
@@ -1565,6 +1572,12 @@ comment rather than changing behaviour. `pause_count` gates nothing.
    deficit and flood them on return.
 2. The Stripe webhook's resume-detection block — fires when `pause_collection`
    is gone, i.e. the customer resumed early through the billing portal.
+3. *(§32.3)* `POST /api/customer/subscription/resume` — the customer pressed a
+   button. Shares `resumePausedCustomer()` in `src/lib/resumePause.ts` with path
+   1 **verbatim**, so an early resume and a scheduled one cannot drift apart.
+   Unlike the cron it REFUSES a pending cancellation rather than skipping it,
+   pointing at "Keep my subscription": their subscription is on record as
+   ending, so resuming would restart collection for a period they closed.
 
 Both are guarded on `.not("paused_at","is",null)` so only the writer that
 actually flips the column sends the email, and both close the episode through
@@ -3664,6 +3677,16 @@ feature.
 **An owned lead is never given to anybody else.** Not by ordinary routing, not
 by escalation, not by the pool, not by an admin force-assign.
 
+⚠️ **Superseded in part by §32 (0107, 0108).** An owned lead that has been
+through a PAID analysis and come back with trustworthy figures is now sold to
+exactly one other operator. The pool half of this rule is untouched and
+`lead_pool_barred()` is unchanged — owned leads still never pool, qualified or
+not. What changed is `lead_retired_from_allocation()`, which now retires an
+owned lead only while `owner_resale_qualified_at` is null, and the consequence
+for the table below: **`get_escalation_candidates` no longer inherits the
+exclusion through that function** and carries its own `owner_customer_id is
+null` clause (0107). Read §32.6 before changing anything here.
+
 That is enforced in the two functions the codebase already treats as the single
 expression of "may this lead be handed out" (invariant 11), each gaining one
 `owner_customer_id is not null` branch:
@@ -3831,6 +3854,13 @@ evidence.
 `DELETE /api/customer/my-leads/[id]` removes the lead itself and lets the 0001
 cascade take the assignment, notes, files, events and notifications. Nothing was
 charged and it was never offered to anyone, so there is no record to preserve.
+
+⚠️ **Since §32 this is only one of two modes.** Once a lead has been sold to
+another operator, deleting the `leads` row would cascade away the BUYER's
+assignment, notes and files — a lead they paid £15 for. The route now calls
+`delete_owner_lead_copy` (0107), which decides under a row lock: whole lead when
+nobody else holds it, the uploader's copy alone when somebody does. See §32.7 for
+the two things it must never do.
 "No such lead", "not yours" and "not an owned lead" all return one
 indistinguishable 404.
 
@@ -3863,7 +3893,12 @@ operators — `get_customer_engagement_scores`, `get_engagement_benchmarks`,
 `get_wins` / `get_customer_scoreboard` / `get_assignments_awaiting_outcome`,
 `capture_operator_proof` **and** `get_operator_proof` (which duplicate one
 population and must change together, §20), and the leads-scanning CTEs in
-`get_service_capacity`. All need `l.owner_customer_id is null`. They were held
+`get_service_capacity`. ~~All need `l.owner_customer_id is null`.~~ ⚠️ **That instruction is now wrong
+for at least two of them** — see §32.8. Since a customer may BUY an owned lead,
+the predicate must be `l.owner_customer_id is distinct from c.id`:
+`get_customer_engagement_scores` and `get_wins` / `get_customer_scoreboard`
+would otherwise drop a buyer's paid assignment out of their own engagement score
+and leaderboard standing. They were held
 back from 0102 deliberately: they are eight large function bodies, all
 reporting, and rewriting them beside the safety-critical work above would have
 put a transcription slip in a reporting CTE next to the code that stops a lead
@@ -4306,3 +4341,346 @@ import commit, which now quotes the offer.
 them the queue simply does not drain, which is the safe direction: nothing is
 charged for work that cannot happen. `INTERNAL_API_SECRET` must hold the **same
 value** on the analyser app.
+
+---
+
+## 32. Leaving, coming back, and reselling a lead you brought in *(0107, 0108)*
+
+Three changes that share one theme: what a customer keeps when they stop paying,
+and what happens to the leads they bring in themselves.
+
+### 32.1 — The database is free, and always was *(no migration)*
+
+A customer who pauses or cancels could already log in and read everything.
+Nothing in `middleware.ts` or `dashboard/layout.tsx` gates on subscription
+state, and `getCurrentCustomer()` resolves the row on the service role
+regardless. What was shut was the half that makes it a CRM rather than a
+delivery channel: `/dashboard/leads/add` refused them, and both
+`POST /api/customer/my-leads` and `.../import/preview` 403'd on `holdsProduct()`.
+
+So the gate became **"is this a pipeline you have ever run"**, not "are you
+paying". They keep their login, every marketplace lead already delivered with
+its notes, files, stages and export, and the ability to add and import their own
+leads free and unlimited. **The only thing that stops is new allocation.**
+
+`availableLeadTypes()` in `src/lib/products.ts` is the single definition, built
+on `previouslyHeldProduct()`:
+
+| Product | Test |
+|---|---|
+| Management | `account_status = 'cancelled'` **or** `cancelled_at` non-null |
+| Guaranteed Rent | `gr_cancelled_at` non-null (GR has no `account_status` — invariant 6) |
+
+**Those columns are the point.** The Stripe webhook is their only writer and it
+only ever stamps them on a real cancellation, so a **waitlisted or invited
+account can never satisfy them**. That is what lets the same predicate serve as
+the re-subscribe gate below without reopening self-serve acquisition.
+
+`lead_type` is resolved from history rather than offered as a free choice.
+`create_customer_leads` scopes its duplicate check to `(owner, lead_type)`,
+pipeline stages differ per product, and the analysis route filters on it — a
+selector would hand a customer silent duplicates spread across two pipelines. A
+never-subscribed account gets `[]` and keeps its existing card.
+
+**Paid lead analysis follows the same rule** (`analysisIneligibilityReason`).
+Nothing about it depends on assignment, which is the argument that already
+admitted a *paused* customer; a cancelled one is the same case. Consequence
+worth knowing: a non-subscriber can therefore generate resale supply for paying
+ones.
+
+Still gated, deliberately: goals, filtering, the expired pool, packages
+checkout, top-ups.
+
+### 32.2 — Saying so, before they decide
+
+`src/lib/retentionCopy.ts` — `KEEP_CRM_POINTS` and `keepCrmBulletsHtml()`. Four
+surfaces state this promise (the pause form, two steps of the cancel flow, both
+confirmation emails) and four copies of one promise is four chances to drift.
+The same discipline `cancelOptions.ts` uses for its reason list.
+
+Placement is part of it:
+
+- In the pause card, **above the arm button**, not inside the armed form. It can
+  only change a decision if it is read before the decision.
+- In the cancel interstitial, **below both columns**, not inside either. It is
+  equally true of pausing and cancelling; put in one column it reads as a point
+  scored for that option.
+- In the `reasons` step's consequences box, immediately above the irreversible
+  click.
+
+**The last bullet is the limitation** — no new leads are allocated. A list that
+only says what they keep reads as a sales pitch and buries the thing they most
+need to understand.
+
+"Coming back later needs a new signup" was removed from the cancel column. 32.3
+makes it false.
+
+### 32.3 — Two ways back in
+
+**Resume, for a paused customer.** `POST /api/customer/subscription/resume`.
+There was no in-app resume at all before this: the daily cron resumed them on the
+date they originally chose, and the only early exit was the Stripe billing
+portal, which is a billing screen rather than somewhere anyone looks for "send me
+leads again".
+
+`src/lib/resumePause.ts` holds the body, shared **verbatim** with
+`/api/cron/resume-paused-subscriptions` — the cron keeps its query, its
+`cancel_at_period_end = false` filter, its tallies and the pause-ending notice
+block, and its behaviour does not change. Every step of that body is
+load-bearing and none of it is worth having twice: Stripe first so a failure
+leaves the row paused for the next run; the clear **guarded on `paused_at` still
+being set**, which is what decides who sends the "you're back" email when the
+webhook races us; the pacing re-baseline that stops a stale anchor reading as a
+maximal deficit and flooding them on return; `lead_balance` untouched.
+
+The manual route **refuses a pending cancellation** rather than resuming it, and
+for a different reason than the cron's. The cron skips so it never un-pauses
+somebody behind their back; here they are asking for it, but their subscription
+is still on record as ending, so resuming would restart collection for a period
+they closed. It points at "Keep my subscription", which is self-healing — that
+clears the flag and the next daily run resumes them normally.
+
+⚠️ **The copy must not promise a charge today.** A `void` pause leaves Stripe's
+billing cycle running underneath and resuming only stops the voiding, so the next
+real charge lands at the next natural cycle boundary (§11). Leads restart
+immediately; billing does not.
+
+**Re-subscribe, for a cancelled customer.** `/api/customer/subscribe`'s 403 gains
+one exception: `previouslyHeldProduct(customer, leadType)`. A waitlisted prospect
+is still refused — that is the guard's whole purpose (§17) — and the columns
+behind the predicate make that structural rather than a matter of care.
+
+Everything else in that route stays exactly where it is: the allocation write
+**before** `checkout.sessions.create` (§17's trap), activation as the webhook's
+job, and `invoice.paid` promoting `account_status` out of `'cancelled'` (§23.9).
+Unused credits are kept (§18E).
+
+`/dashboard/packages` mirrors the gate **per product, not per page**: holding the
+other product buys either, having once held *this* one buys only this one back.
+A customer who cancelled management sees a checkout for management and support
+copy for GR, because buying GR would be acquisition.
+
+### 32.4 — One resale, and only one
+
+**An owned lead that has been ANALYSED goes to exactly one other operator.**
+
+Qualification is a **paid** analysis (§31) that returned figures we trust. A run
+rejected for `quality_ok = false` — the analyser's tell-tale for a synthetic
+estimate from `getShortLetData()` — never qualifies, and neither does a failure
+of any other kind. Those leads stay unsellable for ever.
+
+| | |
+|---|---|
+| Reach | Uploader **+ exactly 1**. Never more |
+| Price | £15, one credit, ordinary routing — indistinguishable from any other lead |
+| To the uploader | **Never.** Not by routing, not by admin, not out of the pool |
+| Pool | **Never.** Qualified or not |
+| Uploader's reward | None |
+| Notice to the uploader | **None** — see 32.8 |
+
+Two columns, because there are two questions:
+
+- **`owner_resale_allowed`** — consent, stamped `true` at creation by
+  `create_customer_leads` and never changed. This **is** the new-uploads-only
+  rule: anything added before 0108 keeps the default of `false` and can never
+  become sellable, however it is analysed later.
+- **`owner_resale_qualified_at`** — the event. Non-null **is** the sellable
+  state, and it is what `lead_retired_from_allocation` reads.
+
+**A property of the row rather than a clock, deliberately.** The obvious
+alternative is a cutoff timestamp in `system_settings` compared against
+`created_at` — the `reclaim_enabled_from` shape (§7). Rejected: a global like
+that is one bad read from enrolling the entire back catalogue at once, and it
+does not survive a restore into a different timeline. A per-row boolean
+defaulting to `false` fails in the safe direction by construction.
+
+`qualify_owned_lead_for_resale()` is **claim-by-write** (the `credit_invoice`
+discipline, §19.5) and every clause in its `WHERE` is load-bearing:
+
+| Clause | Why |
+|---|---|
+| `owner_resale_qualified_at is null` | Idempotent. The worker retries on a failed write, and a customer may buy a **re-run** of an already-analysed lead — neither may raise the cap twice |
+| `max_assignments = 1` | Refuses to overwrite a cap an admin moved by hand. Better unsellable than silently rewritten |
+| `gross_annual_income is not null` | The same test `/admin/imported-leads` uses for "analysed" (§31.11), **not** `income_report_status = 'parsed'` — which is also true of a marketplace lead read off Monday |
+| `postcode_area is not null` | ⚠️ **Not redundant.** It is what `get_filtered_candidates_for_lead` matches on, so a lead without one reaches unfiltered customers only — sold, quietly, to the wrong half of the book. `analysability()` already refuses a lead with no clear postcode, so this should never bite; if it does, the lead stays unsellable rather than mis-routed |
+
+The cap goes to 2 **in the same statement** that stamps the timestamp, so the
+sellable state and the room to sell into can never disagree.
+
+### 32.5 — A clear postcode is already the price of entry
+
+`analysability()` in `src/lib/leadAnalysis.ts` refuses `no_postcode` and
+`ambiguous_postcode`, and `analysisQuote()` drops those rows from the quote. So
+a customer **cannot pay** to analyse a lead without a clear postcode, and
+nothing can qualify for resale without one. Nothing enforces this beyond what
+was already there — which is the point: a resold lead carries the same shape as
+every other lead in the book, and routes through the same filters.
+
+### 32.6 — Every place the cap of one could break
+
+Eight paths could raise or bypass `max_assignments`. Six are SQL and are stopped
+in **0107**, which is a pure tightening migration that enables nothing:
+
+| Path | Guard |
+|---|---|
+| `escalate_lead_assignment` | raises the column by one — refused outright |
+| `get_escalation_candidates` | feeds it. Excluded **explicitly**, NOT via `lead_retired_from_allocation`, which 0108 relaxes — leaving only `max_assignments < 5`, which a qualified lead at 2 satisfies |
+| `get_reclaim_candidates` | a reclaim slot is **added on top of** `max_assignments` inside `assign_lead_to_customer` |
+| `assign_lead_to_customer` | caps owned leads at `least(max_assignments, 2)` under the lock, and ignores reclaim slots for them entirely |
+| `admin_swap_lead_assignment` | rewrites `max_assignments = assignment_count` on the outgoing lead, which would silently **un-qualify** a sold lead. Both directions refused |
+| `discard_lead_assignment` | decrements `assignment_count`, reopening the slot (§19.6's argument) |
+
+Two are **not** in SQL and could not be guarded there:
+
+- **The contention branch in `ingest.ts`** — the dangerous one. It writes
+  `max_assignments: 4` straight through PostgREST, bypassing the row lock and
+  every 0107 guard, and its own `.lt("max_assignments", 4)` predicate is no
+  protection because a qualified lead sits at 2. `shouldRaiseContentionCap()`
+  in `src/lib/leadResale.ts` excludes owned leads, qualified or not.
+- **`PATCH /api/admin/leads/[id]`** — refuses an owned lead outright.
+
+**The pool is not on that list**, because owned leads never enter it.
+`lead_pool_barred()` keeps its `owner_customer_id is not null` clause, unchanged
+and deliberately so. Until 0108 that function and
+`lead_retired_from_allocation()` agreed by coincidence; **from here they mean
+different things**, which is why only one of them moved. `customer_can_see_pool_lead`
+gains the owner exclusion anyway — a second independent bar, and the one that
+answers "the uploader must never be offered their own lead back; they already
+have it on their system". `claim_pool_lead` calls that same function before it
+locks, so one clause covers the listing and the claim (§19.4).
+
+### 32.7 — The uploader is excluded EXPLICITLY, and why that is new
+
+Every candidate function skips a customer who already holds an assignment for
+the lead, and the uploader holds one — so they were excluded incidentally.
+**`delete_owner_lead_copy` breaks that**, and it is why the explicit
+`c.id is distinct from l.owner_customer_id` had to be added to all three
+candidate functions and to `assign_lead_to_customer` under its row lock.
+
+Delete now has two modes, chosen **under a row lock inside the function**:
+
+| | |
+|---|---|
+| Nobody else holds it | The lead goes, as before. Nothing was charged and it was never offered to anyone |
+| Somebody bought it | Only the uploader's copy goes. The buyer keeps the lead, notes, files and stages they paid £15 for |
+
+An RPC because of the lock: reading "does anyone else hold this?" in TypeScript
+and then deleting leaves a window for a resale to land in between, and the route
+then destroys a lead somebody bought a moment earlier.
+
+Two things it must never do: **decrement `assignment_count`** (the freed slot
+would outlive the deleted row, and routing would sell the lead again) and
+**null `owner_customer_id`** (it is the provenance, and it is what stops the
+lead being sold back to its uploader). The uploader loses sight of it through
+the existing `leads_select_assigned` policy, which is the intended effect.
+
+The file cleanup is scoped to the caller's own assignment for the same reason —
+deleting by lead id would take the buyer's attachments with the uploader's.
+
+### 32.8 — Ownership is relative to the reader
+
+`isOwnedLead()` and `leadSourceLabel()` asked whether a lead **has** an owner,
+which stopped being the same question as whether it is **yours**. Read as a bare
+null check, the buyer of a resold lead is told *"Your lead · you added this
+yourself, it is only visible to you"*, gets "Added by you" in their export, is
+offered a Delete that 404s, and **cannot reject or close a lead they paid £15
+for**. Three of those are on the first screen.
+
+`leadSourceLabel` needed no new parameter: an assignment row already carries the
+`customer_id` it belongs to. A resold lead reads **"Allocated"** to its buyer —
+true, and silent about the operator who brought it in (§19.7).
+
+**`viewerScopedLead()` nulls another customer's id at the page boundary.** The
+customer lead surfaces select `lead:leads(*)`, so a resold lead would otherwise
+ship the uploader's primary key to the buyer's browser. It does **not** replace
+the viewer argument: server-side callers read the column directly and must never
+depend on a sanitisation step having run upstream.
+
+Reject and close now refuse only when the caller **is** the owner. **Discard
+stays refused for both parties**, for different reasons — for the uploader it
+would strand a lead they own and cannot see; for the buyer it reopens the slot.
+They have reject and close.
+
+Two aggregates were counting backwards and are now viewer-relative:
+`/dashboard/analytics` would have scored a bought lead as the buyer's **own
+sourcing**, and the goals won count excluded every lead with an owner including
+one the buyer paid for. §30.8's "imported fifty clients and marked them won"
+argument is about the **uploader's** book, not somebody else's.
+
+⚠️ **This corrects §30.8's instruction for the unwritten 0103.** Those eight
+reporting functions need `l.owner_customer_id is distinct from c.id`, **not**
+`is null` — at least `get_customer_engagement_scores` and
+`get_wins`/`get_customer_scoreboard`, which would otherwise drop a buyer's paid
+assignment out of their own engagement score and leaderboard standing.
+
+### 32.9 — What is deliberately unchanged
+
+- **`find_duplicate_lead()` stays blind to owned leads** (§30.1). A private copy
+  must never make a real Monday enquiry look like a duplicate and get discarded.
+  ⚠️ The accepted consequence: **one landlord can be sold both as a resold owned
+  lead and, separately, as an ordinary marketplace lead** — possibly to the same
+  operator. The two rows are distinct `leads` ids and nothing refuses it. "Why
+  have I got this landlord twice" is a support answer, not a bug.
+- **The §28 / §30.8 exclusions stay.** `fetchLeadVolumeData`, `publicStats` and
+  the admin counters still filter owned leads out, so resale supply is invisible
+  to the filter forecast and the public ticker. Resale volume depends on how
+  many customers upload *and* pay £3 *and* pass the quality gate — none of which
+  we can forecast — and under-quoting a filter is the safe direction. It does
+  mean a customer's forecast reads low by exactly the leads we then deliver
+  them, which is worth revisiting if resale ever becomes material.
+- **`parse-income-reports` must keep its exclusion regardless.** A resold lead
+  still has no `monday_item_id`, and feeding null into Monday's `items(ids:)`
+  fails nightly for ever (§30.8).
+- **Nothing tells the uploader.** No opt-in tick, no notice on the import
+  screens, no line in the £3 purchase flow, and nothing on the lead itself
+  saying it has been matched to another operator. A settled product decision,
+  recorded here so the behaviour is discoverable in the codebase even though it
+  is not surfaced in the product.
+
+### Verification
+
+Scratch Postgres 16 from empty, all 103 migrations, 0107 and 0108 each
+re-applied twice for idempotency. Every redefined function confirmed
+`service_role`-only by `has_function_privilege`, and invariant 7 re-checked on
+the four that must stay `authenticated`-executable.
+
+**0107 asserts nothing changed**: a marketplace lead still not retired, not
+pool-barred, still returning candidates, still allocating and spending exactly
+one credit, still deduping; an owned lead still retired, still pool-barred,
+absent from pool and escalation candidates, refused by both assign functions,
+and invisible to `find_duplicate_lead`. Then the new guards: swap refused in
+both directions, discard refused, and `delete_owner_lead_copy` returning
+`lead_deleted` / `copy_deleted` / `not_found` with `assignment_count` and
+`owner_customer_id` **untouched** on the copy path — and the buyer's row intact.
+
+**0108's 22 assertions** cover qualification refusing a lead with no figures,
+succeeding once they exist, raising the cap 1 → 2, being idempotent on a second
+call, the lead leaving retirement, **the uploader never appearing as a
+candidate** (including with their assignment row deleted, which is the case the
+explicit exclusion exists for), the one resale landing and spending a credit, a
+**second resale refused**, selling back to the uploader refused, the cap holding
+under the row lock **even with `max_assignments` forced to 5**, and a pre-0108
+upload never qualifying.
+
+353 vitest cases green; `npm run build` passes.
+
+**Not rehearsed against live Stripe.** The re-subscribe checkout and the manual
+resume join §12's standing list (the tier swap, the cancel flow) — test mode
+before relying on them.
+
+### Deployment order — migrations BEFORE code, and 0107 BEFORE 0108
+
+**0107 first, verified to have changed nothing, and only then 0108.** Landed
+together, a transcription slip in an exclusion clause goes live at the same
+instant as the relaxation it guards against, and the symptom is a customer's
+private lead sold to a competitor.
+
+Code after both. `ingest.ts`, the analysis worker and `assign-pending` all
+select `owner_resale_qualified_at`, and §30's own account records what code
+arriving first costs: a preview returned "Could not find the function … in the
+schema cache", and worse, `fetchLeadVolumeData` swallowed the error and quoted
+**zero** volume while the admin tile read 0.
+
+One gap is intended and worth stating so it is not mistaken for drift: leads
+uploaded between 0108 and the code get `owner_resale_allowed = true` and are
+never qualified, because nothing writes the stamp yet.
