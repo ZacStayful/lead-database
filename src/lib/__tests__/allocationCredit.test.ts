@@ -184,20 +184,24 @@ describe("resolveCreditAllocation", () => {
 });
 
 describe("driftMessage", () => {
-  it("says the price moved when the invoice won", () => {
+  it("says the subscription is new when the invoice won", () => {
+    // NOT "the price changed" — at activation there may be no previous price at
+    // all, and a comp that survived a cancellation is reset here. Claiming a
+    // change the admin did not make would send them looking for the wrong thing.
     const d = { allocation: 10, fromInvoice: true, drift: true };
     const msg = driftMessage("cus-1", "management", d, 10, 20);
     expect(msg).toContain("cus-1");
-    expect(msg).toContain("has changed");
-    expect(msg).toContain("crediting 10");
+    expect(msg).toContain("new subscription");
+    expect(msg).not.toContain("price has changed");
+    expect(msg).toContain("re-apply it in admin");
   });
 
-  it("says the price did NOT move when the row won, and points at admin", () => {
-    // This is the comp case, and the wording has to make a human look — from the
-    // numbers alone a deliberate comp and a mistake are indistinguishable.
+  it("says the row stands on an established subscription, and points at admin", () => {
+    // The comp case, and the wording has to make a human look — from the numbers
+    // alone a deliberate allocation and a mistake are indistinguishable.
     const d = { allocation: 20, fromInvoice: false, drift: true };
     const msg = driftMessage("cus-2", "management", d, 10, 20);
-    expect(msg).toContain("has NOT changed");
+    expect(msg).toContain("established subscription");
     expect(msg).toContain("Correct it in admin");
   });
 });

@@ -146,10 +146,16 @@ export function resolveCreditAllocation(
 /**
  * The line written when the invoice's price and the row disagree.
  *
- * Deliberately worded like the GR one it mirrors, so both products' drift reads
- * the same way in the logs. It names what was credited and why, because "20 vs
- * 10" without the reason is not actionable — a comp and a mistake look identical
- * until you know whether the price moved.
+ * Deliberately worded the same for both products, so drift reads identically in
+ * the logs. It names what was credited and why, because "20 vs 10" without the
+ * reason is not actionable — a deliberate allocation and a mistake look
+ * identical until you know which side won and on what grounds.
+ *
+ * ⚠️ The activating-invoice arm says the subscription is new, NOT that the price
+ * changed. At activation there may be no previous price at all, and a comp that
+ * survived a cancellation is reset here — correctly, since it was attached to a
+ * subscription that no longer exists — so the line has to tell an admin to
+ * re-apply it rather than imply a change they did not make.
  */
 export function driftMessage(
   customerId: string,
@@ -159,6 +165,6 @@ export function driftMessage(
   rowAllocation: number
 ): string {
   return decision.fromInvoice
-    ? `${product} allocation drift for customer ${customerId}: invoice price implies ${invoiceAllocation} leads but the row said ${rowAllocation}. The price has changed, so crediting ${decision.allocation} from the invoice and re-sizing the row.`
-    : `${product} allocation drift for customer ${customerId}: invoice price implies ${invoiceAllocation} leads but the row credits ${rowAllocation}. The price has NOT changed, so this is a deliberate allocation or a mistake — crediting ${decision.allocation}. Correct it in admin if it is a mistake.`;
+    ? `${product} allocation drift for customer ${customerId}: invoice price implies ${invoiceAllocation} leads but the row said ${rowAllocation}. This is a new subscription's first invoice, so crediting ${decision.allocation} from the price and re-sizing the row. If ${rowAllocation} was a deliberate allocation, re-apply it in admin — a comp does not survive a re-subscription.`
+    : `${product} allocation drift for customer ${customerId}: invoice price implies ${invoiceAllocation} leads but the row credits ${rowAllocation}. This is an established subscription, so the row stands — a deliberate allocation, or a mistake. Crediting ${decision.allocation}. Correct it in admin if it is a mistake.`;
 }

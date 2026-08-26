@@ -176,7 +176,14 @@ export async function recordPlanChange(
  * Best-effort. A stale price is a display bug; a thrown error here would strand
  * the plan change itself, which has real money behind it.
  */
-async function repriceFilterForecast(
+/**
+ * Re-price a stored filter forecast after an allocation change (§28.3).
+ *
+ * Exported since §33: the webhook's activation re-sizes are allocation changes
+ * like any other, and a forecast left sized against the old plan would quote a
+ * count above the new cap at the old plan's price.
+ */
+export async function repriceFilterForecast(
   admin: SupabaseClient,
   customerId: string,
   leadType: LeadType,

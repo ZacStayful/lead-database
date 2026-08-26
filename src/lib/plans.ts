@@ -230,11 +230,18 @@ export function allocationForPriceIds(priceIds: string[]): number | null {
  * overwrite a hand-edited allocation. See the webhook's credit path.
  */
 export function grAllocationForPriceIds(priceIds: string[]): number | null {
+  const found = new Set<number>();
   for (const plan of Object.values(GR_PLANS)) {
     const configured = process.env[plan.priceEnv];
-    if (configured && priceIds.includes(configured)) return plan.leads;
+    if (configured && priceIds.includes(configured)) found.add(plan.leads);
   }
-  return null;
+  // Ambiguous is not a tier — see the note on allocationForPriceIds above. This
+  // guard matters more than it used to: since §33 this function can overrule the
+  // row and rewrite gr_monthly_allocation, so a proration invoice carrying both
+  // GR prices would otherwise resolve to 10 (lead_10 is first in GR_PLANS) and
+  // permanently halve a £300/20 subscriber.
+  if (found.size !== 1) return null;
+  return Array.from(found)[0];
 }
 
 /**

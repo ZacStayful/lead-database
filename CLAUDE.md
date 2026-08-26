@@ -4770,6 +4770,7 @@ its checkout route, so it gets the same override from the same function.
 | Activating invoice (incl. a re-subscribe) | invoice | credit the price, correct the row |
 | Tier change (portal, admin) | subscription event | re-size the row; the invoice never chases it |
 | **Comp** — admin sets 20 on a £150 sub | neither | row wins, drift logged. Never re-sized |
+| Comp on a customer who cancels and returns | invoice | reset from the price. The comp was attached to a subscription that no longer exists; the log says to re-apply it |
 | Ordinary renewal | — | row wins |
 | Unrecognised **or ambiguous** price | — | row wins, no drift reported |
 
@@ -4818,9 +4819,13 @@ deliberately left without it. §33 closes that gap.
   Extracted rather than inlined because the Stripe webhook is the least testable
   file in the repo and this is the part of it that decides money. The whole
   credit path had **zero** test coverage before this.
-- **The webhook**, in two places, from that one function so they cannot
-  disagree: the management half of `customer.subscription.*` re-sizes the row,
-  and the management half of `invoice.paid` decides the credit and logs drift.
+- **The webhook**, from that one function so the sites cannot disagree:
+  `customer.subscription.*` re-sizes the row, and `invoice.paid` decides the
+  credit and logs drift. **Both products**, both halves.
+
+Every re-size calls `repriceFilterForecast` (§28.3), as
+`applyPendingPlanChange` already did — an allocation change that left the stored
+forecast behind would quote a count above the new cap at the old plan's price.
 
 ### Why the credit decision is duplicated at the invoice
 

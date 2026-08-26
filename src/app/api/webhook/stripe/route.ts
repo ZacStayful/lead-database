@@ -18,7 +18,10 @@ import {
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
-import { applyPendingPlanChange } from "@/lib/planChanges";
+import {
+  applyPendingPlanChange,
+  repriceFilterForecast,
+} from "@/lib/planChanges";
 import {
   driftMessage,
   resolveCreditAllocation,
@@ -591,6 +594,30 @@ export async function POST(request: NextRequest) {
           .update(update)
           .or(customerMatchFilter(customerId, isGuaranteedRent));
 
+        // If that update re-sized the allocation, the stored filter forecast has
+        // to move with it (§28.3) — the same call applyPendingPlanChange makes.
+        // Needs the customer id, which this branch matches on Stripe ids rather
+        // than carrying, so it is read back only when a re-size actually landed.
+        const resized = isGuaranteedRent
+          ? update.gr_monthly_allocation
+          : update.monthly_allocation;
+        if (typeof resized === "number") {
+          const { data: resizedRow } = await admin
+            .from("customers")
+            .select("id")
+            .or(customerMatchFilter(customerId, isGuaranteedRent))
+            .maybeSingle();
+          if (resizedRow?.id) {
+            await repriceFilterForecast(
+              admin,
+              resizedRow.id as string,
+              isGuaranteedRent ? "guaranteed_rent" : "management",
+              resized,
+              `${event.type}/resize`
+            );
+          }
+        }
+
         // Resume detection (management only). If the management subscription is
         // NOT paused in Stripe but our record still marks it paused, the customer
         // has resumed collection out-of-band (e.g. they chose to continue paying
@@ -866,6 +893,14 @@ export async function POST(request: NextRequest) {
                   customer.id,
                   grResizeError
                 );
+              } else {
+                await repriceFilterForecast(
+                  admin,
+                  customer.id,
+                  "guaranteed_rent",
+                  grDecision.allocation,
+                  "invoice.paid"
+                );
               }
             }
 
@@ -1086,6 +1121,18 @@ export async function POST(request: NextRequest) {
                 "invoice.paid: could not correct monthly_allocation",
                 customer.id,
                 resizeError
+              );
+            } else {
+              // An allocation change has to take the stored filter forecast with
+              // it (§28.3), as applyPendingPlanChange does — otherwise a
+              // re-size down leaves a quoted count above the new cap, priced
+              // against the plan they are no longer on.
+              await repriceFilterForecast(
+                admin,
+                customer.id,
+                "management",
+                decision.allocation,
+                "invoice.paid"
               );
             }
           }
