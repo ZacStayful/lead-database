@@ -25,10 +25,12 @@
  * customer to 20 leads on a £150 subscription means it, and §17 and §24 both
  * declined to introduce a re-size that would undo that.
  *
- * So this function overrules the row in exactly one circumstance: the
- * customer's FIRST paid subscription invoice. That is the only moment the row
- * can be stale — nothing has corrected it yet — and the only moment at which no
- * comp can possibly exist, because nobody has been billed to comp against.
+ * So this function overrules the row in exactly one circumstance: a
+ * subscription's ACTIVATING invoice — the first invoice for a Stripe
+ * subscription we have not recorded yet. That is the only moment the row can be
+ * stale, and the only moment at which no comp can exist, because that
+ * subscription has never been billed to comp against. A cancel-and-return
+ * (§32.3) is a new subscription and so is covered.
  *
  * Everywhere else the row wins and the disagreement is merely logged. Keeping
  * the row honest after activation is the subscription branch's job, and it is
@@ -49,21 +51,30 @@ export interface CreditAllocationInput {
   /** The allocation stored on the customer row. */
   rowAllocation: number;
   /**
-   * Whether this is the customer's FIRST paid subscription invoice.
+   * Whether this invoice belongs to a subscription we have not recorded against
+   * the customer yet — i.e. this is that subscription's ACTIVATING invoice.
    *
    * ⚠️ THE ONLY CASE THIS FUNCTION MAY OVERRULE THE ROW, and the narrowness is
    * deliberate. The row is stale at exactly one moment — activation, before
    * `customer.subscription.*` has landed and corrected it — and that is where
-   * the bug lives. After activation the subscription branch owns the row: it
-   * sees the subscription's CURRENT price, where an invoice may carry a
-   * proration line or be a stale past_due charge at a price the customer is no
-   * longer on. Acting on those would downgrade somebody permanently.
+   * the bug lives. Afterwards the subscription branch owns the row: it sees the
+   * subscription's CURRENT price, where an invoice may carry a proration line or
+   * be a stale past_due charge at a price the customer has already left. Acting
+   * on those would downgrade somebody permanently.
    *
-   * Must be established from `payments`, not inferred from a null recorded
-   * price: `customers.stripe_price_id` arrived in 0088 with no backfill, so a
-   * long-standing comped customer can still be carrying null.
+   * ⚠️ PER SUBSCRIPTION, NOT PER CUSTOMER. "Has this customer ever paid us" is
+   * the wrong question: a customer who cancels and re-subscribes (§32.3) has
+   * paid before, and if they return to the tier they previously held the
+   * subscription branch sees no price change either — so the bug would survive
+   * untouched for exactly the population that flow was built for. A
+   * re-subscription is a NEW Stripe subscription id, so comparing against the
+   * recorded one catches it.
+   *
+   * Not inferred from a null `stripe_price_id`: that column arrived in 0088 with
+   * no backfill, so a long-standing comped customer can still be carrying null.
+   * `stripe_subscription_id` has been written since 0001.
    */
-  isFirstPayment: boolean;
+  isActivatingInvoice: boolean;
   /**
    * A self-serve tier change awaiting its next invoice (§24). When the invoice's
    * price is the one that change is FOR, the change is being applied by
@@ -94,7 +105,7 @@ export interface CreditAllocationDecision {
 export function resolveCreditAllocation(
   input: CreditAllocationInput
 ): CreditAllocationDecision {
-  const { invoiceAllocation, rowAllocation, isFirstPayment } = input;
+  const { invoiceAllocation, rowAllocation, isActivatingInvoice } = input;
 
   // An unrecognised — or AMBIGUOUS — price tells us nothing, so it cannot
   // overrule anything. A Payment Link on a price object that is not in env
@@ -116,16 +127,16 @@ export function resolveCreditAllocation(
   }
 
   // Activation only. The row can be stale here because nothing has corrected it
-  // yet, and no comp can exist on a customer who has never paid us — so the
-  // money is unambiguously the better authority.
+  // yet, and no comp can exist against a subscription that has never been
+  // billed — so the money is unambiguously the better authority.
   //
-  // On every later invoice the row wins, even when it disagrees. The
-  // subscription branch keeps it honest from the subscription's CURRENT price,
-  // which an invoice does not reliably report: a proration line, or a stale
-  // past_due charge settled after an upgrade, would otherwise downgrade a
-  // customer permanently — and permanently is right, because from the next
-  // renewal the recorded and invoice prices agree and nothing re-examines it.
-  if (drift && isFirstPayment) {
+  // On every later invoice for that subscription the row wins, even when it
+  // disagrees. The subscription branch keeps it honest from the subscription's
+  // CURRENT price, which an invoice does not reliably report: a proration line,
+  // or a stale past_due charge settled after an upgrade, would otherwise
+  // downgrade a customer permanently — and permanently is right, because from
+  // the next renewal the two agree and nothing re-examines it.
+  if (drift && isActivatingInvoice) {
     return { allocation: invoiceAllocation, fromInvoice: true, drift: true };
   }
 

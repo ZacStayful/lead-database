@@ -725,7 +725,9 @@ export async function POST(request: NextRequest) {
             // Payment Link (0056). Match on either.
             let { data: customer } = await admin
               .from("customers")
-              .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
+              .select(
+                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+              )
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
 
@@ -766,7 +768,9 @@ export async function POST(request: NextRequest) {
                   }
                   const { data: linked } = await admin
                     .from("customers")
-                    .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
+                    .select(
+                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+              )
                     .eq("id", result.customerId)
                     .maybeSingle();
                   customer = linked ?? null;
@@ -811,18 +815,58 @@ export async function POST(request: NextRequest) {
               "invoice.paid"
             );
 
-            const grCredits = grPlanForAllocation(grAllocationNow).leads;
+            // BELIEVE THE INVOICE at activation, exactly as management does.
+            //
+            // GR has had the price-keyed re-size on `customer.subscription.*`
+            // since its £300/20 plan launched, but that leaves the same race
+            // management had: Stripe does not guarantee the subscription event
+            // arrives before `invoice.paid`, and `credit_invoice` is idempotent
+            // per invoice — so a stale row at this moment is a permanently wrong
+            // credit for that cycle, not something the next event repairs. The
+            // GR checkout route writes gr_monthly_allocation before redirecting
+            // just as the management one does, so the stale row is reachable the
+            // same way.
+            const grDecision = resolveCreditAllocation({
+              invoiceAllocation: grInvoiceAllocation,
+              rowAllocation: grAllocationNow,
+              isActivatingInvoice:
+                subscriptionId !== null &&
+                (customer.gr_stripe_subscription_id as string | null) !==
+                  subscriptionId,
+              pendingAllocation: customer.gr_pending_monthly_allocation ?? null,
+            });
 
-            // The row is the source of truth, but if it disagrees with the
-            // price actually being billed, somebody is being over- or
-            // under-credited every month. Log it loudly rather than papering
-            // over it — this is the one signal that a GR checkout was created
-            // without its allocation being set first. A pending tier change is
-            // not drift — it has just been applied above, so the two agree.
-            if (grInvoiceAllocation && grInvoiceAllocation !== grCredits) {
+            const grCredits = grPlanForAllocation(grDecision.allocation).leads;
+
+            // Reported whichever side won. When the ROW won this is a deliberate
+            // allocation or a mistake, and only a human can tell which.
+            if (grDecision.drift && grInvoiceAllocation != null) {
               console.error(
-                `GR allocation drift for customer ${customer.id}: invoice price implies ${grInvoiceAllocation} leads but gr_monthly_allocation credits ${grCredits}. Crediting ${grCredits} — correct gr_monthly_allocation in admin.`
+                driftMessage(
+                  customer.id,
+                  "guaranteed rent",
+                  grDecision,
+                  grInvoiceAllocation,
+                  grAllocationNow
+                )
               );
+            }
+
+            // Correct the row too, so pacing and capacity follow the money.
+            // Only ever reached at activation, so this cannot act on a proration
+            // line or a stale past_due invoice.
+            if (grDecision.fromInvoice) {
+              const { error: grResizeError } = await admin
+                .from("customers")
+                .update({ gr_monthly_allocation: grDecision.allocation })
+                .eq("id", customer.id);
+              if (grResizeError) {
+                console.error(
+                  "invoice.paid: could not correct gr_monthly_allocation",
+                  customer.id,
+                  grResizeError
+                );
+              }
             }
 
             // Idempotent, invoice-keyed credit: records the paid invoice and
@@ -880,7 +924,7 @@ export async function POST(request: NextRequest) {
           let { data: customer } = await admin
             .from("customers")
             .select(
-              "id, monthly_allocation, pending_monthly_allocation, stripe_price_id"
+              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id"
             )
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
@@ -938,7 +982,7 @@ export async function POST(request: NextRequest) {
                 const { data: linked } = await admin
                   .from("customers")
                   .select(
-              "id, monthly_allocation, pending_monthly_allocation, stripe_price_id"
+              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id"
             )
                   .eq("id", result.customerId)
                   .maybeSingle();
@@ -993,24 +1037,20 @@ export async function POST(request: NextRequest) {
           // subtotal and defaults to 20, which is the wrong failure direction
           // when it decides what somebody is given.
           //
-          // "First payment" is established from the payments ledger, not from a
-          // null stripe_price_id: that column arrived in 0088 with no backfill,
-          // so a long-standing comped customer can still be carrying null and
-          // would otherwise lose their comp on the next renewal.
-          const { count: priorPayments } = await admin
-            .from("payments")
-            .select("id", { count: "exact", head: true })
-            .eq("customer_id", customer.id)
-            .eq("payment_type", "subscription")
-            .eq("status", "paid");
-
+          // Activation is "an invoice for a subscription we have not recorded
+          // yet", not "the customer's first ever payment". A cancel-and-return
+          // customer (§32.3) HAS paid before, and if they come back to the tier
+          // they previously held the subscription branch sees no price change
+          // either — so the bug would survive for exactly the population that
+          // flow was built for. A re-subscription is a new Stripe subscription
+          // id, which this catches.
           const invoiceAllocation = allocationForPriceIds(priceIds);
           const decision = resolveCreditAllocation({
             invoiceAllocation,
             rowAllocation: allocationNow,
-            // Null count means the query failed. Treat that as "not the first
-            // payment" — the row wins, which is the pre-existing behaviour.
-            isFirstPayment: (priorPayments ?? 1) === 0,
+            isActivatingInvoice:
+              subscriptionId !== null &&
+              (customer.stripe_subscription_id as string | null) !== subscriptionId,
             pendingAllocation: customer.pending_monthly_allocation ?? null,
           });
 

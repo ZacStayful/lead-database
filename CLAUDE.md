@@ -4757,12 +4757,17 @@ the dashboard. Everything reads consistent while money leaves at both ends.
 
 The row is kept honest by **`customer.subscription.*`**, which reads the
 subscription's CURRENT price. The credit is decided at **`invoice.paid`**, which
-overrules the row in exactly one circumstance: the customer's **first paid
-subscription invoice**.
+overrules the row in exactly one circumstance: a subscription's **activating
+invoice** — the first invoice for a Stripe subscription we have not recorded
+against that customer yet.
+
+**Both products.** GR has had the price-keyed re-size since its £300/20 plan
+launched, but it had the same activation race and the same pre-payment write in
+its checkout route, so it gets the same override from the same function.
 
 | | Who decides | Result |
 |---|---|---|
-| First payment | invoice | credit the price, correct the row |
+| Activating invoice (incl. a re-subscribe) | invoice | credit the price, correct the row |
 | Tier change (portal, admin) | subscription event | re-size the row; the invoice never chases it |
 | **Comp** — admin sets 20 on a £150 sub | neither | row wins, drift logged. Never re-sized |
 | Ordinary renewal | — | row wins |
@@ -4770,17 +4775,25 @@ subscription invoice**.
 
 **Why the invoice only acts at activation.** That is the one moment the row can
 be stale — nothing has corrected it yet — and the one moment no comp can exist,
-because nobody has been billed to comp against. Afterwards an invoice is a
+because that subscription has never been billed to comp against. Afterwards an invoice is a
 *worse* authority than the subscription: an upgrade with default proration puts
 **both** tiers on the next invoice, and a `past_due` charge collected after an
 upgrade is at a price the customer has already left. Acting on either would
 downgrade somebody permanently, because from the next renewal nothing
 re-examines it.
 
-⚠️ **"First payment" is read from the `payments` ledger, never from a null
-`stripe_price_id`.** That column arrived in 0088 with no backfill, so a
-long-standing comped customer can still be carrying null — inferring activation
-from it would strip the comp this design exists to protect.
+⚠️ **Activation is PER SUBSCRIPTION, not per customer.** "Has this customer ever
+paid us" is the wrong question: a cancel-and-return customer (§32.3) has paid
+before, and if they come back to the tier they previously held the subscription
+branch sees no price change either — so the bug would survive untouched for
+exactly the population that flow was built for. A re-subscription is a new
+Stripe subscription id, so the test compares the invoice's subscription against
+`(gr_)stripe_subscription_id`.
+
+Deliberately **not** inferred from a null `stripe_price_id`: that column arrived
+in 0088 with no backfill, so a long-standing comped customer can still be
+carrying null, and reading that as activation would strip the comp this design
+exists to protect. `stripe_subscription_id` has been written since 0001.
 
 The same null-is-not-a-change rule governs the re-size: on
 `customer.subscription.created` the price is the truth (nothing to protect
@@ -4826,12 +4839,13 @@ when the row won, points at admin.
 
 ### Verification
 
-**18 cases** in `src/lib/__tests__/allocationCredit.test.ts`. The decision: the
-bug itself (first payment, stale row → credit the invoice), the mirror case
-(paid more than the row says → do not under-credit), the comp preserved, the §24
-pending stand-down, an unrelated pending change that must NOT shield drift, an
-unrecognised price, a post-fix renewal, and — the guard against everything the
-review caught — that after activation the row wins in **both** directions.
+**19 cases** in `src/lib/__tests__/allocationCredit.test.ts`. The decision: the
+bug itself (activating invoice, stale row → credit the invoice), the mirror case
+(paid more than the row says → do not under-credit), the comp preserved, a cancel-and-return
+customer, the §24 pending stand-down, an unrelated pending change that must NOT
+shield drift, an unrecognised price, a post-fix renewal, and — the guard against
+everything the review caught — that after activation the row wins in **both**
+directions.
 The helper: each tier, the historical price id, unknown prices, a repeat of one
 tier, an unrelated line item, and the **two-tier proration invoice that must
 resolve to null**.

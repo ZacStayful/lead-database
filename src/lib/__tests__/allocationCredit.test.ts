@@ -12,7 +12,7 @@ function input(over: Partial<CreditAllocationInput> = {}): CreditAllocationInput
   return {
     invoiceAllocation: 10,
     rowAllocation: 10,
-    isFirstPayment: false,
+    isActivatingInvoice: false,
     pendingAllocation: null,
     ...over,
   };
@@ -33,7 +33,7 @@ describe("resolveCreditAllocation", () => {
       input({
         invoiceAllocation: 10,
         rowAllocation: 20,
-        isFirstPayment: true,
+        isActivatingInvoice: true,
       })
     );
     expect(d.allocation).toBe(10);
@@ -48,10 +48,27 @@ describe("resolveCreditAllocation", () => {
       input({
         invoiceAllocation: 20,
         rowAllocation: 10,
-        isFirstPayment: true,
+        isActivatingInvoice: true,
       })
     );
     expect(d.allocation).toBe(20);
+    expect(d.fromInvoice).toBe(true);
+  });
+
+  it("covers a customer who cancelled and came back (§32.3)", () => {
+    // The review case. "Has this customer ever paid us" would answer YES here,
+    // and if they return to the tier they previously held the subscription
+    // branch sees no price change either — so the bug would survive untouched
+    // for exactly the population §32.3 was built for. A re-subscription is a
+    // new Stripe subscription, which is what the caller compares.
+    const d = resolveCreditAllocation(
+      input({
+        invoiceAllocation: 10,
+        rowAllocation: 20,
+        isActivatingInvoice: true,
+      })
+    );
+    expect(d.allocation).toBe(10);
     expect(d.fromInvoice).toBe(true);
   });
 
@@ -64,7 +81,7 @@ describe("resolveCreditAllocation", () => {
       input({
         invoiceAllocation: 10,
         rowAllocation: 20,
-        isFirstPayment: false,
+        isActivatingInvoice: false,
       })
     );
     expect(d.allocation).toBe(20);
@@ -85,7 +102,7 @@ describe("resolveCreditAllocation", () => {
     // downgrade them — permanently, since from the next renewal nothing
     // re-examines it.
     const d = resolveCreditAllocation(
-      input({ invoiceAllocation: 20, rowAllocation: 10, isFirstPayment: false })
+      input({ invoiceAllocation: 20, rowAllocation: 10, isActivatingInvoice: false })
     );
     expect(d.allocation).toBe(10);
     expect(d.fromInvoice).toBe(false);
@@ -101,7 +118,7 @@ describe("resolveCreditAllocation", () => {
       input({
         invoiceAllocation: 20,
         rowAllocation: 10,
-        isFirstPayment: false,
+        isActivatingInvoice: false,
         pendingAllocation: 20,
       })
     );
@@ -117,7 +134,7 @@ describe("resolveCreditAllocation", () => {
       input({
         invoiceAllocation: 10,
         rowAllocation: 20,
-        isFirstPayment: true,
+        isActivatingInvoice: true,
         pendingAllocation: 20,
       })
     );
@@ -133,7 +150,7 @@ describe("resolveCreditAllocation", () => {
       input({
         invoiceAllocation: null,
         rowAllocation: 20,
-        isFirstPayment: true,
+        isActivatingInvoice: true,
       })
     );
     expect(d).toEqual({ allocation: 20, fromInvoice: false, drift: false });
@@ -157,7 +174,7 @@ describe("resolveCreditAllocation", () => {
       [20, 10],
     ] as const) {
       const d = resolveCreditAllocation(
-        input({ invoiceAllocation, rowAllocation, isFirstPayment: false })
+        input({ invoiceAllocation, rowAllocation, isActivatingInvoice: false })
       );
       expect(d.allocation).toBe(rowAllocation);
       expect(d.fromInvoice).toBe(false);
