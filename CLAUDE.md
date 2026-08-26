@@ -4773,6 +4773,7 @@ its checkout route, so it gets the same override from the same function.
 | Comp on a customer who cancels and returns | invoice | reset from the price. The comp was attached to a subscription that no longer exists; the log says to re-apply it |
 | Ordinary renewal | — | row wins |
 | Unrecognised **or ambiguous** price | — | row wins, no drift reported |
+| **Bespoke allocation** — admin sets 30 | neither | row wins, drift logged. Never normalised to a tier |
 
 **Why the invoice only acts at activation.** That is the one moment the row can
 be stale — nothing has corrected it yet — and the one moment no comp can exist,
@@ -4794,7 +4795,22 @@ Stripe subscription id, so the test compares the invoice's subscription against
 Deliberately **not** inferred from a null `stripe_price_id`: that column arrived
 in 0088 with no backfill, so a long-standing comped customer can still be
 carrying null, and reading that as activation would strip the comp this design
-exists to protect. `stripe_subscription_id` has been written since 0001.
+exists to protect. `stripe_subscription_id` predates it by a long way and is now
+stamped at every paid invoice on both products, so a row that lacks one is
+either genuinely new or has never had a subscription at all (a comped account —
+§18A — which never reaches `invoice.paid`).
+
+⚠️ **A BESPOKE ALLOCATION IS NEVER NORMALISED**, at activation or anywhere else.
+`/api/admin/customers/[id]/allocation` accepts any integer, and the MANAGEMENT
+invite route deliberately does not round it to a tier (only the GR half does) —
+a customer comped 30 leads is invoiced at the nearest plan and keeps their 30
+for pacing and weighted capacity. `30` is not a disagreement with the £300
+price; it is an arrangement the price cannot express, and rewriting it to 20
+would silently change what that customer is owed.
+
+So every re-size and the credit decision are gated on `isPlanAllocation()`:
+only a row already sitting on a tier can be a MIS-SET tier, which is the only
+thing any of this is here to correct. The disagreement is still logged.
 
 **A new subscription id is a change too**, on both halves. A customer who
 cancels and returns to the tier they previously held has an unchanged price, so

@@ -13,6 +13,7 @@ function input(over: Partial<CreditAllocationInput> = {}): CreditAllocationInput
     invoiceAllocation: 10,
     rowAllocation: 10,
     isActivatingInvoice: false,
+    rowIsPlanTier: true,
     pendingAllocation: null,
     ...over,
   };
@@ -70,6 +71,27 @@ describe("resolveCreditAllocation", () => {
     );
     expect(d.allocation).toBe(10);
     expect(d.fromInvoice).toBe(true);
+  });
+
+  it("NEVER touches a bespoke allocation, even at activation", () => {
+    // An admin may set any integer, and the management invite route leaves it
+    // alone on purpose — a customer comped 30 leads is invoiced at the nearest
+    // plan and keeps their 30 for pacing and capacity. That is not a
+    // disagreement with the price, it is an arrangement the price cannot
+    // express, and normalising it to 20 would silently change what they are
+    // owed. Only a row already on a tier can be a MIS-SET tier.
+    const d = resolveCreditAllocation(
+      input({
+        invoiceAllocation: 20,
+        rowAllocation: 30,
+        isActivatingInvoice: true,
+        rowIsPlanTier: false,
+      })
+    );
+    expect(d.allocation).toBe(30);
+    expect(d.fromInvoice).toBe(false);
+    // Reported, so the arrangement is at least visible.
+    expect(d.drift).toBe(true);
   });
 
   it("KEEPS A COMP: row edited, price never moved", () => {

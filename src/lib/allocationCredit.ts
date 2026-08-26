@@ -51,6 +51,19 @@ export interface CreditAllocationInput {
   /** The allocation stored on the customer row. */
   rowAllocation: number;
   /**
+   * Whether `rowAllocation` is one of the tiers we sell.
+   *
+   * ⚠️ A BESPOKE ALLOCATION IS NEVER OVERRULED. An admin may set any integer,
+   * and the management invite route deliberately leaves it alone — a customer
+   * comped 30 leads is invoiced at the nearest plan and keeps their 30. That is
+   * not a disagreement with the price, it is an arrangement the price cannot
+   * express, and rewriting it to 20 would silently change what they are owed.
+   *
+   * Only a row already sitting on a tier can be a MIS-SET tier, which is the
+   * only thing this function is here to correct.
+   */
+  rowIsPlanTier: boolean;
+  /**
    * Whether this invoice belongs to a subscription we have not recorded against
    * the customer yet — i.e. this is that subscription's ACTIVATING invoice.
    *
@@ -105,7 +118,8 @@ export interface CreditAllocationDecision {
 export function resolveCreditAllocation(
   input: CreditAllocationInput
 ): CreditAllocationDecision {
-  const { invoiceAllocation, rowAllocation, isActivatingInvoice } = input;
+  const { invoiceAllocation, rowAllocation, isActivatingInvoice, rowIsPlanTier } =
+    input;
 
   // An unrecognised — or AMBIGUOUS — price tells us nothing, so it cannot
   // overrule anything. A Payment Link on a price object that is not in env
@@ -136,7 +150,7 @@ export function resolveCreditAllocation(
   // or a stale past_due charge settled after an upgrade, would otherwise
   // downgrade a customer permanently — and permanently is right, because from
   // the next renewal the two agree and nothing re-examines it.
-  if (drift && isActivatingInvoice) {
+  if (drift && isActivatingInvoice && rowIsPlanTier) {
     return { allocation: invoiceAllocation, fromInvoice: true, drift: true };
   }
 

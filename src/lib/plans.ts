@@ -119,6 +119,24 @@ export function planForProductAllocation(
  * The £300/20 plan keeps its historical env var `STRIPE_MONTHLY_PRICE_ID` for
  * backwards compatibility; a newer `STRIPE_PRICE_ID_20` overrides it if set.
  */
+/**
+ * Whether a stored allocation is one of the tiers we actually sell.
+ *
+ * ⚠️ THE GUARD THAT PROTECTS A BESPOKE ALLOCATION. An admin may set any integer
+ * (`/api/admin/customers/[id]/allocation`), and the MANAGEMENT invite route
+ * deliberately does not normalise it — a customer comped 30 leads is invoiced at
+ * the nearest plan and keeps their 30 for pacing and capacity.
+ *
+ * Nothing that re-sizes from a Stripe price may touch such a row. `30` is not a
+ * disagreement with the £300 price, it is a deliberate arrangement the price
+ * cannot express, and rewriting it to 20 would silently change what that
+ * customer is owed. Only a row already sitting on a tier can be a mis-set tier.
+ */
+export function isPlanAllocation(leadType: LeadType, allocation: number): boolean {
+  const table = leadType === "guaranteed_rent" ? GR_PLANS : PLANS;
+  return Object.values(table).some((plan) => plan.leads === allocation);
+}
+
 export function stripePriceIdFor(allocation: number): string {
   const plan = planForAllocation(allocation);
   const id =

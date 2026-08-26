@@ -7,6 +7,7 @@ import {
   GR_PLANS,
   allocationForPriceIds,
   grAllocationForPriceIds,
+  isPlanAllocation,
   grPlanForAllocation,
   isGuaranteedRentPriceId,
   planForAllocation,
@@ -439,7 +440,7 @@ export async function POST(request: NextRequest) {
             const { data: grRow } = await admin
               .from("customers")
               .select(
-                "gr_stripe_price_id, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+                "gr_stripe_price_id, gr_pending_monthly_allocation, gr_stripe_subscription_id, gr_monthly_allocation"
               )
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
@@ -449,8 +450,13 @@ export async function POST(request: NextRequest) {
             const grNewSubscription = grRow
               ? (grRow.gr_stripe_subscription_id as string | null) !== sub.id
               : false;
+            const grRowIsTier = isPlanAllocation(
+              "guaranteed_rent",
+              (grRow?.gr_monthly_allocation as number | null) ?? 10
+            );
             if (
               grRow &&
+              grRowIsTier &&
               (grRow.gr_stripe_price_id !== subPriceIds[0] || grNewSubscription) &&
               !deferred
             ) {
@@ -504,7 +510,7 @@ export async function POST(request: NextRequest) {
             const { data: mgmtRow } = await admin
               .from("customers")
               .select(
-                "stripe_price_id, pending_monthly_allocation, stripe_subscription_id"
+                "stripe_price_id, pending_monthly_allocation, stripe_subscription_id, monthly_allocation"
               )
               .eq("stripe_customer_id", customerId)
               .maybeSingle();
@@ -542,7 +548,19 @@ export async function POST(request: NextRequest) {
               ? (mgmtRow.stripe_subscription_id as string | null) !== sub.id
               : false;
 
-            if (mgmtRow && (priceChanged || newSubscription) && !deferred) {
+            // A bespoke allocation is never normalised — see isPlanAllocation.
+            // The management invite route leaves such a row alone on purpose, so
+            // re-sizing it here would undo a deliberate arrangement.
+            const mgmtRowIsTier = isPlanAllocation(
+              "management",
+              (mgmtRow?.monthly_allocation as number | null) ?? 20
+            );
+            if (
+              mgmtRow &&
+              mgmtRowIsTier &&
+              (priceChanged || newSubscription) &&
+              !deferred
+            ) {
               update.monthly_allocation = mgmtAllocation;
             }
           }
@@ -878,6 +896,7 @@ export async function POST(request: NextRequest) {
                 subscriptionId !== null &&
                 (customer.gr_stripe_subscription_id as string | null) !==
                   subscriptionId,
+              rowIsPlanTier: isPlanAllocation("guaranteed_rent", grAllocationNow),
               pendingAllocation: customer.gr_pending_monthly_allocation ?? null,
             });
 
@@ -1109,6 +1128,7 @@ export async function POST(request: NextRequest) {
             isActivatingInvoice:
               subscriptionId !== null &&
               (customer.stripe_subscription_id as string | null) !== subscriptionId,
+            rowIsPlanTier: isPlanAllocation("management", allocationNow),
             pendingAllocation: customer.pending_monthly_allocation ?? null,
           });
 
