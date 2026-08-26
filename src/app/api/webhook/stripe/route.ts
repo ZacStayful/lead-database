@@ -495,11 +495,26 @@ export async function POST(request: NextRequest) {
               .maybeSingle();
             const deferred =
               mgmtRow?.pending_monthly_allocation === mgmtAllocation;
-            if (
-              mgmtRow &&
-              mgmtRow.stripe_price_id !== subPriceIds[0] &&
-              !deferred
-            ) {
+
+            // ⚠️ A NULL RECORDED PRICE MEANS "NEVER OBSERVED", NOT "CHANGED".
+            // stripe_price_id arrived in 0088 with no backfill, so every
+            // customer who predates it carries null until their first
+            // subscription event after this deploys. Treating that as a change
+            // would re-size them from their price — and a comped customer would
+            // silently lose their comp on the very event that was only meant to
+            // record what they are billed on.
+            //
+            // On `created` there is nothing to protect: the subscription is new,
+            // so no comp can exist against it yet and the price is the truth.
+            // On `updated`/`deleted` with nothing recorded, we record the price
+            // and leave the allocation alone.
+            const recordedPrice = mgmtRow?.stripe_price_id ?? null;
+            const priceChanged =
+              recordedPrice === null
+                ? event.type === "customer.subscription.created"
+                : recordedPrice !== subPriceIds[0];
+
+            if (mgmtRow && priceChanged && !deferred) {
               update.monthly_allocation = mgmtAllocation;
             }
           }
@@ -977,12 +992,25 @@ export async function POST(request: NextRequest) {
           // Strict allocation only: `allocationFromPrices` guesses from the
           // subtotal and defaults to 20, which is the wrong failure direction
           // when it decides what somebody is given.
+          //
+          // "First payment" is established from the payments ledger, not from a
+          // null stripe_price_id: that column arrived in 0088 with no backfill,
+          // so a long-standing comped customer can still be carrying null and
+          // would otherwise lose their comp on the next renewal.
+          const { count: priorPayments } = await admin
+            .from("payments")
+            .select("id", { count: "exact", head: true })
+            .eq("customer_id", customer.id)
+            .eq("payment_type", "subscription")
+            .eq("status", "paid");
+
           const invoiceAllocation = allocationForPriceIds(priceIds);
           const decision = resolveCreditAllocation({
             invoiceAllocation,
             rowAllocation: allocationNow,
-            invoicePriceId: priceIds[0] ?? null,
-            recordedPriceId: (customer.stripe_price_id as string | null) ?? null,
+            // Null count means the query failed. Treat that as "not the first
+            // payment" — the row wins, which is the pre-existing behaviour.
+            isFirstPayment: (priorPayments ?? 1) === 0,
             pendingAllocation: customer.pending_monthly_allocation ?? null,
           });
 
@@ -1004,7 +1032,9 @@ export async function POST(request: NextRequest) {
           }
 
           // Correct the row too, so pacing and capacity follow the money rather
-          // than staying on the stale note. Best-effort: the credit below is
+          // than staying on the stale note. Only ever reached at activation —
+          // see resolveCreditAllocation — so this cannot act on a proration
+          // line or a stale past_due invoice. Best-effort: the credit below is
           // what matters, and the subscription event re-sizes it anyway.
           if (decision.fromInvoice) {
             const { error: resizeError } = await admin

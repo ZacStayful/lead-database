@@ -201,13 +201,27 @@ export function isGuaranteedRentPriceId(priceIds: string[]): boolean {
  * 20-lead subscriber on the old id as "unrecognised".
  */
 export function allocationForPriceIds(priceIds: string[]): number | null {
+  const found = new Set<number>();
   for (const plan of Object.values(PLANS)) {
     const configured = process.env[plan.priceEnv];
-    if (configured && priceIds.includes(configured)) return plan.leads;
+    if (configured && priceIds.includes(configured)) found.add(plan.leads);
   }
   const legacyTwenty = process.env.STRIPE_MONTHLY_PRICE_ID;
-  if (legacyTwenty && priceIds.includes(legacyTwenty)) return PLANS.lead_20.leads;
-  return null;
+  if (legacyTwenty && priceIds.includes(legacyTwenty)) found.add(PLANS.lead_20.leads);
+
+  // ⚠️ AMBIGUOUS IS NOT A TIER. An invoice carries every line, so an upgrade
+  // made with default proration puts BOTH prices on the next invoice — the old
+  // one as a proration credit and the new one as the subscription line. Taking
+  // the first match in plan order would read that £300 invoice as the 10-lead
+  // plan, and since the row would then be rewritten to match, it would never
+  // self-heal: from the next renewal onward the recorded and invoice prices
+  // agree and the wrong figure wins.
+  //
+  // We cannot tell which line is the subscription from the price ids alone, so
+  // two tiers means we do not know — and not knowing falls back to the row,
+  // exactly as an unrecognised price does.
+  if (found.size !== 1) return null;
+  return Array.from(found)[0];
 }
 
 /**

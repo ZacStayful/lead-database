@@ -4753,26 +4753,43 @@ indefinitely — the £300 plan for £150.
 The over-delivery and the over-reporting point opposite ways and cancel out on
 the dashboard. Everything reads consistent while money leaves at both ends.
 
-### The rule: has the price MOVED?
+### Two jobs, split by who can see the truth
 
-Not "do the price and the row disagree" — **"is the price different from the one
-we last recorded"**. That single distinction is the whole design:
+The row is kept honest by **`customer.subscription.*`**, which reads the
+subscription's CURRENT price. The credit is decided at **`invoice.paid`**, which
+overrules the row in exactly one circumstance: the customer's **first paid
+subscription invoice**.
 
-| | Price moved? | Result |
+| | Who decides | Result |
 |---|---|---|
-| First payment (nothing recorded yet) | yes, by definition | credit the price, correct the row |
-| Tier change in the portal or by an admin | yes | credit the price, correct the row |
-| **Comp** — admin sets 20 on a £150 sub | **no** | credit the row. Never re-sized |
-| Ordinary renewal | no | credit the row |
-| Price we do not recognise | — | credit the row, no drift reported |
+| First payment | invoice | credit the price, correct the row |
+| Tier change (portal, admin) | subscription event | re-size the row; the invoice never chases it |
+| **Comp** — admin sets 20 on a £150 sub | neither | row wins, drift logged. Never re-sized |
+| Ordinary renewal | — | row wins |
+| Unrecognised **or ambiguous** price | — | row wins, no drift reported |
 
-A comp is a row edited while the price stayed put, so it fails the test and
-keeps its allocation — the silent re-sizing §17 and §24 both declined. The bug
-lives entirely in the first row of that table.
+**Why the invoice only acts at activation.** That is the one moment the row can
+be stale — nothing has corrected it yet — and the one moment no comp can exist,
+because nobody has been billed to comp against. Afterwards an invoice is a
+*worse* authority than the subscription: an upgrade with default proration puts
+**both** tiers on the next invoice, and a `past_due` charge collected after an
+upgrade is at a price the customer has already left. Acting on either would
+downgrade somebody permanently, because from the next renewal nothing
+re-examines it.
+
+⚠️ **"First payment" is read from the `payments` ledger, never from a null
+`stripe_price_id`.** That column arrived in 0088 with no backfill, so a
+long-standing comped customer can still be carrying null — inferring activation
+from it would strip the comp this design exists to protect.
+
+The same null-is-not-a-change rule governs the re-size: on
+`customer.subscription.created` the price is the truth (nothing to protect
+yet); on `updated`/`deleted` with nothing recorded we record the price and leave
+the allocation alone.
 
 **This is GR's rule.** Guaranteed Rent has had the price-keyed re-size since its
 £300/20 plan launched (`gr_stripe_price_id !== subPriceIds[0]`). Management was
-deliberately left without it. §33 closes that gap and nothing more.
+deliberately left without it. §33 closes that gap.
 
 ### Three pieces
 
@@ -4809,13 +4826,15 @@ when the row won, points at admin.
 
 ### Verification
 
-`resolveCreditAllocation` goes through **12 cases** in
-`src/lib/__tests__/allocationCredit.test.ts`: the bug itself (first payment,
-stale row → credit the invoice), the mirror case (paid more than the row says →
-do not under-credit), the comp preserved, a genuine tier change, the §24 pending
-stand-down, an unrelated pending change that must NOT shield drift, an
-unrecognised price, a post-fix renewal, and an unreadable price id. 376 vitest
-cases green overall; `next build` passes.
+**18 cases** in `src/lib/__tests__/allocationCredit.test.ts`. The decision: the
+bug itself (first payment, stale row → credit the invoice), the mirror case
+(paid more than the row says → do not under-credit), the comp preserved, the §24
+pending stand-down, an unrelated pending change that must NOT shield drift, an
+unrecognised price, a post-fix renewal, and — the guard against everything the
+review caught — that after activation the row wins in **both** directions.
+The helper: each tier, the historical price id, unknown prices, a repeat of one
+tier, an unrelated line item, and the **two-tier proration invoice that must
+resolve to null**.
 
 **Not rehearsed against live Stripe** — §12's standing item. Before relying on
 it: subscribe at the £150/10 price with the row hand-set to 20 and confirm the
