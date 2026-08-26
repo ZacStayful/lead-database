@@ -2,6 +2,7 @@ import { Resend } from "resend";
 import { APP_URL, LOGIN_URL } from "@/lib/env";
 import { extractCity } from "@/lib/utils";
 import { pauseMonthsWords } from "@/lib/pauseOptions";
+import { keepCrmBulletsHtml } from "@/lib/retentionCopy";
 import type { Lead } from "@/lib/types";
 
 const BRAND = "#5D8156";
@@ -542,6 +543,10 @@ export async function sendSubscriptionPausedEmail(params: {
       <li>Any lead credits you have left are preserved and will be waiting for you.</li>
       <li>Your subscription resumes automatically on <strong style="color:#1a1a1a">${esc(resumeDate)}</strong>, when billing and leads restart.</li>
     </ul>
+    <p style="margin:0 0 8px;font-size:14px"><strong style="color:#1a1a1a">Your database stays open the whole time</strong></p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      ${keepCrmBulletsHtml(esc)}
+    </ul>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">There is nothing you need to do. We will email you again when your subscription resumes.</p>
     ${button(`${APP_URL}/dashboard/settings`, "View settings")}
   `;
@@ -623,6 +628,10 @@ export async function sendSubscriptionCancelledEmail(params: {
       <li>Your subscription ends on ${endPhrase} — you keep your access and any remaining leads until then.</li>
       <li>Nothing else is charged and there is nothing more you need to do.</li>
       <li>Changed your mind? Choose <strong style="color:#1a1a1a">Keep my subscription</strong> in Settings any time before your end date and everything continues as it was.</li>
+    </ul>
+    <p style="margin:0 0 8px;font-size:14px"><strong style="color:#1a1a1a">Your database stays open, and it is free</strong></p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      ${keepCrmBulletsHtml(esc)}
     </ul>
     <p style="margin:0 0 18px;color:#6b706a;font-size:14px">We are sorry to see you go. If anything about the service fell short, replying to this email goes straight to us.</p>
     ${button(`${APP_URL}/dashboard/settings`, "View settings")}

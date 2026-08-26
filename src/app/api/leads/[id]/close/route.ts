@@ -72,8 +72,13 @@ export async function POST(req: NextRequest) {
   // never offered to anyone else. On a lead only its owner holds there is
   // nobody else to protect, and the status dropdown already records the
   // outcome; delete covers the rest.
+  //
+  // ⚠️ Refused only when the CALLER is the owner, not whenever the lead has
+  // one. Since §32 an analysed owned lead can be sold to one other operator,
+  // and that buyer paid £15 for it — refusing them this would leave them
+  // holding a lead they cannot record an outcome on.
   const ownership = await getAssignmentLeadOwnership(admin, assignment_id);
-  if (ownership?.ownerCustomerId) {
+  if (ownership?.ownerCustomerId === customer.id) {
     return NextResponse.json(
       { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
       { status: 400 }

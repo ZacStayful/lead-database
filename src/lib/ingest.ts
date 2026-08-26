@@ -8,6 +8,7 @@ import { sendNewLeadSms } from "@/lib/sms";
 import { leadPriceFor } from "@/lib/plans";
 import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import { syncStoredReport } from "@/lib/incomeReportStorage";
+import { shouldRaiseContentionCap, shouldRouteLead } from "@/lib/leadResale";
 import {
   DEFAULT_MAX_ASSIGNMENTS,
   CONTENDED_FILTERED_CUSTOMERS,
@@ -393,14 +394,16 @@ export async function autoAssignLead(
   supabase: ReturnType<typeof createAdminClient>,
   lead: Lead
 ): Promise<number> {
-  // A customer-owned lead belongs to the person who added it and is never
-  // routed to anyone. The database enforces this too (0102 —
-  // lead_retired_from_allocation, asserted inside assign_lead_to_customer), and
-  // such a lead is seeded full at 1/1 so the shortfall below is already zero.
-  // Stated explicitly all the same: the contention branch further down can
-  // RAISE max_assignments, so "it has no free slots" is a fact about today's
-  // code rather than a guarantee.
-  if (lead.owner_customer_id) return 0;
+  // A customer-owned lead belongs to the person who added it, and is routed to
+  // nobody UNTIL it qualifies — a paid analysis returning figures we trust
+  // (§32). A qualified one is ordinary supply for exactly one more operator and
+  // has to fall through to the candidate search below; an unqualified one is
+  // still seeded 1/1, so the shortfall would be zero anyway.
+  //
+  // The database enforces all of it regardless (0107/0108 —
+  // lead_retired_from_allocation, and the cap asserted under the row lock in
+  // assign_lead_to_customer). This early return only saves the round trip.
+  if (!shouldRouteLead(lead)) return 0;
 
   const remaining =
     (lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS) - (lead.assignment_count ?? 0);
@@ -480,8 +483,14 @@ export async function autoAssignLead(
   // already queued — and stops at 4, the same first rung, so a lead can still
   // reach 5 by escalating afterwards but never overshoots by both routes at
   // once. Only ever raises: a lead an admin has already lifted is left alone.
+  //
+  // ⚠️ NEVER on a customer's own lead. This update goes straight through
+  // PostgREST, so it bypasses assign_lead_to_customer's row lock and every
+  // guard 0107 added — it is the one path that could take an owned lead past
+  // its uploader plus one. The `.lt(...)` predicate below is not protection
+  // either: a qualified owned lead sits at 2, which satisfies it.
   let slots = remaining;
-  if (filtered.length >= CONTENDED_FILTERED_CUSTOMERS) {
+  if (shouldRaiseContentionCap(lead, filtered.length, CONTENDED_FILTERED_CUSTOMERS)) {
     const cap = lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS;
     if (cap < CONTENDED_FILTERED_CUSTOMERS) {
       const { error: capErr } = await supabase

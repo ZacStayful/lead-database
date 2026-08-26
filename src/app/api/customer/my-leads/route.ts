@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { holdsProduct } from "@/lib/products";
+import { availableLeadTypes } from "@/lib/products";
 import {
   createOwnedLeads,
   hasAnyContactDetail,
@@ -56,10 +56,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No customer record" }, { status: 404 });
   }
 
-  // Their own leads are free and unlimited, but they still have to be a
-  // customer of the product whose pipeline the lead will use — a GR lead gets
-  // GR's stages and a management lead gets management's (invariant 6).
-  if (!holdsProduct(customer as Customer, leadType)) {
+  // Their own leads are free and unlimited, and they stay free through a pause
+  // or a cancellation — the database side is not part of what a subscription
+  // buys. What is still required is that the lead's pipeline is one they have
+  // actually run: a GR lead gets GR's stages and a management lead gets
+  // management's (invariant 6), so a product they have never held is refused.
+  if (!availableLeadTypes(customer as Customer).includes(leadType)) {
     return NextResponse.json(
       { error: "You do not hold that product" },
       { status: 403 }

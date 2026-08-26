@@ -41,25 +41,100 @@ export interface CreateOwnedLeadsResult {
   leadIds: string[];
 }
 
-/** A lead the customer owns, for the badge and the source filter. */
+/**
+ * Whether THIS customer is the one who added this lead.
+ *
+ * ⚠️ RELATIVE TO THE VIEWER, always. `owner_customer_id` being set means the
+ * lead belongs to SOME customer, which stopped being the same question the
+ * moment an analysed owned lead could be sold to one other operator (§32): the
+ * buyer holds a lead with an owner, and that owner is not them.
+ *
+ * Read as a bare null check — which is what this was until §32 — it tells the
+ * buyer "Your lead · you added this yourself, it is only visible to you", puts
+ * "Added by you" in their export, offers them a Delete that 404s, and hides
+ * Reject on a lead they paid £15 for. Every one of those is wrong and three of
+ * them are visible on the first screen.
+ */
 export function isOwnedLead(
-  lead: { owner_customer_id?: string | null } | null | undefined
+  lead: { owner_customer_id?: string | null } | null | undefined,
+  viewerCustomerId: string | null | undefined
 ): boolean {
-  return Boolean(lead?.owner_customer_id);
+  return Boolean(
+    lead?.owner_customer_id && viewerCustomerId && lead.owner_customer_id === viewerCustomerId
+  );
 }
 
 /**
  * The Source value shown to the customer, in the export and anywhere else the
  * provenance of a lead is stated. One definition so the export, the badge and
  * any future surface cannot disagree.
+ *
+ * Takes no viewer parameter: an assignment row IS the viewer — every one of
+ * them carries the `customer_id` it belongs to. That is why this is the shape
+ * the fix wanted, and why a caller cannot forget to pass the viewer in.
+ *
+ * A resold owned lead reads "Allocated" to its buyer. True — it arrived by
+ * ordinary routing at the ordinary price — and it says nothing about the
+ * operator who brought it in, which is the §19.7 standard: what the people who
+ * held a lead before you did with it is never yours to see.
  */
 export function leadSourceLabel(assignment: {
+  customer_id?: string | null;
   claimed_from_pool_at?: string | null;
   lead?: { owner_customer_id?: string | null } | null;
 }): string {
-  if (isOwnedLead(assignment.lead)) return "Added by you";
+  if (isOwnedLead(assignment.lead, assignment.customer_id)) return "Added by you";
   if (assignment.claimed_from_pool_at) return "Claimed from expired leads";
   return "Allocated";
+}
+
+/**
+ * Strip another customer's identity out of a lead before it reaches the browser.
+ *
+ * Customer lead surfaces select `lead:leads(*)`, which since §32 can carry an
+ * `owner_customer_id` belonging to somebody else — the operator who uploaded a
+ * lead that was then sold on. That id is another customer's primary key, and
+ * shipping it to the buyer's browser is the sort of thing §19.7 rules out on
+ * principle: what the people who held a lead before you did is not yours to
+ * see, and neither is who they were.
+ *
+ * So it is nulled at the page boundary. The buyer gets a lead that looks like
+ * any other allocated lead, which is exactly what it is to them, and every
+ * client component's `Boolean(lead.owner_customer_id)` becomes correct without
+ * needing to know the viewer.
+ *
+ * ⚠️ **`lead_profile` goes too, and that is the more important half.** On a
+ * marketplace lead that column is our own qualification blurb, written to be
+ * read by whoever holds the lead. On an IMPORTED one it is whatever the
+ * customer's spreadsheet had left over: `leadImport.ts` folds every column it
+ * could not map into it as `Header: value`, plus every column mapped to notes.
+ * That is the uploader's own working material — margins, source attribution,
+ * "will take 12%, spoke to Dave" — and handing it to a competing operator is a
+ * different act from handing over the landlord's phone number. We cannot tell
+ * the useful lines from the private ones, so the buyer gets none of them. They
+ * still receive the name, address, bedrooms, contact details and the full
+ * analysis, which is everything needed to price a call.
+ *
+ * This does NOT replace `isOwnedLead`'s viewer argument. Server-side callers —
+ * analytics, goals, the API routes — read the columns directly and must never
+ * depend on a sanitisation step having been run somewhere upstream.
+ *
+ * ⚠️ Nor is it a security boundary. `leads_select_assigned` (0014) grants any
+ * holder `select` on the whole row, so a buyer with their own Supabase session
+ * can read `owner_customer_id` and `lead_profile` from the browser directly.
+ * What that yields is an opaque customer UUID that resolves to nothing
+ * (`customers` is select-own) and text they were arguably sold — this is a
+ * presentation control that keeps another operator's material out of the
+ * product, not a wall. Anything that must be unreachable needs RLS or a column
+ * that is never selected.
+ */
+export function viewerScopedLead<
+  T extends { owner_customer_id?: string | null; lead_profile?: string | null },
+>(lead: T | null | undefined, viewerCustomerId: string | null | undefined): T | null {
+  if (!lead) return null;
+  if (!lead.owner_customer_id) return lead;
+  if (viewerCustomerId && lead.owner_customer_id === viewerCustomerId) return lead;
+  return { ...lead, owner_customer_id: null, lead_profile: null };
 }
 
 /**
@@ -227,3 +302,19 @@ export async function getAssignmentLeadOwnership(
  */
 export const OWNED_LEAD_OUTCOME_REFUSAL =
   "This is a lead you added yourself. Delete it instead — reject, discard and close only apply to leads supplied by Stayful.";
+
+/**
+ * Why the BUYER of a resold lead cannot discard it.
+ *
+ * Discard is the one outcome refused to both parties, and this half is not
+ * about ownership at all: discarding decrements `assignment_count`, which would
+ * put the lead back under its cap with nothing left recording that it has
+ * already been sold once — so ordinary routing would sell it again and the cap
+ * of one would be breached by the single path that also destroys the evidence
+ * (§19.6's argument, in its original form). 0107 raises inside
+ * `discard_lead_assignment`; this is the sentence the customer reads.
+ *
+ * Reject and close are both open to them, and either records the outcome.
+ */
+export const RESOLD_LEAD_DISCARD_REFUSAL =
+  "This lead can't be discarded. Reject it or close it instead — both record the outcome and neither costs you anything.";

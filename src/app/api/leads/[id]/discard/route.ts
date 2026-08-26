@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   OWNED_LEAD_OUTCOME_REFUSAL,
+  RESOLD_LEAD_DISCARD_REFUSAL,
   getLeadOwnership,
 } from "@/lib/customerLeads";
 
@@ -74,16 +75,34 @@ export async function POST(
     );
   }
 
-  // THE IMPORTANT ONE. Discard deletes the assignment row and decrements
+  // THE IMPORTANT ONE, and the only outcome refused to BOTH parties — for two
+  // different reasons.
+  //
+  // For the UPLOADER: discard deletes the assignment row and decrements
   // assignment_count to put the lead back into circulation. On a lead the
   // customer owns that would leave the `leads` row alive with NO assignment —
   // invisible to its owner under leads_select_assigned, gone from their feed,
   // and unreachable by the delete control, which resolves the lead through the
-  // owner's assignment. Refused here rather than relying on the UI hiding it.
+  // owner's assignment.
+  //
+  // For the BUYER of a resold lead (§32): that same decrement reopens the slot
+  // while nothing records that the lead has already been sold once, so ordinary
+  // routing would sell it again — the cap of one breached by the single path
+  // that also destroys the evidence. They have reject and close instead.
+  //
+  // Refused here rather than relying on the UI hiding it; 0107 also raises
+  // inside discard_lead_assignment, which is the authority.
   const ownership = await getLeadOwnership(admin, params.id);
   if (ownership?.ownerCustomerId) {
+    // The assignment was already proved to be this user's above, so its
+    // customer_id IS the caller.
+    const callerId = (assignment as { customer_id?: string }).customer_id;
+    const isOwner = ownership.ownerCustomerId === callerId;
     return NextResponse.json(
-      { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
+      {
+        error: isOwner ? OWNED_LEAD_OUTCOME_REFUSAL : RESOLD_LEAD_DISCARD_REFUSAL,
+        code: "owned_lead",
+      },
       { status: 400 }
     );
   }

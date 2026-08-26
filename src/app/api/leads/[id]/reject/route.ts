@@ -58,8 +58,13 @@ export async function POST(req: NextRequest) {
   // A lead the customer added themselves cannot be rejected: rejection is a
   // settled, chargeable outcome on a lead WE sold them (0019), and nothing was
   // sold here. Delete is the verb for their own leads.
+  //
+  // ⚠️ Refused only when the CALLER is the owner, not whenever the lead has
+  // one. Since §32 an analysed owned lead can be sold to one other operator,
+  // and that buyer paid £15 for it — refusing them this would leave them
+  // holding a lead they cannot record an outcome on.
   const ownership = await getAssignmentLeadOwnership(admin, assignment_id);
-  if (ownership?.ownerCustomerId) {
+  if (ownership?.ownerCustomerId === customer.id) {
     return NextResponse.json(
       { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
       { status: 400 }

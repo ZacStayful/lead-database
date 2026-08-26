@@ -92,6 +92,10 @@ export async function GET(
       "id, lead_name, postcode, lead_type, assignment_count, max_assignments, created_at"
     )
     .eq("lead_type", leadType)
+    // A customer's own lead is never swapped in — it belongs to whoever added
+    // it, and admin_swap_lead_assignment refuses one (0107). Filtered here as
+    // well, because an offered control that 400s reads as a bug (§18E).
+    .is("owner_customer_id", null)
     .is("withdrawn_at", null)
     .order("created_at", { ascending: false })
     .limit(200);

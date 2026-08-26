@@ -318,7 +318,17 @@ export function LeadDetail({
   // lead you own, and the API refuses the other three regardless of this.
   const isOwnLead = Boolean(lead.owner_customer_id);
 
-  const canDiscard = status === "new" && !hasNotes && !isOwnLead;
+  // A RESOLD lead is excluded too, and the buyer is who that catches. Discard
+  // decrements assignment_count, which would reopen the slot on a lead already
+  // sold once (§32.6) — the API refuses it and 0107 raises inside the function,
+  // so offering the button here would only ever produce a 400. `isOwnLead` does
+  // not cover them: viewerScopedLead has nulled the owner id they cannot see,
+  // which is exactly the point of it.
+  //
+  // owner_resale_qualified_at survives that scoping deliberately — it says a
+  // lead was analysed and is shared, and identifies nobody.
+  const isResoldLead = Boolean(lead.owner_resale_qualified_at);
+  const canDiscard = status === "new" && !hasNotes && !isOwnLead && !isResoldLead;
 
   // Once this customer has rejected the lead the stage is read-only. Rejection
   // is their own settled decision on their own assignment — another operator
@@ -398,7 +408,11 @@ export function LeadDetail({
               <Badge
                 variant="outline"
                 className="border-transparent bg-sky-100 text-sky-700"
-                title="You added this lead yourself. It is only visible to you."
+                title={
+                  isResoldLead
+                    ? "You added this lead yourself."
+                    : "You added this lead yourself. It is only visible to you."
+                }
               >
                 Your lead
               </Badge>
@@ -760,9 +774,9 @@ export function LeadDetail({
             ) : (
               <div className="rounded-xl border border-black/10 bg-white p-4">
                 <p className="mb-3 text-sm text-[#52514e]">
-                  Delete this lead for good? You added it yourself, so it is
-                  only in your database — its notes and files go with it, and it
-                  cannot be undone.
+                  {isResoldLead
+                    ? "Remove this lead from your database? Your notes and files on it go with it, and it cannot be undone."
+                    : "Delete this lead for good? You added it yourself, so it is only in your database — its notes and files go with it, and it cannot be undone."}
                 </p>
                 <div className="flex gap-2">
                   <button

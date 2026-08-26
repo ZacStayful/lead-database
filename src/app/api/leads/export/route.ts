@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDateTime } from "@/lib/utils";
-import { leadSourceLabel } from "@/lib/customerLeads";
+import { leadSourceLabel, viewerScopedLead } from "@/lib/customerLeads";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 
@@ -32,11 +32,19 @@ export async function GET() {
     return NextResponse.json({ error: "No customer record" }, { status: 404 });
   }
 
-  const { data: assignments } = await admin
+  const { data: assignmentsRaw } = await admin
     .from("lead_assignments")
     .select("*, lead:leads(*)")
     .eq("customer_id", customer.id)
     .order("assigned_at", { ascending: false });
+
+  // Same scoping as the dashboard surfaces: a lead resold from another operator
+  // carries their customer id and their leftover spreadsheet material in
+  // lead_profile, and neither belongs in this customer's export.
+  const assignments = (assignmentsRaw ?? []).map((a) => ({
+    ...a,
+    lead: viewerScopedLead(a.lead as { owner_customer_id?: string | null } | null, customer.id),
+  }));
 
   // Pull every note for this customer and group by assignment so each exported
   // lead carries its full, timestamped contact history in one cell.

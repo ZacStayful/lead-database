@@ -5,7 +5,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import {
   GR_PLANS,
+  allocationForPriceIds,
   grAllocationForPriceIds,
+  isPlanAllocation,
   grPlanForAllocation,
   isGuaranteedRentPriceId,
   planForAllocation,
@@ -17,7 +19,14 @@ import {
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
-import { applyPendingPlanChange } from "@/lib/planChanges";
+import {
+  applyPendingPlanChange,
+  repriceFilterForecast,
+} from "@/lib/planChanges";
+import {
+  driftMessage,
+  resolveCreditAllocation,
+} from "@/lib/allocationCredit";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -430,12 +439,27 @@ export async function POST(request: NextRequest) {
           if (grAllocation) {
             const { data: grRow } = await admin
               .from("customers")
-              .select("gr_stripe_price_id, gr_pending_monthly_allocation")
+              .select(
+                "gr_stripe_price_id, gr_pending_monthly_allocation, gr_stripe_subscription_id, gr_monthly_allocation"
+              )
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
             const deferred =
               grRow?.gr_pending_monthly_allocation === grAllocation;
-            if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0] && !deferred) {
+            // A new subscription is a change too — see the management twin.
+            const grNewSubscription = grRow
+              ? (grRow.gr_stripe_subscription_id as string | null) !== sub.id
+              : false;
+            const grRowIsTier = isPlanAllocation(
+              "guaranteed_rent",
+              (grRow?.gr_monthly_allocation as number | null) ?? 10
+            );
+            if (
+              grRow &&
+              grRowIsTier &&
+              (grRow.gr_stripe_price_id !== subPriceIds[0] || grNewSubscription) &&
+              !deferred
+            ) {
               update.gr_monthly_allocation = grAllocation;
             }
           }
@@ -456,12 +480,96 @@ export async function POST(request: NextRequest) {
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
+
+          // Re-size monthly_allocation when — and only when — the management
+          // subscription's PRICE changes. The GR half above has done this since
+          // its £300/20 plan launched; management was left without it, and this
+          // is that gap.
+          //
+          // WHY IT MATTERS: `/api/customer/subscribe` writes monthly_allocation
+          // BEFORE creating the Checkout Session (§17's "one trap"), so the
+          // column is a note about what somebody was ABOUT to buy. Anyone who
+          // looks at both plans before buying leaves that note on whichever they
+          // clicked LAST, not on what they paid for — and `invoice.paid` used to
+          // credit the note. A customer who considered the £300/20 plan, thought
+          // better of it and bought the £150/10 plan was credited 20 leads a
+          // month, indefinitely. No scheming required.
+          //
+          // Keyed on "the price is not the one we last recorded" rather than on
+          // the event type or on a bare disagreement. That distinction is the
+          // whole design: an allocation an admin has hand-edited while the price
+          // stayed put is a COMP and is never touched — the silent re-sizing §17
+          // and §24 both declined — while a first payment has no recorded price
+          // and therefore always corrects. An unrecognised price changes nothing.
+          //
+          // Same §24 exception as GR: a self-serve tier change carries its own
+          // pending column and is applied at the next paid invoice, so stepping
+          // in here would re-size the customer a month early.
+          const mgmtAllocation = allocationForPriceIds(subPriceIds);
+          if (mgmtAllocation) {
+            const { data: mgmtRow } = await admin
+              .from("customers")
+              .select(
+                "stripe_price_id, pending_monthly_allocation, stripe_subscription_id, monthly_allocation"
+              )
+              .eq("stripe_customer_id", customerId)
+              .maybeSingle();
+            const deferred =
+              mgmtRow?.pending_monthly_allocation === mgmtAllocation;
+
+            // ⚠️ A NULL RECORDED PRICE MEANS "NEVER OBSERVED", NOT "CHANGED".
+            // stripe_price_id arrived in 0088 with no backfill, so every
+            // customer who predates it carries null until their first
+            // subscription event after this deploys. Treating that as a change
+            // would re-size them from their price — and a comped customer would
+            // silently lose their comp on the very event that was only meant to
+            // record what they are billed on.
+            //
+            // On `created` there is nothing to protect: the subscription is new,
+            // so no comp can exist against it yet and the price is the truth.
+            // On `updated`/`deleted` with nothing recorded, we record the price
+            // and leave the allocation alone.
+            const recordedPrice = mgmtRow?.stripe_price_id ?? null;
+            const priceChanged =
+              recordedPrice === null
+                ? event.type === "customer.subscription.created"
+                : recordedPrice !== subPriceIds[0];
+
+            // A NEW SUBSCRIPTION IS A CHANGE, whatever the price says. A
+            // customer who cancels and re-subscribes to the tier they held
+            // before (§32.3) has an unchanged price, so the test above fires
+            // nothing — and this same event stamps the new subscription id, so
+            // `invoice.paid` then sees an established subscription and credits
+            // the stale row. Both halves of the fix would miss them.
+            //
+            // Nothing is being protected here: the comp, if there was one, was
+            // attached to a subscription that no longer exists.
+            const newSubscription = mgmtRow
+              ? (mgmtRow.stripe_subscription_id as string | null) !== sub.id
+              : false;
+
+            // A bespoke allocation is never normalised — see isPlanAllocation.
+            // The management invite route leaves such a row alone on purpose, so
+            // re-sizing it here would undo a deliberate arrangement.
+            const mgmtRowIsTier = isPlanAllocation(
+              "management",
+              (mgmtRow?.monthly_allocation as number | null) ?? 20
+            );
+            if (
+              mgmtRow &&
+              mgmtRowIsTier &&
+              (priceChanged || newSubscription) &&
+              !deferred
+            ) {
+              update.monthly_allocation = mgmtAllocation;
+            }
+          }
+
           // Recorded for symmetry with gr_stripe_price_id, and because which
           // price a management customer is actually billed on was otherwise
-          // invisible to admin (0088). OBSERVABILITY ONLY: deliberately no
-          // allocation re-size follows it. §17 declined to introduce silent
-          // re-sizing on the management side, and a self-serve tier change
-          // carries its own pending column rather than being inferred here.
+          // invisible to admin (0088). It is now also the change detector the
+          // re-size above reads — the row is read BEFORE this write, so the
+          // comparison is against the previously stored id.
           update.stripe_price_id = subPriceIds[0] ?? null;
           // A cancelled management subscription must release its capacity slot —
           // capacity is counted by account_status = 'active'. GR cancellations
@@ -528,6 +636,23 @@ export async function POST(request: NextRequest) {
           .from("customers")
           .update(update)
           .or(customerMatchFilter(customerId, isGuaranteedRent));
+
+        // If that update re-sized the allocation, the stored filter forecast has
+        // to move with it (§28.3) — the same call applyPendingPlanChange makes.
+        // Needs the customer id, which this branch matches on Stripe ids rather
+        // than carrying, so it is read back only when a re-size actually landed.
+        const resized = isGuaranteedRent
+          ? update.gr_monthly_allocation
+          : update.monthly_allocation;
+        if (typeof resized === "number" && existing?.id) {
+          await repriceFilterForecast(
+            admin,
+            existing.id,
+            isGuaranteedRent ? "guaranteed_rent" : "management",
+            resized,
+            `${event.type}/resize`
+          );
+        }
 
         // Resume detection (management only). If the management subscription is
         // NOT paused in Stripe but our record still marks it paused, the customer
@@ -663,7 +788,9 @@ export async function POST(request: NextRequest) {
             // Payment Link (0056). Match on either.
             let { data: customer } = await admin
               .from("customers")
-              .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
+              .select(
+                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+              )
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
 
@@ -704,7 +831,9 @@ export async function POST(request: NextRequest) {
                   }
                   const { data: linked } = await admin
                     .from("customers")
-                    .select("id, gr_monthly_allocation, gr_pending_monthly_allocation")
+                    .select(
+                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+              )
                     .eq("id", result.customerId)
                     .maybeSingle();
                   customer = linked ?? null;
@@ -749,18 +878,67 @@ export async function POST(request: NextRequest) {
               "invoice.paid"
             );
 
-            const grCredits = grPlanForAllocation(grAllocationNow).leads;
+            // BELIEVE THE INVOICE at activation, exactly as management does.
+            //
+            // GR has had the price-keyed re-size on `customer.subscription.*`
+            // since its £300/20 plan launched, but that leaves the same race
+            // management had: Stripe does not guarantee the subscription event
+            // arrives before `invoice.paid`, and `credit_invoice` is idempotent
+            // per invoice — so a stale row at this moment is a permanently wrong
+            // credit for that cycle, not something the next event repairs. The
+            // GR checkout route writes gr_monthly_allocation before redirecting
+            // just as the management one does, so the stale row is reachable the
+            // same way.
+            const grDecision = resolveCreditAllocation({
+              invoiceAllocation: grInvoiceAllocation,
+              rowAllocation: grAllocationNow,
+              isActivatingInvoice:
+                subscriptionId !== null &&
+                (customer.gr_stripe_subscription_id as string | null) !==
+                  subscriptionId,
+              rowIsPlanTier: isPlanAllocation("guaranteed_rent", grAllocationNow),
+              pendingAllocation: customer.gr_pending_monthly_allocation ?? null,
+            });
 
-            // The row is the source of truth, but if it disagrees with the
-            // price actually being billed, somebody is being over- or
-            // under-credited every month. Log it loudly rather than papering
-            // over it — this is the one signal that a GR checkout was created
-            // without its allocation being set first. A pending tier change is
-            // not drift — it has just been applied above, so the two agree.
-            if (grInvoiceAllocation && grInvoiceAllocation !== grCredits) {
+            const grCredits = grPlanForAllocation(grDecision.allocation).leads;
+
+            // Reported whichever side won. When the ROW won this is a deliberate
+            // allocation or a mistake, and only a human can tell which.
+            if (grDecision.drift && grInvoiceAllocation != null) {
               console.error(
-                `GR allocation drift for customer ${customer.id}: invoice price implies ${grInvoiceAllocation} leads but gr_monthly_allocation credits ${grCredits}. Crediting ${grCredits} — correct gr_monthly_allocation in admin.`
+                driftMessage(
+                  customer.id,
+                  "guaranteed rent",
+                  grDecision,
+                  grInvoiceAllocation,
+                  grAllocationNow
+                )
               );
+            }
+
+            // Correct the row too, so pacing and capacity follow the money.
+            // Only ever reached at activation, so this cannot act on a proration
+            // line or a stale past_due invoice.
+            if (grDecision.fromInvoice) {
+              const { error: grResizeError } = await admin
+                .from("customers")
+                .update({ gr_monthly_allocation: grDecision.allocation })
+                .eq("id", customer.id);
+              if (grResizeError) {
+                console.error(
+                  "invoice.paid: could not correct gr_monthly_allocation",
+                  customer.id,
+                  grResizeError
+                );
+              } else {
+                await repriceFilterForecast(
+                  admin,
+                  customer.id,
+                  "guaranteed_rent",
+                  grDecision.allocation,
+                  "invoice.paid"
+                );
+              }
             }
 
             // Idempotent, invoice-keyed credit: records the paid invoice and
@@ -817,7 +995,9 @@ export async function POST(request: NextRequest) {
           // size the credit and detect a mismatched Stripe id.
           let { data: customer } = await admin
             .from("customers")
-            .select("id, monthly_allocation, pending_monthly_allocation")
+            .select(
+              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id"
+            )
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
 
@@ -873,7 +1053,9 @@ export async function POST(request: NextRequest) {
                 }
                 const { data: linked } = await admin
                   .from("customers")
-                  .select("id, monthly_allocation, pending_monthly_allocation")
+                  .select(
+              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id"
+            )
                   .eq("id", result.customerId)
                   .maybeSingle();
                 customer = linked ?? null;
@@ -895,6 +1077,12 @@ export async function POST(request: NextRequest) {
           // Applied only when the invoice's own price agrees with the pending
           // figure — so an allocation an admin has hand-edited is still never
           // silently re-sized from an invoice, which is the line §17 drew.
+          // Strict, not `allocationFromPrices`: §24's safety is that the
+          // invoice's own price must AGREE with the pending figure, and a helper
+          // that guesses from the subtotal and defaults to 20 can manufacture
+          // that agreement for a price it never recognised. GR already passes
+          // the strict one.
+          const invoiceAllocation = allocationForPriceIds(priceIds);
           const allocationNow = await applyPendingPlanChange(
             admin,
             {
@@ -902,12 +1090,95 @@ export async function POST(request: NextRequest) {
               leadType: "management",
               currentAllocation: customer.monthly_allocation ?? 20,
               pendingAllocation: customer.pending_monthly_allocation ?? null,
-              invoiceAllocation: allocationFromPrices(priceIds, invoice.subtotal),
+              invoiceAllocation,
             },
             "invoice.paid"
           );
 
-          const credits = planForAllocation(allocationNow).leads;
+          // BELIEVE THE INVOICE, not the row.
+          //
+          // monthly_allocation is written before the customer ever reaches
+          // Stripe (§17's trap), so it is a note about what somebody was about
+          // to buy. This is where that note used to decide the credit — and a
+          // customer who browsed both plans before buying left it on the wrong
+          // one, and was credited the wrong number of leads every month for as
+          // long as they stayed. No scheming required.
+          //
+          // The re-size in customer.subscription.* already corrects the row, but
+          // Stripe does not guarantee that event arrives first, and
+          // `credit_invoice` is idempotent per invoice — so a stale row at THIS
+          // moment is a permanently wrong credit for this cycle. The same
+          // predicate therefore runs here, from one shared function, so the two
+          // cannot disagree.
+          //
+          // Strict allocation only: `allocationFromPrices` guesses from the
+          // subtotal and defaults to 20, which is the wrong failure direction
+          // when it decides what somebody is given.
+          //
+          // Activation is "an invoice for a subscription we have not recorded
+          // yet", not "the customer's first ever payment". A cancel-and-return
+          // customer (§32.3) HAS paid before, and if they come back to the tier
+          // they previously held the subscription branch sees no price change
+          // either — so the bug would survive for exactly the population that
+          // flow was built for. A re-subscription is a new Stripe subscription
+          // id, which this catches.
+          const decision = resolveCreditAllocation({
+            invoiceAllocation,
+            rowAllocation: allocationNow,
+            isActivatingInvoice:
+              subscriptionId !== null &&
+              (customer.stripe_subscription_id as string | null) !== subscriptionId,
+            rowIsPlanTier: isPlanAllocation("management", allocationNow),
+            pendingAllocation: customer.pending_monthly_allocation ?? null,
+          });
+
+          const credits = planForAllocation(decision.allocation).leads;
+
+          // Reported whichever side won. When the ROW won this is a deliberate
+          // allocation or a mistake, and only a human can tell which — so the
+          // message says which case it is rather than leaving two bare numbers.
+          if (decision.drift && invoiceAllocation != null) {
+            console.error(
+              driftMessage(
+                customer.id,
+                "management",
+                decision,
+                invoiceAllocation,
+                allocationNow
+              )
+            );
+          }
+
+          // Correct the row too, so pacing and capacity follow the money rather
+          // than staying on the stale note. Only ever reached at activation —
+          // see resolveCreditAllocation — so this cannot act on a proration
+          // line or a stale past_due invoice. Best-effort: the credit below is
+          // what matters, and the subscription event re-sizes it anyway.
+          if (decision.fromInvoice) {
+            const { error: resizeError } = await admin
+              .from("customers")
+              .update({ monthly_allocation: decision.allocation })
+              .eq("id", customer.id);
+            if (resizeError) {
+              console.error(
+                "invoice.paid: could not correct monthly_allocation",
+                customer.id,
+                resizeError
+              );
+            } else {
+              // An allocation change has to take the stored filter forecast with
+              // it (§28.3), as applyPendingPlanChange does — otherwise a
+              // re-size down leaves a quoted count above the new cap, priced
+              // against the plan they are no longer on.
+              await repriceFilterForecast(
+                admin,
+                customer.id,
+                "management",
+                decision.allocation,
+                "invoice.paid"
+              );
+            }
+          }
 
           // Idempotent, invoice-keyed credit: records the paid invoice and moves
           // lead_balance in a single transaction. A replayed delivery of an
@@ -972,6 +1243,12 @@ export async function POST(request: NextRequest) {
             subscription_status: "active",
             updated_at: new Date().toISOString(),
           };
+          // Record which subscription this invoice was for, as the GR half
+          // already does. That column is what tells the NEXT invoice it is not
+          // an activation — without it, a customer whose subscription.* events
+          // never land reads as activating on every renewal, and a deliberate
+          // allocation would be re-credited from the price month after month.
+          if (subscriptionId) renewalUpdate.stripe_subscription_id = subscriptionId;
           const renewalAnchor = toDateString(invoice.period_start);
           if (renewalAnchor) renewalUpdate.billing_cycle_anchor = renewalAnchor;
 

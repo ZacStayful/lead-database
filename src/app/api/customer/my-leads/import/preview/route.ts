@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { holdsProduct } from "@/lib/products";
+import { availableLeadTypes } from "@/lib/products";
 import {
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
@@ -92,7 +92,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No customer record" }, { status: 404 });
   }
 
-  if (!holdsProduct(customer as Customer, leadType)) {
+  // Held or previously held — see the note on the manual-add route. The commit
+  // half needs no equivalent check: it re-reads lead_type off the staged
+  // lead_imports row rather than taking it from the request.
+  if (!availableLeadTypes(customer as Customer).includes(leadType)) {
     return NextResponse.json(
       { error: "You do not hold that product" },
       { status: 403 }

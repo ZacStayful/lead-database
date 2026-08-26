@@ -119,6 +119,24 @@ export function planForProductAllocation(
  * The £300/20 plan keeps its historical env var `STRIPE_MONTHLY_PRICE_ID` for
  * backwards compatibility; a newer `STRIPE_PRICE_ID_20` overrides it if set.
  */
+/**
+ * Whether a stored allocation is one of the tiers we actually sell.
+ *
+ * ⚠️ THE GUARD THAT PROTECTS A BESPOKE ALLOCATION. An admin may set any integer
+ * (`/api/admin/customers/[id]/allocation`), and the MANAGEMENT invite route
+ * deliberately does not normalise it — a customer comped 30 leads is invoiced at
+ * the nearest plan and keeps their 30 for pacing and capacity.
+ *
+ * Nothing that re-sizes from a Stripe price may touch such a row. `30` is not a
+ * disagreement with the £300 price, it is a deliberate arrangement the price
+ * cannot express, and rewriting it to 20 would silently change what that
+ * customer is owed. Only a row already sitting on a tier can be a mis-set tier.
+ */
+export function isPlanAllocation(leadType: LeadType, allocation: number): boolean {
+  const table = leadType === "guaranteed_rent" ? GR_PLANS : PLANS;
+  return Object.values(table).some((plan) => plan.leads === allocation);
+}
+
 export function stripePriceIdFor(allocation: number): string {
   const plan = planForAllocation(allocation);
   const id =
@@ -180,16 +198,68 @@ export function isGuaranteedRentPriceId(priceIds: string[]): boolean {
 }
 
 /**
+ * The MANAGEMENT allocation implied by a set of price ids, or null if none is a
+ * known management price. The twin of `grAllocationForPriceIds` below.
+ *
+ * ⚠️ STRICT, AND THAT IS THE ENTIRE POINT. The webhook's own
+ * `allocationFromPrices()` never returns null — for an unrecognised price it
+ * guesses from the invoice subtotal and returns **20** for a null subtotal, a £0
+ * invoice, or anything at or above £225. That is fine for the post-call-offer
+ * LABEL it was written for, and unsafe as the basis of a credit: a guess that
+ * defaults to the larger tier is exactly the wrong failure direction when it
+ * decides how many leads somebody is given.
+ *
+ * Returning null is what lets the caller say "I do not recognise this price, so
+ * leave the customer's row alone" — which is the correct answer for a Payment
+ * Link on a price object that is not in env, and for a comped or bespoke
+ * subscription.
+ *
+ * Honours `STRIPE_MONTHLY_PRICE_ID`, the historical alias for the £300/20 plan
+ * that `stripePriceIdFor` still accepts. Omitting it would read an existing
+ * 20-lead subscriber on the old id as "unrecognised".
+ */
+export function allocationForPriceIds(priceIds: string[]): number | null {
+  const found = new Set<number>();
+  for (const plan of Object.values(PLANS)) {
+    const configured = process.env[plan.priceEnv];
+    if (configured && priceIds.includes(configured)) found.add(plan.leads);
+  }
+  const legacyTwenty = process.env.STRIPE_MONTHLY_PRICE_ID;
+  if (legacyTwenty && priceIds.includes(legacyTwenty)) found.add(PLANS.lead_20.leads);
+
+  // ⚠️ AMBIGUOUS IS NOT A TIER. An invoice carries every line, so an upgrade
+  // made with default proration puts BOTH prices on the next invoice — the old
+  // one as a proration credit and the new one as the subscription line. Taking
+  // the first match in plan order would read that £300 invoice as the 10-lead
+  // plan, and since the row would then be rewritten to match, it would never
+  // self-heal: from the next renewal onward the recorded and invoice prices
+  // agree and the wrong figure wins.
+  //
+  // We cannot tell which line is the subscription from the price ids alone, so
+  // two tiers means we do not know — and not knowing falls back to the row,
+  // exactly as an unrecognised price does.
+  if (found.size !== 1) return null;
+  return Array.from(found)[0];
+}
+
+/**
  * The GR allocation implied by a set of price ids, or null if none is a known
  * GR price. Used only to detect drift against the customer row — never to
  * overwrite a hand-edited allocation. See the webhook's credit path.
  */
 export function grAllocationForPriceIds(priceIds: string[]): number | null {
+  const found = new Set<number>();
   for (const plan of Object.values(GR_PLANS)) {
     const configured = process.env[plan.priceEnv];
-    if (configured && priceIds.includes(configured)) return plan.leads;
+    if (configured && priceIds.includes(configured)) found.add(plan.leads);
   }
-  return null;
+  // Ambiguous is not a tier — see the note on allocationForPriceIds above. This
+  // guard matters more than it used to: since §33 this function can overrule the
+  // row and rewrite gr_monthly_allocation, so a proration invoice carrying both
+  // GR prices would otherwise resolve to 10 (lead_10 is first in GR_PLANS) and
+  // permanently halve a £300/20 subscriber.
+  if (found.size !== 1) return null;
+  return Array.from(found)[0];
 }
 
 /**

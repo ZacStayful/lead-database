@@ -112,11 +112,23 @@ export function otherProduct(leadType: LeadType): LeadType {
   return leadType === "management" ? "guaranteed_rent" : "management";
 }
 
-/** Customer fields the product-holding helpers read. */
+/** Customer fields `holdsProduct` reads. */
 export type ProductCustomerFields = Pick<
   Customer,
   "account_status" | "subscription_status" | "gr_subscription_status"
 >;
+
+/**
+ * Customer fields the "have they EVER held this" helpers read.
+ *
+ * Deliberately a wider type than `ProductCustomerFields` rather than a widening
+ * OF it: `holdsProduct` answers a question about the present and needs three
+ * columns, and several callers select exactly those three. Making them all
+ * fetch two cancellation timestamps they never look at would be the tail
+ * wagging the dog.
+ */
+export type ProductHistoryFields = ProductCustomerFields &
+  Pick<Customer, "cancelled_at" | "gr_cancelled_at">;
 
 /**
  * Whether the customer currently HOLDS this product.
@@ -145,6 +157,60 @@ export function holdsProduct(
     customer.account_status === "active" ||
     customer.subscription_status === "active" ||
     customer.subscription_status === "past_due"
+  );
+}
+
+/**
+ * Whether the customer USED to hold this product and no longer does.
+ *
+ * The distinction this draws is between somebody who left and somebody who
+ * never arrived, and it is load-bearing in two places: a returning customer may
+ * re-subscribe self-serve (§17's 403 exists to keep self-serve ACQUISITION
+ * retired, not to strand a customer who has already paid us), and an
+ * unsubscribed customer keeps the database free for the products they held.
+ *
+ * `cancelled_at` / `gr_cancelled_at` (0064) are the right test because the
+ * Stripe webhook is the only writer and only ever stamps them on a real
+ * cancellation. A waitlisted or invited account has never had one, so it can
+ * never satisfy this — which is exactly the guarantee §17 needs.
+ *
+ * Per product, per invariant 6. Management also accepts
+ * `account_status = 'cancelled'`, which is the same state read the §18E admin
+ * invite gate uses, and covers a row cancelled before 0064 added the timestamp.
+ * GR has no `account_status` of its own, so the timestamp is all there is.
+ */
+export function previouslyHeldProduct(
+  customer: ProductHistoryFields,
+  leadType: LeadType
+): boolean {
+  if (holdsProduct(customer, leadType)) return false;
+  if (leadType === "guaranteed_rent") {
+    return Boolean(customer.gr_cancelled_at);
+  }
+  return Boolean(customer.cancelled_at) || customer.account_status === "cancelled";
+}
+
+/**
+ * The products this customer may file their OWN leads under.
+ *
+ * Held, or previously held. A cancelled customer keeps the database free — they
+ * simply receive no new allocated leads — so the gate on adding leads is not
+ * "are you paying" but "is this a pipeline you have ever run".
+ *
+ * Resolved from history rather than offered as a free choice, because
+ * `lead_type` is not cosmetic: `create_customer_leads` scopes its duplicate
+ * check to (owner, lead_type), pipeline stages differ per product, and the
+ * analysis route filters on it. A customer flipping a selector would get silent
+ * duplicates spread across two pipelines.
+ *
+ * Empty for an account that has never held anything — a waitlisted prospect gets
+ * support, not self-serve (§17), and that refusal is the caller's to render.
+ */
+export function availableLeadTypes(customer: ProductHistoryFields): LeadType[] {
+  const all: LeadType[] = ["management", "guaranteed_rent"];
+  return all.filter(
+    (leadType) =>
+      holdsProduct(customer, leadType) || previouslyHeldProduct(customer, leadType)
   );
 }
 

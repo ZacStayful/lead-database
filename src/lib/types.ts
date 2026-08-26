@@ -75,6 +75,16 @@ export interface Customer {
   // cancellation wins, matching cancelled_at. Management-only.
   cancellation_feedback: string | null;
   cancellation_comment: string | null;
+  /**
+   * When the management subscription was first cancelled (0064). Stamped by the
+   * Stripe webhook, first cancellation winning, and cleared only on a genuine
+   * change of mind (active and no longer scheduled to cancel).
+   *
+   * Non-null is the durable record that this customer once PAID for management,
+   * which is what `previouslyHeldProduct()` reads to tell a returning customer
+   * apart from a waitlisted prospect who never subscribed.
+   */
+  cancelled_at: string | null;
   first_login_at: string | null;
   last_assignment_at: string | null;
   billing_cycle_anchor: string | null;
@@ -86,6 +96,9 @@ export interface Customer {
    *  `stripe_customer_id` — i.e. a GR Payment Link purchase (0056). NULL means
    *  GR shares the management Stripe customer. */
   gr_stripe_customer_id: string | null;
+  /** gr_ mirror of cancelled_at (0064). GR has no `account_status`, so this is
+   *  the only durable record that a customer once held Guaranteed Rent. */
+  gr_cancelled_at: string | null;
   gr_monthly_allocation: number;
   /** gr_ mirror of pending_monthly_allocation (0088). */
   gr_pending_monthly_allocation: number | null;
@@ -314,6 +327,21 @@ export interface Lead {
   owner_customer_id: string | null;
   /** How an owned lead arrived. Always null exactly when owner_customer_id is. */
   owner_source: "import" | "manual" | null;
+  /**
+   * Whether this owned lead MAY become sellable to one other operator (0108).
+   *
+   * Consent, stamped true at creation and never changed. False on every lead
+   * uploaded before 0108, which is the whole of the new-uploads-only rule —
+   * those can never become sellable however they are analysed later.
+   */
+  owner_resale_allowed: boolean;
+  /**
+   * When a paid analysis returned trustworthy figures and this owned lead became
+   * sellable (0108). Non-null IS the sellable state: it is what
+   * `lead_retired_from_allocation` reads, and `max_assignments` went to 2 in the
+   * same statement that stamped it.
+   */
+  owner_resale_qualified_at: string | null;
   lead_name: string;
   address: string | null;
   phone: string | null;

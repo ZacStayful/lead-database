@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { viewerScopedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer } from "@/lib/auth";
 import { fetchOrderedAssignments } from "@/lib/leadOrder";
 import { PriorityLeadsList } from "@/components/dashboard/PriorityLeadsList";
@@ -18,7 +19,12 @@ export default async function PriorityLeadsPage() {
   if (!user) redirect("/login");
   if (!customer) redirect("/dashboard");
 
-  const assignments = await fetchOrderedAssignments(customer.id, "priority");
+  // Scoped to this viewer, as on the feed and the detail page: a lead sold on
+  // from another operator carries THEIR customer id, which is not the buyer's
+  // to see (§32.8).
+  const assignments = (await fetchOrderedAssignments(customer.id, "priority")).map(
+    (a) => ({ ...a, lead: viewerScopedLead(a.lead, customer.id) })
+  ) as Awaited<ReturnType<typeof fetchOrderedAssignments>>;
 
   return (
     <div className="space-y-6">

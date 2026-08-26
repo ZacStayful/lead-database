@@ -17,6 +17,8 @@ import { runLeadAnalysis } from "./analyserClient";
 import { incomeReportPatch } from "./incomeReport";
 import { syncStoredReport } from "./incomeReportStorage";
 import { analysability, buildOutcomeFromAnalyserResponse } from "./leadAnalysis";
+import { autoAssignLead } from "./ingest";
+import type { Lead } from "./types";
 
 /** A claimed row, joined to the lead it is about. */
 export interface ClaimedAnalysisRow {
@@ -28,7 +30,14 @@ export interface ClaimedAnalysisRow {
 }
 
 export type RowResult =
-  | { kind: "succeeded" }
+  | {
+      kind: "succeeded";
+      /**
+       * Set when this run made a customer's own lead sellable (§32). The CALLER
+       * routes it, after recording the row as succeeded — see `qualifyOwnedLead`.
+       */
+       routeLeadId?: string;
+    }
   /** Terminal for this row. It is chargeable, so the finaliser will refund it. */
   | { kind: "failed"; errorCode: string; message: string }
   /** Put back for another attempt; the attempt is already spent. */
@@ -141,5 +150,84 @@ export async function processAnalysisRow(
     return { kind: "retry", errorCode: "write_failed", message: writeError.message };
   }
 
-  return { kind: "succeeded" };
+  // ── The lead is now analysed, which is what makes it sellable ─────
+  //
+  // A customer's own lead goes to exactly one other operator once a PAID
+  // analysis has returned figures we trust (§32). Everything above is that
+  // condition: a `quality_ok = false` run — the analyser's tell-tale for a
+  // synthetic estimate — and every other failure returned long before here, so
+  // reaching this line IS the qualification.
+  const qualified = await qualifyOwnedLead(admin, typed.id);
+
+  return qualified
+    ? { kind: "succeeded", routeLeadId: typed.id }
+    : { kind: "succeeded" };
 }
+
+/**
+ * Mark an analysed owned lead sellable. One UPDATE, and nothing else.
+ *
+ * MAY NOT FAIL THE ROW. The customer paid for figures and has them, so the row
+ * is a success whatever happens here; a missed qualification costs a resale
+ * nobody was owed, and the RPC is idempotent so a later re-run picks it up.
+ *
+ * ⚠️ Routing is deliberately NOT done here. `autoAssignLead` runs two candidate
+ * RPCs, the assign RPC and then an unbounded set of Resend and SMS sends, and
+ * this function is called inside the worker's 46-second reserve — which was
+ * sized for a write-back, not for that. A slow tail would kill the invocation
+ * before `status: 'succeeded'` is written, leaving a paid row looking unfinished
+ * or, worse, stopping between the credit spend and the buyer's notification.
+ * The caller routes instead, once the row is safely recorded.
+ */
+async function qualifyOwnedLead(admin: SupabaseClient, leadId: string): Promise<boolean> {
+  const { data: qualified, error } = await admin.rpc(
+    "qualify_owned_lead_for_resale",
+    { p_lead_id: leadId }
+  );
+
+  if (error) {
+    console.error("leadAnalysisRun: qualify failed", leadId, error);
+    return false;
+  }
+
+  // False is the ordinary case, not a fault: every marketplace lead read off
+  // Monday comes through here too, and so does a paid RE-RUN of a lead already
+  // qualified. The RPC's own predicates decide, and it is idempotent.
+  return Boolean(qualified);
+}
+
+/**
+ * Offer a newly qualified lead to its single further operator — immediately.
+ *
+ * "Immediately" is the design: there is no head-start window, so the moment the
+ * figures land the lead enters ordinary routing. This is the only automatic
+ * driver of that. `assign-pending` is an admin button with no cron entry, and
+ * the two `autoAssignLead` calls in `ingest.ts` are both inside `ingestLead`,
+ * which never sees an owned lead — they have no Monday item by construction
+ * (0102's CHECK).
+ *
+ * Best-effort. Finding no candidate is not a failure: every subscriber may be
+ * at quota, and banked leads are inventory rather than a backlog (§4).
+ */
+export async function routeQualifiedLead(
+  admin: SupabaseClient,
+  leadId: string
+): Promise<void> {
+  const { data: lead, error } = await admin
+    .from("leads")
+    .select("*")
+    .eq("id", leadId)
+    .maybeSingle();
+
+  if (error || !lead) {
+    console.error("leadAnalysisRun: could not re-read qualified lead", leadId, error);
+    return;
+  }
+
+  try {
+    await autoAssignLead(admin, lead as Lead);
+  } catch (err) {
+    console.error("leadAnalysisRun: routing a qualified lead threw", leadId, err);
+  }
+}
+

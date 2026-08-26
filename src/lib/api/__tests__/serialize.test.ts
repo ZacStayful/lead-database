@@ -144,14 +144,17 @@ describe("serializeAssignment", () => {
     lead: hostileLeadRow(),
   };
 
+  /** The caller these rows belong to — serializeAssignment scopes to it. */
+  const VIEWER = "customer-1";
+
   it("emits exactly the documented field set", () => {
-    expect(Object.keys(serializeAssignment(row)).sort()).toEqual(
+    expect(Object.keys(serializeAssignment(row, VIEWER)).sort()).toEqual(
       EXPECTED_ASSIGNMENT_FIELDS
     );
   });
 
   it("drops customer_id and our own delivery mechanics", () => {
-    const out = serializeAssignment(row);
+    const out = serializeAssignment(row, VIEWER);
     expect(out).not.toHaveProperty("customer_id");
     expect(out).not.toHaveProperty("notification_sent");
     expect(out).not.toHaveProperty("email_sent");
@@ -159,16 +162,16 @@ describe("serializeAssignment", () => {
   });
 
   it("derives source from the pool-claim marker rather than exposing it", () => {
-    expect(serializeAssignment(row).source).toBe("allocated");
+    expect(serializeAssignment(row, VIEWER).source).toBe("allocated");
     expect(
-      serializeAssignment({ ...row, claimed_from_pool_at: "2026-08-04T00:00:00Z" })
+      serializeAssignment({ ...row, claimed_from_pool_at: "2026-08-04T00:00:00Z" }, VIEWER)
         .source
     ).toBe("pool_claim");
-    expect(serializeAssignment(row)).not.toHaveProperty("claimed_from_pool_at");
+    expect(serializeAssignment(row, VIEWER)).not.toHaveProperty("claimed_from_pool_at");
   });
 
   it("keeps Stayful's projection and the operator's estimate separate", () => {
-    const out = serializeAssignment(row);
+    const out = serializeAssignment(row, VIEWER);
     expect(out.income_estimate).toBe(1500);
     expect((out.lead as Record<string, unknown>).gross_annual_income).toBe(36112);
   });

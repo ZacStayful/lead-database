@@ -4,7 +4,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
 import { getStripe } from "@/lib/stripe";
-import { processAnalysisRow, type ClaimedAnalysisRow } from "@/lib/leadAnalysisRun";
+import {
+  processAnalysisRow,
+  routeQualifiedLead,
+  type ClaimedAnalysisRow,
+} from "@/lib/leadAnalysisRun";
 import { settleDueRefunds } from "@/lib/leadAnalysisRefund";
 import { sendAnalysisReadyEmail } from "@/lib/emails";
 
@@ -218,6 +222,18 @@ async function handle(request: NextRequest) {
             finished_at: new Date().toISOString(),
           })
           .eq("id", row.id);
+
+        // Offer a newly qualified owned lead to its one further operator (§32).
+        //
+        // AFTER the row is recorded, deliberately. Routing runs two candidate
+        // RPCs, the assign RPC and an unbounded set of emails and texts, and
+        // the budget above was sized for a write-back. Doing it before this
+        // update would let a slow tail kill the invocation with a paid row
+        // still looking unfinished. Here the worst case is a lead that waits
+        // for the admin backstop.
+        if (result.routeLeadId) {
+          await routeQualifiedLead(admin, result.routeLeadId);
+        }
         continue;
       }
 

@@ -735,6 +735,13 @@ paying, already on a Stripe customer record. Two guards keep it that way:
    waitlisted accounts, and checkout here would be a way to jump the queue.
    They still see the descriptions; the call to action is support.
 
+⚠️ **Guard 2 gained one exception in §32.3**: a customer who once HELD this
+product may buy it back. `previouslyHeldProduct()` reads `cancelled_at` /
+`gr_cancelled_at`, which only a real cancellation ever stamps, so a waitlisted
+prospect still cannot satisfy it — self-serve **acquisition** stays retired, and
+that is now structural rather than a matter of care. The exception is per
+product: having once held management buys management back, not GR.
+
 **Nothing in the route grants a product.** The Stripe webhook does that, routing
 by price id: `invoice.paid` credits the leads and promotes `account_status` out
 of `invited`/`waitlisted`. So a self-serve buyer lands in exactly the same state
@@ -757,10 +764,23 @@ an admin invite produces so the webhook needs no special case. Abandoning
 checkout leaves the column inert — it gates nothing for a customer who does not
 hold management.
 
-An `allocationFromPrices()` helper already exists in the webhook and would fix
+~~An `allocationFromPrices()` helper already exists in the webhook and would fix
 this at source, but it is only used for post-call-offer labelling; switching the
 credit onto it would silently re-size any hand-edited allocation that disagrees
-with its price, so it was left alone.
+with its price, so it was left alone.~~
+
+⚠️ **Corrected. The management side is now backstopped, on GR's rule** — see
+§33. The objection above was sound but it conflated two things: crediting from
+the price, and re-sizing a hand-edited row. The fix does the first without the
+second, by testing whether the **price has MOVED** from the one we last recorded
+rather than whether it merely disagrees. A comp — row edited, price untouched —
+is still never re-sized, which is the line this paragraph was drawing. A first
+payment has no recorded price and therefore always corrects, which is where the
+trap actually bit.
+
+`allocationFromPrices()` is still not the helper for it: it never returns null,
+guessing from the subtotal and defaulting to **20**. `allocationForPriceIds()`
+in `plans.ts` is the strict twin the credit path uses.
 
 **The same trap applies to GR**, in the opposite direction. `gr_monthly_allocation`
 defaults to **10**, so a £300/20 GR buyer left on the default is credited *half*
@@ -1565,6 +1585,12 @@ comment rather than changing behaviour. `pause_count` gates nothing.
    deficit and flood them on return.
 2. The Stripe webhook's resume-detection block — fires when `pause_collection`
    is gone, i.e. the customer resumed early through the billing portal.
+3. *(§32.3)* `POST /api/customer/subscription/resume` — the customer pressed a
+   button. Shares `resumePausedCustomer()` in `src/lib/resumePause.ts` with path
+   1 **verbatim**, so an early resume and a scheduled one cannot drift apart.
+   Unlike the cron it REFUSES a pending cancellation rather than skipping it,
+   pointing at "Keep my subscription": their subscription is on record as
+   ending, so resuming would restart collection for a period they closed.
 
 Both are guarded on `.not("paused_at","is",null)` so only the writer that
 actually flips the column sends the email, and both close the episode through
@@ -2292,8 +2318,12 @@ eventually disagree.
 
 Added for symmetry with `gr_stripe_price_id` and because which price a
 management customer is actually billed on was otherwise invisible to admin.
-**Observability only — nothing gates on it**, and deliberately no allocation
-re-size follows it.
+
+⚠️ **No longer observability only.** As of §33 it is the change detector the
+management allocation backstop reads — exactly the job `gr_stripe_price_id` has
+always done on the GR side. The §24 stand-down applies to management too now: a
+pending tier change is applied by `applyPendingPlanChange` at the next paid
+invoice, so neither the re-size nor the credit decision may step in front of it.
 
 ### Verification
 
@@ -3664,6 +3694,16 @@ feature.
 **An owned lead is never given to anybody else.** Not by ordinary routing, not
 by escalation, not by the pool, not by an admin force-assign.
 
+⚠️ **Superseded in part by §32 (0107, 0108).** An owned lead that has been
+through a PAID analysis and come back with trustworthy figures is now sold to
+exactly one other operator. The pool half of this rule is untouched and
+`lead_pool_barred()` is unchanged — owned leads still never pool, qualified or
+not. What changed is `lead_retired_from_allocation()`, which now retires an
+owned lead only while `owner_resale_qualified_at` is null, and the consequence
+for the table below: **`get_escalation_candidates` no longer inherits the
+exclusion through that function** and carries its own `owner_customer_id is
+null` clause (0107). Read §32.6 before changing anything here.
+
 That is enforced in the two functions the codebase already treats as the single
 expression of "may this lead be handed out" (invariant 11), each gaining one
 `owner_customer_id is not null` branch:
@@ -3831,6 +3871,13 @@ evidence.
 `DELETE /api/customer/my-leads/[id]` removes the lead itself and lets the 0001
 cascade take the assignment, notes, files, events and notifications. Nothing was
 charged and it was never offered to anyone, so there is no record to preserve.
+
+⚠️ **Since §32 this is only one of two modes.** Once a lead has been sold to
+another operator, deleting the `leads` row would cascade away the BUYER's
+assignment, notes and files — a lead they paid £15 for. The route now calls
+`delete_owner_lead_copy` (0107), which decides under a row lock: whole lead when
+nobody else holds it, the uploader's copy alone when somebody does. See §32.7 for
+the two things it must never do.
 "No such lead", "not yours" and "not an owned lead" all return one
 indistinguishable 404.
 
@@ -3863,7 +3910,12 @@ operators — `get_customer_engagement_scores`, `get_engagement_benchmarks`,
 `get_wins` / `get_customer_scoreboard` / `get_assignments_awaiting_outcome`,
 `capture_operator_proof` **and** `get_operator_proof` (which duplicate one
 population and must change together, §20), and the leads-scanning CTEs in
-`get_service_capacity`. All need `l.owner_customer_id is null`. They were held
+`get_service_capacity`. ~~All need `l.owner_customer_id is null`.~~ ⚠️ **That instruction is now wrong
+for at least two of them** — see §32.8. Since a customer may BUY an owned lead,
+the predicate must be `l.owner_customer_id is distinct from c.id`:
+`get_customer_engagement_scores` and `get_wins` / `get_customer_scoreboard`
+would otherwise drop a buyer's paid assignment out of their own engagement score
+and leaderboard standing. They were held
 back from 0102 deliberately: they are eight large function bodies, all
 reporting, and rewriting them beside the safety-critical work above would have
 put a transcription slip in a reporting CTE next to the code that stops a lead
@@ -4306,3 +4358,543 @@ import commit, which now quotes the offer.
 them the queue simply does not drain, which is the safe direction: nothing is
 charged for work that cannot happen. `INTERNAL_API_SECRET` must hold the **same
 value** on the analyser app.
+
+---
+
+## 32. Leaving, coming back, and reselling a lead you brought in *(0107, 0108)*
+
+Three changes that share one theme: what a customer keeps when they stop paying,
+and what happens to the leads they bring in themselves.
+
+### 32.1 — The database is free, and always was *(no migration)*
+
+A customer who pauses or cancels could already log in and read everything.
+Nothing in `middleware.ts` or `dashboard/layout.tsx` gates on subscription
+state, and `getCurrentCustomer()` resolves the row on the service role
+regardless. What was shut was the half that makes it a CRM rather than a
+delivery channel: `/dashboard/leads/add` refused them, and both
+`POST /api/customer/my-leads` and `.../import/preview` 403'd on `holdsProduct()`.
+
+So the gate became **"is this a pipeline you have ever run"**, not "are you
+paying". They keep their login, every marketplace lead already delivered with
+its notes, files, stages and export, and the ability to add and import their own
+leads free and unlimited. **The only thing that stops is new allocation.**
+
+`availableLeadTypes()` in `src/lib/products.ts` is the single definition, built
+on `previouslyHeldProduct()`:
+
+| Product | Test |
+|---|---|
+| Management | `account_status = 'cancelled'` **or** `cancelled_at` non-null |
+| Guaranteed Rent | `gr_cancelled_at` non-null (GR has no `account_status` — invariant 6) |
+
+**Those columns are the point.** The Stripe webhook is their only writer and it
+only ever stamps them on a real cancellation, so a **waitlisted or invited
+account can never satisfy them**. That is what lets the same predicate serve as
+the re-subscribe gate below without reopening self-serve acquisition.
+
+`lead_type` is resolved from history rather than offered as a free choice.
+`create_customer_leads` scopes its duplicate check to `(owner, lead_type)`,
+pipeline stages differ per product, and the analysis route filters on it — a
+selector would hand a customer silent duplicates spread across two pipelines. A
+never-subscribed account gets `[]` and keeps its existing card.
+
+**Paid lead analysis follows the same rule** (`analysisIneligibilityReason`).
+Nothing about it depends on assignment, which is the argument that already
+admitted a *paused* customer; a cancelled one is the same case. Consequence
+worth knowing: a non-subscriber can therefore generate resale supply for paying
+ones.
+
+Still gated, deliberately: goals, filtering, the expired pool, packages
+checkout, top-ups.
+
+### 32.2 — Saying so, before they decide
+
+`src/lib/retentionCopy.ts` — `KEEP_CRM_POINTS` and `keepCrmBulletsHtml()`. Four
+surfaces state this promise (the pause form, two steps of the cancel flow, both
+confirmation emails) and four copies of one promise is four chances to drift.
+The same discipline `cancelOptions.ts` uses for its reason list.
+
+Placement is part of it:
+
+- In the pause card, **above the arm button**, not inside the armed form. It can
+  only change a decision if it is read before the decision.
+- In the cancel interstitial, **below both columns**, not inside either. It is
+  equally true of pausing and cancelling; put in one column it reads as a point
+  scored for that option.
+- In the `reasons` step's consequences box, immediately above the irreversible
+  click.
+
+**The last bullet is the limitation** — no new leads are allocated. A list that
+only says what they keep reads as a sales pitch and buries the thing they most
+need to understand.
+
+"Coming back later needs a new signup" was removed from the cancel column. 32.3
+makes it false.
+
+### 32.3 — Two ways back in
+
+**Resume, for a paused customer.** `POST /api/customer/subscription/resume`.
+There was no in-app resume at all before this: the daily cron resumed them on the
+date they originally chose, and the only early exit was the Stripe billing
+portal, which is a billing screen rather than somewhere anyone looks for "send me
+leads again".
+
+`src/lib/resumePause.ts` holds the body, shared **verbatim** with
+`/api/cron/resume-paused-subscriptions` — the cron keeps its query, its
+`cancel_at_period_end = false` filter, its tallies and the pause-ending notice
+block, and its behaviour does not change. Every step of that body is
+load-bearing and none of it is worth having twice: Stripe first so a failure
+leaves the row paused for the next run; the clear **guarded on `paused_at` still
+being set**, which is what decides who sends the "you're back" email when the
+webhook races us; the pacing re-baseline that stops a stale anchor reading as a
+maximal deficit and flooding them on return; `lead_balance` untouched.
+
+The manual route **refuses a pending cancellation** rather than resuming it, and
+for a different reason than the cron's. The cron skips so it never un-pauses
+somebody behind their back; here they are asking for it, but their subscription
+is still on record as ending, so resuming would restart collection for a period
+they closed. It points at "Keep my subscription", which is self-healing — that
+clears the flag and the next daily run resumes them normally.
+
+⚠️ **The copy must not promise a charge today.** A `void` pause leaves Stripe's
+billing cycle running underneath and resuming only stops the voiding, so the next
+real charge lands at the next natural cycle boundary (§11). Leads restart
+immediately; billing does not.
+
+**Re-subscribe, for a cancelled customer.** `/api/customer/subscribe`'s 403 gains
+one exception: `previouslyHeldProduct(customer, leadType)`. A waitlisted prospect
+is still refused — that is the guard's whole purpose (§17) — and the columns
+behind the predicate make that structural rather than a matter of care.
+
+Everything else in that route stays exactly where it is: the allocation write
+**before** `checkout.sessions.create` (§17's trap), activation as the webhook's
+job, and `invoice.paid` promoting `account_status` out of `'cancelled'` (§23.9).
+Unused credits are kept (§18E).
+
+`/dashboard/packages` mirrors the gate **per product, not per page**: holding the
+other product buys either, having once held *this* one buys only this one back.
+A customer who cancelled management sees a checkout for management and support
+copy for GR, because buying GR would be acquisition.
+
+### 32.4 — One resale, and only one
+
+**An owned lead that has been ANALYSED goes to exactly one other operator.**
+
+Qualification is a **paid** analysis (§31) that returned figures we trust. A run
+rejected for `quality_ok = false` — the analyser's tell-tale for a synthetic
+estimate from `getShortLetData()` — never qualifies, and neither does a failure
+of any other kind. Those leads stay unsellable for ever.
+
+| | |
+|---|---|
+| Reach | Uploader **+ exactly 1**. Never more |
+| Price | £15, one credit, ordinary routing — indistinguishable from any other lead |
+| To the uploader | **Never.** Not by routing, not by admin, not out of the pool |
+| Pool | **Never.** Qualified or not |
+| Uploader's reward | None |
+| Notice to the uploader | **None** — see 32.8 |
+
+Two columns, because there are two questions:
+
+- **`owner_resale_allowed`** — consent, stamped `true` at creation by
+  `create_customer_leads` and never changed. This **is** the new-uploads-only
+  rule: anything added before 0108 keeps the default of `false` and can never
+  become sellable, however it is analysed later.
+- **`owner_resale_qualified_at`** — the event. Non-null **is** the sellable
+  state, and it is what `lead_retired_from_allocation` reads.
+
+**A property of the row rather than a clock, deliberately.** The obvious
+alternative is a cutoff timestamp in `system_settings` compared against
+`created_at` — the `reclaim_enabled_from` shape (§7). Rejected: a global like
+that is one bad read from enrolling the entire back catalogue at once, and it
+does not survive a restore into a different timeline. A per-row boolean
+defaulting to `false` fails in the safe direction by construction.
+
+`qualify_owned_lead_for_resale()` is **claim-by-write** (the `credit_invoice`
+discipline, §19.5) and every clause in its `WHERE` is load-bearing:
+
+| Clause | Why |
+|---|---|
+| `owner_resale_qualified_at is null` | Idempotent. The worker retries on a failed write, and a customer may buy a **re-run** of an already-analysed lead — neither may raise the cap twice |
+| `max_assignments = 1` | Refuses to overwrite a cap an admin moved by hand. Better unsellable than silently rewritten |
+| `gross_annual_income is not null` | The same test `/admin/imported-leads` uses for "analysed" (§31.11), **not** `income_report_status = 'parsed'` — which is also true of a marketplace lead read off Monday |
+| `postcode_area is not null` | ⚠️ **Not redundant.** It is what `get_filtered_candidates_for_lead` matches on, so a lead without one reaches unfiltered customers only — sold, quietly, to the wrong half of the book. `analysability()` already refuses a lead with no clear postcode, so this should never bite; if it does, the lead stays unsellable rather than mis-routed |
+
+The cap goes to 2 **in the same statement** that stamps the timestamp, so the
+sellable state and the room to sell into can never disagree.
+
+### 32.5 — A clear postcode is already the price of entry
+
+`analysability()` in `src/lib/leadAnalysis.ts` refuses `no_postcode` and
+`ambiguous_postcode`, and `analysisQuote()` drops those rows from the quote. So
+a customer **cannot pay** to analyse a lead without a clear postcode, and
+nothing can qualify for resale without one. Nothing enforces this beyond what
+was already there — which is the point: a resold lead carries the same shape as
+every other lead in the book, and routes through the same filters.
+
+### 32.6 — Every place the cap of one could break
+
+Eight paths could raise or bypass `max_assignments`. Six are SQL and are stopped
+in **0107**, which is a pure tightening migration that enables nothing:
+
+| Path | Guard |
+|---|---|
+| `escalate_lead_assignment` | raises the column by one — refused outright |
+| `get_escalation_candidates` | feeds it. Excluded **explicitly**, NOT via `lead_retired_from_allocation`, which 0108 relaxes — leaving only `max_assignments < 5`, which a qualified lead at 2 satisfies |
+| `get_reclaim_candidates` | a reclaim slot is **added on top of** `max_assignments` inside `assign_lead_to_customer` |
+| `assign_lead_to_customer` | caps owned leads at `least(max_assignments, 2)` under the lock, and ignores reclaim slots for them entirely |
+| `admin_swap_lead_assignment` | rewrites `max_assignments = assignment_count` on the outgoing lead, which would silently **un-qualify** a sold lead. Both directions refused |
+| `discard_lead_assignment` | decrements `assignment_count`, reopening the slot (§19.6's argument) |
+
+Two are **not** in SQL and could not be guarded there:
+
+- **The contention branch in `ingest.ts`** — the dangerous one. It writes
+  `max_assignments: 4` straight through PostgREST, bypassing the row lock and
+  every 0107 guard, and its own `.lt("max_assignments", 4)` predicate is no
+  protection because a qualified lead sits at 2. `shouldRaiseContentionCap()`
+  in `src/lib/leadResale.ts` excludes owned leads, qualified or not.
+- **`PATCH /api/admin/leads/[id]`** — refuses an owned lead outright.
+
+**The pool is not on that list**, because owned leads never enter it.
+`lead_pool_barred()` keeps its `owner_customer_id is not null` clause, unchanged
+and deliberately so. Until 0108 that function and
+`lead_retired_from_allocation()` agreed by coincidence; **from here they mean
+different things**, which is why only one of them moved. `customer_can_see_pool_lead`
+gains the owner exclusion anyway — a second independent bar, and the one that
+answers "the uploader must never be offered their own lead back; they already
+have it on their system". `claim_pool_lead` calls that same function before it
+locks, so one clause covers the listing and the claim (§19.4).
+
+### 32.7 — The uploader is excluded EXPLICITLY, and why that is new
+
+Every candidate function skips a customer who already holds an assignment for
+the lead, and the uploader holds one — so they were excluded incidentally.
+**`delete_owner_lead_copy` breaks that**, and it is why the explicit
+`c.id is distinct from l.owner_customer_id` had to be added to all three
+candidate functions and to `assign_lead_to_customer` under its row lock.
+
+Delete now has two modes, chosen **under a row lock inside the function**:
+
+| | |
+|---|---|
+| Nobody else holds it | The lead goes, as before. Nothing was charged and it was never offered to anyone |
+| Somebody bought it | Only the uploader's copy goes. The buyer keeps the lead, notes, files and stages they paid £15 for |
+
+An RPC because of the lock: reading "does anyone else hold this?" in TypeScript
+and then deleting leaves a window for a resale to land in between, and the route
+then destroys a lead somebody bought a moment earlier.
+
+Two things it must never do: **decrement `assignment_count`** (the freed slot
+would outlive the deleted row, and routing would sell the lead again) and
+**null `owner_customer_id`** (it is the provenance, and it is what stops the
+lead being sold back to its uploader). The uploader loses sight of it through
+the existing `leads_select_assigned` policy, which is the intended effect.
+
+The file cleanup is scoped to the caller's own assignment for the same reason —
+deleting by lead id would take the buyer's attachments with the uploader's.
+
+### 32.8 — Ownership is relative to the reader
+
+`isOwnedLead()` and `leadSourceLabel()` asked whether a lead **has** an owner,
+which stopped being the same question as whether it is **yours**. Read as a bare
+null check, the buyer of a resold lead is told *"Your lead · you added this
+yourself, it is only visible to you"*, gets "Added by you" in their export, is
+offered a Delete that 404s, and **cannot reject or close a lead they paid £15
+for**. Three of those are on the first screen.
+
+`leadSourceLabel` needed no new parameter: an assignment row already carries the
+`customer_id` it belongs to. A resold lead reads **"Allocated"** to its buyer —
+true, and silent about the operator who brought it in (§19.7).
+
+**`viewerScopedLead()` nulls another customer's id at the page boundary**, and
+**their `lead_profile` with it.** The customer lead surfaces select
+`lead:leads(*)`, so a resold lead would otherwise ship the uploader's primary key
+to the buyer's browser. It does **not** replace the viewer argument: server-side
+callers read the columns directly and must never depend on a sanitisation step
+having run upstream — which is why the export and `serializeAssignment` call it
+explicitly, the latter taking the viewer as a REQUIRED parameter because
+`customer_id` is in `NEVER_EXPOSED` and therefore never selected.
+
+⚠️ **The profile is the half that matters.** On a marketplace lead that column is
+our own qualification blurb, written to be read by whoever holds the lead. On an
+IMPORTED one it is whatever the spreadsheet had left over: `leadImport.ts` folds
+every column it could not map into it as `Header: value`, plus every column
+mapped to notes. That is the uploader's own working material — margins, source
+attribution, "will take 12%, spoke to Dave" — and handing it to a competing
+operator is a different act from handing over the landlord's phone number. We
+cannot tell the useful lines from the private ones, so the buyer gets none of
+them; they still receive the contact details, the address, the bedrooms and the
+full analysis, which is everything needed to price a call.
+
+⚠️ **It is a presentation control, not a security boundary.**
+`leads_select_assigned` (0014) grants any holder `select` on the whole `leads`
+row, so a buyer with their own Supabase session can read both columns from the
+browser directly. What that yields is an opaque customer UUID that resolves to
+nothing (`customers` is select-own) and text they were arguably sold. Anything
+that must be genuinely unreachable needs RLS or a column that is never selected.
+
+Reject and close now refuse only when the caller **is** the owner. **Discard
+stays refused for both parties**, for different reasons — for the uploader it
+would strand a lead they own and cannot see; for the buyer it reopens the slot.
+They have reject and close.
+
+Two aggregates were counting backwards and are now viewer-relative:
+`/dashboard/analytics` would have scored a bought lead as the buyer's **own
+sourcing**, and the goals won count excluded every lead with an owner including
+one the buyer paid for. §30.8's "imported fifty clients and marked them won"
+argument is about the **uploader's** book, not somebody else's.
+
+⚠️ **This corrects §30.8's instruction for the unwritten 0103.** Those eight
+reporting functions need `l.owner_customer_id is distinct from c.id`, **not**
+`is null` — at least `get_customer_engagement_scores` and
+`get_wins`/`get_customer_scoreboard`, which would otherwise drop a buyer's paid
+assignment out of their own engagement score and leaderboard standing.
+
+### 32.9 — What is deliberately unchanged
+
+- **`find_duplicate_lead()` stays blind to owned leads** (§30.1). A private copy
+  must never make a real Monday enquiry look like a duplicate and get discarded.
+  ⚠️ The accepted consequence: **one landlord can be sold both as a resold owned
+  lead and, separately, as an ordinary marketplace lead** — possibly to the same
+  operator. The two rows are distinct `leads` ids and nothing refuses it. "Why
+  have I got this landlord twice" is a support answer, not a bug.
+- **The §28 / §30.8 exclusions stay.** `fetchLeadVolumeData`, `publicStats` and
+  the admin counters still filter owned leads out, so resale supply is invisible
+  to the filter forecast and the public ticker. Resale volume depends on how
+  many customers upload *and* pay £3 *and* pass the quality gate — none of which
+  we can forecast — and under-quoting a filter is the safe direction. It does
+  mean a customer's forecast reads low by exactly the leads we then deliver
+  them, which is worth revisiting if resale ever becomes material.
+- **`parse-income-reports` must keep its exclusion regardless.** A resold lead
+  still has no `monday_item_id`, and feeding null into Monday's `items(ids:)`
+  fails nightly for ever (§30.8).
+- **Nothing tells the uploader.** No opt-in tick, no notice on the import
+  screens, no line in the £3 purchase flow, and nothing on the lead itself
+  saying it has been matched to another operator. A settled product decision,
+  recorded here so the behaviour is discoverable in the codebase even though it
+  is not surfaced in the product.
+
+### Verification
+
+Scratch Postgres 16 from empty, all 103 migrations, 0107 and 0108 each
+re-applied twice for idempotency. Every redefined function confirmed
+`service_role`-only by `has_function_privilege`, and invariant 7 re-checked on
+the four that must stay `authenticated`-executable.
+
+**0107 asserts nothing changed**: a marketplace lead still not retired, not
+pool-barred, still returning candidates, still allocating and spending exactly
+one credit, still deduping; an owned lead still retired, still pool-barred,
+absent from pool and escalation candidates, refused by both assign functions,
+and invisible to `find_duplicate_lead`. Then the new guards: swap refused in
+both directions, discard refused, and `delete_owner_lead_copy` returning
+`lead_deleted` / `copy_deleted` / `not_found` with `assignment_count` and
+`owner_customer_id` **untouched** on the copy path — and the buyer's row intact.
+
+**0108's 22 assertions** cover qualification refusing a lead with no figures,
+succeeding once they exist, raising the cap 1 → 2, being idempotent on a second
+call, the lead leaving retirement, **the uploader never appearing as a
+candidate** (including with their assignment row deleted, which is the case the
+explicit exclusion exists for), the one resale landing and spending a credit, a
+**second resale refused**, selling back to the uploader refused, the cap holding
+under the row lock **even with `max_assignments` forced to 5**, and a pre-0108
+upload never qualifying.
+
+353 vitest cases green; `npm run build` passes.
+
+**Not rehearsed against live Stripe.** The re-subscribe checkout and the manual
+resume join §12's standing list (the tier swap, the cancel flow) — test mode
+before relying on them.
+
+### Deployment order — migrations BEFORE code, and 0107 BEFORE 0108
+
+**0107 first, verified to have changed nothing, and only then 0108.** Landed
+together, a transcription slip in an exclusion clause goes live at the same
+instant as the relaxation it guards against, and the symptom is a customer's
+private lead sold to a competitor.
+
+Code after both. `ingest.ts`, the analysis worker and `assign-pending` all
+select `owner_resale_qualified_at`, and §30's own account records what code
+arriving first costs: a preview returned "Could not find the function … in the
+schema cache", and worse, `fetchLeadVolumeData` swallowed the error and quoted
+**zero** volume while the admin tile read 0.
+
+One gap is intended and worth stating so it is not mistaken for drift: leads
+uploaded between 0108 and the code get `owner_resale_allowed = true` and are
+never qualified, because nothing writes the stamp yet.
+
+---
+
+## 33. Believe the invoice, not the note *(no migration)*
+
+`/api/customer/subscribe` writes `monthly_allocation` **before** creating the
+Stripe Checkout Session — §17 calls this "the one trap" — and `invoice.paid`
+credited from that row rather than from the invoice. The row is a note about
+what somebody was **about to** buy; the invoice is what they actually bought.
+When the two disagreed, the note won.
+
+### It is not an exploit, it is ordinary browsing
+
+Nobody has to be scheming. Anyone who looks at **both plans before buying**
+leaves the note on whichever they clicked *last*, not on what they paid for:
+
+1. Click £150/10 → note says `10`, Stripe session A opens for £150.
+2. Click £300/20 → note is overwritten to `20`, session B opens for £300.
+3. Pay session A — **£150**.
+4. `invoice.paid` reads the note: `20`. Credits **20 leads**.
+5. Every month after: **£150 charged, 20 leads delivered.**
+
+Ten extra leads a month at £15 is **£150/month given away**, per customer,
+indefinitely — the £300 plan for £150.
+
+**And it was invisible**, which is why it survived: admin MRR is computed as
+`planForAllocation(monthly_allocation).priceGbp` summed
+(`src/app/admin/page.tsx`), so that customer also *reports* as £300 of revenue.
+The over-delivery and the over-reporting point opposite ways and cancel out on
+the dashboard. Everything reads consistent while money leaves at both ends.
+
+### Two jobs, split by who can see the truth
+
+The row is kept honest by **`customer.subscription.*`**, which reads the
+subscription's CURRENT price. The credit is decided at **`invoice.paid`**, which
+overrules the row in exactly one circumstance: a subscription's **activating
+invoice** — the first invoice for a Stripe subscription we have not recorded
+against that customer yet.
+
+**Both products.** GR has had the price-keyed re-size since its £300/20 plan
+launched, but it had the same activation race and the same pre-payment write in
+its checkout route, so it gets the same override from the same function.
+
+| | Who decides | Result |
+|---|---|---|
+| Activating invoice (incl. a re-subscribe) | invoice | credit the price, correct the row |
+| Tier change (portal, admin) | subscription event | re-size the row; the invoice never chases it |
+| **Comp** — admin sets 20 on a £150 sub | neither | row wins, drift logged. Never re-sized |
+| Comp on a customer who cancels and returns | invoice | reset from the price. The comp was attached to a subscription that no longer exists; the log says to re-apply it |
+| Ordinary renewal | — | row wins |
+| Unrecognised **or ambiguous** price | — | row wins, no drift reported |
+| **Bespoke allocation** — admin sets 30 | neither | row wins, drift logged. Never normalised to a tier |
+
+**Why the invoice only acts at activation.** That is the one moment the row can
+be stale — nothing has corrected it yet — and the one moment no comp can exist,
+because that subscription has never been billed to comp against. Afterwards an invoice is a
+*worse* authority than the subscription: an upgrade with default proration puts
+**both** tiers on the next invoice, and a `past_due` charge collected after an
+upgrade is at a price the customer has already left. Acting on either would
+downgrade somebody permanently, because from the next renewal nothing
+re-examines it.
+
+⚠️ **Activation is PER SUBSCRIPTION, not per customer.** "Has this customer ever
+paid us" is the wrong question: a cancel-and-return customer (§32.3) has paid
+before, and if they come back to the tier they previously held the subscription
+branch sees no price change either — so the bug would survive untouched for
+exactly the population that flow was built for. A re-subscription is a new
+Stripe subscription id, so the test compares the invoice's subscription against
+`(gr_)stripe_subscription_id`.
+
+Deliberately **not** inferred from a null `stripe_price_id`: that column arrived
+in 0088 with no backfill, so a long-standing comped customer can still be
+carrying null, and reading that as activation would strip the comp this design
+exists to protect. `stripe_subscription_id` predates it by a long way and is now
+stamped at every paid invoice on both products, so a row that lacks one is
+either genuinely new or has never had a subscription at all (a comped account —
+§18A — which never reaches `invoice.paid`).
+
+⚠️ **A BESPOKE ALLOCATION IS NEVER NORMALISED**, at activation or anywhere else.
+`/api/admin/customers/[id]/allocation` accepts any integer, and the MANAGEMENT
+invite route deliberately does not round it to a tier (only the GR half does) —
+a customer comped 30 leads is invoiced at the nearest plan and keeps their 30
+for pacing and weighted capacity. `30` is not a disagreement with the £300
+price; it is an arrangement the price cannot express, and rewriting it to 20
+would silently change what that customer is owed.
+
+So every re-size and the credit decision are gated on `isPlanAllocation()`:
+only a row already sitting on a tier can be a MIS-SET tier, which is the only
+thing any of this is here to correct. The disagreement is still logged.
+
+**A new subscription id is a change too**, on both halves. A customer who
+cancels and returns to the tier they previously held has an unchanged price, so
+a price-only test fires nothing — and the same event stamps the new subscription
+id, so `invoice.paid` then reads an established subscription and credits the
+stale row. Nothing is protected by holding back: any comp was attached to a
+subscription that no longer exists.
+
+The null-is-not-a-change rule governs the rest of the re-size: on
+`customer.subscription.created` the price is the truth (nothing to protect
+yet); on `updated`/`deleted` with nothing recorded we record the price and leave
+the allocation alone.
+
+⚠️ **Accepted gap.** That last case loses one tier change: a pre-0088 row whose
+first post-deploy event is an `updated` that is also a price change records the
+new price without re-sizing, and no later event can detect a move that has
+already been absorbed. The alternative — re-sizing on it — strips a comp, which
+is the thing §17 and §24 spent two sections refusing. It is not silent either
+way: the invoice-time drift log fires every month for as long as the row and the
+price disagree, which is what makes it correctable rather than lost.
+
+**This is GR's rule.** Guaranteed Rent has had the price-keyed re-size since its
+£300/20 plan launched (`gr_stripe_price_id !== subPriceIds[0]`). Management was
+deliberately left without it. §33 closes that gap.
+
+### Three pieces
+
+- **`allocationForPriceIds()`** in `plans.ts` — the strict twin of
+  `grAllocationForPriceIds`. ⚠️ **Do not reach for `allocationFromPrices()`
+  instead**: it never returns null, guessing from the invoice subtotal and
+  returning **20** for a null subtotal, a £0 invoice, or any unrecognised price
+  at or above £225. Fine for the post-call-offer label it was written for, and
+  the wrong failure direction for a credit. Returning null is what lets a
+  bespoke or Payment-Link price mean "leave the row alone". Honours
+  `STRIPE_MONTHLY_PRICE_ID`, the historical alias for the £300/20 plan.
+- **`resolveCreditAllocation()`** in `allocationCredit.ts` — the decision, pure.
+  Extracted rather than inlined because the Stripe webhook is the least testable
+  file in the repo and this is the part of it that decides money. The whole
+  credit path had **zero** test coverage before this.
+- **The webhook**, from that one function so the sites cannot disagree:
+  `customer.subscription.*` re-sizes the row, and `invoice.paid` decides the
+  credit and logs drift. **Both products**, both halves.
+
+Every re-size calls `repriceFilterForecast` (§28.3), as
+`applyPendingPlanChange` already did — an allocation change that left the stored
+forecast behind would quote a count above the new cap at the old plan's price.
+
+### Why the credit decision is duplicated at the invoice
+
+The re-size alone would be enough if Stripe guaranteed
+`customer.subscription.created` arrives before `invoice.paid`. It does not — and
+`credit_invoice()` is idempotent per invoice (§19.5), so a stale row at invoice
+time is a **permanently** wrong credit for that cycle, not something the next
+event repairs. Hence the same test in both places.
+
+### Drift is always reported, and says which case it is
+
+Mirroring GR's message, with one addition: it states whether the price moved.
+From two bare numbers a deliberate comp and a mistake are indistinguishable, and
+only a human can tell them apart — so the log says which it is looking at and,
+when the row won, points at admin.
+
+### Verification
+
+**19 cases** in `src/lib/__tests__/allocationCredit.test.ts`. The decision: the
+bug itself (activating invoice, stale row → credit the invoice), the mirror case
+(paid more than the row says → do not under-credit), the comp preserved, a cancel-and-return
+customer, the §24 pending stand-down, an unrelated pending change that must NOT
+shield drift, an unrecognised price, a post-fix renewal, and — the guard against
+everything the review caught — that after activation the row wins in **both**
+directions.
+The helper: each tier, the historical price id, unknown prices, a repeat of one
+tier, an unrelated line item, and the **two-tier proration invoice that must
+resolve to null**.
+
+**Not rehearsed against live Stripe** — §12's standing item. Before relying on
+it: subscribe at the £150/10 price with the row hand-set to 20 and confirm the
+first invoice credits **10**, the row is corrected and the drift line appears;
+then hand-edit the row to 20 with the price unchanged and confirm the next
+renewal credits **20** and does not re-size.
+
+### Still true, and still worth fixing separately
+
+**Admin MRR is derived from the allocation column, not from Stripe.** That is
+what hid this bug. The drift log now surfaces a disagreement, but the revenue
+figure still infers price from allocation. Pointing it at Stripe is a separate,
+larger change.

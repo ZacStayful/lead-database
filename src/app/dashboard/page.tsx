@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { viewerScopedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,7 +57,13 @@ export default async function DashboardPage() {
     .eq("customer_id", customer.id)
     .order("assigned_at", { ascending: false });
 
-  const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
+  // Scope each lead to this viewer before it reaches the client: a lead sold
+  // on from another operator carries THEIR customer id, which is not the
+  // buyer's to see (§32).
+  const assignments = ((assignmentsRaw ?? []) as AssignmentWithLead[]).map((a) => ({
+    ...a,
+    lead: viewerScopedLead(a.lead, customer.id),
+  })) as AssignmentWithLead[];
   const unreadLeads = assignments.filter((a) => !a.viewed_at).length;
 
   // Shown on the audience rule alone, so a customer who turned announcement
