@@ -1,8 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  FEATURE_REQUEST_LABEL,
+  FEATURE_REQUEST_PATH,
+  FEATURE_REQUEST_PROMPT,
+} from "@/lib/featureRequest";
 
 /**
  * The dashboard copy of an announcement.
@@ -83,6 +90,22 @@ export function AnnouncementBanner({
           {linkLabel} →
         </a>
       )}
+
+      {/*
+        The feature-request ask. Unconditional, exactly as in the email — every
+        announcement carries it, and no column or toggle governs it.
+
+        It sits INSIDE the dismissible card on purpose: dismissing the notice
+        dismisses the ask with it, because this is part of the notice rather than
+        a permanent dashboard fixture. The footer link in dashboard/layout.tsx is
+        the always-available route to the same form.
+      */}
+      <div className="mt-4 border-t border-brand/20 pt-3">
+        <p className="text-xs text-muted-foreground">{FEATURE_REQUEST_PROMPT}</p>
+        <Button asChild variant="outline" size="sm" className="mt-2">
+          <Link href={FEATURE_REQUEST_PATH}>{FEATURE_REQUEST_LABEL}</Link>
+        </Button>
+      </div>
     </div>
   );
 }
