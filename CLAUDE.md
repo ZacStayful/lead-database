@@ -1846,6 +1846,64 @@ the type, `PREFERENCE_KEYS`/`DEFAULT_PREFERENCES` in the settings route,
 `PREFERENCE_ROWS` **and** the `useState` initialiser in `SettingsPanel`, and the
 migration's default plus `||` backfill.
 
+### 21.8 — The feature-request button *(no migration)*
+
+Every announcement — email and banner — carries a **Request a feature** button
+under the content. Announcements were the one channel that was not lead-shaped,
+and they were also one-way; this makes each notice a prompt for the operators to
+say what they want built next.
+
+**It reuses the flow that already existed.** `/feedback?type=feature`
+(`src/app/feedback/page.tsx` → `/api/feedback` → `sendFeedbackEmail`) prefills
+from the signed-in customer and emails `FEEDBACK_EMAIL`. Nothing is persisted,
+there is no table and no admin screen, and the dashboard footer has linked the
+same page since long before this. A second feature-request flow beside it would
+be two inboxes and two definitions of the same ask.
+
+**Unconditional, with no column and no toggle.** It renders whether or not the
+admin set a CTA link, on every audience, in the `[TEST]` copy, and on the banner.
+Nothing about an announcement can suppress it — which is what keeps the email and
+the banner from ever disagreeing about whether the ask is present.
+
+`src/lib/featureRequest.ts` is the one definition of the path, prompt and label,
+shared by `sendAnnouncementEmail` and `AnnouncementBanner` — the same discipline
+as `announcementTargetsCustomer` (§21.1) and `customer_can_see_pool_lead` (§19.4).
+**It must stay import-free**: the banner is a `"use client"` component, so these
+constants cannot live in `announcements.ts`, which pulls in supabase-js for
+`fetchAnnouncementCandidates`.
+
+The email uses an outlined `secondaryButton()` rather than `button()`. Two
+brand-filled buttons stacked read as a choice between equals, and on an
+announcement the admin's own call to action is the one that matters. On the
+banner the block sits INSIDE the dismissible card: dismissing the notice
+dismisses the ask with it, because it is part of the notice rather than a
+permanent dashboard fixture.
+
+#### ⚠️ The email URL goes through `esc()`, and every other one does not
+
+`?type=feature&page=Announcement` is the **only href in `emails.ts` carrying a
+query string** — every other `button()` call passes a bare path. So the comment
+above `${cta}`, which explains why the admin's `linkUrl` skips `esc()`, does not
+cover it: `new URL().toString()` percent-encodes the quote that would break out
+of the attribute but leaves `&` alone, and a raw `&` between two query params is
+not valid in an `href`. `esc()` replaces `&` before `<` and `>`, so it yields
+`&amp;` with no double-escaping. Verified in Chromium: the browser parses the
+attribute back to `?type=feature&page=Announcement`.
+
+#### `page=Announcement` is attribution, and it is invisible on this form
+
+It seeds the feedback form's page field, so a request that came from an
+announcement says `Page: Announcement` in the team email — which is the only way
+to tell whether this button does anything.
+
+⚠️ **`FeedbackForm` renders that input under `isBug &&`, so it is bug-only.** On
+a feature request the value is still seeded into form state and still posted (the
+submit body is `{ type, ...form }`) and still reaches the email; it is simply
+never shown. Verified end to end by driving the real form. That is deliberate —
+the attribution is ours, not a question we are asking the customer — but it means
+the field is *not* editable on this path, and widening it to feature requests is
+a decision about the feature form, not a fix.
+
 ### Verification
 
 All 85 migrations applied to a scratch Postgres 16 from empty; every CHECK and

@@ -12,7 +12,19 @@ export function FeedbackForm({
   defaults,
 }: {
   initialType?: FeedbackType;
-  defaults?: { name?: string; email?: string; business?: string };
+  defaults?: {
+    name?: string;
+    email?: string;
+    business?: string;
+    /**
+     * Seeds `form.page`. On a BUG report that fills the visible "Which page or
+     * screen?" input; on a feature request the field is not rendered (see the
+     * `isBug &&` guard below) and the value travels invisibly in the submit
+     * body, which is how ?page= attributes a request to where it came from.
+     * See src/app/feedback/page.tsx.
+     */
+    page?: string;
+  };
 }) {
   const [type, setType] = useState<FeedbackType>(initialType);
   const [form, setForm] = useState({
@@ -21,7 +33,7 @@ export function FeedbackForm({
     business: defaults?.business ?? "",
     subject: "",
     details: "",
-    page: "",
+    page: defaults?.page ?? "",
   });
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);

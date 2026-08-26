@@ -1,5 +1,10 @@
 import { Resend } from "resend";
 import { APP_URL, LOGIN_URL } from "@/lib/env";
+import {
+  FEATURE_REQUEST_LABEL,
+  FEATURE_REQUEST_PATH,
+  FEATURE_REQUEST_PROMPT,
+} from "@/lib/featureRequest";
 import { extractCity } from "@/lib/utils";
 import { pauseMonthsWords } from "@/lib/pauseOptions";
 import type { Lead } from "@/lib/types";
@@ -22,6 +27,17 @@ function getResend(): Resend {
 
 function button(href: string, label: string): string {
   return `<a href="${href}" style="display:inline-block;background:${BRAND};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600;font-size:14px;margin-top:8px">${label}</a>`;
+}
+
+/**
+ * A quieter button, for an ask that must not outrank the message it sits under.
+ *
+ * Same metrics as button() so the two line up, but outlined rather than filled.
+ * Two brand-filled buttons stacked read as a choice between equals, and on an
+ * announcement the admin's own call to action is the one that matters.
+ */
+function secondaryButton(href: string, label: string): string {
+  return `<a href="${href}" style="display:inline-block;background:#ffffff;color:${BRAND};text-decoration:none;padding:12px 22px;border:1px solid ${BRAND};border-radius:6px;font-weight:600;font-size:14px;margin-top:8px">${label}</a>`;
 }
 
 function shell(inner: string): string {
@@ -999,11 +1015,33 @@ export async function sendAnnouncementEmail(params: {
       ? `<div style="margin-top:4px">${button(linkUrl, esc(linkLabel))}</div>`
       : "";
 
+  // The feature-request ask, on every announcement. Unconditional: it carries no
+  // column and no toggle, so it rides both a notice with a CTA and one without.
+  //
+  // ⚠️ esc() ON THE URL, and it is doing real work. This is the ONLY href in this
+  // file carrying a query string — every other button() call passes a bare path —
+  // so the reasoning in the ${cta} comment above does NOT cover it. There the URL
+  // skips esc() because new URL().toString() percent-encodes the quote that would
+  // break out of the attribute; but it leaves `&` alone, and a raw `&` between two
+  // query params is not valid in an href. esc() replaces `&` before `<` and `>`,
+  // so it yields `&amp;` with no double-escaping, which parses back to the real
+  // URL in every client. The label and prompt are hard-coded, so they need none.
+  const featureRequest = `
+    <div style="margin-top:20px;padding-top:18px;border-top:1px solid #e6e8e5">
+      <p style="margin:0 0 4px;font-size:13px;color:#6b706a">${FEATURE_REQUEST_PROMPT}</p>
+      ${secondaryButton(
+        esc(`${APP_URL}${FEATURE_REQUEST_PATH}`),
+        FEATURE_REQUEST_LABEL
+      )}
+    </div>
+  `;
+
   const inner = `
     <h1 style="margin:0 0 14px;font-size:18px">${esc(title)}</h1>
     ${greeting}
     ${bodyHtml}
     ${cta}
+    ${featureRequest}
     <p style="margin:22px 0 0;color:#8a8f88;font-size:11px">
       You can turn announcements off under Notifications in your
       <a href="${APP_URL}/dashboard/settings" style="color:#8a8f88">dashboard settings</a>.
