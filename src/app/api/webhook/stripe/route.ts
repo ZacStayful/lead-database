@@ -438,12 +438,22 @@ export async function POST(request: NextRequest) {
           if (grAllocation) {
             const { data: grRow } = await admin
               .from("customers")
-              .select("gr_stripe_price_id, gr_pending_monthly_allocation")
+              .select(
+                "gr_stripe_price_id, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+              )
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
             const deferred =
               grRow?.gr_pending_monthly_allocation === grAllocation;
-            if (grRow && grRow.gr_stripe_price_id !== subPriceIds[0] && !deferred) {
+            // A new subscription is a change too — see the management twin.
+            const grNewSubscription = grRow
+              ? (grRow.gr_stripe_subscription_id as string | null) !== sub.id
+              : false;
+            if (
+              grRow &&
+              (grRow.gr_stripe_price_id !== subPriceIds[0] || grNewSubscription) &&
+              !deferred
+            ) {
               update.gr_monthly_allocation = grAllocation;
             }
           }
@@ -493,7 +503,9 @@ export async function POST(request: NextRequest) {
           if (mgmtAllocation) {
             const { data: mgmtRow } = await admin
               .from("customers")
-              .select("stripe_price_id, pending_monthly_allocation")
+              .select(
+                "stripe_price_id, pending_monthly_allocation, stripe_subscription_id"
+              )
               .eq("stripe_customer_id", customerId)
               .maybeSingle();
             const deferred =
@@ -517,7 +529,20 @@ export async function POST(request: NextRequest) {
                 ? event.type === "customer.subscription.created"
                 : recordedPrice !== subPriceIds[0];
 
-            if (mgmtRow && priceChanged && !deferred) {
+            // A NEW SUBSCRIPTION IS A CHANGE, whatever the price says. A
+            // customer who cancels and re-subscribes to the tier they held
+            // before (§32.3) has an unchanged price, so the test above fires
+            // nothing — and this same event stamps the new subscription id, so
+            // `invoice.paid` then sees an established subscription and credits
+            // the stale row. Both halves of the fix would miss them.
+            //
+            // Nothing is being protected here: the comp, if there was one, was
+            // attached to a subscription that no longer exists.
+            const newSubscription = mgmtRow
+              ? (mgmtRow.stripe_subscription_id as string | null) !== sub.id
+              : false;
+
+            if (mgmtRow && (priceChanged || newSubscription) && !deferred) {
               update.monthly_allocation = mgmtAllocation;
             }
           }
@@ -601,21 +626,14 @@ export async function POST(request: NextRequest) {
         const resized = isGuaranteedRent
           ? update.gr_monthly_allocation
           : update.monthly_allocation;
-        if (typeof resized === "number") {
-          const { data: resizedRow } = await admin
-            .from("customers")
-            .select("id")
-            .or(customerMatchFilter(customerId, isGuaranteedRent))
-            .maybeSingle();
-          if (resizedRow?.id) {
-            await repriceFilterForecast(
-              admin,
-              resizedRow.id as string,
-              isGuaranteedRent ? "guaranteed_rent" : "management",
-              resized,
-              `${event.type}/resize`
-            );
-          }
+        if (typeof resized === "number" && existing?.id) {
+          await repriceFilterForecast(
+            admin,
+            existing.id,
+            isGuaranteedRent ? "guaranteed_rent" : "management",
+            resized,
+            `${event.type}/resize`
+          );
         }
 
         // Resume detection (management only). If the management subscription is
@@ -1040,6 +1058,12 @@ export async function POST(request: NextRequest) {
           // Applied only when the invoice's own price agrees with the pending
           // figure — so an allocation an admin has hand-edited is still never
           // silently re-sized from an invoice, which is the line §17 drew.
+          // Strict, not `allocationFromPrices`: §24's safety is that the
+          // invoice's own price must AGREE with the pending figure, and a helper
+          // that guesses from the subtotal and defaults to 20 can manufacture
+          // that agreement for a price it never recognised. GR already passes
+          // the strict one.
+          const invoiceAllocation = allocationForPriceIds(priceIds);
           const allocationNow = await applyPendingPlanChange(
             admin,
             {
@@ -1047,7 +1071,7 @@ export async function POST(request: NextRequest) {
               leadType: "management",
               currentAllocation: customer.monthly_allocation ?? 20,
               pendingAllocation: customer.pending_monthly_allocation ?? null,
-              invoiceAllocation: allocationFromPrices(priceIds, invoice.subtotal),
+              invoiceAllocation,
             },
             "invoice.paid"
           );
@@ -1079,7 +1103,6 @@ export async function POST(request: NextRequest) {
           // either — so the bug would survive for exactly the population that
           // flow was built for. A re-subscription is a new Stripe subscription
           // id, which this catches.
-          const invoiceAllocation = allocationForPriceIds(priceIds);
           const decision = resolveCreditAllocation({
             invoiceAllocation,
             rowAllocation: allocationNow,
@@ -1200,6 +1223,12 @@ export async function POST(request: NextRequest) {
             subscription_status: "active",
             updated_at: new Date().toISOString(),
           };
+          // Record which subscription this invoice was for, as the GR half
+          // already does. That column is what tells the NEXT invoice it is not
+          // an activation — without it, a customer whose subscription.* events
+          // never land reads as activating on every renewal, and a deliberate
+          // allocation would be re-credited from the price month after month.
+          if (subscriptionId) renewalUpdate.stripe_subscription_id = subscriptionId;
           const renewalAnchor = toDateString(invoice.period_start);
           if (renewalAnchor) renewalUpdate.billing_cycle_anchor = renewalAnchor;
 

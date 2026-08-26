@@ -4796,10 +4796,25 @@ in 0088 with no backfill, so a long-standing comped customer can still be
 carrying null, and reading that as activation would strip the comp this design
 exists to protect. `stripe_subscription_id` has been written since 0001.
 
-The same null-is-not-a-change rule governs the re-size: on
+**A new subscription id is a change too**, on both halves. A customer who
+cancels and returns to the tier they previously held has an unchanged price, so
+a price-only test fires nothing — and the same event stamps the new subscription
+id, so `invoice.paid` then reads an established subscription and credits the
+stale row. Nothing is protected by holding back: any comp was attached to a
+subscription that no longer exists.
+
+The null-is-not-a-change rule governs the rest of the re-size: on
 `customer.subscription.created` the price is the truth (nothing to protect
 yet); on `updated`/`deleted` with nothing recorded we record the price and leave
 the allocation alone.
+
+⚠️ **Accepted gap.** That last case loses one tier change: a pre-0088 row whose
+first post-deploy event is an `updated` that is also a price change records the
+new price without re-sizing, and no later event can detect a move that has
+already been absorbed. The alternative — re-sizing on it — strips a comp, which
+is the thing §17 and §24 spent two sections refusing. It is not silent either
+way: the invoice-time drift log fires every month for as long as the row and the
+price disagree, which is what makes it correctable rather than lost.
 
 **This is GR's rule.** Guaranteed Rent has had the price-keyed re-size since its
 £300/20 plan launched (`gr_stripe_price_id !== subPriceIds[0]`). Management was
