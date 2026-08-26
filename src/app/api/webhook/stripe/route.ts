@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import {
   GR_PLANS,
+  allocationForPriceIds,
   grAllocationForPriceIds,
   grPlanForAllocation,
   isGuaranteedRentPriceId,
@@ -18,6 +19,10 @@ import {
 import { provisionPaidSubscriber } from "@/lib/provisioning";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 import { applyPendingPlanChange } from "@/lib/planChanges";
+import {
+  driftMessage,
+  resolveCreditAllocation,
+} from "@/lib/allocationCredit";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -456,12 +461,54 @@ export async function POST(request: NextRequest) {
         } else {
           update.stripe_subscription_id = sub.id;
           update.subscription_status = status;
+
+          // Re-size monthly_allocation when — and only when — the management
+          // subscription's PRICE changes. The GR half above has done this since
+          // its £300/20 plan launched; management was left without it, and this
+          // is that gap.
+          //
+          // WHY IT MATTERS: `/api/customer/subscribe` writes monthly_allocation
+          // BEFORE creating the Checkout Session (§17's "one trap"), so the
+          // column is a note about what somebody was ABOUT to buy. Anyone who
+          // looks at both plans before buying leaves that note on whichever they
+          // clicked LAST, not on what they paid for — and `invoice.paid` used to
+          // credit the note. A customer who considered the £300/20 plan, thought
+          // better of it and bought the £150/10 plan was credited 20 leads a
+          // month, indefinitely. No scheming required.
+          //
+          // Keyed on "the price is not the one we last recorded" rather than on
+          // the event type or on a bare disagreement. That distinction is the
+          // whole design: an allocation an admin has hand-edited while the price
+          // stayed put is a COMP and is never touched — the silent re-sizing §17
+          // and §24 both declined — while a first payment has no recorded price
+          // and therefore always corrects. An unrecognised price changes nothing.
+          //
+          // Same §24 exception as GR: a self-serve tier change carries its own
+          // pending column and is applied at the next paid invoice, so stepping
+          // in here would re-size the customer a month early.
+          const mgmtAllocation = allocationForPriceIds(subPriceIds);
+          if (mgmtAllocation) {
+            const { data: mgmtRow } = await admin
+              .from("customers")
+              .select("stripe_price_id, pending_monthly_allocation")
+              .eq("stripe_customer_id", customerId)
+              .maybeSingle();
+            const deferred =
+              mgmtRow?.pending_monthly_allocation === mgmtAllocation;
+            if (
+              mgmtRow &&
+              mgmtRow.stripe_price_id !== subPriceIds[0] &&
+              !deferred
+            ) {
+              update.monthly_allocation = mgmtAllocation;
+            }
+          }
+
           // Recorded for symmetry with gr_stripe_price_id, and because which
           // price a management customer is actually billed on was otherwise
-          // invisible to admin (0088). OBSERVABILITY ONLY: deliberately no
-          // allocation re-size follows it. §17 declined to introduce silent
-          // re-sizing on the management side, and a self-serve tier change
-          // carries its own pending column rather than being inferred here.
+          // invisible to admin (0088). It is now also the change detector the
+          // re-size above reads — the row is read BEFORE this write, so the
+          // comparison is against the previously stored id.
           update.stripe_price_id = subPriceIds[0] ?? null;
           // A cancelled management subscription must release its capacity slot —
           // capacity is counted by account_status = 'active'. GR cancellations
@@ -817,7 +864,9 @@ export async function POST(request: NextRequest) {
           // size the credit and detect a mismatched Stripe id.
           let { data: customer } = await admin
             .from("customers")
-            .select("id, monthly_allocation, pending_monthly_allocation")
+            .select(
+              "id, monthly_allocation, pending_monthly_allocation, stripe_price_id"
+            )
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
 
@@ -873,7 +922,9 @@ export async function POST(request: NextRequest) {
                 }
                 const { data: linked } = await admin
                   .from("customers")
-                  .select("id, monthly_allocation, pending_monthly_allocation")
+                  .select(
+              "id, monthly_allocation, pending_monthly_allocation, stripe_price_id"
+            )
                   .eq("id", result.customerId)
                   .maybeSingle();
                 customer = linked ?? null;
@@ -907,7 +958,67 @@ export async function POST(request: NextRequest) {
             "invoice.paid"
           );
 
-          const credits = planForAllocation(allocationNow).leads;
+          // BELIEVE THE INVOICE, not the row.
+          //
+          // monthly_allocation is written before the customer ever reaches
+          // Stripe (§17's trap), so it is a note about what somebody was about
+          // to buy. This is where that note used to decide the credit — and a
+          // customer who browsed both plans before buying left it on the wrong
+          // one, and was credited the wrong number of leads every month for as
+          // long as they stayed. No scheming required.
+          //
+          // The re-size in customer.subscription.* already corrects the row, but
+          // Stripe does not guarantee that event arrives first, and
+          // `credit_invoice` is idempotent per invoice — so a stale row at THIS
+          // moment is a permanently wrong credit for this cycle. The same
+          // predicate therefore runs here, from one shared function, so the two
+          // cannot disagree.
+          //
+          // Strict allocation only: `allocationFromPrices` guesses from the
+          // subtotal and defaults to 20, which is the wrong failure direction
+          // when it decides what somebody is given.
+          const invoiceAllocation = allocationForPriceIds(priceIds);
+          const decision = resolveCreditAllocation({
+            invoiceAllocation,
+            rowAllocation: allocationNow,
+            invoicePriceId: priceIds[0] ?? null,
+            recordedPriceId: (customer.stripe_price_id as string | null) ?? null,
+            pendingAllocation: customer.pending_monthly_allocation ?? null,
+          });
+
+          const credits = planForAllocation(decision.allocation).leads;
+
+          // Reported whichever side won. When the ROW won this is a deliberate
+          // allocation or a mistake, and only a human can tell which — so the
+          // message says which case it is rather than leaving two bare numbers.
+          if (decision.drift && invoiceAllocation != null) {
+            console.error(
+              driftMessage(
+                customer.id,
+                "management",
+                decision,
+                invoiceAllocation,
+                allocationNow
+              )
+            );
+          }
+
+          // Correct the row too, so pacing and capacity follow the money rather
+          // than staying on the stale note. Best-effort: the credit below is
+          // what matters, and the subscription event re-sizes it anyway.
+          if (decision.fromInvoice) {
+            const { error: resizeError } = await admin
+              .from("customers")
+              .update({ monthly_allocation: decision.allocation })
+              .eq("id", customer.id);
+            if (resizeError) {
+              console.error(
+                "invoice.paid: could not correct monthly_allocation",
+                customer.id,
+                resizeError
+              );
+            }
+          }
 
           // Idempotent, invoice-keyed credit: records the paid invoice and moves
           // lead_balance in a single transaction. A replayed delivery of an

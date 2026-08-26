@@ -180,6 +180,37 @@ export function isGuaranteedRentPriceId(priceIds: string[]): boolean {
 }
 
 /**
+ * The MANAGEMENT allocation implied by a set of price ids, or null if none is a
+ * known management price. The twin of `grAllocationForPriceIds` below.
+ *
+ * ⚠️ STRICT, AND THAT IS THE ENTIRE POINT. The webhook's own
+ * `allocationFromPrices()` never returns null — for an unrecognised price it
+ * guesses from the invoice subtotal and returns **20** for a null subtotal, a £0
+ * invoice, or anything at or above £225. That is fine for the post-call-offer
+ * LABEL it was written for, and unsafe as the basis of a credit: a guess that
+ * defaults to the larger tier is exactly the wrong failure direction when it
+ * decides how many leads somebody is given.
+ *
+ * Returning null is what lets the caller say "I do not recognise this price, so
+ * leave the customer's row alone" — which is the correct answer for a Payment
+ * Link on a price object that is not in env, and for a comped or bespoke
+ * subscription.
+ *
+ * Honours `STRIPE_MONTHLY_PRICE_ID`, the historical alias for the £300/20 plan
+ * that `stripePriceIdFor` still accepts. Omitting it would read an existing
+ * 20-lead subscriber on the old id as "unrecognised".
+ */
+export function allocationForPriceIds(priceIds: string[]): number | null {
+  for (const plan of Object.values(PLANS)) {
+    const configured = process.env[plan.priceEnv];
+    if (configured && priceIds.includes(configured)) return plan.leads;
+  }
+  const legacyTwenty = process.env.STRIPE_MONTHLY_PRICE_ID;
+  if (legacyTwenty && priceIds.includes(legacyTwenty)) return PLANS.lead_20.leads;
+  return null;
+}
+
+/**
  * The GR allocation implied by a set of price ids, or null if none is a known
  * GR price. Used only to detect drift against the customer row — never to
  * overwrite a hand-edited allocation. See the webhook's credit path.

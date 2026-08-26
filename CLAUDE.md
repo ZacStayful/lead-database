@@ -764,10 +764,23 @@ an admin invite produces so the webhook needs no special case. Abandoning
 checkout leaves the column inert — it gates nothing for a customer who does not
 hold management.
 
-An `allocationFromPrices()` helper already exists in the webhook and would fix
+~~An `allocationFromPrices()` helper already exists in the webhook and would fix
 this at source, but it is only used for post-call-offer labelling; switching the
 credit onto it would silently re-size any hand-edited allocation that disagrees
-with its price, so it was left alone.
+with its price, so it was left alone.~~
+
+⚠️ **Corrected. The management side is now backstopped, on GR's rule** — see
+§33. The objection above was sound but it conflated two things: crediting from
+the price, and re-sizing a hand-edited row. The fix does the first without the
+second, by testing whether the **price has MOVED** from the one we last recorded
+rather than whether it merely disagrees. A comp — row edited, price untouched —
+is still never re-sized, which is the line this paragraph was drawing. A first
+payment has no recorded price and therefore always corrects, which is where the
+trap actually bit.
+
+`allocationFromPrices()` is still not the helper for it: it never returns null,
+guessing from the subtotal and defaulting to **20**. `allocationForPriceIds()`
+in `plans.ts` is the strict twin the credit path uses.
 
 **The same trap applies to GR**, in the opposite direction. `gr_monthly_allocation`
 defaults to **10**, so a £300/20 GR buyer left on the default is credited *half*
@@ -2305,8 +2318,12 @@ eventually disagree.
 
 Added for symmetry with `gr_stripe_price_id` and because which price a
 management customer is actually billed on was otherwise invisible to admin.
-**Observability only — nothing gates on it**, and deliberately no allocation
-re-size follows it.
+
+⚠️ **No longer observability only.** As of §33 it is the change detector the
+management allocation backstop reads — exactly the job `gr_stripe_price_id` has
+always done on the GR side. The §24 stand-down applies to management too now: a
+pending tier change is applied by `applyPendingPlanChange` at the next paid
+invoice, so neither the re-size nor the credit decision may step in front of it.
 
 ### Verification
 
@@ -4705,3 +4722,110 @@ schema cache", and worse, `fetchLeadVolumeData` swallowed the error and quoted
 One gap is intended and worth stating so it is not mistaken for drift: leads
 uploaded between 0108 and the code get `owner_resale_allowed = true` and are
 never qualified, because nothing writes the stamp yet.
+
+---
+
+## 33. Believe the invoice, not the note *(no migration)*
+
+`/api/customer/subscribe` writes `monthly_allocation` **before** creating the
+Stripe Checkout Session — §17 calls this "the one trap" — and `invoice.paid`
+credited from that row rather than from the invoice. The row is a note about
+what somebody was **about to** buy; the invoice is what they actually bought.
+When the two disagreed, the note won.
+
+### It is not an exploit, it is ordinary browsing
+
+Nobody has to be scheming. Anyone who looks at **both plans before buying**
+leaves the note on whichever they clicked *last*, not on what they paid for:
+
+1. Click £150/10 → note says `10`, Stripe session A opens for £150.
+2. Click £300/20 → note is overwritten to `20`, session B opens for £300.
+3. Pay session A — **£150**.
+4. `invoice.paid` reads the note: `20`. Credits **20 leads**.
+5. Every month after: **£150 charged, 20 leads delivered.**
+
+Ten extra leads a month at £15 is **£150/month given away**, per customer,
+indefinitely — the £300 plan for £150.
+
+**And it was invisible**, which is why it survived: admin MRR is computed as
+`planForAllocation(monthly_allocation).priceGbp` summed
+(`src/app/admin/page.tsx`), so that customer also *reports* as £300 of revenue.
+The over-delivery and the over-reporting point opposite ways and cancel out on
+the dashboard. Everything reads consistent while money leaves at both ends.
+
+### The rule: has the price MOVED?
+
+Not "do the price and the row disagree" — **"is the price different from the one
+we last recorded"**. That single distinction is the whole design:
+
+| | Price moved? | Result |
+|---|---|---|
+| First payment (nothing recorded yet) | yes, by definition | credit the price, correct the row |
+| Tier change in the portal or by an admin | yes | credit the price, correct the row |
+| **Comp** — admin sets 20 on a £150 sub | **no** | credit the row. Never re-sized |
+| Ordinary renewal | no | credit the row |
+| Price we do not recognise | — | credit the row, no drift reported |
+
+A comp is a row edited while the price stayed put, so it fails the test and
+keeps its allocation — the silent re-sizing §17 and §24 both declined. The bug
+lives entirely in the first row of that table.
+
+**This is GR's rule.** Guaranteed Rent has had the price-keyed re-size since its
+£300/20 plan launched (`gr_stripe_price_id !== subPriceIds[0]`). Management was
+deliberately left without it. §33 closes that gap and nothing more.
+
+### Three pieces
+
+- **`allocationForPriceIds()`** in `plans.ts` — the strict twin of
+  `grAllocationForPriceIds`. ⚠️ **Do not reach for `allocationFromPrices()`
+  instead**: it never returns null, guessing from the invoice subtotal and
+  returning **20** for a null subtotal, a £0 invoice, or any unrecognised price
+  at or above £225. Fine for the post-call-offer label it was written for, and
+  the wrong failure direction for a credit. Returning null is what lets a
+  bespoke or Payment-Link price mean "leave the row alone". Honours
+  `STRIPE_MONTHLY_PRICE_ID`, the historical alias for the £300/20 plan.
+- **`resolveCreditAllocation()`** in `allocationCredit.ts` — the decision, pure.
+  Extracted rather than inlined because the Stripe webhook is the least testable
+  file in the repo and this is the part of it that decides money. The whole
+  credit path had **zero** test coverage before this.
+- **The webhook**, in two places, from that one function so they cannot
+  disagree: the management half of `customer.subscription.*` re-sizes the row,
+  and the management half of `invoice.paid` decides the credit and logs drift.
+
+### Why the credit decision is duplicated at the invoice
+
+The re-size alone would be enough if Stripe guaranteed
+`customer.subscription.created` arrives before `invoice.paid`. It does not — and
+`credit_invoice()` is idempotent per invoice (§19.5), so a stale row at invoice
+time is a **permanently** wrong credit for that cycle, not something the next
+event repairs. Hence the same test in both places.
+
+### Drift is always reported, and says which case it is
+
+Mirroring GR's message, with one addition: it states whether the price moved.
+From two bare numbers a deliberate comp and a mistake are indistinguishable, and
+only a human can tell them apart — so the log says which it is looking at and,
+when the row won, points at admin.
+
+### Verification
+
+`resolveCreditAllocation` goes through **12 cases** in
+`src/lib/__tests__/allocationCredit.test.ts`: the bug itself (first payment,
+stale row → credit the invoice), the mirror case (paid more than the row says →
+do not under-credit), the comp preserved, a genuine tier change, the §24 pending
+stand-down, an unrelated pending change that must NOT shield drift, an
+unrecognised price, a post-fix renewal, and an unreadable price id. 376 vitest
+cases green overall; `next build` passes.
+
+**Not rehearsed against live Stripe** — §12's standing item. Before relying on
+it: subscribe at the £150/10 price with the row hand-set to 20 and confirm the
+first invoice credits **10**, the row is corrected and the drift line appears;
+then hand-edit the row to 20 with the price unchanged and confirm the next
+renewal credits **20** and does not re-size.
+
+### Still true, and still worth fixing separately
+
+**Admin MRR is derived from the allocation column, not from Stripe.** That is
+what hid this bug. The drift log now surfaces a disagreement, but the revenue
+figure still infers price from allocation. Pointing it at Stripe is a separate,
+larger change.

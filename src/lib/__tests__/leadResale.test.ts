@@ -48,6 +48,42 @@ describe("isResellable", () => {
   });
 });
 
+describe("lead_profile never gates allocation", () => {
+  // An imported lead's profile is whatever the spreadsheet had left over, and a
+  // resold one has it withheld from the buyer (§32.8). Neither may have any
+  // bearing on whether the lead is allocated — a lead with no profile routes
+  // exactly like one with a full profile.
+  //
+  // This is already true: lead_profile appears in no candidate function, no
+  // assign_lead_to_customer, no lead_retired_from_allocation and no
+  // qualify_owned_lead_for_resale predicate. Pinned here so it stays true.
+  const profiles = [
+    ["null", null],
+    ["empty", ""],
+    ["populated", "Margin: 14%\nSource: Dave"],
+  ] as const;
+
+  for (const [label, profile] of profiles) {
+    it(`routes a qualified lead the same with a ${label} profile`, () => {
+      const lead = { ...QUALIFIED, lead_profile: profile };
+      expect(isResellable(lead)).toBe(true);
+      expect(shouldRouteLead(lead)).toBe(true);
+    });
+
+    it(`withholds an unqualified lead the same with a ${label} profile`, () => {
+      const lead = { ...UNQUALIFIED, lead_profile: profile };
+      expect(isResellable(lead)).toBe(false);
+      expect(shouldRouteLead(lead)).toBe(false);
+    });
+
+    it(`routes a marketplace lead the same with a ${label} profile`, () => {
+      const lead = { ...MARKETPLACE, lead_profile: profile };
+      expect(isResellable(lead)).toBe(true);
+      expect(shouldRouteLead(lead)).toBe(true);
+    });
+  }
+});
+
 describe("shouldRouteLead", () => {
   it("lets autoAssignLead skip an owned lead until it qualifies", () => {
     expect(shouldRouteLead(MARKETPLACE)).toBe(true);
