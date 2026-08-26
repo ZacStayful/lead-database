@@ -1346,7 +1346,10 @@ to this customer · matches their lead filter · not paused.
 
 **Filters are the allocation filters** — same columns, same semantics, including
 `pending_lift` counting as filtered and a lead with an unparseable postcode or
-bedroom count matching no filtered customer.
+bedroom count matching no filtered customer. `lead_matches_customer_filter()`
+is that one definition, and since 0109 the **admin swap** consults it too
+(§34), so every route a lead can reach a customer by now reads the same
+predicate.
 
 ### 19.5 — The debit
 
@@ -4602,7 +4605,7 @@ in **0107**, which is a pure tightening migration that enables nothing:
 | `get_escalation_candidates` | feeds it. Excluded **explicitly**, NOT via `lead_retired_from_allocation`, which 0108 relaxes — leaving only `max_assignments < 5`, which a qualified lead at 2 satisfies |
 | `get_reclaim_candidates` | a reclaim slot is **added on top of** `max_assignments` inside `assign_lead_to_customer` |
 | `assign_lead_to_customer` | caps owned leads at `least(max_assignments, 2)` under the lock, and ignores reclaim slots for them entirely |
-| `admin_swap_lead_assignment` | rewrites `max_assignments = assignment_count` on the outgoing lead, which would silently **un-qualify** a sold lead. Both directions refused |
+| `admin_swap_lead_assignment` | rewrites `max_assignments = assignment_count` on the outgoing lead, which would silently **un-qualify** a sold lead. Both directions refused. (0109 later added a lead-filter guard to the same function — §34) |
 | `discard_lead_assignment` | decrements `assignment_count`, reopening the slot (§19.6's argument) |
 
 Two are **not** in SQL and could not be guarded there:
@@ -4956,3 +4959,135 @@ renewal credits **20** and does not re-size.
 what hid this bug. The drift log now surfaces a disagreement, but the revenue
 figure still infers price from allocation. Pointing it at Stripe is a separate,
 larger change.
+
+---
+
+## 34. A swapped-in lead must match the customer's filter *(0109)*
+
+`/admin/customers/[id]` lets an admin replace one assigned lead with another —
+`SwapLeadControl` → `GET/POST /api/admin/assignments/[id]/swap` →
+`admin_swap_lead_assignment`. Its guards stopped at won, duplicate, capacity,
+paused, product and customer-owned. **None of them was the customer's lead
+filter**, so a customer who filtered to "3+ beds in BS, GL" could be handed a
+one-bed in Sheffield as a replacement.
+
+That is not a cosmetic mismatch. A swap calls the same `completeAssignment`
+ingest and the admin force-assign call, so the customer gets the ordinary
+new-lead email and text and has **no way to tell a replacement from a lead the
+engine chose for them** — and they were quoted a volume forecast and a cost per
+lead on exactly the selection being ignored (§28). Allocation, escalation and
+the expired pool all honour the filter; the swap was the one hole.
+
+### The predicate is not written again
+
+`lead_matches_customer_filter()` (0074) is the single expression of "does this
+lead pass this customer's filter", and it is already what
+`customer_can_see_pool_lead` delegates to (§19.4). Two of its properties are why
+it, and not the inlined copy in `get_filtered_candidates_for_lead`, is the right
+one to call here:
+
+- **`filter_status = 'off'` returns `true`** — no filter is not an empty filter.
+  An unfiltered customer's swap therefore behaves exactly as it did before 0109,
+  with no branch anywhere saying so, in SQL or in the picker.
+- The inlined copy answers a **different question**: "is this customer in the
+  filtered pool", which excludes `off` customers entirely. That is right for
+  routing and wrong for a swap.
+
+Carried over unchanged: `pending_lift` counts as filtered, and a lead whose
+postcode area or bedroom count will not parse matches no filtered customer.
+
+### The override, and what makes it deliberate
+
+A swap is a support action — the lead had a dead number, the landlord had
+already sold, and the customer is owed a replacement **today**. A narrow filter
+may have nothing matching in stock at that moment, and a hard refusal would
+leave the admin with an empty dropdown and no way to make them whole. So:
+
+- the refusal is the **default**: `p_allow_filter_mismatch` must be passed
+  `true`, and nothing infers it;
+- the picker **groups** rather than hides — `Matches their filter (N)` and
+  `Outside their filter (N)` — and names the filter above the select;
+- choosing an off-filter lead raises a block naming that lead, that filter and
+  the consequence, gated on a tick that resets whenever the selection changes.
+  Only then does the POST carry the flag.
+
+`allow_filter_mismatch` is read with a strict `=== true`. The flag has to be
+sent, so the picker cannot forget to opt in — it has to opt in.
+
+### ⚠️ The new argument has NO DEFAULT, and that is load-bearing
+
+Adding `p_allow_filter_mismatch boolean default false` to the existing function
+would **not** replace it. Postgres would create an overload, and every
+two-argument call — including the one running in production at apply time —
+would then fail with `function is not unique`.
+
+Two distinct signatures, neither defaulted. The two-argument form is kept as a
+shim that delegates with `false`, which is also what makes migration-before-code
+genuinely safe here: the deployed route keeps working the moment 0109 lands,
+enforcing the filter with no override, which is the safe direction for the
+window between apply and deploy.
+
+### `get_swap_candidates_for_assignment`
+
+The route's own rule is that the picker can never offer something the swap would
+then refuse. It now also needs to know *which* candidates match, and answering
+that in TypeScript would be a **fifth** hand-written copy of the predicate. So
+the candidate list is a function: it resolves the product, applies every
+eligibility rule (same product, room left, not already held, not withdrawn, not
+customer-owned, not the outgoing lead itself), attaches `matches_filter` per
+row, and returns matching leads first. The route does not re-sort and knows
+nothing about filters.
+
+This also moved `assignment_count < max_assignments` out of the route's
+post-fetch filter, where it only lived because PostgREST cannot compare two
+columns, and retired the separate `lead_type` lookup and its "fail loudly"
+branch with it.
+
+The customer's filter is still read in TypeScript for **display** —
+`activeLeadFilters()` / `filterSummary()` / `filterTooltip()` from
+`src/lib/leadFilter.ts`, unchanged. `filter: null` for a customer with no active
+filter on that product is what collapses the picker back to its old rendering.
+
+### Deliberately unchanged
+
+- **`admin_assign_lead` / `/api/admin/assign` still ignores filters.** A settled
+  decision, not an oversight; if it is ever revisited it needs its own candidate
+  function and its own acknowledgement, not a shared one.
+- **The won check and the management pause are not in the candidate query.** The
+  first is a fact about the *outgoing* assignment and the UI already gates on it;
+  the second the function raises on in plain language, which the route passes
+  straight through.
+
+### Verification
+
+All 104 migrations applied to a scratch **Postgres 16** from empty (0002 skipped
+— `pg_cron` is not available there), then 0109 re-applied twice for idempotency.
+ACLs audited with `has_function_privilege`: both `admin_swap_lead_assignment`
+signatures and `get_swap_candidates_for_assignment` are `service_role`-only, and
+invariant 7's four `authenticated`-executable functions re-checked.
+
+Against seeded rows, on a filtered customer (`{BS}`, 3+ beds): a BS 4-bed
+accepted with no override; a wrong-area lead, a 1-bed, a lead with a null
+`postcode_area` and one with `bedrooms = 'studio'` each refused; both of the
+first two accepted **with** the override; the two-argument shim accepting a match
+and refusing a mismatch; `pending_lift` behaving as `active`; every pre-existing
+guard (cap, product, already-held, same-lead) still firing.
+
+Three that mattered most: **a refusal mutates nothing** — the assignment is still
+there, `withdrawn_at` still null, `max_assignments` still 3; **an `off` customer
+is untouched** — every candidate comes back `matches_filter = true` and a 1-bed
+anywhere still swaps in with no override; and **a successful swap still moves no
+money** — balance, monthly counter and odometer all unmoved, the replacement
+carrying the same `price_paid`.
+
+The GR mirror was driven separately, on a customer carrying a GR filter of
+`{BS}`/3+ **and** an unrelated management filter of `{ZZ}`/9+: the GR swap reads
+`gr_` and only `gr_` (invariant 6).
+
+384 vitest cases green, `npm run lint` clean, `npm run build` passes.
+
+### Deployment order — migration BEFORE code
+
+0109 first, as ever — though the two-argument shim means code arriving late
+merely enforces the filter without an override rather than breaking swaps.
+Nothing here touches a balance, counter, pacing or capacity column.

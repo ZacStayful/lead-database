@@ -7,22 +7,38 @@ type Candidate = {
   id: string;
   lead_name: string | null;
   postcode: string | null;
+  bedrooms: string | null;
   assignment_count: number;
   max_assignments: number;
   created_at: string;
+  matches_filter: boolean;
+};
+
+/** The customer's active filter for this product, or null if they have none. */
+type FilterView = {
+  label: string;
+  status: string;
+  summary: string;
+  tooltip: string;
+  liftDate: string | null;
 };
 
 /**
  * Swap one assigned lead for another.
  *
- * Three deliberate frictions, because this is destructive and irreversible:
+ * Four deliberate frictions, because this is destructive and irreversible:
  *
  *   1. The picker only lists leads the swap would actually accept, so a
  *      selection cannot fail on eligibility after the fact.
- *   2. The consequences are spelled out before the confirm, not after — the
+ *   2. Where the customer has a lead filter, leads that miss it are grouped
+ *      and labelled rather than silently mixed in, and placing one takes a
+ *      second, named acknowledgement — a replacement reaches the customer as
+ *      an ordinary new lead, email and text included, so an off-filter one is
+ *      us sending exactly what they asked us not to.
+ *   3. The consequences are spelled out before the confirm, not after — the
  *      removed lead never goes back into circulation, and any notes or files
  *      the customer wrote on it are deleted with the assignment.
- *   3. Confirm is a separate press from choosing.
+ *   4. Confirm is a separate press from choosing.
  */
 export function SwapLeadControl({
   assignmentId,
@@ -37,13 +53,23 @@ export function SwapLeadControl({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [filter, setFilter] = useState<FilterView | null>(null);
   const [chosen, setChosen] = useState<Candidate | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
   const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // A won lead is a conversion record; the function refuses it and so does the
   // button, so the refusal is visible before it is pressed.
   const isWon = status === "won";
+
+  const matching = candidates.filter((c) => c.matches_filter);
+  const outside = candidates.filter((c) => !c.matches_filter);
+
+  // Only meaningful when the customer actually has a filter. Without one every
+  // candidate comes back matching, so this is false throughout and the whole
+  // acknowledgement path stays out of the way.
+  const needsAcknowledgement = Boolean(filter) && chosen != null && !chosen.matches_filter;
 
   async function load() {
     setLoading(true);
@@ -66,6 +92,7 @@ export function SwapLeadControl({
         return;
       }
       setCandidates((data?.candidates ?? []) as Candidate[]);
+      setFilter((data?.filter ?? null) as FilterView | null);
     } catch (err) {
       setError(
         `Could not reach the server: ${
@@ -80,19 +107,33 @@ export function SwapLeadControl({
   function start() {
     setOpen(true);
     setChosen(null);
+    setAcknowledged(false);
     setError(null);
     void load();
   }
 
+  function choose(id: string) {
+    setChosen(candidates.find((c) => c.id === id) ?? null);
+    // Never carried from one lead to the next: the tick names a specific lead
+    // and a specific filter it misses.
+    setAcknowledged(false);
+  }
+
   async function swap() {
     if (!chosen) return;
+    if (needsAcknowledgement && !acknowledged) return;
     setSwapping(true);
     setError(null);
     try {
       const res = await fetch(`/api/admin/assignments/${assignmentId}/swap`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_lead_id: chosen.id }),
+        body: JSON.stringify({
+          new_lead_id: chosen.id,
+          // Only ever sent for a lead the admin has been shown is off-filter
+          // and has ticked for. Anything else and the function refuses.
+          allow_filter_mismatch: needsAcknowledgement && acknowledged,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -142,6 +183,16 @@ export function SwapLeadControl({
     );
   }
 
+  const optionLabel = (c: Candidate) =>
+    [
+      c.lead_name ?? "Unnamed lead",
+      c.postcode ?? null,
+      c.bedrooms ? `${c.bedrooms} bed` : null,
+      `${c.assignment_count}/${c.max_assignments} assigned`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
   return (
     <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/30 p-3 text-left">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -165,6 +216,26 @@ export function SwapLeadControl({
         email and text for the replacement.
       </p>
 
+      {filter && (
+        <p
+          className="text-sm text-muted-foreground"
+          title={filter.tooltip}
+        >
+          <span className="font-medium text-foreground">
+            {filter.label} lead filter:
+          </span>{" "}
+          {filter.summary}
+          {filter.status === "pending_lift" && (
+            <>
+              {" "}
+              — a lift is scheduled
+              {filter.liftDate ? ` for ${filter.liftDate}` : ""}, so it still
+              applies today.
+            </>
+          )}
+        </p>
+      )}
+
       <div>
         <label htmlFor={`swap-${assignmentId}`} className="sr-only">
           Replacement lead
@@ -173,9 +244,7 @@ export function SwapLeadControl({
           id={`swap-${assignmentId}`}
           value={chosen?.id ?? ""}
           disabled={loading || swapping}
-          onChange={(e) =>
-            setChosen(candidates.find((c) => c.id === e.target.value) ?? null)
-          }
+          onChange={(e) => choose(e.target.value)}
           className="w-full rounded-md border-[0.5px] border-border bg-background px-3 py-2 text-sm disabled:opacity-60"
         >
           <option value="">
@@ -187,17 +256,37 @@ export function SwapLeadControl({
                   ? "No eligible leads"
                   : `Choose a replacement (${candidates.length} available)`}
           </option>
-          {candidates.map((c) => (
-            <option key={c.id} value={c.id}>
-              {[
-                c.lead_name ?? "Unnamed lead",
-                c.postcode ?? null,
-                `${c.assignment_count}/${c.max_assignments} assigned`,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </option>
-          ))}
+
+          {/* Grouped only when there is a filter to group against. An
+              unfiltered customer gets the flat list they always had. */}
+          {filter ? (
+            <>
+              {matching.length > 0 && (
+                <optgroup label={`Matches their filter (${matching.length})`}>
+                  {matching.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {optionLabel(c)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {outside.length > 0 && (
+                <optgroup label={`Outside their filter (${outside.length})`}>
+                  {outside.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {optionLabel(c)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </>
+          ) : (
+            candidates.map((c) => (
+              <option key={c.id} value={c.id}>
+                {optionLabel(c)}
+              </option>
+            ))
+          )}
         </select>
         {!loading && candidates.length === 0 && !error && (
           <p className="mt-1 text-sm text-muted-foreground">
@@ -205,14 +294,44 @@ export function SwapLeadControl({
             already be with this customer.
           </p>
         )}
+        {!loading && filter && matching.length === 0 && candidates.length > 0 && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Nothing in stock matches their filter right now. Anything you pick
+            is a lead they asked not to receive.
+          </p>
+        )}
       </div>
+
+      {needsAcknowledgement && filter && (
+        <div className="space-y-2 rounded-md border-[0.5px] border-amber-300 bg-amber-50 p-3">
+          <p className="text-sm text-amber-900">
+            <span className="font-medium">
+              {chosen?.lead_name ?? "This lead"} is outside their {filter.label}{" "}
+              filter
+            </span>{" "}
+            ({filter.summary}). They chose that filter and their volume forecast
+            and cost per lead were quoted on it. They will get the ordinary
+            new-lead email and text for this one, with nothing to say it is not
+            what they asked for.
+          </p>
+          <label className="flex items-start gap-2 text-sm text-amber-900">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>Send it anyway — I have a reason and I will tell them.</span>
+          </label>
+        </div>
+      )}
 
       {error && <p className="text-sm text-red-700">{error}</p>}
 
       <button
         type="button"
         onClick={() => void swap()}
-        disabled={!chosen || swapping}
+        disabled={!chosen || swapping || (needsAcknowledgement && !acknowledged)}
         className="rounded-md bg-[#3B6D11] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#2d5409] disabled:opacity-50"
       >
         {swapping
