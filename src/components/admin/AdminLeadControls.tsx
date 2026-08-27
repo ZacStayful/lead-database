@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,10 @@ interface CustomerOption {
   id: string;
   business_name: string;
   credits: number;
+  /** Does this lead pass their lead filter? True for an unfiltered customer. */
+  matches_filter: boolean;
+  /** Their filter in words ("3+ beds · Bristol"), null when they have none. */
+  filter_summary: string | null;
 }
 
 export function AdminLeadControls({
@@ -43,6 +47,10 @@ export function AdminLeadControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // Ticked only after the admin has been shown, by name, which customers
+  // asked not to receive a lead like this one. Reset on every selection
+  // change below, so it can never carry over from one choice to another.
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const remainingSlots = Math.max(0, Number(max) - assignmentCount);
   const atCapacity = remainingSlots === 0;
@@ -60,10 +68,29 @@ export function AdminLeadControls({
       (c) => selected.has(c.id) || c.business_name.toLowerCase().includes(q)
     );
   }, [pool, query, selected]);
+  // Matching first, then the rest — one list with a heading before each group,
+  // so the search box and the remainingSlots cap keep working unchanged.
+  const matching = useMemo(() => list.filter((c) => c.matches_filter), [list]);
+  const outside = useMemo(() => list.filter((c) => !c.matches_filter), [list]);
+  const ordered = useMemo(() => [...matching, ...outside], [matching, outside]);
+
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
+
+  // The selected customers this lead misses. Empty for an unfiltered book, so
+  // every branch below stays out of the way until it is real.
+  const offFilterSelected = useMemo(
+    () => pool.filter((c) => selected.has(c.id) && !c.matches_filter),
+    [pool, selected]
+  );
+  const needsAcknowledgement = offFilterSelected.length > 0;
+  const anyFiltered = useMemo(
+    () => pool.some((c) => !c.matches_filter),
+    [pool]
+  );
 
   function toggle(id: string) {
     setMessage(null);
+    setAcknowledged(false);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -78,6 +105,7 @@ export function AdminLeadControls({
   function toggleOverride() {
     setSelected(new Set());
     setMessage(null);
+    setAcknowledged(false);
     setOverride((v) => !v);
   }
 
@@ -105,6 +133,7 @@ export function AdminLeadControls({
 
   async function forceAssign() {
     if (selectedIds.length === 0) return;
+    if (needsAcknowledgement && !acknowledged) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -115,6 +144,9 @@ export function AdminLeadControls({
           lead_id: leadId,
           customer_ids: selectedIds,
           override,
+          // Only ever sent for customers the admin has been shown are outside
+          // their filter and has ticked for. Without it the RPC refuses.
+          allow_filter_mismatch: needsAcknowledgement && acknowledged,
         }),
       });
       const raw = await res.text();
@@ -141,6 +173,7 @@ export function AdminLeadControls({
         );
       }
       setSelected(new Set());
+      setAcknowledged(false);
       router.refresh();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Assignment failed");
@@ -224,14 +257,31 @@ export function AdminLeadControls({
               />
             )}
             <div className="max-h-60 space-y-1 overflow-y-auto rounded-md border-[0.5px] border-border p-1">
-              {list.map((c) => {
+              {/* Grouped only when something in the pool actually misses a
+                  filter. An unfiltered book renders the flat list it always
+                  did, with no headings and no extra chrome. */}
+              {anyFiltered && matching.length > 0 && (
+                <p className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Matches their filter ({matching.length})
+                </p>
+              )}
+              {ordered.map((c, i) => {
+                // The second heading rides on the first non-matching row rather
+                // than a second map, so there is exactly one row renderer.
+                const startsOutsideGroup =
+                  anyFiltered && !c.matches_filter && i === matching.length;
                 const isSelected = selected.has(c.id);
                 const disabled =
                   busy || (!isSelected && selected.size >= remainingSlots);
                 const noCredits = c.credits <= 0;
                 return (
+                  <Fragment key={c.id}>
+                  {startsOutsideGroup && (
+                    <p className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-amber-700">
+                      Outside their filter ({outside.length})
+                    </p>
+                  )}
                   <button
-                    key={c.id}
                     type="button"
                     onClick={() => toggle(c.id)}
                     disabled={disabled}
@@ -255,6 +305,11 @@ export function AdminLeadControls({
                         {c.credits} credit{c.credits === 1 ? "" : "s"} left
                         {noCredits && override ? " — override" : ""}
                       </span>
+                      {!c.matches_filter && c.filter_summary && (
+                        <span className="truncate text-xs text-amber-700">
+                          Wants {c.filter_summary}
+                        </span>
+                      )}
                     </span>
                     <span
                       className={
@@ -267,6 +322,7 @@ export function AdminLeadControls({
                       {isSelected && <Check className="h-3 w-3" />}
                     </span>
                   </button>
+                  </Fragment>
                 );
               })}
               {list.length === 0 && (
@@ -278,9 +334,49 @@ export function AdminLeadControls({
           </>
         )}
 
+        {needsAcknowledgement && (
+          <div className="space-y-2 rounded-md border-[0.5px] border-amber-300 bg-amber-50 p-3">
+            <p className="text-sm text-amber-900">
+              <span className="font-medium">
+                {offFilterSelected.length === 1
+                  ? `${offFilterSelected[0].business_name} asked not to receive leads like this one`
+                  : `${offFilterSelected.length} of the customers you picked asked not to receive leads like this one`}
+              </span>{" "}
+              — {offFilterSelected
+                .map((c) =>
+                  c.filter_summary
+                    ? `${c.business_name} wants ${c.filter_summary}`
+                    : c.business_name
+                )
+                .join("; ")}
+              . They chose that filter and their volume forecast and cost per
+              lead were quoted on it. They will get the ordinary new-lead email
+              and text for this one, with nothing to say it is not what they
+              asked for.
+            </p>
+            <label className="flex items-start gap-2 text-sm text-amber-900">
+              <input
+                type="checkbox"
+                checked={acknowledged}
+                onChange={(e) => setAcknowledged(e.target.checked)}
+                disabled={busy}
+                className="mt-0.5"
+              />
+              <span>
+                Send {offFilterSelected.length === 1 ? "it" : "them"} anyway — I
+                have a reason and I will tell them.
+              </span>
+            </label>
+          </div>
+        )}
+
         <Button
           onClick={forceAssign}
-          disabled={busy || selected.size === 0}
+          disabled={
+            busy ||
+            selected.size === 0 ||
+            (needsAcknowledgement && !acknowledged)
+          }
           className="w-full"
         >
           {override && selected.size > 0

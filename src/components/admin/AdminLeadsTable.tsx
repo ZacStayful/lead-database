@@ -106,6 +106,11 @@ export function AdminLeadsTable({
     new Set()
   );
   const [override, setOverride] = useState(false);
+  // Separate from `override` on purpose (0110): that one bypasses the credit
+  // gate, this one bypasses what the customer asked for. This screen is a
+  // leads x customers cross product, so mismatches are reported per pair in
+  // the failure list rather than marked on every row.
+  const [allowFilterMismatch, setAllowFilterMismatch] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   // Starts expanded so the bar behaves exactly as it always has on a fresh
@@ -240,6 +245,7 @@ export function AdminLeadsTable({
           lead_ids: Array.from(selectedLeads),
           customer_ids: Array.from(selectedCustomers),
           override,
+          allow_filter_mismatch: allowFilterMismatch,
         }),
       });
       // The endpoint can return a non-JSON gateway error (e.g. a timeout page),
@@ -609,6 +615,26 @@ export function AdminLeadsTable({
                     — place these even with customers who are out of credits or
                     not subscribed. No credit is spent. (Paused customers are
                     still blocked.)
+                  </span>
+                </span>
+              </label>
+
+              <label className="mt-2 flex cursor-pointer items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={allowFilterMismatch}
+                  onChange={() => setAllowFilterMismatch((v) => !v)}
+                  disabled={busy}
+                  className="mt-0.5 h-4 w-4 accent-brand"
+                />
+                <span>
+                  <span className="font-medium text-foreground">
+                    Allow leads outside a customer&rsquo;s filter
+                  </span>{" "}
+                  <span className="text-muted-foreground">
+                    — off by default. Without it, any pair where the lead misses
+                    that customer&rsquo;s area or bedroom filter is refused and
+                    listed below; everything else still goes through.
                   </span>
                 </span>
               </label>

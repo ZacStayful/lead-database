@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
     customer_ids?: string[];
     price?: number;
     override?: boolean;
+    allow_filter_mismatch?: boolean;
   };
   try {
     body = await request.json();
@@ -61,6 +62,17 @@ export async function POST(request: NextRequest) {
   // (which still honours capacity and the paused-customer block). Automatic
   // ingest never sets this, so paid leads are never given away by accident.
   const override = body.override === true;
+
+  // A SEPARATE flag, deliberately (0110). `override` means "bypass the credit
+  // gate"; this means "bypass what the customer asked for". Folding them would
+  // make every credit override silently a filter override too, and the credit
+  // override is the routine one.
+  //
+  // Strict true. A truthy string or a 1 from some future caller must not be
+  // enough to place a lead the customer asked not to receive. Both RPC branches
+  // refuse a mismatch without it, so the picker cannot forget to opt in — it
+  // has to opt in.
+  const allowFilterMismatch = body.allow_filter_mismatch === true;
 
   const admin = createAdminClient();
 
@@ -113,6 +125,7 @@ export async function POST(request: NextRequest) {
         p_customer_id: customerId,
         p_price: price,
         p_lead_type: typedLead.lead_type,
+        p_allow_filter_mismatch: allowFilterMismatch,
       }
     );
 

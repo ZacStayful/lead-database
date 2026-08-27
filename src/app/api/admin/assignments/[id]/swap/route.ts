@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
 import { completeAssignment } from "@/lib/ingest";
-import type { Lead } from "@/lib/types";
+import { activeLeadFilters, filterSummary, filterTooltip } from "@/lib/leadFilter";
+import type { Customer, Lead } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,9 +24,18 @@ async function isAdminRequest(req: NextRequest): Promise<boolean> {
 /**
  * Leads eligible to replace this one.
  *
- * Eligibility is resolved here rather than in the picker so the list can never
- * offer something the swap would then refuse: same product, room left, not
- * already held by this customer, and not previously withdrawn.
+ * Eligibility is resolved in SQL rather than here, and here rather than in the
+ * picker, so the list can never offer something the swap would then refuse:
+ * same product, room left, not already held by this customer, not previously
+ * withdrawn, not a customer's own lead.
+ *
+ * The customer's lead FILTER is the one rule that is reported rather than
+ * applied. get_swap_candidates_for_assignment (0109) flags each candidate with
+ * `matches_filter` — from lead_matches_customer_filter, the same predicate
+ * allocation and the expired pool use — and a mismatch is still returned. A
+ * swap is a support action, and a customer with a narrow filter may have no
+ * matching lead in stock at the moment they are owed a replacement. The
+ * override is the admin's to take, deliberately and per swap; see the POST.
  */
 export async function GET(
   req: NextRequest,
@@ -47,82 +57,59 @@ export async function GET(
     return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
   }
 
-  // The product is fetched separately rather than through an embedded
-  // `leads!inner(lead_type)` select. PostgREST returns an embedded row as
-  // either an object or an array depending on how it infers the relationship,
-  // and reading `.lead_type` off the array form yields undefined — which
-  // becomes `lead_type=eq.undefined`, matches nothing, and renders as an empty
-  // dropdown indistinguishable from "no eligible leads". Two plain queries
-  // cannot go wrong that way.
-  const { data: currentLead } = await admin
-    .from("leads")
-    .select("lead_type")
-    .eq("id", assignment.lead_id as string)
-    .maybeSingle();
-
-  const leadType = currentLead?.lead_type as string | undefined;
-
-  // Fail loudly. An empty list is a legitimate answer, so a lookup that cannot
-  // determine the product must not be allowed to masquerade as one.
-  if (!leadType) {
-    console.error("swap candidates: could not resolve lead_type", {
-      assignmentId: params.id,
-      leadId: assignment.lead_id,
-    });
-    return NextResponse.json(
-      { error: "Could not determine this lead's product." },
-      { status: 500 }
-    );
-  }
-
-  // Everything this customer already holds, so the picker cannot offer a
-  // duplicate the function would reject.
-  const { data: held } = await admin
-    .from("lead_assignments")
-    .select("lead_id")
-    .eq("customer_id", assignment.customer_id);
-
-  const heldIds = new Set((held ?? []).map((r) => r.lead_id as string));
-
   const search = req.nextUrl.searchParams.get("q")?.trim() ?? "";
 
-  let query = admin
-    .from("leads")
-    .select(
-      "id, lead_name, postcode, lead_type, assignment_count, max_assignments, created_at"
-    )
-    .eq("lead_type", leadType)
-    // A customer's own lead is never swapped in — it belongs to whoever added
-    // it, and admin_swap_lead_assignment refuses one (0107). Filtered here as
-    // well, because an offered control that 400s reads as a bug (§18E).
-    .is("owner_customer_id", null)
-    .is("withdrawn_at", null)
-    .order("created_at", { ascending: false })
-    .limit(200);
-
-  if (search) {
-    query = query.or(`lead_name.ilike.%${search}%,postcode.ilike.%${search}%`);
-  }
-
-  const { data: leads, error } = await query;
+  // The product, the capacity comparison and the filter verdict are all
+  // resolved inside the function. It returns matching leads first.
+  const { data: candidates, error } = await admin.rpc(
+    "get_swap_candidates_for_assignment",
+    {
+      p_assignment_id: params.id,
+      p_search: search || null,
+      p_limit: 50,
+    }
+  );
 
   if (error) {
     console.error("swap candidates lookup failed", error);
     return NextResponse.json({ error: "Could not load leads." }, { status: 500 });
   }
 
-  // Capacity is filtered here rather than in the query: PostgREST cannot
-  // compare two columns, so `assignment_count < max_assignments` has to happen
-  // after the fetch.
-  const candidates = (leads ?? [])
-    .filter(
-      (l) =>
-        !heldIds.has(l.id as string) &&
-        (l.assignment_count as number) < (l.max_assignments as number)
-    )
-    .slice(0, 50);
+  // What the filter actually IS, so the picker can name it rather than just
+  // marking leads good and bad. activeLeadFilters is the existing admin-side
+  // reader (it already knows pending_lift counts as filtered, and that an
+  // empty area list means anywhere).
+  const { data: customer } = await admin
+    .from("customers")
+    .select("*")
+    .eq("id", assignment.customer_id as string)
+    .maybeSingle();
 
-  return NextResponse.json({ ok: true, candidates });
+  const { data: currentLead } = await admin
+    .from("leads")
+    .select("lead_type")
+    .eq("id", assignment.lead_id as string)
+    .maybeSingle();
+
+  const view = customer
+    ? activeLeadFilters(customer as Customer).find(
+        (f) => f.leadType === currentLead?.lead_type
+      )
+    : undefined;
+
+  // null for a customer with no active filter on this product — which is what
+  // lets the picker fall back to its pre-0109 rendering with no extra branch.
+  const filter = view
+    ? {
+        label: view.label,
+        status: view.status,
+        summary: filterSummary(view),
+        tooltip: filterTooltip(view),
+        liftDate: view.liftDate,
+      }
+    : null;
+
+  return NextResponse.json({ ok: true, candidates: candidates ?? [], filter });
 }
 
 /**
@@ -131,6 +118,11 @@ export async function GET(
  * Every rule lives in admin_swap_lead_assignment, not here, so the route and
  * the function cannot disagree — the same reasoning as the reject route, which
  * deliberately runs no pre-flight check of its own (CLAUDE.md §5E).
+ *
+ * That includes the filter. `allow_filter_mismatch` is passed straight through
+ * and is the ONLY thing that lets an off-filter lead in; absent or false, the
+ * function refuses. The flag has to be sent, so the picker cannot forget to
+ * opt in — it has to opt in.
  *
  * No money moves. The replacement inherits the removed assignment's
  * price_paid, no credit is spent, and no counter changes.
@@ -143,7 +135,7 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
-  let body: { new_lead_id?: unknown };
+  let body: { new_lead_id?: unknown; allow_filter_mismatch?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -159,18 +151,24 @@ export async function POST(
     );
   }
 
+  // Strict true. A truthy string or a 1 from some future caller must not be
+  // enough to place a lead the customer asked not to receive.
+  const allowFilterMismatch = body.allow_filter_mismatch === true;
+
   const admin = createAdminClient();
 
   const { data, error } = await admin.rpc("admin_swap_lead_assignment", {
     p_assignment_id: params.id,
     p_new_lead_id: newLeadId,
+    p_allow_filter_mismatch: allowFilterMismatch,
   });
 
   if (error) {
     console.error("swap lead assignment failed", error);
     // The function raises in plain language for every rule it enforces — won,
-    // duplicate, capacity, paused, product mismatch — so the message is worth
-    // passing through rather than replacing with something generic.
+    // duplicate, capacity, paused, product mismatch, filter mismatch — so the
+    // message is worth passing through rather than replacing with something
+    // generic.
     return NextResponse.json(
       { error: error.message || "Could not swap this lead." },
       { status: 400 }
@@ -186,6 +184,9 @@ export async function POST(
   // and no reason to know it arrived by a different route, so a second
   // notification path written just for swaps would be a second thing to keep
   // in step with their preferences and opt-outs.
+  //
+  // It is also the reason the filter has to be honoured above: the customer
+  // cannot tell a replacement from a lead the engine chose for them.
   //
   // sendThresholdWarnings is FALSE. A swap spends no credit, so the balance has
   // not moved; the low-credits and top-up-offer branches key on exact balance
