@@ -241,6 +241,25 @@ export interface AnalyserFigures {
   cleaning_fee_pct: number;
   management_fee_annual: number;
   monthly_revenue_profile: number[] | null;
+  /**
+   * ── The market block (0113) ──────────────────────────────────────────
+   *
+   * OPTIONAL, and that is load-bearing rather than lax. The analyser is a
+   * separately deployed app: a build of it that predates these fields must go
+   * on producing usable leads, so every one of them is "absent means the
+   * document did not say", exactly as a missing figure in a PDF is.
+   *
+   * ⚠️ THE TWO SCORES RUN IN OPPOSITE DIRECTIONS — risk is 0 for LOW, direct
+   * booking is 100 for best. Stored as stated; never normalised to agree.
+   */
+  market_occupancy_rate?: number | null;
+  comp_set_size?: number | null;
+  comp_set_radius_km?: number | null;
+  comp_avg_rating?: number | null;
+  comp_avg_review_count?: number | null;
+  risk_score?: number | null;
+  risk_label?: string | null;
+  direct_booking_score?: number | null;
 }
 
 export interface AnalyserSuccess {
@@ -299,6 +318,17 @@ export function buildOutcomeFromAnalyserResponse(
     return reject("Monthly forecast was not twelve months");
   }
 
+  // Both or neither, twice over — the same pairing rule the PDF parser applies:
+  // a comp-set count says nothing without the radius it was found in, and a
+  // risk score with no wording is a number a landlord cannot read.
+  const compSetOk =
+    inRange(f.comp_set_size, 0, 100_000) != null &&
+    inRange(f.comp_set_radius_km, 0.001, 500) != null;
+  const riskOk =
+    inRange(f.risk_score, 0, 100) != null &&
+    typeof f.risk_label === "string" &&
+    f.risk_label.trim().length > 0;
+
   const occupancy = f.occupancy_rate;
   const rate = f.avg_nightly_rate;
   const pairOk =
@@ -326,6 +356,18 @@ export function buildOutcomeFromAnalyserResponse(
     platformFeePct: numberOrNull(f.platform_fee_pct),
     cleaningFeePct: numberOrNull(f.cleaning_fee_pct),
     monthlyRevenueProfile: profile ?? null,
+    // The market block (0113). Range-guarded here rather than trusted, for the
+    // same reason occupancy is asserted above: the receiving CHECK constraints
+    // abort the WHOLE lead update on a bad value, so one out-of-range score
+    // would cost the figures beside it. Out of range becomes null.
+    marketOccupancyRate: inRange(f.market_occupancy_rate, 0, 100),
+    compSetSize: compSetOk ? numberOrNull(f.comp_set_size) : null,
+    compSetRadiusKm: compSetOk ? numberOrNull(f.comp_set_radius_km) : null,
+    compAvgRating: inRange(f.comp_avg_rating, 0, 5),
+    compAvgReviewCount: inRange(f.comp_avg_review_count, 0, 100_000),
+    riskScore: riskOk ? inRange(f.risk_score, 0, 100) : null,
+    riskLabel: riskOk ? String(f.risk_label).slice(0, 60) : null,
+    directBookingScore: inRange(f.direct_booking_score, 0, 100),
     // Opaque Monday asset ids do not exist for a lead we analysed ourselves.
     assetId: null,
     error: null,
@@ -335,4 +377,10 @@ export function buildOutcomeFromAnalyserResponse(
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** A number the receiving CHECK constraint will accept, or null. */
+function inRange(value: unknown, min: number, max: number): number | null {
+  const n = numberOrNull(value);
+  return n != null && n >= min && n <= max ? n : null;
 }

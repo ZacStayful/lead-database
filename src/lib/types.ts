@@ -169,6 +169,20 @@ export interface Customer {
   presentation_settings: unknown;
   /** NULL means never set up, which is what the dashboard prompts on. */
   presentation_settings_updated_at: string | null;
+  /**
+   * The operator's own branding for that presentation (0112): one accent
+   * colour and a pointer at their logo in the presentation-brand bucket. Every
+   * other colour is DERIVED from the accent at render time, so this can never
+   * hold a palette that renders a slide unreadable. Validated in
+   * src/lib/presentationBrand.ts.
+   */
+  presentation_brand: unknown;
+  /**
+   * NULL means never saved — and this is deliberately a SECOND timestamp
+   * rather than a reuse of the one above. Sharing it would let uploading a logo
+   * silence the prompt about terms the operator has never reviewed.
+   */
+  presentation_brand_updated_at: string | null;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).

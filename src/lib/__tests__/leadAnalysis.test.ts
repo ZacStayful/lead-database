@@ -211,6 +211,71 @@ describe("buildOutcomeFromAnalyserResponse", () => {
     expect(o.bytes).toBe(PDF);
   });
 
+  /**
+   * ── The market block (0113) ──────────────────────────────────────────
+   *
+   * The analyser is deployed separately, so a build of it that predates these
+   * fields must go on producing perfectly good leads. Absent means "the
+   * analysis did not say", exactly as a missing figure in a PDF does.
+   */
+  it("produces a lead with no market figures when the analyser sends none", () => {
+    const o = buildOutcomeFromAnalyserResponse(reply(), PDF);
+    expect(o.status).toBe("parsed");
+    expect(o.grossAnnualIncome).toBe(43295);
+    expect(o.riskScore).toBeNull();
+    expect(o.compAvgRating).toBeNull();
+    expect(o.directBookingScore).toBeNull();
+  });
+
+  it("carries the market block when the analyser sends it", () => {
+    const o = buildOutcomeFromAnalyserResponse(
+      reply({
+        market_occupancy_rate: 62,
+        comp_set_size: 48,
+        comp_set_radius_km: 1.5,
+        comp_avg_rating: 4.8,
+        comp_avg_review_count: 42,
+        risk_score: 38,
+        risk_label: "Low-Medium Risk",
+        direct_booking_score: 72,
+      }),
+      PDF
+    );
+    expect(o.marketOccupancyRate).toBe(62);
+    expect(o.compSetSize).toBe(48);
+    expect(o.compSetRadiusKm).toBe(1.5);
+    expect(o.compAvgRating).toBe(4.8);
+    expect(o.compAvgReviewCount).toBe(42);
+    expect(o.riskScore).toBe(38);
+    expect(o.riskLabel).toBe("Low-Medium Risk");
+    expect(o.directBookingScore).toBe(72);
+  });
+
+  /**
+   * The receiving CHECK constraints abort the WHOLE lead update, so one
+   * out-of-range score would cost the gross beside it. Out of range is dropped.
+   */
+  it("drops a market figure the receiving constraint would reject", () => {
+    const o = buildOutcomeFromAnalyserResponse(
+      reply({ comp_avg_rating: 48, risk_score: 380, direct_booking_score: -4 }),
+      PDF
+    );
+    expect(o.status).toBe("parsed");
+    expect(o.grossAnnualIncome).toBe(43295);
+    expect(o.compAvgRating).toBeNull();
+    expect(o.riskScore).toBeNull();
+    expect(o.directBookingScore).toBeNull();
+  });
+
+  it("keeps the comp set and the risk verdict paired", () => {
+    const noRadius = buildOutcomeFromAnalyserResponse(reply({ comp_set_size: 48 }), PDF);
+    expect(noRadius.compSetSize).toBeNull();
+
+    const noWording = buildOutcomeFromAnalyserResponse(reply({ risk_score: 38 }), PDF);
+    expect(noWording.riskScore).toBeNull();
+    expect(noWording.riskLabel).toBeNull();
+  });
+
   it("refuses an occupancy that is still a fraction", () => {
     // The receiving CHECK is 0..100, so 0.63 would be stored without complaint
     // and the only symptom would be a silently reworded caption.

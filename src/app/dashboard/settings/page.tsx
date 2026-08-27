@@ -2,7 +2,10 @@ import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { SettingsPanel } from "@/components/dashboard/SettingsPanel";
 import { PresentationSettingsCard } from "@/components/dashboard/PresentationSettingsCard";
+import { PresentationBrandCard } from "@/components/dashboard/PresentationBrandCard";
 import { validatePresentationSettings } from "@/lib/presentationSettings";
+import { validatePresentationBrand } from "@/lib/presentationBrand";
+import { brandLogoDataUrl } from "@/lib/presentationBrandStorage";
 import { ApiAccessPanel, type ApiKeyRow } from "@/components/dashboard/ApiAccessPanel";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { holdsProduct } from "@/lib/products";
@@ -44,6 +47,11 @@ export default async function SettingsPage() {
     ]);
   }
 
+  const brand = validatePresentationBrand(customer.presentation_brand);
+  // Read here rather than in an effect, so the card renders with the logo
+  // already on screen instead of flashing an empty preview.
+  const brandLogoUrl = await brandLogoDataUrl(brand);
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
@@ -53,6 +61,21 @@ export default async function SettingsPage() {
         </p>
       </div>
       <SettingsPanel customer={customer} />
+
+      {/*
+        Branding is for ANY subscriber, which is why it sits outside the
+        management gate below rather than inside it. The presentation a lead
+        seeds is management-only (invariant 6), but a GR operator opens the
+        blank tool from Documents and their logo is theirs either way (0112).
+
+        Gated on holding a product, like API access above it — and for the same
+        reason that gate is about CREATING rather than using: the routes stay
+        open to any customer row, so somebody who later cancels does not have
+        their logo pulled out from under a presentation mid-meeting.
+      */}
+      {holdsAny && (
+        <PresentationBrandCard initial={brand} initialLogoUrl={brandLogoUrl} />
+      )}
 
       {/*
         Management only. A Guaranteed Rent operator earns the margin between the

@@ -47,12 +47,50 @@ export interface PresentationSeedData {
   nextSteps: PresentationSettings["nextSteps"];
   notes: { landlord: string; phone: string; note: string };
   /**
+   * What the analysis says about the market around this property (0113), or
+   * null when it said nothing.
+   *
+   * A SEPARATE OBJECT FROM `income`, because it is a different KIND of claim.
+   * Everything in `income` is about money this property makes and feeds the
+   * arithmetic on every slide; nothing here is computed with — it is evidence,
+   * shown on its own slide and nowhere else. Folding it in would also mean the
+   * tool's "Adjust figures" form had to offer an operator a rating to edit,
+   * and these are not theirs to adjust.
+   */
+  market: PresentationMarket | null;
+  /**
    * The property's own seasonal curve as multipliers of its average month, or
    * null. Not a field the tool ships with — it is read by the patched
    * genMonths() so "regenerate" uses this property's shape rather than the
    * generic one.
    */
   monthWeights: number[] | null;
+}
+
+/**
+ * The market block, exactly as the report states it (0113).
+ *
+ * ⚠️ EVERY FIELD IS INDEPENDENTLY NULLABLE and the slide renders per field, so
+ * a report that gave us a risk score and nothing else produces one card rather
+ * than a broken slide. There is no default for any of them: the tool's other
+ * defaults exist so a partly-parsed lead still shows a plausible FORM to fill
+ * in, and a made-up guest rating is not a form, it is a false statement about
+ * somebody else's property.
+ */
+export interface PresentationMarket {
+  /** The property's projected occupancy, repeated here for the comparison. */
+  occupancy: number | null;
+  /** The market's, as printed. 0 legitimately means "no comparables nearby". */
+  marketOccupancy: number | null;
+  compSetSize: number | null;
+  compSetRadiusKm: number | null;
+  compAvgRating: number | null;
+  compAvgReviews: number | null;
+  /** 0-100 where 0 is LOW risk, with the report's own wording beside it. */
+  riskScore: number | null;
+  riskLabel: string | null;
+  /** 0-100 where 100 is best — the opposite direction to riskScore. */
+  directBookingScore: number | null;
 }
 
 /** The tool's own starting figures, for anything the report did not state. */
@@ -82,11 +120,63 @@ export interface SeedLead {
   platform_fee_pct: number | null;
   cleaning_fee_pct: number | null;
   monthly_revenue_profile: number[] | null;
+  market_occupancy_rate: number | null;
+  comp_set_size: number | null;
+  comp_set_radius_km: number | null;
+  comp_avg_rating: number | null;
+  comp_avg_review_count: number | null;
+  risk_score: number | null;
+  risk_label: string | null;
+  direct_booking_score: number | null;
 }
 
 export interface SeedCustomer {
   business_name: string | null;
   presentation_settings: unknown;
+}
+
+/**
+ * The market block, or null when the report stated none of it.
+ *
+ * Null rather than an object of nulls, because the tool switches a whole SLIDE
+ * on it: an object that is present but empty would put an empty slide in front
+ * of a landlord, which is worse than the six slides this tool has always had.
+ */
+function marketFrom(lead: SeedLead): PresentationMarket | null {
+  const market: PresentationMarket = {
+    occupancy: numOrNull(lead.occupancy_rate),
+    // 0 is kept — it is the report's way of saying there is nothing comparable
+    // nearby, which is worth an operator knowing.
+    marketOccupancy: numOrNull(lead.market_occupancy_rate, true),
+    compSetSize: numOrNull(lead.comp_set_size, true),
+    compSetRadiusKm: numOrNull(lead.comp_set_radius_km),
+    compAvgRating: numOrNull(lead.comp_avg_rating),
+    compAvgReviews: numOrNull(lead.comp_avg_review_count, true),
+    riskScore: numOrNull(lead.risk_score, true),
+    riskLabel: lead.risk_label?.trim() || null,
+    directBookingScore: numOrNull(lead.direct_booking_score, true),
+  };
+
+  // The property's own occupancy is not evidence about the market on its own —
+  // it is already on the income slide. Something the market block actually
+  // states has to be present for the slide to be worth showing.
+  const { occupancy, ...evidence } = market;
+  const hasEvidence = Object.values(evidence).some((v) => v != null);
+  return hasEvidence ? market : null;
+}
+
+/**
+ * ⚠️ `Number(null)` IS 0, not NaN — so a bare `Number()` here would turn every
+ * absent market figure into a legitimate-looking zero, and a lead whose report
+ * stated none of this would arrive claiming a market occupancy of 0% and a comp
+ * set of nothing. Absence is tested before the number is.
+ */
+function numOrNull(value: unknown, allowZero = false): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (n < 0) return null;
+  return n > 0 || allowZero ? n : null;
 }
 
 function num(value: unknown, fallback: number): number {
@@ -203,6 +293,7 @@ export function buildPresentationSeed(
     landlord: settings.landlord,
     discovery: settings.discovery,
     nextSteps: settings.nextSteps,
+    market: marketFrom(lead),
     // Private to the presenter — the notes panel, never a slide.
     notes: {
       landlord: lead.lead_name?.trim() || "",

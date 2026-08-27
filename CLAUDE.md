@@ -3034,11 +3034,18 @@ Same arrangement §20 records for `capture_operator_proof` duplicating
 
 ### 26.8 — The static file is generated upstream
 
-Four marked edits, and re-applying them after a regeneration is the maintenance
-cost of this feature: `componentDidMount` (lead id, per-lead key, seeding),
-`genMonths` (real weights), `renderVals` (the flags), and the setup template
-(the `<sc-if>` wrappers and the seeded header). Each is commented
-`STAYFUL EDIT n of 4`.
+~~Four marked edits~~ **Nine**, and re-applying them after a regeneration is the
+maintenance cost of this feature. 1-4 are 0093's: `componentDidMount` (lead id,
+per-lead key, seeding), `genMonths` (real weights), `renderVals` (the flags),
+and the setup template (the `<sc-if>` wrappers and the seeded header). 5-7 are
+branding (§37): the `:root` palette in the helmet `<style>`, the brand fetch and
+`applyBrand` in the script, and the logo `<img>` blocks. 8-9 are the market
+slide (§38): the slide SEQUENCE replacing the fixed six, and the slide itself.
+Each is commented `STAYFUL EDIT n of 9`.
+
+⚠️ **Every brand colour in the file is now `var(--sf-*)`, not a hex.** A
+regeneration brings the literals back, and a deck that has stopped responding to
+an operator's colour is the symptom. The mapping is in §37.
 
 ⚠️ `componentDidMount` also assigned its keydown handler to `this._key`, which is
 now the storage key. It is renamed `_keyHandler`; the two must not collide again.
@@ -5455,3 +5462,307 @@ deploy at any point after the migration.
 `package.json`'s `vitest run && next build`, so the suite gated nothing on
 deploy.** It now runs the tests. The phone normaliser's only defence is a unit
 test, and it was one CI never executed.
+
+---
+
+## 37. The operator's own branding *(0112)*
+
+`public/income-presentation/` is the deck a management customer walks a landlord
+through. Since §26 it arrives filled in — the property's figures from its
+analysis, the operator's fee and terms from their profile. What it still was, up
+to here, was **ours to look at**: Stayful green throughout, and the operator's
+identity reduced to one line of text, "prepared by <name>".
+
+That is the same argument §26 already makes about the management fee. The report
+charges 15% of gross because that is *Stayful's* fee, and an operator quoting it
+to a landlord would be quoting ours — so it comes from their profile and never
+from the report. Their colours are the same fact one step out. **Full
+white-label: their logo, their colour, and no Stayful mark on any slide.**
+
+### 37.1 — One colour is stored. Everything else is derived
+
+`customers.presentation_brand` (jsonb) holds an accent hex and a pointer at a
+logo. `derivePalette()` in `src/lib/presentationBrand.ts` produces the other
+eight colours on every render.
+
+**A customer who could store nine colours could store nine colours that render a
+slide unreadable, in front of a landlord, with no way to see it coming.** Each
+derived token fixes its own *lightness* and borrows only the hue and a fraction
+of the saturation, so the dark slide ground is dark whatever arrives and the
+near-white type stays near-white. The one thing a hostile pick can still move is
+the accent itself, and that is guarded:
+
+> **Contrast, and why there is only one guard.** The accent is both a button
+> fill with white text on it *and* accent-coloured text on a white slide. WCAG
+> contrast is symmetric, so a single requirement — accent against white ≥ 4.5:1 —
+> makes both legible at once. A pale yellow is darkened 1% of lightness at a time
+> until it passes, and `palette.adjusted` says so on the settings card rather
+> than silently showing a colour they did not choose.
+
+⚠️ **`DEFAULT_PRESENTATION_BRAND` and the derived defaults mirror the hex
+literals the tool shipped with, and the two must change together.** Every
+customer starts on the default accent, so if the derivation drifted, this
+feature would silently restyle every deck in the business on the day it
+deployed. `presentationBrand.test.ts` pins each token to within four parts in
+255 of the colour it replaced.
+
+**Presets resolve to a hex on save; the preset's name is never stored.**
+Re-tuning "Slate" a year from now must not restyle a deck an operator has
+already presented from.
+
+### 37.2 — The palette reaches the static file as CSS custom properties
+
+Sixty brand-colour literals in `index.html` became `var(--sf-*)`, defaulted in
+`:root` to exactly the hexes they replaced, and `applyBrand()` overwrites them
+with nine `setProperty` calls. `cssToObj` in `support.js` splits a declaration
+on `;` then the first `:` and passes `--custom` props through verbatim, so a
+`var()` in an inline style attribute survives the runtime's conversion to React
+style objects.
+
+| Token | Was |
+|---|---|
+| `--sf-accent` / `--sf-accent-dark` / `--sf-accent-mid` | `#2f7d4f` · `#245f3c` · `#3a9560` |
+| `--sf-accent-soft` / `--sf-accent-bright` | `#8fbf9e` · `#8fe0a6` |
+| `--sf-ink` / `--sf-ink-text` | `#16241c` · `#f4f8f2` |
+| `--sf-tint` / `--sf-tint-deep` | `#f0f6f1` · `#eef4ec` |
+
+**Not brandable, deliberately:** the greys (`#1a1a19`, `#55564f`, `#8a8b84`),
+the page ground (`#f2f3ef`), and **`#c26b3d`, which marks a NEGATIVE delta and
+must never become somebody's brand orange**. The `rgba(244,248,242,α)` text
+tints are also left alone — a near-white at alpha reads correctly on any dark
+ground.
+
+### 37.3 — The logo is inlined, not linked
+
+`data:` URI in the payload the tool already fetches, never a signed URL.
+
+The tool vendors React locally *specifically* so it survives a bad network
+during a live meeting. A signed URL puts back exactly what that avoids: a second
+request, to a host that may be unreachable, for an asset that **expires on a
+clock** — so the failure lands mid-presentation rather than at the start where it
+would be noticed. A logo is a few kilobytes.
+
+`brandLogoDataUrl()` **fails to null and never throws**: a missing or unreadable
+object costs the operator their logo and nothing else.
+
+### 37.4 — The bucket, and why the bytes go through a route
+
+`presentation-brand`: private, image types only, 2 MB, and **no
+`storage.objects` policy at all** — deny-all to the browser, following
+`lead-reports` (0092) rather than `lead-files`. That other bucket keys every
+policy on `auth.uid()` because each object is a customer's own file; a logo is
+read by our route on the service role and by nobody else, so a signature is the
+whole authorisation story and a policy would be a second one to keep in step.
+
+The browser therefore cannot upload directly, **which is the point**: the file is
+checked server-side, and it is checked by **sniffing its own bytes**. The
+declared content-type is the client's word for it, and the bucket's
+`allowed_mime_types` checks that same client-supplied string, so neither is
+evidence. PNG, JPEG and WebP have magic numbers; SVG has none and is recognised
+by its opening tag after any BOM or whitespace.
+
+⚠️ **SVG is accepted, and safe only because of where it is rendered.** Inside an
+`<img>` browsers refuse scripts and external references. It must never be
+inlined into the page's own markup. It is held to a tighter cap (512 KB) than
+raster — a vector logo is a few kilobytes, and anything approaching that is a
+pasted-in bitmap or an embedded font dump.
+
+⚠️ **The path is fixed: `<customer_id>/logo`, no extension.** One object per
+customer, replaced by overwrite, so there is nothing to garbage-collect and a
+png→jpg swap cannot orphan the old file. The mime lives in the jsonb, which is
+also what makes an extensionless path safe to serve.
+
+### 37.5 — Two timestamps, because they answer different questions
+
+`presentation_brand_updated_at` is **separate from
+`presentation_settings_updated_at`** and must stay so. That column is the "have
+they set their terms up yet" test (§26.5), and it is NULL-versus-set rather than
+a test of the blob's contents. Sharing it would mean uploading a logo silently
+answers a question nobody asked: the tool would stop prompting an operator about
+the fee and contract terms they have never looked at, and they would present
+Stayful's generic wording under their own logo.
+
+### 37.6 — Any subscriber, and the blank tool too
+
+Branding is offered to **management and GR alike**, which is why
+`PresentationBrandCard` sits *outside* the `subscription_status === 'active'`
+gate that `PresentationSettingsCard` sits inside. The lead-seeded presentation is
+management-only because a management fee is not what a GR operator sells
+(invariant 6); a logo is not a product.
+
+With a lead, the brand rides with the seed. With none — the tool opened from
+Documents — `GET /api/customer/presentation/brand` fetches it alone, and fills
+in the company name where the operator has not typed one. The blank tool is
+otherwise untouched: same form, same six slides, same storage key.
+
+⚠️ `applyBrand` is called from **all three** fetch paths — `seedFromLead`,
+`checkProfile` and `loadBrand`. `checkProfile` is the one that is easy to miss
+and the most commonly taken: it is the path a lead with saved work goes down, so
+omitting it would lose an operator their branding on exactly the leads they have
+been working.
+
+---
+
+## 38. What the analysis says about the market *(0113)*
+
+§25 takes the money out of the property-analysis PDF: gross, rate, occupancy,
+cost percentages, the long-let comparison, the seasonal curve. The analyser
+states more than that, and the rest is what an operator needs when a landlord
+asks the obvious question — *is anyone actually booking round here?*
+
+A seventh slide now carries it: comparable-set size and radius, their average
+guest rating and review count, the market's occupancy against the property's,
+the analyser's direct-booking score and its risk verdict.
+
+### 38.1 — Only what the report states
+
+Nothing on that slide is derived, estimated or inferred from figures we already
+hold — no "direct booking potential" computed from the platform fee, no risk
+band invented from occupancy. **A number an operator repeats to a landlord has
+to be one the document behind it actually prints**, or the analysis stops being
+the thing that makes the deck credible.
+
+The one exception proves the rule: `market_occupancy_rate` is not new work at
+all. `OCCUPANCY_RE` has captured it as its second group since 0090 and thrown it
+away. It is printed on the report; we were simply discarding it.
+
+### 38.2 — Two producers, and the constant that keeps them honest
+
+`NO_FIGURES` was exported when §31 added a second producer of
+`IncomeReportOutcome`. That paid off immediately here: adding eight fields to
+the type made `leadAnalysis.ts` **fail to compile**, which is exactly the
+failure that constant exists to force.
+
+| Producer | Source | Reaches |
+|---|---|---|
+| `parseIncomeReport` | the Monday PDF's text layer | Monday-sourced leads |
+| `buildOutcomeFromAnalyserResponse` | the analyser's JSON | customer-owned analysed leads (§31) |
+
+The analyser half needed the analyser itself extended — `AnalyseFigures` in
+`ZacStayful/Stayful-STR-estimate-software` now carries the same eight fields,
+read off `deriveReportData`, **the same derivation the PDF renders from**, so the
+JSON and the document in one response cannot state different numbers.
+
+**Every new field is optional on our side.** The analyser deploys separately, so
+a build of it that predates them must go on producing perfectly good leads:
+absent means "the analysis did not say", exactly as a missing figure in a PDF
+does. Deployment order is therefore one-way and safe — analyser first, or not at
+all, and nothing breaks either way.
+
+### 38.3 — The anchors read plain captions, and the trap next door
+
+§25 documents why the headline block is unmatchable — its labels are
+letter-spaced in the text layer (`AVG N I G H T LY R AT E`). These four anchors
+are on the *Comparable Properties* and *Local Demand & Risk* pages, which render
+in ordinary type, so they read the caption directly:
+
+```
+48 active Airbnb listings within 1.50 km ·      → size + radius
+Avg Rating 4.8 ★   Avg Reviews 42               → rating + review count
+Direct Booking Potential Score: 72/100 — GOOD   → direct booking
+Low-Medium Risk · 38/100                        → risk verdict
+```
+
+⚠️ **The risk paragraph explains its own scale as "(0 = Low Risk, 100 = High
+Risk)" and sits ABOVE the verdict.** Reading that as the verdict would report
+every property in the book as high risk — plausibly, and silently. The
+separator class admits no comma, which is what keeps the explanation out.
+
+⚠️ **The rating prints as `4.8 ★` and Helvetica has no star**, so what survives
+into the text layer varies. The pattern stops at the number and never asserts
+what follows it. An unrated comp set prints an em dash, which simply does not
+match — the right outcome.
+
+**There is no cross-check to run, and that is deliberate.** Unlike the money
+figures, none of these has a second printing to agree with, and inventing an
+arithmetic relationship between them would be inventing the thing §38.1 says not
+to. What guards them instead is **range**: a rating outside 0–5 or a score
+outside 0–100 is a match that has wandered into another number, and is dropped.
+
+### 38.4 — ⚠️ The two scores run in opposite directions
+
+`risk_score` is **0 for LOW risk**. `direct_booking_score` is **100 for the
+best**. Both are stored exactly as printed and worded accordingly on the slide.
+Normalising one to match the other would invert a number an operator reads aloud
+to a landlord.
+
+Two pairings are enforced on both producers, for different reasons: a comp-set
+count without its radius does not say how hard the analyser had to look for it,
+and a risk score without its wording is a number a landlord cannot read.
+
+### 38.5 — The deck is a sequence now
+
+The tool's fixed `s1…s6` became a **sequence array**: `go()` walks it, the
+counter reads `pos / seq.length`, and the market slide is in the sequence only
+when the lead supplied at least one market figure. The blank tool and every lead
+without them still walk exactly the six slides this file has always had.
+
+The property's **own** occupancy does not count as evidence for that test — it is
+already on the income slide, and a slide about the market carrying one restated
+figure is worse than no slide. Every card inside the slide is independently
+present, so a report that stated only a risk score produces one card rather than
+a broken slide.
+
+⚠️ **`Number(null)` is 0, not NaN.** The first cut of `marketFrom()` used a bare
+`Number()` and turned every absent figure into a legitimate-looking zero, so a
+lead whose report said none of this arrived claiming a market occupancy of 0%
+and a comp set of nothing — and the slide appeared on every lead in the
+database. Caught by the seed tests, which is what they are for.
+
+### 38.6 — No backfill, deliberately
+
+The sweep's third pass selects
+`income_report_path.is.null OR platform_fee_pct.is.null`, and every
+already-parsed lead fails both — so nothing here reaches the leads that already
+carry figures. **That is a decision, not an oversight**: those leads work, their
+decks render today, and re-reading hundreds of documents to add a slide is not
+worth the chance of disturbing one that is live.
+
+New leads get these at ingest, through the same parse that writes the gross;
+`presentationFiguresPatch()` carries them too, under its existing add-only rule,
+so any lead still in that pass for a missing `platform_fee_pct` picks them up
+free. Should the backlog ever be worth clearing, adding `risk_score.is.null` to
+that `.or()` is the whole change.
+
+### Verification
+
+`npm run test` — 481 → 504 cases in this repo, and 192 → 195 in the analyser's, all pure units, so they stay inside the suite
+that gates `next build`. Among them: the default palette reproducing all nine
+shipped hexes, every preset clearing 4.5:1 unaided, the contrast guard on a pale
+yellow, the byte sniffer against a PDF renamed `.png` and an XML preamble with
+no `<svg>` after it, the risk-scale explanation not being read as the verdict,
+both "pair or nothing" rules on both producers, and the seed round-tripped
+through the tool's **own** `merge()` to pin §26.7's array-shrink trap.
+
+**The parser was run over a real report**, rendered from the analyser's own
+generator (`deriveReportData` → `StayfulReport` → `renderToBuffer`) rather than
+sampled: 8 comparables within 3.00 km, avg rating 4.6, avg reviews 50,
+`Low-Medium Risk · 48/100`, direct booking 70 — all eight market figures read
+back exactly, **and the nine existing figures came back unchanged**, which is the
+regression that would have mattered. Generating the document rather than
+sampling one is the stronger check: it exercises the template as it stands
+today, so a change to the report's wording fails here rather than in production.
+
+All **108 migrations applied to a scratch Postgres 16 from empty**, then 0112
+and 0113 re-applied to prove idempotency. Every new CHECK exercised on its
+boundaries (0, 100, 5, 0.001, 500 accepted) and on eight invalid values (all
+refused). The bucket's row confirmed private with the four image types, and
+`pg_policies` confirmed to name **no** policy on `presentation-brand` — the
+only `storage.objects` policies are `lead_files_*`.
+
+The tool was rendered in Chromium four ways: blank (six slides, original form,
+default palette, no logo, no page errors); blank with branding (navy palette
+applied to `:root`, logo on the cover, company name filled); a seeded lead with
+market figures (**seven** slides, counter `3 / 7`, every card rendering); and a
+seeded lead without them (six slides, unchanged).
+
+### Deployment order — migrations BEFORE code
+
+0112 and 0113 first. The seed route selects the new lead columns on every
+request, `getCurrentCustomer()` reads `customers` with `select("*")`, and the
+settings page reads the brand blob — so code arriving first would query columns
+that do not exist. Both are additive and inert on their own, and neither touches
+a balance, counter, pacing or capacity column, so a lagging migration cannot
+affect lead allocation.
+
+The analyser's own change is independent and can land in either order (§38.2).

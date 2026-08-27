@@ -17,13 +17,35 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* ==== STAYFUL EDIT 5 of 9 (0112): the palette, as custom properties. ====
+     Every BRAND colour in this file is now var(--sf-*), and the defaults below
+     are the exact hexes it shipped with — so a customer who has set no branding
+     sees the deck they saw yesterday. componentDidMount overwrites these on
+     :root from the operator's own colour (edit 6).
+
+     NOT brandable, deliberately, and still literals throughout: the greys
+     (#1a1a19, #55564f, #8a8b84), the page ground (#f2f3ef), and #c26b3d, which
+     marks a NEGATIVE delta and must never become somebody's brand orange.
+     ==================================================================== */
+  :root {
+    --sf-accent: #2f7d4f;
+    --sf-accent-dark: #245f3c;
+    --sf-accent-mid: #3a9560;
+    --sf-accent-soft: #8fbf9e;
+    --sf-accent-bright: #8fe0a6;
+    --sf-ink: #16241c;
+    --sf-ink-text: #f4f8f2;
+    --sf-tint: #f0f6f1;
+    --sf-tint-deep: #eef4ec;
+  }
+  /* ==== end STAYFUL EDIT 5 ==== */
   * { box-sizing: border-box; }
   html, body { margin: 0; }
   body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: #1a1a19; -webkit-font-smoothing: antialiased; }
-  a { color: #2f7d4f; text-decoration: none; }
-  a:hover { color: #245f3c; }
+  a { color: var(--sf-accent); text-decoration: none; }
+  a:hover { color: var(--sf-accent-dark); }
   input, select, textarea { font-family: inherit; }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: #2f7d4f; box-shadow: 0 0 0 3px rgba(47,125,79,0.14); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--sf-accent); box-shadow: 0 0 0 3px rgba(47,125,79,0.14); }
   ::placeholder { color: #b3b4ad; }
   @keyframes fadeSlide { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -39,17 +61,24 @@
 
   <div style="position:sticky;top:0;z-index:20;background:rgba(242,243,239,0.9);backdrop-filter:blur(8px);border-bottom:1px solid rgba(20,30,22,0.10);">
     <div style="max-width:880px;margin:0 auto;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
-      <div>
-        <div style="font-weight:600;font-size:17px;color:#1a1a19;">Presentation setup</div>
-        <div style="font-size:13px;color:#8a8b84;">{{ setupSubhead }}</div>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <!-- STAYFUL EDIT 7 (0112): so an operator can see their branding took
+             effect before they present, not after. -->
+        <sc-if value="{{ hasLogo }}" hint-placeholder-val="{{ false }}">
+        <img src="{{ logoUrl }}" alt="{{ logoAlt }}" style="display:block;max-height:32px;max-width:130px;">
+        </sc-if>
+        <div>
+          <div style="font-weight:600;font-size:17px;color:#1a1a19;">Presentation setup</div>
+          <div style="font-size:13px;color:#8a8b84;">{{ setupSubhead }}</div>
+        </div>
       </div>
-      <button type="button" onClick="{{ goPresent }}" style="background:#2f7d4f;color:#fff;border:none;border-radius:9px;padding:11px 22px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .15s ease, background .15s ease;" style-hover="background:#245f3c;transform:translateY(-1px);">Present</button>
+      <button type="button" onClick="{{ goPresent }}" style="background:var(--sf-accent);color:#fff;border:none;border-radius:9px;padding:11px 22px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .15s ease, background .15s ease;" style-hover="background:var(--sf-accent-dark);transform:translateY(-1px);">Present</button>
     </div>
   </div>
 
   <div style="max-width:880px;margin:0 auto;padding:28px 24px 0;display:flex;flex-direction:column;gap:20px;">
 
-    <!-- ==== STAYFUL EDIT 4 of 4 (0093): the collapsed, seeded setup screen ====
+    <!-- ==== STAYFUL EDIT 4 of 9 (0093): the collapsed, seeded setup screen ====
          Everything below this block is the ORIGINAL form, untouched, wrapped in
          a manualSetup conditional, so the blank tool at /dashboard/documents still
          shows all of it. When a lead has seeded the tool, 20 of its ~28 inputs
@@ -61,18 +90,18 @@
     <div style="background:#fdf6e3;border:1px solid rgba(180,140,20,0.35);border-radius:14px;padding:20px 22px;">
       <div style="font-weight:600;font-size:16px;margin-bottom:6px;">Your presentation details aren&rsquo;t set up yet</div>
       <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:#5a4a1a;max-width:70ch;">The figures below come from this property&rsquo;s analysis, but your fee, contract terms and process are still generic wording. Set them once and every lead&rsquo;s presentation uses them.</p>
-      <a href="{{ profileUrl }}" style="display:inline-flex;align-items:center;gap:8px;background:#2f7d4f;color:#fff;border-radius:9px;padding:10px 18px;font-size:14px;font-weight:600;">Set up my details</a>
+      <a href="{{ profileUrl }}" style="display:inline-flex;align-items:center;gap:8px;background:var(--sf-accent);color:#fff;border-radius:9px;padding:10px 18px;font-size:14px;font-weight:600;">Set up my details</a>
     </div>
     </sc-if>
 
     <sc-if value="{{ profileStale }}" hint-placeholder-val="{{ false }}">
     <div style="background:#fff;border:1px solid rgba(20,30,22,0.16);border-radius:14px;padding:16px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
       <span style="font-size:14px;color:#1a1a19;">Your presentation details have changed since you set this lead up.</span>
-      <button onClick="{{ applyProfile }}" style="background:#2f7d4f;color:#fff;border:0;border-radius:9px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;">Apply them</button>
+      <button onClick="{{ applyProfile }}" style="background:var(--sf-accent);color:#fff;border:0;border-radius:9px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;">Apply them</button>
     </div>
     </sc-if>
 
-    <div style="background:#16241c;border-radius:14px;padding:28px;color:#f4f8f2;">
+    <div style="background:var(--sf-ink);border-radius:14px;padding:28px;color:var(--sf-ink-text);">
       <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:rgba(244,248,242,0.6);margin-bottom:8px;">Presenting as {{ companyLabel }}</div>
       <div style="font-weight:600;font-size:20px;margin-bottom:4px;">{{ propertyLabel }}</div>
       <div style="font-size:14px;color:rgba(244,248,242,0.72);margin-bottom:20px;">{{ landlordLine }}</div>
@@ -84,7 +113,7 @@
       </div>
       <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:rgba(244,248,242,0.72);max-width:70ch;">From Stayful&rsquo;s analysis of this property. Your fee and terms come from your settings. Check anything you disagree with before you present &mdash; the analysis is an estimate.</p>
       <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;">
-        <button onClick="{{ toggleFigures }}" style="background:rgba(244,248,242,0.12);color:#f4f8f2;border:1px solid rgba(244,248,242,0.25);border-radius:9px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;">{{ figuresToggle }}</button>
+        <button onClick="{{ toggleFigures }}" style="background:rgba(244,248,242,0.12);color:var(--sf-ink-text);border:1px solid rgba(244,248,242,0.25);border-radius:9px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;">{{ figuresToggle }}</button>
         <button onClick="{{ reloadFigures }}" style="background:transparent;color:rgba(244,248,242,0.72);border:0;padding:9px 4px;font-size:14px;cursor:pointer;text-decoration:underline;">Reload figures from the lead</button>
         <a href="{{ profileUrl }}" style="color:rgba(244,248,242,0.72);padding:9px 4px;font-size:14px;text-decoration:underline;">Edit my terms</a>
       </div>
@@ -93,12 +122,12 @@
 
     <sc-if value="{{ figuresEditable }}" hint-placeholder-val="{{ true }}">
     <!-- Intro -->
-    <div style="background:#16241c;border-radius:14px;padding:30px 28px;color:#f4f8f2;display:flex;flex-direction:column;align-items:center;text-align:center;">
+    <div style="background:var(--sf-ink);border-radius:14px;padding:30px 28px;color:var(--sf-ink-text);display:flex;flex-direction:column;align-items:center;text-align:center;">
       <div style="font-weight:600;font-size:18px;margin-bottom:10px;">Build a presentation tailored to this lead</div>
       <p style="margin:0;font-size:15px;line-height:1.6;color:rgba(244,248,242,0.82);max-width:60ch;">The figures you enter below drive every slide — the income analysis, the 12-month chart, the best, likely and worst cases, and your terms. The more accurate they are, the more convincing the numbers look on the call. Nothing is fixed to anyone else's rates: it is your property estimate, your fees and your process.</p>
       <p style="margin:14px 0 0;font-size:15px;line-height:1.6;color:rgba(244,248,242,0.82);max-width:60ch;">Don't have the numbers yet? Run the analysis for this property first, then bring the results back here.</p>
       <div style="display:flex;justify-content:center;margin-top:20px;">
-        <a href="https://intelligence.stayful.co.uk/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#2f7d4f;color:#fff;border-radius:9px;padding:12px 22px;font-size:15px;font-weight:600;text-align:center;transition:transform .15s ease, background .15s ease;" style-hover="background:#3a9560;transform:translateY(-1px);">Run the analysis figures<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H8M17 7v9"/></svg></a>
+        <a href="https://intelligence.stayful.co.uk/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--sf-accent);color:#fff;border-radius:9px;padding:12px 22px;font-size:15px;font-weight:600;text-align:center;transition:transform .15s ease, background .15s ease;" style-hover="background:var(--sf-accent-mid);transform:translateY(-1px);">Run the analysis figures<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H8M17 7v9"/></svg></a>
       </div>
     </div>
 
@@ -135,10 +164,10 @@
         <label><span style="display:block;font-size:13px;font-weight:500;color:#55564f;margin-bottom:6px;">Cleaning (% of gross)</span><input type="number" data-key="income.cleaning" value="{{ d.income.cleaning }}" onChange="{{ onChange }}" style="width:100%;padding:10px 12px;border:1px solid rgba(20,30,22,0.16);border-radius:8px;font-size:15px;background:#fff;"></label>
         <label><span style="display:block;font-size:13px;font-weight:500;color:#55564f;margin-bottom:6px;">Management fee (%)</span><input type="number" data-key="fee.pct" value="{{ d.fee.pct }}" onChange="{{ onChange }}" style="width:100%;padding:10px 12px;border:1px solid rgba(20,30,22,0.16);border-radius:8px;font-size:15px;background:#fff;"></label>
       </div>
-      <div style="margin-top:18px;background:#f0f6f1;border:1px solid rgba(47,125,79,0.25);border-radius:10px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:20px;">
-        <div><div style="font-size:12px;color:#55564f;">Net revenue (annual)</div><div style="font-size:20px;font-weight:700;color:#2f7d4f;font-variant-numeric:tabular-nums;">{{ netAnnual }}</div></div>
+      <div style="margin-top:18px;background:var(--sf-tint);border:1px solid rgba(47,125,79,0.25);border-radius:10px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:20px;">
+        <div><div style="font-size:12px;color:#55564f;">Net revenue (annual)</div><div style="font-size:20px;font-weight:700;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ netAnnual }}</div></div>
         <div><div style="font-size:12px;color:#55564f;">Net (monthly)</div><div style="font-size:20px;font-weight:700;color:#1a1a19;font-variant-numeric:tabular-nums;">{{ netMonthly }}</div></div>
-        <div><div style="font-size:12px;color:#55564f;">Uplift vs long-let</div><div style="font-size:20px;font-weight:700;color:#2f7d4f;font-variant-numeric:tabular-nums;">{{ upPct }}</div></div>
+        <div><div style="font-size:12px;color:#55564f;">Uplift vs long-let</div><div style="font-size:20px;font-weight:700;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ upPct }}</div></div>
       </div>
     </div>
 
@@ -149,9 +178,9 @@
       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin-bottom:18px;">
         <div style="flex:1 1 240px;">
           <div style="display:flex;justify-content:space-between;font-size:13px;color:#55564f;margin-bottom:6px;"><span>Seasonal variance</span><span style="font-variant-numeric:tabular-nums;">{{ variancePct }}</span></div>
-          <input type="range" min="0" max="1" step="0.05" data-key="chart.variance" value="{{ d.chart.variance }}" onChange="{{ onChange }}" style="width:100%;accent-color:#2f7d4f;">
+          <input type="range" min="0" max="1" step="0.05" data-key="chart.variance" value="{{ d.chart.variance }}" onChange="{{ onChange }}" style="width:100%;accent-color:var(--sf-accent);">
         </div>
-        <button type="button" onClick="{{ genMonths }}" style="background:#eef4ec;color:#245f3c;border:1px solid rgba(47,125,79,0.3);border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Generate curve</button>
+        <button type="button" onClick="{{ genMonths }}" style="background:var(--sf-tint-deep);color:var(--sf-accent-dark);border:1px solid rgba(47,125,79,0.3);border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Generate curve</button>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;">
         <sc-for list="{{ monthFields }}" as="mf" hint-placeholder-count="12">
@@ -287,7 +316,7 @@
     </div>
 
     <div style="display:flex;justify-content:flex-end;padding-top:4px;">
-      <button type="button" onClick="{{ goPresent }}" style="background:#2f7d4f;color:#fff;border:none;border-radius:9px;padding:12px 26px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .15s ease, background .15s ease;" style-hover="background:#245f3c;transform:translateY(-1px);">Present</button>
+      <button type="button" onClick="{{ goPresent }}" style="background:var(--sf-accent);color:#fff;border:none;border-radius:9px;padding:12px 26px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .15s ease, background .15s ease;" style-hover="background:var(--sf-accent-dark);transform:translateY(-1px);">Present</button>
     </div>
 
   </div>
@@ -296,18 +325,24 @@
 
 <!-- ============ PRESENT MODE ============ -->
 <sc-if value="{{ isPresent }}" hint-placeholder-val="{{ false }}">
-<div style="position:fixed;inset:0;background:#16241c;overflow:hidden;">
+<div style="position:fixed;inset:0;background:var(--sf-ink);overflow:hidden;">
 
   <!-- SLIDE 1 · Cover -->
   <sc-if value="{{ s1 }}" hint-placeholder-val="{{ true }}">
-  <div style="position:absolute;inset:0;background:#16241c;overflow-y:auto;display:flex;align-items:center;padding:clamp(72px,10vh,110px) clamp(24px,6vw,72px);animation:fadeSlide .45s ease;">
+  <div style="position:absolute;inset:0;background:var(--sf-ink);overflow-y:auto;display:flex;align-items:center;padding:clamp(72px,10vh,110px) clamp(24px,6vw,72px);animation:fadeSlide .45s ease;">
     <div style="width:100%;max-width:960px;margin:0 auto;">
-      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:#8fbf9e;margin-bottom:26px;">Managed short-let income</div>
-      <h1 style="margin:0;font-weight:600;font-size:clamp(34px,6vw,72px);line-height:1.05;letter-spacing:-0.02em;color:#f4f8f2;text-wrap:balance;">What {{ propertyLabel }} could earn as a managed short let.</h1>
+      <!-- STAYFUL EDIT 7 of 9 (0112): the operator's logo. Renders nothing at
+           all when they have not set one, so an unbranded deck is exactly the
+           deck this file shipped with. -->
+      <sc-if value="{{ hasLogo }}" hint-placeholder-val="{{ false }}">
+      <img src="{{ logoUrl }}" alt="{{ logoAlt }}" style="display:block;max-height:56px;max-width:260px;margin-bottom:30px;">
+      </sc-if>
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent-soft);margin-bottom:26px;">Managed short-let income</div>
+      <h1 style="margin:0;font-weight:600;font-size:clamp(34px,6vw,72px);line-height:1.05;letter-spacing:-0.02em;color:var(--sf-ink-text);text-wrap:balance;">What {{ propertyLabel }} could earn as a managed short let.</h1>
       <p style="margin:28px 0 0;font-size:clamp(17px,2.3vw,22px);line-height:1.55;color:rgba(244,248,242,0.72);max-width:48ch;">A look at the income, the month-by-month picture, and how it would work — prepared by {{ companyLabel }}.</p>
       <div style="margin-top:44px;display:flex;flex-wrap:wrap;gap:14px;">
-        <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:16px 20px;min-width:150px;"><div style="font-size:12px;color:rgba(244,248,242,0.6);margin-bottom:4px;">Net (monthly)</div><div style="font-size:26px;font-weight:700;color:#8fe0a6;font-variant-numeric:tabular-nums;">{{ netMonthly }}</div></div>
-        <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:16px 20px;min-width:150px;"><div style="font-size:12px;color:rgba(244,248,242,0.6);margin-bottom:4px;">Uplift vs long-let</div><div style="font-size:26px;font-weight:700;color:#f4f8f2;font-variant-numeric:tabular-nums;">{{ upPct }}</div></div>
+        <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:16px 20px;min-width:150px;"><div style="font-size:12px;color:rgba(244,248,242,0.6);margin-bottom:4px;">Net (monthly)</div><div style="font-size:26px;font-weight:700;color:var(--sf-accent-bright);font-variant-numeric:tabular-nums;">{{ netMonthly }}</div></div>
+        <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:16px 20px;min-width:150px;"><div style="font-size:12px;color:rgba(244,248,242,0.6);margin-bottom:4px;">Uplift vs long-let</div><div style="font-size:26px;font-weight:700;color:var(--sf-ink-text);font-variant-numeric:tabular-nums;">{{ upPct }}</div></div>
       </div>
     </div>
   </div>
@@ -317,7 +352,7 @@
   <sc-if value="{{ s2 }}" hint-placeholder-val="{{ false }}">
   <div style="position:absolute;inset:0;background:#ffffff;overflow-y:auto;padding:clamp(72px,10vh,104px) clamp(24px,6vw,64px);animation:fadeSlide .45s ease;">
     <div style="width:100%;max-width:1080px;margin:0 auto;">
-      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:#2f7d4f;margin-bottom:22px;">Income analysis</div>
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent);margin-bottom:22px;">Income analysis</div>
       <div style="display:flex;flex-wrap:wrap;gap:clamp(24px,4vw,48px);">
         <div style="flex:1 1 300px;min-width:280px;">
           <div style="font-size:14px;color:#8a8b84;">Gross revenue (annual)</div>
@@ -327,23 +362,23 @@
             <div style="display:flex;justify-content:space-between;padding:13px 16px;border-bottom:1px solid rgba(20,30,22,0.08);"><span style="color:#55564f;font-size:15px;">Platform commission · {{ platformPct }}</span><span style="font-variant-numeric:tabular-nums;font-size:15px;color:#55564f;">−{{ platformAnnual }}</span></div>
             <div style="display:flex;justify-content:space-between;padding:13px 16px;border-bottom:1px solid rgba(20,30,22,0.08);"><span style="color:#55564f;font-size:15px;">Cleaning · {{ cleaningPct }}</span><span style="font-variant-numeric:tabular-nums;font-size:15px;color:#55564f;">−{{ cleaningAnnual }}</span></div>
             <div style="display:flex;justify-content:space-between;padding:13px 16px;border-bottom:1px solid rgba(20,30,22,0.08);"><span style="color:#55564f;font-size:15px;">Management fee · {{ mgmtPct }}</span><span style="font-variant-numeric:tabular-nums;font-size:15px;color:#55564f;">−{{ mgmtAnnual }}</span></div>
-            <div style="display:flex;justify-content:space-between;padding:13px 16px;background:#f0f6f1;"><span style="font-weight:600;font-size:15px;color:#1a1a19;">Net revenue</span><span style="font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;color:#2f7d4f;">{{ netAnnual }}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:13px 16px;background:var(--sf-tint);"><span style="font-weight:600;font-size:15px;color:#1a1a19;">Net revenue</span><span style="font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;color:var(--sf-accent);">{{ netAnnual }}</span></div>
           </div>
         </div>
         <div style="flex:1 1 300px;min-width:280px;display:flex;flex-direction:column;gap:16px;">
-          <div style="background:#f0f6f1;border:1px solid rgba(47,125,79,0.25);border-radius:14px;padding:24px;">
+          <div style="background:var(--sf-tint);border:1px solid rgba(47,125,79,0.25);border-radius:14px;padding:24px;">
             <div style="font-size:14px;color:#55564f;">Net to the landlord</div>
-            <div style="font-size:clamp(34px,5vw,52px);font-weight:700;line-height:1.05;color:#2f7d4f;font-variant-numeric:tabular-nums;">{{ netMonthly }}</div>
+            <div style="font-size:clamp(34px,5vw,52px);font-weight:700;line-height:1.05;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ netMonthly }}</div>
             <div style="font-size:15px;color:#55564f;margin-top:2px;">per month · {{ netAnnual }} a year</div>
           </div>
           <div style="border:1px solid rgba(20,30,22,0.10);border-radius:14px;padding:24px;">
             <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;"><span style="font-size:14px;color:#55564f;">Current long-let</span><span style="font-variant-numeric:tabular-nums;font-size:17px;font-weight:600;color:#1a1a19;">{{ llMonthly }}/mo</span></div>
-            <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:14px;color:#55564f;">Net uplift</span><span style="font-variant-numeric:tabular-nums;font-size:17px;font-weight:700;color:#2f7d4f;">+{{ upMonthly }}/mo · {{ upPct }}</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:14px;color:#55564f;">Net uplift</span><span style="font-variant-numeric:tabular-nums;font-size:17px;font-weight:700;color:var(--sf-accent);">+{{ upMonthly }}/mo · {{ upPct }}</span></div>
           </div>
         </div>
       </div>
 
-      <button type="button" data-sub="fee" onClick="{{ toggleSub }}" style="margin-top:26px;background:none;border:none;color:#2f7d4f;font-size:14px;font-weight:600;cursor:pointer;padding:0;">{{ subFeeToggle }}</button>
+      <button type="button" data-sub="fee" onClick="{{ toggleSub }}" style="margin-top:26px;background:none;border:none;color:var(--sf-accent);font-size:14px;font-weight:600;cursor:pointer;padding:0;">{{ subFeeToggle }}</button>
       <sc-if value="{{ subFeeOpen }}" hint-placeholder-val="{{ false }}">
         <div style="margin-top:14px;background:#f7f8f5;border:1px solid rgba(20,30,22,0.10);border-radius:12px;padding:20px;max-width:640px;font-size:15px;line-height:1.6;color:#55564f;">The management fee is {{ mgmtPct }} {{ feeBasisText }}. {{ feeDesc }}</div>
       </sc-if>
@@ -351,11 +386,81 @@
   </div>
   </sc-if>
 
+  <!-- ==== STAYFUL EDIT 9 of 9 (0113): SLIDE · the market ====================
+       Only in the deck when the analysis stated something to put on it, and
+       every card inside it is independently present. ONLY WHAT THE REPORT
+       STATES: there is no card here computed from figures we hold, because a
+       number an operator repeats to a landlord has to be one the document
+       behind it actually prints.
+       ==================================================================== -->
+  <sc-if value="{{ sMarket }}" hint-placeholder-val="{{ false }}">
+  <div style="position:absolute;inset:0;background:#ffffff;overflow-y:auto;padding:clamp(72px,10vh,104px) clamp(24px,6vw,64px);animation:fadeSlide .45s ease;">
+    <div style="width:100%;max-width:1080px;margin:0 auto;">
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent);margin-bottom:22px;">The market</div>
+      <h2 style="margin:0 0 8px;font-weight:600;font-size:clamp(24px,3.4vw,38px);line-height:1.15;letter-spacing:-0.02em;color:#1a1a19;">What the comparable properties are doing.</h2>
+      <p style="margin:0 0 30px;font-size:16px;line-height:1.55;color:#55564f;max-width:60ch;">Taken from the same property analysis as the income figures — the listings this property would be competing with, and how the analysis rates it.</p>
+
+      <div style="display:flex;flex-wrap:wrap;gap:16px;">
+
+        <sc-if value="{{ mkOccupancy }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1 1 240px;background:var(--sf-tint);border:1px solid rgba(20,30,22,0.08);border-radius:14px;padding:20px 22px;">
+          <div style="font-size:13px;color:#55564f;margin-bottom:8px;">Occupancy</div>
+          <div style="font-size:30px;font-weight:700;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ mkOccupancyOwn }}</div>
+          <div style="font-size:14px;color:#55564f;margin-top:6px;">Local listings average {{ mkOccupancyMarket }} — this property is projected {{ mkOccupancyVerdict }}.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ mkComps }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1 1 240px;background:var(--sf-tint);border:1px solid rgba(20,30,22,0.08);border-radius:14px;padding:20px 22px;">
+          <div style="font-size:13px;color:#55564f;margin-bottom:8px;">Compared against</div>
+          <div style="font-size:30px;font-weight:700;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ mkCompsCount }}</div>
+          <div style="font-size:14px;color:#55564f;margin-top:6px;">Active short-let listings within {{ mkCompsRadius }} of the property.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ mkRating }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1 1 240px;background:var(--sf-tint);border:1px solid rgba(20,30,22,0.08);border-radius:14px;padding:20px 22px;">
+          <div style="font-size:13px;color:#55564f;margin-bottom:8px;">Average guest rating nearby</div>
+          <div style="font-size:30px;font-weight:700;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ mkRatingValue }}</div>
+          <div style="font-size:14px;color:#55564f;margin-top:6px;">The standard a new listing has to meet to compete here.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ mkReviews }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1 1 240px;background:var(--sf-tint);border:1px solid rgba(20,30,22,0.08);border-radius:14px;padding:20px 22px;">
+          <div style="font-size:13px;color:#55564f;margin-bottom:8px;">Reviews per listing</div>
+          <div style="font-size:30px;font-weight:700;color:var(--sf-accent);font-variant-numeric:tabular-nums;">{{ mkReviewsValue }}</div>
+          <div style="font-size:14px;color:#55564f;margin-top:6px;">How established the competition is — a market of highly rated listings with few reviews each is one with room in it.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ mkDirect }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1 1 240px;background:var(--sf-ink);border-radius:14px;padding:20px 22px;">
+          <div style="font-size:13px;color:var(--sf-accent-soft);margin-bottom:8px;">Direct booking potential</div>
+          <div style="font-size:30px;font-weight:700;color:var(--sf-accent-bright);font-variant-numeric:tabular-nums;">{{ mkDirectValue }}</div>
+          <div style="font-size:14px;color:rgba(244,248,242,0.72);margin-top:6px;">{{ mkDirectWord }} — how much of the demand here can be brought direct over time rather than through a platform.</div>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ mkRisk }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1 1 240px;background:var(--sf-ink);border-radius:14px;padding:20px 22px;">
+          <div style="font-size:13px;color:var(--sf-accent-soft);margin-bottom:8px;">Risk profile</div>
+          <div style="font-size:30px;font-weight:700;color:var(--sf-ink-text);">{{ mkRiskLabel }}</div>
+          <div style="font-size:14px;color:rgba(244,248,242,0.72);margin-top:6px;">Scored {{ mkRiskValue }} on revenue consistency, seasonal variance and the long-let comparison, where 0 is lowest risk.</div>
+        </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </div>
+  </sc-if>
+  <!-- ==== end STAYFUL EDIT 9 ==== -->
+
   <!-- SLIDE 3 · 12-month chart -->
   <sc-if value="{{ s3 }}" hint-placeholder-val="{{ false }}">
   <div style="position:absolute;inset:0;background:#f7f8f5;overflow-y:auto;padding:clamp(72px,10vh,104px) clamp(24px,6vw,64px);animation:fadeSlide .45s ease;">
     <div style="width:100%;max-width:1080px;margin:0 auto;">
-      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:#2f7d4f;margin-bottom:8px;">The 12-month picture</div>
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent);margin-bottom:8px;">The 12-month picture</div>
       <h2 style="margin:0 0 6px;font-weight:600;font-size:clamp(22px,3vw,32px);letter-spacing:-0.01em;color:#1a1a19;">Net income month by month</h2>
       <div style="font-size:15px;color:#55564f;margin-bottom:8px;">The dashed line is the current long-let income of {{ llMonthly }}/month.</div>
       <div style="display:flex;flex-wrap:wrap;gap:20px;margin-bottom:18px;">
@@ -375,7 +480,7 @@
         </div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;font-size:13px;color:#8a8b84;">
-        <span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:12px;height:12px;border-radius:3px;background:#2f7d4f;display:inline-block;"></span>Net income</span>
+        <span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:12px;height:12px;border-radius:3px;background:var(--sf-accent);display:inline-block;"></span>Net income</span>
         <span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:16px;height:0;border-top:2px dashed #c26b3d;display:inline-block;"></span>Long-let benchmark</span>
       </div>
     </div>
@@ -386,7 +491,7 @@
   <sc-if value="{{ s4 }}" hint-placeholder-val="{{ false }}">
   <div style="position:absolute;inset:0;background:#ffffff;overflow-y:auto;padding:clamp(72px,10vh,104px) clamp(24px,6vw,64px);animation:fadeSlide .45s ease;">
     <div style="width:100%;max-width:1080px;margin:0 auto;">
-      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:#2f7d4f;margin-bottom:8px;">A realistic range</div>
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent);margin-bottom:8px;">A realistic range</div>
       <h2 style="margin:0 0 6px;font-weight:600;font-size:clamp(22px,3vw,32px);letter-spacing:-0.01em;color:#1a1a19;">Best, likely and worst case</h2>
       <div style="font-size:15px;color:#55564f;margin-bottom:32px;">Monthly net, against the current long-let income of {{ llMonthly }}.</div>
       <div style="display:flex;flex-wrap:wrap;gap:18px;">
@@ -408,42 +513,42 @@
   <sc-if value="{{ s5 }}" hint-placeholder-val="{{ false }}">
   <div style="position:absolute;inset:0;background:#f7f8f5;overflow-y:auto;padding:clamp(72px,10vh,104px) clamp(24px,6vw,64px);animation:fadeSlide .45s ease;">
     <div style="width:100%;max-width:820px;margin:0 auto;">
-      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:#2f7d4f;margin-bottom:8px;">The arrangement</div>
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent);margin-bottom:8px;">The arrangement</div>
       <h2 style="margin:0 0 24px;font-weight:600;font-size:clamp(22px,3vw,32px);letter-spacing:-0.01em;color:#1a1a19;">How it works</h2>
       <div style="display:flex;flex-direction:column;gap:10px;">
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="fee" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Fee model<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accFeeSign }}</span></button>
+          <button type="button" data-acc="fee" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Fee model<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accFeeSign }}</span></button>
           <sc-if value="{{ accFee }}" hint-placeholder-val="{{ true }}"><div style="padding:0 20px 20px;font-size:15px;line-height:1.6;color:#55564f;">{{ mgmtPct }} {{ feeBasisText }}. {{ feeDesc }}</div></sc-if>
         </div>
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="cleaning" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Cleaning<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accCleaningSign }}</span></button>
+          <button type="button" data-acc="cleaning" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Cleaning<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accCleaningSign }}</span></button>
           <sc-if value="{{ accCleaning }}" hint-placeholder-val="{{ false }}"><div style="padding:0 20px 20px;font-size:15px;line-height:1.6;color:#55564f;"><strong style="color:#1a1a19;font-weight:600;">{{ cleaningMode }}.</strong> {{ cleaningDesc }}</div></sc-if>
         </div>
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="contract" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Contract terms<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accContractSign }}</span></button>
+          <button type="button" data-acc="contract" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Contract terms<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accContractSign }}</span></button>
           <sc-if value="{{ accContract }}" hint-placeholder-val="{{ false }}"><div style="padding:0 20px 20px;font-size:15px;line-height:1.6;color:#55564f;">Term: {{ contractTerm }} · Notice: {{ contractNotice }} · {{ contractExit }}</div></sc-if>
         </div>
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="compliance" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Compliance<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accComplianceSign }}</span></button>
+          <button type="button" data-acc="compliance" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Compliance<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accComplianceSign }}</span></button>
           <sc-if value="{{ accCompliance }}" hint-placeholder-val="{{ false }}"><div style="padding:0 20px 20px;font-size:15px;line-height:1.6;color:#55564f;">{{ complianceText }}</div></sc-if>
         </div>
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="vetting" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Guest vetting<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accVettingSign }}</span></button>
+          <button type="button" data-acc="vetting" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Guest vetting<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accVettingSign }}</span></button>
           <sc-if value="{{ accVetting }}" hint-placeholder-val="{{ false }}"><div style="padding:0 20px 20px;font-size:15px;line-height:1.6;color:#55564f;">{{ vettingText }}</div></sc-if>
         </div>
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="onboard" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Onboarding<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accOnboardSign }}</span></button>
+          <button type="button" data-acc="onboard" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">Onboarding<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accOnboardSign }}</span></button>
           <sc-if value="{{ accOnboard }}" hint-placeholder-val="{{ false }}">
             <div style="padding:0 20px 20px;display:flex;flex-direction:column;gap:12px;">
               <sc-for list="{{ d.onboarding }}" as="step" hint-placeholder-count="5">
                 <div style="display:flex;gap:14px;align-items:baseline;">
-                  <div style="flex:0 0 auto;font-size:13px;font-weight:600;color:#2f7d4f;font-variant-numeric:tabular-nums;min-width:76px;">{{ step.when }}</div>
+                  <div style="flex:0 0 auto;font-size:13px;font-weight:600;color:var(--sf-accent);font-variant-numeric:tabular-nums;min-width:76px;">{{ step.when }}</div>
                   <div style="font-size:15px;color:#1a1a19;">{{ step.title }}</div>
                 </div>
               </sc-for>
@@ -452,11 +557,11 @@
         </div>
 
         <div style="background:#fff;border:1px solid rgba(20,30,22,0.10);border-radius:12px;overflow:hidden;">
-          <button type="button" data-acc="managed" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">What's managed vs what stays with you<span style="color:#2f7d4f;font-size:20px;line-height:1;">{{ accManagedSign }}</span></button>
+          <button type="button" data-acc="managed" onClick="{{ toggleAcc }}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:12px;background:none;border:none;padding:18px 20px;cursor:pointer;font-size:16px;font-weight:600;color:#1a1a19;text-align:left;">What's managed vs what stays with you<span style="color:var(--sf-accent);font-size:20px;line-height:1;">{{ accManagedSign }}</span></button>
           <sc-if value="{{ accManaged }}" hint-placeholder-val="{{ false }}">
             <div style="padding:0 20px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;">
               <div>
-                <div style="font-size:13px;font-weight:600;color:#2f7d4f;margin-bottom:8px;">Managed for you</div>
+                <div style="font-size:13px;font-weight:600;color:var(--sf-accent);margin-bottom:8px;">Managed for you</div>
                 <div style="display:flex;flex-direction:column;gap:6px;">
                   <sc-for list="{{ d.managed }}" as="m" hint-placeholder-count="5"><div style="font-size:15px;color:#55564f;line-height:1.4;">{{ m }}</div></sc-for>
                 </div>
@@ -478,12 +583,18 @@
 
   <!-- SLIDE 6 · summary -->
   <sc-if value="{{ s6 }}" hint-placeholder-val="{{ false }}">
-  <div style="position:absolute;inset:0;background:#16241c;overflow-y:auto;display:flex;align-items:center;padding:clamp(72px,10vh,110px) clamp(24px,6vw,72px);animation:fadeSlide .45s ease;">
+  <div style="position:absolute;inset:0;background:var(--sf-ink);overflow-y:auto;display:flex;align-items:center;padding:clamp(72px,10vh,110px) clamp(24px,6vw,72px);animation:fadeSlide .45s ease;">
     <div style="width:100%;max-width:920px;margin:0 auto;">
-      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:#8fbf9e;margin-bottom:22px;">In summary</div>
-      <h2 style="margin:0;font-weight:600;font-size:clamp(28px,4.6vw,52px);line-height:1.1;letter-spacing:-0.02em;color:#f4f8f2;max-width:20ch;text-wrap:balance;">A likely {{ netMonthly }} a month — {{ upPct }} above the current long-let.</h2>
+      <div style="font-weight:600;font-size:13px;letter-spacing:0.13em;text-transform:uppercase;color:var(--sf-accent-soft);margin-bottom:22px;">In summary</div>
+      <h2 style="margin:0;font-weight:600;font-size:clamp(28px,4.6vw,52px);line-height:1.1;letter-spacing:-0.02em;color:var(--sf-ink-text);max-width:20ch;text-wrap:balance;">A likely {{ netMonthly }} a month — {{ upPct }} above the current long-let.</h2>
       <p style="margin:26px 0 0;font-size:clamp(16px,2vw,20px);line-height:1.6;color:rgba(244,248,242,0.72);max-width:52ch;">Fully managed, on the terms set out here. The decision, and the timing, stay with you.</p>
-      <div style="margin-top:40px;padding-top:22px;border-top:1px solid rgba(255,255,255,0.14);font-size:15px;color:rgba(244,248,242,0.6);">Prepared by {{ companyLabel }}</div>
+      <div style="margin-top:40px;padding-top:22px;border-top:1px solid rgba(255,255,255,0.14);display:flex;align-items:center;gap:16px;">
+        <!-- STAYFUL EDIT 7 (0112) -->
+        <sc-if value="{{ hasLogo }}" hint-placeholder-val="{{ false }}">
+        <img src="{{ logoUrl }}" alt="{{ logoAlt }}" style="display:block;max-height:36px;max-width:160px;">
+        </sc-if>
+        <div style="font-size:15px;color:rgba(244,248,242,0.6);">Prepared by {{ companyLabel }}</div>
+      </div>
     </div>
   </div>
   </sc-if>
@@ -525,7 +636,7 @@
       <div style="display:flex;flex-direction:column;gap:6px;">
         <sc-for list="{{ d.discovery }}" as="q" hint-placeholder-count="6">
           <label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;color:#1a1a19;line-height:1.4;cursor:pointer;">
-            <input type="checkbox" data-key="discovery.{{ $index }}.done" checked="{{ q.done }}" onChange="{{ onChange }}" style="margin-top:2px;accent-color:#2f7d4f;width:16px;height:16px;flex:0 0 auto;">
+            <input type="checkbox" data-key="discovery.{{ $index }}.done" checked="{{ q.done }}" onChange="{{ onChange }}" style="margin-top:2px;accent-color:var(--sf-accent);width:16px;height:16px;flex:0 0 auto;">
             <span>{{ q.q }}</span>
           </label>
         </sc-for>
@@ -542,7 +653,7 @@
       <div style="display:flex;flex-direction:column;gap:6px;">
         <sc-for list="{{ d.nextSteps }}" as="n" hint-placeholder-count="3">
           <label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;color:#1a1a19;line-height:1.4;cursor:pointer;">
-            <input type="checkbox" data-key="nextSteps.{{ $index }}.done" checked="{{ n.done }}" onChange="{{ onChange }}" style="margin-top:2px;accent-color:#2f7d4f;width:16px;height:16px;flex:0 0 auto;">
+            <input type="checkbox" data-key="nextSteps.{{ $index }}.done" checked="{{ n.done }}" onChange="{{ onChange }}" style="margin-top:2px;accent-color:var(--sf-accent);width:16px;height:16px;flex:0 0 auto;">
             <span>{{ n.label }}</span>
           </label>
         </sc-for>
@@ -562,10 +673,11 @@ class Component extends DCLogic {
     super(props);
     // STAYFUL EDIT (0093): seeded / figuresOpen / profileStale drive the
     // collapsed setup screen and the two profile prompts.
-    this.state = { data: this.defaults(), mode: 'setup', slide: 1, notesOpen: false, openAcc: 'fee', subs: {}, seeded: false, figuresOpen: false, profileStale: false };
+    // STAYFUL EDIT (0112): logoUrl is the operator's own logo, as a data: URI.
+    this.state = { data: this.defaults(), mode: 'setup', slide: 1, notesOpen: false, openAcc: 'fee', subs: {}, seeded: false, figuresOpen: false, profileStale: false, logoUrl: '' };
   }
   componentDidMount() {
-    // ---- STAYFUL EDIT 1 of 4 (0093): open pre-filled for one lead. ----------
+    // ---- STAYFUL EDIT 1 of 9 (0093): open pre-filled for one lead. ----------
     // This file is generated upstream, so every change to it is bounded and
     // marked. See CLAUDE.md §26.
     //
@@ -587,6 +699,9 @@ class Component extends DCLogic {
       } else if (this._leadId) {
         this.seedFromLead();
       }
+      // STAYFUL EDIT 6 (0112): with a lead, the brand rides with the seed; with
+      // none, it is fetched on its own. Either way the deck is theirs.
+      if (!this._leadId) this.loadBrand();
     } catch (e) {}
     // ---- end STAYFUL EDIT 1 ------------------------------------------------
     // STAYFUL: renamed from _key, which now holds the storage key (edit 1).
@@ -604,6 +719,50 @@ class Component extends DCLogic {
   // ---- STAYFUL: seeding helpers (0093) -----------------------------------
   // NEVER THROWS AND NEVER BLOCKS. A failed fetch leaves the tool exactly as it
   // behaved before any of this existed: the defaults, editable by hand.
+  // ---- STAYFUL EDIT 6 of 9 (0112): the operator's own branding. ----------
+  // The colours are CSS custom properties (edit 5), so applying a brand is
+  // nine setProperty calls on :root and every inline style in the file follows.
+  // The logo arrives as a data: URI rather than a URL — this tool vendors React
+  // locally so it survives a bad network during a live meeting, and a signed
+  // URL would put an expiring round trip back in the middle of that.
+  applyBrand = (brand) => {
+    if (!brand) return;
+    const p = brand.palette;
+    if (p) {
+      const root = document.documentElement.style;
+      root.setProperty('--sf-accent', p.accent);
+      root.setProperty('--sf-accent-dark', p.accentDark);
+      root.setProperty('--sf-accent-mid', p.accentMid);
+      root.setProperty('--sf-accent-soft', p.accentSoft);
+      root.setProperty('--sf-accent-bright', p.accentBright);
+      root.setProperty('--sf-ink', p.ink);
+      root.setProperty('--sf-ink-text', p.inkText);
+      root.setProperty('--sf-tint', p.tint);
+      root.setProperty('--sf-tint-deep', p.tintDeep);
+    }
+    if (brand.logoUrl) this.setState({ logoUrl: brand.logoUrl });
+  };
+  // With no ?lead= there is no seed to carry the brand, so the blank tool at
+  // /dashboard/documents fetches it alone. It is still THEIR presentation.
+  loadBrand = async () => {
+    try {
+      const res = await fetch('/api/customer/presentation/brand');
+      if (!res.ok) return;
+      const body = await res.json();
+      this.applyBrand(body && body.brand);
+      // A blank tool knows the operator's name from nowhere else, and only
+      // fills it in where they have not typed one themselves.
+      if (body && body.company) {
+        this.setState(st => {
+          if (st.data.company && st.data.company !== '[Your company]') return null;
+          const next = JSON.parse(JSON.stringify(st.data));
+          next.company = body.company;
+          return { data: next };
+        });
+      }
+    } catch (e) {}
+  };
+  // ---- end STAYFUL EDIT 6 ------------------------------------------------
   seedFromLead = async (profileOnly) => {
     if (!this._leadId) return;
     try {
@@ -611,6 +770,9 @@ class Component extends DCLogic {
       if (!res.ok) return;
       const body = await res.json();
       if (!body || !body.data) return;
+      // STAYFUL EDIT 6 (0112): branding rides with the seed, so a lead-opened
+      // presentation needs no second request for it.
+      this.applyBrand(body.brand);
       this._profile = body.profile || null;
       this.setState(st => {
         // profileOnly: apply the operator's terms over what they have already
@@ -639,6 +801,9 @@ class Component extends DCLogic {
       const res = await fetch('/api/customer/presentation/' + this._leadId);
       if (!res.ok) return;
       const body = await res.json();
+      // STAYFUL EDIT 6 (0112): this is the path a lead with saved work takes,
+      // so the brand must be applied here too or a returning operator loses it.
+      this.applyBrand(body.brand);
       this._profile = body.profile || null;
       const now = body.profile && body.profile.updatedAt;
       const then = saved && saved.seededAt;
@@ -700,7 +865,11 @@ class Component extends DCLogic {
       // of its average month, and the profile timestamp this lead was seeded
       // at. Null/'' means "no lead seeded this".
       monthWeights: null,
-      seededAt: ''
+      seededAt: '',
+      // STAYFUL EDIT 8 (0113): what the analysis said about the market. Null,
+      // not an object of nulls: the market SLIDE is switched on this, and an
+      // empty object would put an empty slide in front of a landlord.
+      market: null
     };
   }
   // STAYFUL EDIT (0093): per-lead storage key, falling back to the original.
@@ -736,7 +905,7 @@ class Component extends DCLogic {
   };
   genMonths = () => {
     this.update(d => {
-      // ---- STAYFUL EDIT 2 of 4 (0093) --------------------------------------
+      // ---- STAYFUL EDIT 2 of 9 (0093) --------------------------------------
       // Use THIS property's seasonal curve when its analysis gave us one. The
       // array below is a generic seasonal shape and was the only option; a real
       // curve is strictly better, and the variance damping that softens the
@@ -750,7 +919,30 @@ class Component extends DCLogic {
       d.months = w.map(f => Math.max(0, Math.round(avg * (1 + (f - 1) * v) / 10) * 10));
     });
   };
-  go(dir) { this.setState(s => ({ slide: Math.max(1, Math.min(6, s.slide + dir)) })); }
+  // ---- STAYFUL EDIT 8 of 9 (0113): the deck is a SEQUENCE, not six fixed
+  // slides, because the market slide only exists when the analysis gave us
+  // something to put on it. The blank tool and every lead without market
+  // figures still walk exactly the six slides this file has always had.
+  // These take the data they are to judge rather than reaching for this.state,
+  // so the sequence is always computed from the same object the rest of the
+  // render is describing. `go()` passes the live state; renderVals passes its
+  // own `d`. They are the same object today, and this is what keeps them so.
+  slideKeys(data) {
+    const keys = ['cover', 'income'];
+    if (this.hasMarket(data)) keys.push('market');
+    return keys.concat(['months', 'cases', 'how', 'summary']);
+  }
+  hasMarket(data) {
+    const d = data || this.state.data;
+    const m = d && d.market;
+    if (!m) return false;
+    // The property's own occupancy is already on the income slide; it is not on
+    // its own a reason to show a slide ABOUT THE MARKET.
+    return ['marketOccupancy', 'compSetSize', 'compAvgRating', 'compAvgReviews',
+            'riskScore', 'directBookingScore'].some(k => m[k] !== null && m[k] !== undefined);
+  }
+  go(dir) { const n = this.slideKeys(this.state.data).length; this.setState(s => ({ slide: Math.max(1, Math.min(n, s.slide + dir)) })); }
+  // ---- end STAYFUL EDIT 8 -------------------------------------------------
   goPrev = () => this.go(-1);
   goNext = () => this.go(1);
   goSetup = () => this.setState({ mode: 'setup' });
@@ -787,14 +979,14 @@ class Component extends DCLogic {
       short: this.gbp(v).replace('£', ''),
       label: MONTHS[i][0],
       h: (v / maxScale * 100).toFixed(1) + '%',
-      color: i === pi ? '#245f3c' : (i === qi ? '#8fbf9e' : '#2f7d4f')
+      color: i === pi ? 'var(--sf-accent-dark)' : (i === qi ? 'var(--sf-accent-soft)' : 'var(--sf-accent)')
     }));
     const benchmarkTop = (28 + (1 - c.llM / maxScale) * (260 - 3)) + 'px';
 
     const caseDef = [
       { key: 'worst', name: 'Worst case', desc: 'A conservative floor for a quieter than expected year.', border: 'rgba(20,30,22,0.10)', bg: '#fff', tint: '#8a8b84' },
-      { key: 'likely', name: 'Likely case', desc: 'The expected outcome on current market conditions.', border: 'rgba(47,125,79,0.3)', bg: '#f0f6f1', tint: '#2f7d4f' },
-      { key: 'best', name: 'Best case', desc: 'An aspirational figure in a strong year.', border: 'rgba(20,30,22,0.10)', bg: '#fff', tint: '#245f3c' }
+      { key: 'likely', name: 'Likely case', desc: 'The expected outcome on current market conditions.', border: 'rgba(47,125,79,0.3)', bg: 'var(--sf-tint)', tint: 'var(--sf-accent)' },
+      { key: 'best', name: 'Best case', desc: 'An aspirational figure in a strong year.', border: 'rgba(20,30,22,0.10)', bg: '#fff', tint: 'var(--sf-accent-dark)' }
     ];
     const casesView = caseDef.map(cd => {
       const val = this.num(d.cases[cd.key]);
@@ -803,13 +995,51 @@ class Component extends DCLogic {
         name: cd.name, desc: cd.desc, border: cd.border, bg: cd.bg, tint: cd.tint,
         value: this.gbp(val),
         delta: (delta >= 0 ? '+' : '−') + this.gbp(Math.abs(delta)),
-        deltaColor: delta >= 0 ? '#2f7d4f' : '#c26b3d'
+        deltaColor: delta >= 0 ? 'var(--sf-accent)' : '#c26b3d'
       };
     });
 
     const fee = d.fee;
+
+    // ---- STAYFUL EDIT 8 (0113): where the deck is, and what the market slide
+    // has to say. Every card is independently present or absent — a report that
+    // stated only a risk score produces one card, not a broken slide.
+    const slideKeys = this.slideKeys(d);
+    const slidePos = Math.min(Math.max(1, s.slide), slideKeys.length);
+    const slideKey = slideKeys[slidePos - 1];
+
+    const mk = d.market || {};
+    const has = (v) => v !== null && v !== undefined;
+    const marketView = {
+      mkOccupancy: has(mk.marketOccupancy) && has(mk.occupancy) && mk.marketOccupancy > 0,
+      mkOccupancyOwn: this.num(mk.occupancy) + '%',
+      mkOccupancyMarket: this.num(mk.marketOccupancy) + '%',
+      // "Ahead of" / "in line with" / "behind" — a comparison an operator can
+      // say out loud, rather than two percentages to subtract on the call.
+      mkOccupancyVerdict:
+        this.num(mk.occupancy) - this.num(mk.marketOccupancy) >= 3 ? 'ahead of the local average' :
+        this.num(mk.marketOccupancy) - this.num(mk.occupancy) >= 3 ? 'below the local average' :
+        'in line with the local average',
+      mkComps: has(mk.compSetSize) && has(mk.compSetRadiusKm),
+      mkCompsCount: String(mk.compSetSize),
+      mkCompsRadius: (Math.round(this.num(mk.compSetRadiusKm) * 10) / 10) + ' km',
+      mkRating: has(mk.compAvgRating) && mk.compAvgRating > 0,
+      mkRatingValue: (Math.round(this.num(mk.compAvgRating) * 10) / 10).toFixed(1),
+      mkReviews: has(mk.compAvgReviews),
+      mkReviewsValue: Math.round(this.num(mk.compAvgReviews)).toLocaleString('en-GB'),
+      mkDirect: has(mk.directBookingScore),
+      mkDirectValue: this.num(mk.directBookingScore) + ' / 100',
+      mkDirectWord:
+        this.num(mk.directBookingScore) >= 80 ? 'Excellent' :
+        this.num(mk.directBookingScore) >= 50 ? 'Good' : 'Moderate',
+      mkRisk: has(mk.riskScore) && !!mk.riskLabel,
+      mkRiskValue: this.num(mk.riskScore) + ' / 100',
+      mkRiskLabel: mk.riskLabel || '',
+    };
+    // ---- end STAYFUL EDIT 8 -------------------------------------------------
+
     return {
-      // ---- STAYFUL EDIT 3 of 4 (0093): flags for the collapsed setup screen.
+      // ---- STAYFUL EDIT 3 of 9 (0093): flags for the collapsed setup screen.
       // manualSetup is the one the template switches on, so the blank tool
       // (no ?lead=) keeps the complete form it has always had.
       manualSetup: !s.seeded,
@@ -831,14 +1061,22 @@ class Component extends DCLogic {
       reloadFigures: this.reloadFigures,
       // ---- end STAYFUL EDIT 3 ----------------------------------------------
       isSetup: s.mode === 'setup', isPresent: s.mode === 'present',
-      s1: s.slide === 1, s2: s.slide === 2, s3: s.slide === 3, s4: s.slide === 4, s5: s.slide === 5, s6: s.slide === 6,
-      counter: s.slide + ' / 6',
+      // STAYFUL EDIT 8 (0113): the flags still name the same slides; which
+      // POSITION each sits at is now the sequence's business.
+      s1: slideKey === 'cover', s2: slideKey === 'income', sMarket: slideKey === 'market',
+      s3: slideKey === 'months', s4: slideKey === 'cases', s5: slideKey === 'how', s6: slideKey === 'summary',
+      counter: slidePos + ' / ' + slideKeys.length,
+      ...marketView,
       notesOpen: s.notesOpen,
       d,
       onChange: this.onChange, addItem: this.addItem, removeItem: this.removeItem, genMonths: this.genMonths,
       goPrev: this.goPrev, goNext: this.goNext, goSetup: this.goSetup, goPresent: this.goPresent,
       toggleNotes: this.toggleNotes, toggleAcc: this.toggleAcc, toggleSub: this.toggleSub,
       landlordLine: (d.notes.landlord || 'This landlord') + (d.notes.phone ? ' \u00b7 ' + d.notes.phone : ''),
+      // STAYFUL EDIT 7 of 9 (0112): the logo, and whether there is one at all.
+      hasLogo: !!s.logoUrl,
+      logoUrl: s.logoUrl || '',
+      logoAlt: d.company || 'Logo',
       companyLabel: d.company || '[Your company]',
       propertyLabel: d.property || 'this property',
       grossAnnual: this.gbp(c.gross), grossMonthly: this.gbp(c.grossM),

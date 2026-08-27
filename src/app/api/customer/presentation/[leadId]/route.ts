@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildPresentationSeed, type SeedLead } from "@/lib/presentationSeed";
+import { validatePresentationBrand } from "@/lib/presentationBrand";
+import { buildBrandPayload } from "@/lib/presentationBrandStorage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +52,7 @@ export async function GET(
   const { data: customer } = await admin
     .from("customers")
     .select(
-      "id, business_name, presentation_settings, presentation_settings_updated_at"
+      "id, business_name, presentation_settings, presentation_settings_updated_at, presentation_brand"
     )
     .eq("user_id", user.id)
     .maybeSingle();
@@ -63,6 +65,7 @@ export async function GET(
     business_name: string | null;
     presentation_settings: unknown;
     presentation_settings_updated_at: string | null;
+    presentation_brand: unknown;
   };
 
   const { data: assignment } = await admin
@@ -82,7 +85,9 @@ export async function GET(
     .select(
       "lead_type, address, lead_name, phone, gross_annual_income, avg_nightly_rate, " +
         "occupancy_rate, long_let_annual_income, platform_fee_pct, cleaning_fee_pct, " +
-        "monthly_revenue_profile"
+        "monthly_revenue_profile, market_occupancy_rate, comp_set_size, " +
+        "comp_set_radius_km, comp_avg_rating, comp_avg_review_count, risk_score, " +
+        "risk_label, direct_booking_score"
     )
     .eq("id", leadId)
     .maybeSingle();
@@ -95,6 +100,10 @@ export async function GET(
   }
 
   return NextResponse.json({
+    // The operator's own logo and colour (0112), beside the lead's figures
+    // rather than inside them: branding is theirs and constant, the data is the
+    // property's and changes with every lead.
+    brand: await buildBrandPayload(validatePresentationBrand(c.presentation_brand)),
     data: buildPresentationSeed(row, {
       business_name: c.business_name,
       presentation_settings: c.presentation_settings,

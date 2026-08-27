@@ -109,6 +109,32 @@ const CLEANING_RE =
 const LONG_LET_RE = /Gross\s+Rental\s+Income\s*£\s*([\d,]+)\s*£\s*([\d,]+)/i;
 
 /**
+ * ── The market, as the analysis states it (0113) ──────────────────────────
+ *
+ * These four anchors read PLAIN captions, not the letter-spaced headline
+ * labels the header warns about: they live on the "Comparable Properties" and
+ * "Local Demand & Risk" pages, which the report renders in ordinary type.
+ *
+ * ⚠️ The rating is printed as `4.8 ★`, and Helvetica has no star, so what
+ * survives into the text layer varies. The pattern therefore stops at the
+ * number and never asserts what follows it. `formatRating` prints an em dash
+ * for an unrated comp set, which simply does not match — the right outcome.
+ */
+const COMP_SET_RE =
+  /(\d[\d,]*)\s+active\s+Airbnb\s+listings\s+within\s+([\d.]+)\s*km/i;
+const COMP_RATING_RE = /Avg\s+Rating\s*([\d.]+)/i;
+const COMP_REVIEWS_RE = /Avg\s+Reviews\s*(\d[\d,]*)/i;
+const DIRECT_BOOKING_RE = /Direct\s+Booking\s+Potential\s+Score:\s*(\d{1,3})\s*\/\s*100/i;
+/**
+ * `Low-Medium Risk · 38/100`.
+ *
+ * The paragraph above it explains the scale as "(0 = Low Risk, 100 = High
+ * Risk)", which is why the separator class admits no comma: matching there
+ * would read the explanation as the verdict.
+ */
+const RISK_RE = /(Low-Medium|Medium-High|Low|High|Medium)\s+Risk\s*[·.]?\s*(\d{1,3})\s*\/\s*100/i;
+
+/**
  * The forecast table prints `January £3,142 +£1,122 100%` per row. Full month
  * names appear only there — the bar chart above it abbreviates to `Jan` — so
  * the name is a safe anchor and the order is read from the names rather than
@@ -155,6 +181,17 @@ export interface ParsedIncomeReport {
   cleaningFeePct: number | null;
   /** The twelve-month forecast, January first, or null. */
   monthlyRevenueProfile: number[] | null;
+  /** What the analysis says about the market around it (0113). */
+  marketOccupancyRate: number | null;
+  compSetSize: number | null;
+  compSetRadiusKm: number | null;
+  compAvgRating: number | null;
+  compAvgReviewCount: number | null;
+  /** 0-100, and 0 is GOOD — the analyser scores risk, not quality. */
+  riskScore: number | null;
+  riskLabel: string | null;
+  /** 0-100, and 100 is good. The opposite direction to riskScore. */
+  directBookingScore: number | null;
 }
 
 /**
@@ -246,6 +283,7 @@ export async function parseIncomeReport(
     grossAnnualIncome: annual,
     ...parseRateAndOccupancy(flat),
     ...parsePresentationFigures(flat, annual),
+    ...parseMarketFigures(flat),
   };
 }
 
@@ -321,6 +359,71 @@ function parsePresentationFigures(
     // The forecast is checked against the NET, not the gross — it is a table of
     // net monthlies — so it can only be trusted when the net was.
     monthlyRevenueProfile: parseMonthlyProfile(flat, netAnnualIncome),
+  };
+}
+
+/**
+ * What the analysis says about the market (0113).
+ *
+ * EVERY FIGURE HERE FAILS ON ITS OWN. There is no cross-check to run — unlike
+ * the money figures, none of these has a second printing to agree with, and
+ * inventing an arithmetic relationship between them would be inventing the
+ * thing this section exists not to invent. What guards them instead is RANGE:
+ * a rating outside 0-5 or a score outside 0-100 is a match that has wandered
+ * into another number, and is dropped rather than stored.
+ *
+ * ⚠️ THE TWO SCORES RUN IN OPPOSITE DIRECTIONS. `riskScore` is 0 for LOW risk;
+ * `directBookingScore` is 100 for the best. They are stored exactly as printed
+ * and the presentation words each accordingly — normalising one to match the
+ * other here would silently invert a number an operator reads aloud.
+ *
+ * Exported for its tests. It takes the FLATTENED text layer rather than bytes,
+ * which is what lets the anchors be exercised as pure units — no PDF, no
+ * network, so they can sit in the suite that gates the build.
+ */
+export function parseMarketFigures(
+  flat: string
+): Pick<
+  ParsedIncomeReport,
+  | "marketOccupancyRate"
+  | "compSetSize"
+  | "compSetRadiusKm"
+  | "compAvgRating"
+  | "compAvgReviewCount"
+  | "riskScore"
+  | "riskLabel"
+  | "directBookingScore"
+> {
+  const compSet = flat.match(COMP_SET_RE);
+  const rating = flat.match(COMP_RATING_RE);
+  const reviews = flat.match(COMP_REVIEWS_RE);
+  const risk = flat.match(RISK_RE);
+  const direct = flat.match(DIRECT_BOOKING_RE);
+  const occ = flat.match(OCCUPANCY_RE);
+
+  const inRange = (value: number, min: number, max: number): number | null =>
+    Number.isFinite(value) && value >= min && value <= max ? value : null;
+
+  const size = compSet ? inRange(toNumber(compSet[1]), 0, 100000) : null;
+  const radius = compSet ? inRange(Number(compSet[2]), 0.001, 500) : null;
+
+  return {
+    // The market's average occupancy, which OCCUPANCY_RE has captured and
+    // discarded since 0090. 0 is kept: it means no comparable listings nearby,
+    // which is a fact about the market rather than a failed read.
+    marketOccupancyRate: occ ? inRange(toNumber(occ[2]), 0, 100) : null,
+    // Both or neither: a comp-set size with no radius does not say how hard the
+    // analyser had to look for it, and a radius with no count says less still.
+    compSetSize: size != null && radius != null ? size : null,
+    compSetRadiusKm: size != null && radius != null ? radius : null,
+    compAvgRating: rating ? inRange(Number(rating[1]), 0, 5) : null,
+    compAvgReviewCount: reviews ? inRange(toNumber(reviews[1]), 0, 100000) : null,
+    // Both or neither again, for a different reason: "38/100" with no wording
+    // beside it is a number a landlord cannot read, and the wording without the
+    // number is a claim with nothing behind it.
+    riskScore: risk ? inRange(Number(risk[2]), 0, 100) : null,
+    riskLabel: risk && inRange(Number(risk[2]), 0, 100) != null ? `${risk[1]} Risk` : null,
+    directBookingScore: direct ? inRange(Number(direct[1]), 0, 100) : null,
   };
 }
 
@@ -465,6 +568,15 @@ export interface IncomeReportOutcome {
   platformFeePct: number | null;
   cleaningFeePct: number | null;
   monthlyRevenueProfile: number[] | null;
+  /** The market block (0113). Same fail-alone rule again. */
+  marketOccupancyRate: number | null;
+  compSetSize: number | null;
+  compSetRadiusKm: number | null;
+  compAvgRating: number | null;
+  compAvgReviewCount: number | null;
+  riskScore: number | null;
+  riskLabel: string | null;
+  directBookingScore: number | null;
   assetId: string | null;
   error: string | null;
   /**
@@ -519,6 +631,14 @@ export const NO_FIGURES = {
   platformFeePct: null,
   cleaningFeePct: null,
   monthlyRevenueProfile: null,
+  marketOccupancyRate: null,
+  compSetSize: null,
+  compSetRadiusKm: null,
+  compAvgRating: null,
+  compAvgReviewCount: null,
+  riskScore: null,
+  riskLabel: null,
+  directBookingScore: null,
   bytes: null,
 } as const;
 
@@ -617,6 +737,18 @@ export function presentationFiguresPatch(
   if (outcome.cleaningFeePct != null) patch.cleaning_fee_pct = outcome.cleaningFeePct;
   if (outcome.monthlyRevenueProfile != null)
     patch.monthly_revenue_profile = outcome.monthlyRevenueProfile;
+  // The market block (0113), under the same add-only rule as everything above.
+  if (outcome.marketOccupancyRate != null)
+    patch.market_occupancy_rate = outcome.marketOccupancyRate;
+  if (outcome.compSetSize != null) patch.comp_set_size = outcome.compSetSize;
+  if (outcome.compSetRadiusKm != null) patch.comp_set_radius_km = outcome.compSetRadiusKm;
+  if (outcome.compAvgRating != null) patch.comp_avg_rating = outcome.compAvgRating;
+  if (outcome.compAvgReviewCount != null)
+    patch.comp_avg_review_count = outcome.compAvgReviewCount;
+  if (outcome.riskScore != null) patch.risk_score = outcome.riskScore;
+  if (outcome.riskLabel != null) patch.risk_label = outcome.riskLabel;
+  if (outcome.directBookingScore != null)
+    patch.direct_booking_score = outcome.directBookingScore;
   return patch;
 }
 
@@ -632,6 +764,14 @@ export function incomeReportPatch(
     platform_fee_pct: outcome.platformFeePct,
     cleaning_fee_pct: outcome.cleaningFeePct,
     monthly_revenue_profile: outcome.monthlyRevenueProfile,
+    market_occupancy_rate: outcome.marketOccupancyRate,
+    comp_set_size: outcome.compSetSize,
+    comp_set_radius_km: outcome.compSetRadiusKm,
+    comp_avg_rating: outcome.compAvgRating,
+    comp_avg_review_count: outcome.compAvgReviewCount,
+    risk_score: outcome.riskScore,
+    risk_label: outcome.riskLabel,
+    direct_booking_score: outcome.directBookingScore,
     income_report_status: outcome.status,
     income_report_asset_id: outcome.assetId,
     income_report_parsed_at: new Date().toISOString(),
