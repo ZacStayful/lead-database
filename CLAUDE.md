@@ -5124,15 +5124,39 @@ on all four functions that must stay `authenticated`-executable.
 **462 vitest cases green** (78 new), `npm run build` passes. The normaliser was
 run over every distinct live phone string (34.2).
 
-**Not applied to production.** 0111 is inert on apply, but it has not been run
-against `znlfwbnvhlacwzgfalcf` — do that before the code deploys.
+**Applied to `znlfwbnvhlacwzgfalcf` on 2026-08-27, BEFORE the code** — the order
+§30 argues for, rather than §30's own account of finding out the hard way.
+
+Pre-apply: zero collisions on the six columns, the function name, both indexes
+and the CHECK. And the check §11 says not to assume — production's live `prosrc`
+for **both** replaced functions was diffed against the bodies this migration
+embeds, with the new clause removed, and matched exactly. Worth doing rather
+than assuming here specifically: another session had replaced
+`admin_assign_lead` earlier the same morning (34.8), so "nothing has moved since
+I copied it" was a live question, not a formality.
+
+Post-apply: **437 leads, 332 assignments and 40 customers untouched; all 437
+rows `pending`; zero blocked** — the migration is inert exactly as designed. All
+six columns, both partial indexes and the CHECK present. ACLs re-audited —
+anon `false`, authenticated `false`, service_role `true` on all three functions
+— and invariant 7 confirmed on all four that must stay
+`authenticated`-executable. The column adds, the CHECK and both indexes were
+re-run to prove a second apply is clean.
+
+The predicates were then exercised **on production itself**, inside a `DO` block
+that raises at the end so every write is rolled back: a real unsold lead read
+`pending → f/f`, `failed → t/t`, `+ override → f/f`, `passed → f/f`, and the
+row count afterwards confirmed nothing changed. Supabase's linter reports **no
+new advisory** — all three functions pin `search_path`.
 
 ### Deployment order — migration BEFORE code
 
-0111 first. Every leads read now selects `lead_quality_status`, so code arriving
-first would fail them all; §30 records what that costs (a preview quoting **zero**
-filter volume from a swallowed error). Then the code, then press **Check lead
-quality** in admin to run the backfill.
+0111 first — **done**. Every leads read now selects `lead_quality_status`, so
+code arriving first would fail them all; §30 records what that costs (a preview
+quoting **zero** filter volume from a swallowed error). Then the code, then press
+**Check lead quality** in admin to run the backfill. Until that button is
+pressed every lead stays `pending` and nothing is blocked, so the code is safe to
+deploy at any point after the migration.
 
 **`vercel.json`'s `buildCommand` was `next build`, which overrode
 `package.json`'s `vitest run && next build`, so the suite gated nothing on
