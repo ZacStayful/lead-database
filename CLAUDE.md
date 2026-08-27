@@ -5339,8 +5339,24 @@ book that is 16 leads, 15 of them the `+44` shape — so if the normaliser were
 ever wrong the blast radius is the 24 unsold rows, not the live book. Owned leads
 (§30) are skipped entirely.
 
-Expected on first run: **40 of 437 fail (17 management, 23 GR); 24 blocked, 16
-marked only.**
+**Run on 2026-08-27 against the live book: 41 of 440 failed — 25 blocked, 16
+marked only.** Every rejection was inspected: overseas numbers (Netherlands,
+Saudi, France, Switzerland, Australia, Panama, Portugal, Qatar, Hong Kong,
+Ireland, Malta, New Zealand, UAE), a London landline, two placeholders, two rows
+with no contact details at all, and the three junk names. Nothing surprising and
+nothing borderline.
+
+It was driven from the shipped `assessLeadQuality` rather than the route (which
+needs an admin session), by running the real function over the distinct names and
+the distinct phone strings and then matching in SQL on **exact string
+membership** — so no rule was restated in SQL at any point.
+
+⚠️ The predicted figure was 40 of 437. Two things moved it, both worth knowing:
+the book grew by three leads between measuring and running, and **the real
+normaliser is stricter than the SQL approximation used for the estimate** on
+`0447 711910109` — which it rejects, correctly, and which the test suite pins as
+the case that must never be mangled into a valid number. The estimate was the
+thing that was wrong.
 
 ### 36.7 — What this does NOT close
 
