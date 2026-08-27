@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AdminLeadControls } from "@/components/admin/AdminLeadControls";
 import { formatDate, formatGBP } from "@/lib/utils";
+import { activeLeadFilters, filterSummary } from "@/lib/leadFilter";
 import type { Customer, Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +75,48 @@ export default async function AdminLeadDetailPage({
     (c) => !assignedIds.has(c.id)
   );
 
+  // Which of these customers' filters this lead actually reaches (0110).
+  //
+  // Answered in SQL by customers_matching_lead_filter, which delegates to
+  // lead_matches_customer_filter — the same predicate allocation, the expired
+  // pool and the swap use. Doing it in TypeScript here would be a fifth
+  // hand-written copy of it.
+  //
+  // Fails CLOSED on an unreadable result: an id we get no verdict for is
+  // treated as outside the filter, so the picker warns rather than quietly
+  // offering something assign_lead_to_customer would then refuse. A customer
+  // with no active filter on this product comes back true, so an unfiltered
+  // book renders exactly as it did before this existed.
+  const filterVerdicts = new Map<string, boolean>();
+  if (notAssigned.length > 0) {
+    const { data: verdicts, error: verdictError } = await admin.rpc(
+      "customers_matching_lead_filter",
+      { p_lead_id: lead.id, p_customer_ids: notAssigned.map((c) => c.id) }
+    );
+    if (verdictError) {
+      console.error("lead filter verdicts lookup failed", verdictError);
+    }
+    for (const row of (verdicts ?? []) as {
+      customer_id: string;
+      matches: boolean;
+    }[]) {
+      filterVerdicts.set(row.customer_id, row.matches === true);
+    }
+  }
+  const matchesFilter = (id: string) => filterVerdicts.get(id) === true;
+
+  // The filter itself, in words, so the warning can name what is being
+  // overridden rather than just saying "outside their filter".
+  // activeLeadFilters/filterSummary are the existing admin-side readers — they
+  // already know pending_lift counts as filtered and that an empty area list
+  // means anywhere.
+  const filterText = (c: Customer) => {
+    const view = activeLeadFilters(c).find(
+      (f) => f.leadType === lead.lead_type
+    );
+    return view ? filterSummary(view) : null;
+  };
+
   // Normal pool: customers subscribed to this lead's product, so a GR lead is
   // never force-assigned to a management-only customer (and vice-versa).
   const availableCustomers = notAssigned
@@ -86,6 +129,8 @@ export default async function AdminLeadDetailPage({
       id: c.id,
       business_name: c.business_name,
       credits: creditsOf(c),
+      matches_filter: matchesFilter(c.id),
+      filter_summary: filterText(c),
     }));
 
   // Override pool: any approved customer, regardless of subscription/credits,
@@ -101,6 +146,8 @@ export default async function AdminLeadDetailPage({
       id: c.id,
       business_name: c.business_name,
       credits: creditsOf(c),
+      matches_filter: matchesFilter(c.id),
+      filter_summary: filterText(c),
     }));
 
   const fields: [string, string | null][] = [
