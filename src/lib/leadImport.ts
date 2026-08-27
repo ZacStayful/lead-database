@@ -15,6 +15,8 @@
  * can sit in the build-gating vitest suite.
  */
 
+import { EMAIL_RE } from "@/lib/leadQuality";
+
 /** A raw sheet: rows of cells, already stringified by the caller. */
 export type SheetRows = string[][];
 
@@ -156,7 +158,10 @@ export function normaliseHeader(header: string): string {
   return String(header ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Re-exported from leadQuality.ts rather than declared twice, so the
+// spreadsheet importer and the contact-quality gate (0111) cannot drift apart
+// about what an email address looks like. It lived here first; that module is
+// now where it is defined.
 // Deliberately loose: a sheet may hold "07700 900123", "+44 7700 900123" or
 // "(01179) 123456". Seven or more digits is the same floor normalised_phone
 // uses in the database (0070), so the two agree about what could be a number.

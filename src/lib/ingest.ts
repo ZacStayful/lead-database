@@ -10,6 +10,11 @@ import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import { syncStoredReport } from "@/lib/incomeReportStorage";
 import { shouldRaiseContentionCap, shouldRouteLead } from "@/lib/leadResale";
 import {
+  assessLeadQuality,
+  passesQualityGate,
+  type LeadQualityCode,
+} from "@/lib/leadQuality";
+import {
   DEFAULT_MAX_ASSIGNMENTS,
   CONTENDED_FILTERED_CUSTOMERS,
   type Customer,
@@ -227,6 +232,15 @@ export async function ingestLead(
 
   if (existing) {
     const existingLead = existing as Lead;
+    // ⚠️ THIS BRANCH IS WHY A CHECK AT INSERT TIME IS NOT ENOUGH. Both Monday
+    // syncs run daily and every one of them lands here for every lead already
+    // in the book, so a gate that only guarded the insert would withhold a bad
+    // lead for exactly one day and sell it every morning after.
+    //
+    // Re-judging here rather than trusting the stored verdict also means a
+    // number corrected on the board clears itself on the next sync, with no
+    // admin action and no separate re-check job.
+    await refreshLeadQuality(supabase, existingLead);
     const assignmentsMade = await autoAssignLead(supabase, existingLead);
     return {
       status: "duplicate",
@@ -282,6 +296,21 @@ export async function ingestLead(
     leadType === "guaranteed_rent"
       ? buildGuaranteedRentInsert(payload)
       : buildManagementInsert(payload);
+
+  // Judge the contact details before the row exists, so a lead is never
+  // momentarily `pending` and sellable between the insert and a later sweep.
+  // Pure and synchronous: no network, nothing to time out, nothing that can
+  // fail ingest. `insertPayload` is what actually gets stored, so the verdict
+  // is taken from that rather than from `payload` — the management branch
+  // rewrites absent fields to "" and the verdict must judge what we kept.
+  const verdict = assessLeadQuality({
+    lead_name: insertPayload.lead_name as string | null,
+    phone: insertPayload.phone as string | null,
+    email: insertPayload.email as string | null,
+  });
+  insertPayload.lead_quality_status = verdict.ok ? "passed" : "failed";
+  insertPayload.lead_quality_codes = verdict.codes;
+  insertPayload.lead_quality_checked_at = new Date().toISOString();
 
   const { data: lead, error: insertError } = await supabase
     .from("leads")
@@ -404,6 +433,14 @@ export async function autoAssignLead(
   // lead_retired_from_allocation, and the cap asserted under the row lock in
   // assign_lead_to_customer). This early return only saves the round trip.
   if (!shouldRouteLead(lead)) return 0;
+
+  // Contact details we have judged unusable (0111). The database refuses these
+  // too — the clause is in `lead_retired_from_allocation`, which every candidate
+  // function and `assign_lead_to_customer` assert under the row lock — so this
+  // is not the protection. It is here to skip two round trips per bad lead on
+  // every daily sync, and because the contention branch below writes
+  // `max_assignments` straight through PostgREST, where no SQL guard reaches.
+  if (!passesQualityGate(lead)) return 0;
 
   const remaining =
     (lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS) - (lead.assignment_count ?? 0);
@@ -641,4 +678,60 @@ export async function completeAssignment(
       }
     }
   }
+}
+
+
+/**
+ * Re-judge an already-ingested lead's contact details and store the verdict.
+ *
+ * Called from the `monday_item_id` top-up branch, which every daily sync walks
+ * for every lead already in the book. That makes the gate self-healing in both
+ * directions: a number corrected on the Monday board clears the block on the
+ * next sync with no admin action, and details edited into nonsense are caught
+ * the same day.
+ *
+ * BEST EFFORT, AND IT MUST STAY THAT WAY. A failed write leaves the previous
+ * verdict standing rather than throwing — `ingestLead` is the money path, and a
+ * transient PostgREST error must never halt a whole sync.
+ *
+ * It never touches `lead_quality_override_at`, so an admin's decision to sell a
+ * lead survives every later re-check. That is what makes the override durable
+ * instead of something the next morning quietly undoes.
+ */
+export async function refreshLeadQuality(
+  supabase: ReturnType<typeof createAdminClient>,
+  lead: Lead
+): Promise<void> {
+  const verdict = assessLeadQuality(lead);
+  const status = verdict.ok ? "passed" : "failed";
+  const codes: LeadQualityCode[] = verdict.codes;
+
+  // Skip the write when nothing moved. On an ordinary day that is every lead in
+  // the book, so the sync costs no extra writes at all.
+  const existingCodes = Array.isArray(lead.lead_quality_codes)
+    ? lead.lead_quality_codes
+    : [];
+  const sameCodes =
+    existingCodes.length === codes.length &&
+    existingCodes.every((code, i) => code === codes[i]);
+  if (lead.lead_quality_status === status && sameCodes) return;
+
+  const { error } = await supabase
+    .from("leads")
+    .update({
+      lead_quality_status: status,
+      lead_quality_codes: codes,
+      lead_quality_checked_at: new Date().toISOString(),
+    })
+    .eq("id", lead.id);
+
+  if (error) {
+    console.error("refreshLeadQuality: could not store verdict", lead.id, error);
+    return;
+  }
+
+  // Keep the in-memory row honest: the caller hands it straight to
+  // autoAssignLead, and the TypeScript gate reads these fields.
+  lead.lead_quality_status = status;
+  lead.lead_quality_codes = codes;
 }

@@ -342,6 +342,22 @@ export interface Lead {
    * same statement that stamped it.
    */
   owner_resale_qualified_at: string | null;
+  /**
+   * Contact-quality verdict (0111): `pending` | `passed` | `failed`.
+   *
+   * `pending` means nothing has judged this row — it predates the gate, or was
+   * written by a path that does not stamp — and it DOES NOT BLOCK. Read it
+   * through `passesQualityGate()` in `src/lib/leadQuality.ts` rather than
+   * comparing the string, so the override is never forgotten.
+   */
+  lead_quality_status: string;
+  /** Every failing `LeadQualityCode`, not just the first. Empty when passed. */
+  lead_quality_codes: string[];
+  lead_quality_checked_at: string | null;
+  /** An admin chose to sell this lead despite a failed verdict. */
+  lead_quality_override_at: string | null;
+  lead_quality_override_by: string | null;
+  lead_quality_override_note: string | null;
   lead_name: string;
   address: string | null;
   phone: string | null;

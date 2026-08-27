@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  describeLeadQuality,
+  passesQualityGate,
+  type LeadQualityCode,
+} from "@/lib/leadQuality";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
@@ -30,6 +35,10 @@ export interface LeadRow {
   owner_customer_id: string | null;
   owner_source: "import" | "manual" | null;
   owner_name: string | null;
+  /** Contact-quality verdict (0111): pending | passed | failed. */
+  lead_quality_status: string | null;
+  lead_quality_codes: string[] | null;
+  lead_quality_override_at: string | null;
 }
 
 export interface CustomerRow {
@@ -316,6 +325,7 @@ export function AdminLeadsTable({
               <TableHead>Address</TableHead>
               <TableHead>Assigned</TableHead>
               <TableHead>Recipients</TableHead>
+              <TableHead>Quality</TableHead>
               <TableHead>Source</TableHead>
               <TableHead>Received</TableHead>
               <TableHead className="text-right">View</TableHead>
@@ -324,7 +334,16 @@ export function AdminLeadsTable({
           <TableBody>
             {leads.map((l) => {
               const owned = Boolean(l.owner_customer_id);
-              const full = l.assignment_count >= l.max_assignments || owned;
+              const qualityBlocked =
+                !owned && !passesQualityGate({
+                  lead_quality_status: l.lead_quality_status,
+                  lead_quality_override_at: l.lead_quality_override_at,
+                });
+              // A blocked lead cannot be bulk-assigned. The route refuses it
+              // anyway; disabling the box means an admin never ticks fifty rows
+              // and gets fifty failures back.
+              const full =
+                l.assignment_count >= l.max_assignments || owned || qualityBlocked;
               const none = l.assignment_count === 0;
               const checked = selectedLeads.has(l.id);
               return (
@@ -365,6 +384,40 @@ export function AdminLeadsTable({
                   </TableCell>
                   <TableCell className="max-w-[200px] truncate text-muted-foreground">
                     {l.recipients.length ? l.recipients.join(", ") : "—"}
+                  </TableCell>
+                  <TableCell>
+                    {owned ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : qualityBlocked ? (
+                      <Badge
+                        variant="muted"
+                        className="border-red-300 bg-red-50 text-red-700"
+                        title={describeLeadQuality(
+                          (l.lead_quality_codes ?? []) as LeadQualityCode[]
+                        )}
+                      >
+                        Blocked
+                      </Badge>
+                    ) : l.lead_quality_status === "failed" ? (
+                      <Badge
+                        variant="muted"
+                        className="border-amber-300 bg-amber-50 text-amber-700"
+                        title={describeLeadQuality(
+                          (l.lead_quality_codes ?? []) as LeadQualityCode[]
+                        )}
+                      >
+                        Overridden
+                      </Badge>
+                    ) : l.lead_quality_status === "passed" ? (
+                      <span className="text-muted-foreground">OK</span>
+                    ) : (
+                      <span
+                        className="text-muted-foreground"
+                        title="Predates the contact-quality check — routes as it always has."
+                      >
+                        —
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="max-w-[200px] text-muted-foreground">
                     {owned ? (

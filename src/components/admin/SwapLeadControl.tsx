@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Candidate = {
@@ -30,11 +30,17 @@ type FilterView = {
  *
  *   1. The picker only lists leads the swap would actually accept, so a
  *      selection cannot fail on eligibility after the fact.
- *   2. Where the customer has a lead filter, leads that miss it are grouped
- *      and labelled rather than silently mixed in, and placing one takes a
- *      second, named acknowledgement — a replacement reaches the customer as
- *      an ordinary new lead, email and text included, so an off-filter one is
- *      us sending exactly what they asked us not to.
+ *   2. Where the customer has a lead filter, the picker LEADS WITH the leads
+ *      that match it and hides the rest behind a toggle, and placing one of
+ *      the rest takes a second, named acknowledgement — a replacement reaches
+ *      the customer as an ordinary new lead, email and text included, so an
+ *      off-filter one is us sending exactly what they asked us not to.
+ *
+ *      Grouping alone was not enough. Off-filter leads outnumber matching ones
+ *      heavily (11 against 80 for one live customer), so an <optgroup> label
+ *      left eleven useful options buried under eighty and the picker read as
+ *      broken. The one case that always reveals them is no matching stock at
+ *      all, which is the case they were kept reachable for.
  *   3. The consequences are spelled out before the confirm, not after — the
  *      removed lead never goes back into circulation, and any notes or files
  *      the customer wrote on it are deleted with the assignment.
@@ -58,6 +64,14 @@ export function SwapLeadControl({
   const [acknowledged, setAcknowledged] = useState(false);
   const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Off-filter leads are hidden until asked for. They outnumber the matching
+  // ones badly — one live customer filtered to six areas has 11 matching
+  // against 80 outside — and in a native <select> that is eleven useful
+  // options buried under eighty, behind an <optgroup> label that scrolls past
+  // unnoticed. Grouping them was not enough; the list has to lead with what
+  // the customer actually asked for.
+  const [showOutside, setShowOutside] = useState(false);
+  const [query, setQuery] = useState("");
 
   // A won lead is a conversion record; the function refuses it and so does the
   // button, so the refusal is visible before it is pressed.
@@ -71,11 +85,38 @@ export function SwapLeadControl({
   // acknowledgement path stays out of the way.
   const needsAcknowledgement = Boolean(filter) && chosen != null && !chosen.matches_filter;
 
-  async function load() {
+  // Revealed on request, and ALWAYS when nothing matches. A filtered customer
+  // owed a replacement today may have no matching stock at all — that is the
+  // case 0109 kept these leads reachable for — and an empty dropdown hiding its
+  // own escape hatch behind a toggle would be worse than the noise it fixes.
+  const outsideVisible = !filter || showOutside || matching.length === 0;
+
+  // Debounced so a typed postcode is one request, not one per keystroke. Only
+  // while the picker is open, and never on the first render — `start()` does
+  // that fetch, and firing both would double every open.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      void load(query.trim());
+    }, 300);
+    return () => clearTimeout(t);
+    // `load` is stable enough for this: it closes over assignmentId only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, open]);
+
+  async function load(search = "") {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/assignments/${assignmentId}/swap`);
+      // The route has always accepted ?q= and the SQL has always implemented
+      // p_search, but nothing ever sent it — so the picker was a hard 50-row
+      // cap with no way past it. Matching-first ordering means the matching
+      // group survives that cap today, which is luck rather than design: a
+      // customer with 60 matching leads would silently lose some.
+      const url = search
+        ? `/api/admin/assignments/${assignmentId}/swap?q=${encodeURIComponent(search)}`
+        : `/api/admin/assignments/${assignmentId}/swap`;
+      const res = await fetch(url);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         // A 404 here almost always means this row is stale: the assignment was
@@ -109,7 +150,23 @@ export function SwapLeadControl({
     setChosen(null);
     setAcknowledged(false);
     setError(null);
+    setShowOutside(false);
+    setQuery("");
     void load();
+  }
+
+  /**
+   * Hide the off-filter group again, and drop a selection made from it.
+   *
+   * Leaving `chosen` pointing at an option that is no longer rendered would
+   * show a confirm button for a lead the admin can no longer see.
+   */
+  function hideOutside() {
+    setShowOutside(false);
+    if (chosen && !chosen.matches_filter) {
+      setChosen(null);
+      setAcknowledged(false);
+    }
   }
 
   function choose(id: string) {
@@ -237,6 +294,19 @@ export function SwapLeadControl({
       )}
 
       <div>
+        <label htmlFor={`swap-search-${assignmentId}`} className="sr-only">
+          Search leads by name or postcode
+        </label>
+        <input
+          id={`swap-search-${assignmentId}`}
+          type="text"
+          value={query}
+          disabled={swapping}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name or postcode…"
+          className="mb-2 w-full rounded-md border-[0.5px] border-border bg-background px-3 py-2 text-sm disabled:opacity-60"
+        />
+
         <label htmlFor={`swap-${assignmentId}`} className="sr-only">
           Replacement lead
         </label>
@@ -254,7 +324,9 @@ export function SwapLeadControl({
                 ? "Could not load leads — see below"
                 : candidates.length === 0
                   ? "No eligible leads"
-                  : `Choose a replacement (${candidates.length} available)`}
+                  : filter && !outsideVisible
+                    ? `Choose a replacement (${matching.length} match their filter)`
+                    : `Choose a replacement (${candidates.length} available)`}
           </option>
 
           {/* Grouped only when there is a filter to group against. An
@@ -270,7 +342,7 @@ export function SwapLeadControl({
                   ))}
                 </optgroup>
               )}
-              {outside.length > 0 && (
+              {outside.length > 0 && outsideVisible && (
                 <optgroup label={`Outside their filter (${outside.length})`}>
                   {outside.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -288,10 +360,27 @@ export function SwapLeadControl({
             ))
           )}
         </select>
+        {/* The escape hatch. Deliberately a quiet text button rather than
+            anything that reads as the primary action: placing an off-filter
+            lead is the exception, and it still has to pass the tick below. */}
+        {!loading && filter && outside.length > 0 && matching.length > 0 && (
+          <button
+            type="button"
+            onClick={() => (showOutside ? hideOutside() : setShowOutside(true))}
+            disabled={swapping}
+            className="mt-1 text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+          >
+            {showOutside
+              ? `Hide the ${outside.length} outside their filter`
+              : `Show ${outside.length} lead${outside.length === 1 ? "" : "s"} outside their filter`}
+          </button>
+        )}
+
         {!loading && candidates.length === 0 && !error && (
           <p className="mt-1 text-sm text-muted-foreground">
-            A replacement must be the same product, have room left, and not
-            already be with this customer.
+            {query.trim()
+              ? "No leads match that search. Clear it to see everything eligible."
+              : "A replacement must be the same product, have room left, and not already be with this customer."}
           </p>
         )}
         {!loading && filter && matching.length === 0 && candidates.length > 0 && (

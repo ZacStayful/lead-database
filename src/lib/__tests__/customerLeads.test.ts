@@ -118,6 +118,43 @@ describe("isOwnedLead", () => {
   });
 });
 
+describe("viewerScopedLead — contact-quality override metadata (0111)", () => {
+  it("strips the override author and note for EVERY viewer", () => {
+    const scoped = viewerScopedLead(
+      {
+        id: "l1",
+        owner_customer_id: null,
+        lead_quality_override_by: "zac@stayful.co.uk",
+        lead_quality_override_note: "Rang it myself, number is fine",
+      },
+      "c1"
+    );
+    expect(scoped?.lead_quality_override_by).toBeNull();
+    expect(scoped?.lead_quality_override_note).toBeNull();
+  });
+
+  it("strips them from the uploader of their own lead too", () => {
+    const scoped = viewerScopedLead(
+      {
+        id: "l1",
+        owner_customer_id: "c1",
+        lead_quality_override_by: "zac@stayful.co.uk",
+        lead_quality_override_note: null,
+      },
+      "c1"
+    );
+    // Still their lead — ownership is intact — but the admin's address is not
+    // theirs to see.
+    expect(scoped?.owner_customer_id).toBe("c1");
+    expect(scoped?.lead_quality_override_by).toBeNull();
+  });
+
+  it("returns the row untouched when there is no override to strip", () => {
+    const lead = { id: "l1", owner_customer_id: null };
+    expect(viewerScopedLead(lead, "c1")).toBe(lead);
+  });
+});
+
 describe("viewerScopedLead", () => {
   it("hides another customer's id from the reader", () => {
     const scoped = viewerScopedLead({ id: "l1", owner_customer_id: "c1" }, "c2");

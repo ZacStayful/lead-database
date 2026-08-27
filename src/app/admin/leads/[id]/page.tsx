@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AdminLeadControls } from "@/components/admin/AdminLeadControls";
+import { LeadQualityPanel } from "@/components/admin/LeadQualityPanel";
 import { formatDate, formatGBP } from "@/lib/utils";
 import { activeLeadFilters, filterSummary } from "@/lib/leadFilter";
 import type { Customer, Lead } from "@/lib/types";
@@ -188,6 +189,20 @@ export default async function AdminLeadDetailPage({
           </Badge>
         </div>
       </div>
+
+      {/* Above the fold and outside the two-column grid: a blocked lead is the
+          first thing an admin opening this page needs to know, and burying it
+          in a sidebar card is how it gets missed. */}
+      <LeadQualityPanel
+        leadId={lead.id}
+        status={lead.lead_quality_status ?? "pending"}
+        codes={lead.lead_quality_codes ?? []}
+        checkedAt={lead.lead_quality_checked_at ?? null}
+        overrideAt={lead.lead_quality_override_at ?? null}
+        overrideBy={lead.lead_quality_override_by ?? null}
+        overrideNote={lead.lead_quality_override_note ?? null}
+        isOwnedLead={Boolean(lead.owner_customer_id)}
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">

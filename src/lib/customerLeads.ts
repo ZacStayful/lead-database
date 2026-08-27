@@ -129,12 +129,33 @@ export function leadSourceLabel(assignment: {
  * that is never selected.
  */
 export function viewerScopedLead<
-  T extends { owner_customer_id?: string | null; lead_profile?: string | null },
+  T extends {
+    owner_customer_id?: string | null;
+    lead_profile?: string | null;
+    lead_quality_override_by?: string | null;
+    lead_quality_override_note?: string | null;
+  },
 >(lead: T | null | undefined, viewerCustomerId: string | null | undefined): T | null {
   if (!lead) return null;
-  if (!lead.owner_customer_id) return lead;
-  if (viewerCustomerId && lead.owner_customer_id === viewerCustomerId) return lead;
-  return { ...lead, owner_customer_id: null, lead_profile: null };
+
+  // 0111. The contact-quality override records WHO decided, and that is an
+  // admin's email address plus a private note about the lead. Customer lead
+  // surfaces select `leads(*)`, so without this it ships to the browser of every
+  // operator holding the lead.
+  //
+  // Stripped for EVERY viewer, unlike the owner fields below, because there is
+  // no customer this is ever addressed to. The verdict columns themselves stay —
+  // they say nothing an operator cannot see by looking at the lead.
+  const scrubbed =
+    lead.lead_quality_override_by == null && lead.lead_quality_override_note == null
+      ? lead
+      : { ...lead, lead_quality_override_by: null, lead_quality_override_note: null };
+
+  if (!scrubbed.owner_customer_id) return scrubbed;
+  if (viewerCustomerId && scrubbed.owner_customer_id === viewerCustomerId) {
+    return scrubbed;
+  }
+  return { ...scrubbed, owner_customer_id: null, lead_profile: null };
 }
 
 /**

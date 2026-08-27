@@ -5227,3 +5227,231 @@ an unrelated management filter of `{ZZ}`/9+: the GR assign reads `gr_` and only
 0110 first. The four-argument shims mean code arriving late merely enforces the
 filter with no override rather than breaking assignment. Nothing here changes a
 balance, counter, pacing or capacity column.
+
+## 36. Checking a lead before it is sold *(0111)*
+
+Nothing checked a lead's contact details before this. `ingestLead` wrote whatever
+Monday or n8n handed it — the management branch writes `""` for every absent
+field rather than null — and `autoAssignLead` sold the row minutes later. An
+operator pays £15 for a landlord whose "mobile" is a Dubai landline, reject does
+not refund (invariant 4), and we keep the money.
+
+`src/lib/leadQuality.ts` · `POST /api/admin/leads/quality-check` ·
+`POST /api/admin/leads/[id]/quality` · `LeadQualityPanel`.
+
+### 36.1 — Syntactic only, and no new env var
+
+Format, junk name, UK-mobile shape, email shape. Pure string work over three
+columns already on `leads`, so it runs inside `ingestLead` with no network,
+nothing to time out and nothing that can fail the money path. **No environment
+variable was added.**
+
+What it cannot do is tell you the number is answered or the mailbox exists. The
+privacy policy already names **Twilio Lookup** and **ZeroBounce** as processors
+for exactly that and **neither is implemented** (§36.7). Adding one belongs
+*behind* these columns — a queue on the `run-lead-analysis` chaining pattern,
+never in the sync's 60s budget, and failing **open** unlike the syntactic gate.
+
+### 36.2 — ⚠️ The normaliser exists for one shape
+
+**89 of 193 live management leads store the phone as `+44` followed by a FULL
+NATIONAL number** — `+4407304208011`. Strip `+44` and prefix `0` and you get
+`007304208011`, rejecting **46% of the management book**.
+
+`normaliseUkMobile()` therefore strips the country code, then strips any leading
+zeros, then adds exactly one back. Both `+4407304208011` and `+447711387707`
+land on the same national form. Do not "simplify" it to a `startsWith("+44")`
+slice. All **390 distinct live phone strings** were run through the real
+function: 360 valid, 17 `foreign`, 10 `not_mobile`, 2 `placeholder`, 1 `missing`
+— every rejection inspected and correct.
+
+### 36.3 — A junk detector, not a name format
+
+**A one-word name is the NORM.** 87 of 437 live leads are "Adam", "Ann",
+"Josh" — all with valid mobiles and working emails. Requiring a surname would
+discard a fifth of the book to catch three bad rows (an email pasted into the
+name field, `Dbncc`, `inin`). So the test fails only on evidence the value is
+*not* a name — contains `@` or a digit, no letters, a repeated-character run, a
+placeholder word, four-plus basic-Latin characters with no vowel — and passes a
+lone first name, a lowercase one, an accented one and a non-Latin one.
+
+The no-vowel rule is gated on the name being basic Latin. Applied blindly it
+fails every name in every other script.
+
+### 36.4 — `pending` does not block, and that is the whole safety property
+
+| Status | Meaning | Blocks? |
+|---|---|---|
+| `pending` | never judged — predates 0111, or a path that does not stamp | **No** |
+| `passed` | checked, usable | No |
+| `failed` | checked, `lead_quality_codes` says why | **Yes**, unless overridden |
+
+It is the default, so **0111 changes no behaviour on apply** — the migration-
+before-code rule holds in its strong form. It is also the safe direction: an
+unchecked lead sold is recoverable, an unchecked lead silently withheld is not.
+
+The override is a **separate column**, not a fourth status, so both facts
+survive — what the checker thought and what an admin decided. Clearing it
+restores the block with no re-check. `refreshLeadQuality` never touches it, so
+an admin's decision is not quietly undone the next morning.
+
+### 36.5 — Enforced in BOTH predicates, and re-judged on every sync
+
+⚠️ **A check at insert time is not enough.** `ingestLead`'s `monday_item_id`
+branch skips the insert and calls `autoAssignLead` directly, and both syncs run
+daily — so an insert-only gate would withhold a bad lead for one day and sell it
+every morning after. That branch now calls `refreshLeadQuality`, which makes the
+gate self-healing: a number corrected on the board clears the block on the next
+sync, with no admin action and no separate job.
+
+⚠️ **`lead_pool_barred()` needs the clause as well as
+`lead_retired_from_allocation()`.** They are separate predicates that agree
+about owned leads only by coincidence (§32.6). Without it, a blocked lead that
+was never assigned pools on the `unassigned` basis at day 25 and becomes
+claimable, free, by every subscriber — the worst outcome available, since the
+pool's whole pitch is that ringing costs nothing. Asserted on scratch: the
+blocked lead is absent from `get_pool_entry_candidates()` while the other three
+are present.
+
+Two paths consult neither and are guarded in TypeScript, as §32.6 does for the
+cap writes: the **contention branch** in `ingest.ts` (a direct PostgREST write)
+and **`admin_assign_lead`** via the admin assign routes. Bulk assign *skips*
+blocked leads with a per-lead reason rather than failing the whole request.
+
+`admin_assign_lead` is deliberately **not** rewritten here — see 34.8.
+
+### 36.6 — The backfill is a route, not SQL in the migration
+
+The rules live in TypeScript and the migration does not restate them. A SQL copy
+of the normaliser is a second implementation that must change in step and
+silently would not — §20's `capture_operator_proof`, §26.7's `presentationSeed`.
+Given 34.2, getting it wrong blanks half the book.
+
+So `POST /api/admin/leads/quality-check` (also the **Check lead quality** button
+on `/admin/leads`) runs `assessLeadQuality` over `pending` rows. Claim-by-write
+on `lead_quality_status = 'pending'`, so it is re-runnable, self-draining, and
+two concurrent runs cannot fight.
+
+⚠️ **A lead already SOLD is marked but not blocked** — stamped `failed` and given
+an override in the *same write*. Invariant 4: a delivered lead is chargeable, and
+retiring one an operator is working withdraws something they paid for. On today's
+book that is 16 leads, 15 of them the `+44` shape — so if the normaliser were
+ever wrong the blast radius is the 24 unsold rows, not the live book. Owned leads
+(§30) are skipped entirely.
+
+**Run on 2026-08-27 against the live book: 41 of 440 failed — 25 blocked, 16
+marked only.** Every rejection was inspected: overseas numbers (Netherlands,
+Saudi, France, Switzerland, Australia, Panama, Portugal, Qatar, Hong Kong,
+Ireland, Malta, New Zealand, UAE), a London landline, two placeholders, two rows
+with no contact details at all, and the three junk names. Nothing surprising and
+nothing borderline.
+
+It was driven from the shipped `assessLeadQuality` rather than the route (which
+needs an admin session), by running the real function over the distinct names and
+the distinct phone strings and then matching in SQL on **exact string
+membership** — so no rule was restated in SQL at any point.
+
+⚠️ The predicted figure was 40 of 437. Two things moved it, both worth knowing:
+the book grew by three leads between measuring and running, and **the real
+normaliser is stricter than the SQL approximation used for the estimate** on
+`0447 711910109` — which it rejects, correctly, and which the test suite pins as
+the case that must never be mangled into a valid number. The estimate was the
+thing that was wrong.
+
+### 36.7 — What this does NOT close
+
+`/policies/lead-quality-and-data` tells customers that rejecting a lead as
+"invalid email or mobile" triggers an immediate automated check and restores
+their allocation. **None of that exists**: `reject_lead_assignment` takes no
+reason parameter and no verification vendor is called. Softening that copy, or
+building it, is separate work.
+
+⚠️ Separately: the landing page, the privacy policy (twice) and that same policy
+page all state a **maximum of two operators** per lead. The default has been 3
+since 0055, escalation reaches 5, contention 4, and a pool claim bypasses the cap
+entirely — **21 live leads have gone to 3 operators and 3 to 4**. In the privacy
+policy that is a consent statement, not marketing copy.
+
+### 36.8 — Migration drift, mostly closed
+
+Numbered **0111, not 0109**, because at the time it was written production
+carried two migrations that were **not in `supabase/migrations/`** —
+`swap_respects_lead_filter` and `admin_assign_respects_lead_filter`, both applied
+2026-08-27 ahead of their code. **Both have since been committed** as 0109 and
+0110 (§34, §35), so that half of the drift is resolved and the 0111 number was
+the right one to take.
+
+⚠️ **`worked_conversion` (2026-08-23) is still missing from the directory.** A
+schema rebuilt from `supabase/migrations/` today does not have it. Closing that
+is separate work.
+
+It is also why `admin_assign_lead` is guarded from the routes rather than
+rewritten in 0111: when this was written that function had been replaced by an
+uncommitted migration, so copying its live body in would have lost or fought
+0110 depending on apply order. `admin_block_check_lead_quality()` is the guard
+instead — the arrangement `leadResale.ts` uses for cap writes SQL cannot see
+(§32.6). Now that 0110 is committed the two compose cleanly: the quality gate is
+asserted in the route before the RPC, and 0110's filter opt-in reaches the RPC
+after it, so a blocked lead never gets as far as a filter question.
+
+### Verification
+
+**103 of 104 migrations applied to a scratch Postgres 16 from empty** (the one
+failure is `create extension pg_cron`, unavailable locally), 0111 re-applied
+twice for idempotency. CHECK exercised on an invalid value and all three valid
+ones; both partial indexes confirmed.
+
+Behaviour: a `failed` lead is retired **and** pool-barred, returns **0**
+candidates from `get_unfiltered_candidates_for_lead` and
+`get_next_customers_for_lead`, is refused by `assign_lead_to_customer`, and is
+absent from `get_pool_entry_candidates()`. The same lead with an override set
+allocates normally; withdrawing the override re-blocks it in both predicates.
+Regressions: a `passed` lead allocates and spends **exactly one** credit
+(10 → 9, counter 1), a `pending` lead allocates unchanged, and
+`find_duplicate_lead` still matches.
+
+ACLs audited with `has_function_privilege` on both replaced functions — anon
+`false`, authenticated `false`, service_role `true` — and invariant 7 re-checked
+on all four functions that must stay `authenticated`-executable.
+
+**462 vitest cases green** (78 new), `npm run build` passes. The normaliser was
+run over every distinct live phone string (34.2).
+
+**Applied to `znlfwbnvhlacwzgfalcf` on 2026-08-27, BEFORE the code** — the order
+§30 argues for, rather than §30's own account of finding out the hard way.
+
+Pre-apply: zero collisions on the six columns, the function name, both indexes
+and the CHECK. And the check §11 says not to assume — production's live `prosrc`
+for **both** replaced functions was diffed against the bodies this migration
+embeds, with the new clause removed, and matched exactly. Worth doing rather
+than assuming here specifically: another session had replaced
+`admin_assign_lead` earlier the same morning (34.8), so "nothing has moved since
+I copied it" was a live question, not a formality.
+
+Post-apply: **437 leads, 332 assignments and 40 customers untouched; all 437
+rows `pending`; zero blocked** — the migration is inert exactly as designed. All
+six columns, both partial indexes and the CHECK present. ACLs re-audited —
+anon `false`, authenticated `false`, service_role `true` on all three functions
+— and invariant 7 confirmed on all four that must stay
+`authenticated`-executable. The column adds, the CHECK and both indexes were
+re-run to prove a second apply is clean.
+
+The predicates were then exercised **on production itself**, inside a `DO` block
+that raises at the end so every write is rolled back: a real unsold lead read
+`pending → f/f`, `failed → t/t`, `+ override → f/f`, `passed → f/f`, and the
+row count afterwards confirmed nothing changed. Supabase's linter reports **no
+new advisory** — all three functions pin `search_path`.
+
+### Deployment order — migration BEFORE code
+
+0111 first — **done**. Every leads read now selects `lead_quality_status`, so
+code arriving first would fail them all; §30 records what that costs (a preview
+quoting **zero** filter volume from a swallowed error). Then the code, then press
+**Check lead quality** in admin to run the backfill. Until that button is
+pressed every lead stays `pending` and nothing is blocked, so the code is safe to
+deploy at any point after the migration.
+
+**`vercel.json`'s `buildCommand` was `next build`, which overrode
+`package.json`'s `vitest run && next build`, so the suite gated nothing on
+deploy.** It now runs the tests. The phone normaliser's only defence is a unit
+test, and it was one CI never executed.
