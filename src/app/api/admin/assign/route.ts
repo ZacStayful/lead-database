@@ -5,6 +5,11 @@ import { isAdminUser } from "@/lib/auth";
 import { completeAssignment } from "@/lib/ingest";
 import type { Lead } from "@/lib/types";
 import { leadPriceFor } from "@/lib/plans";
+import {
+  describeLeadQuality,
+  passesQualityGate,
+  type LeadQualityCode,
+} from "@/lib/leadQuality";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +76,29 @@ export async function POST(request: NextRequest) {
   }
 
   const typedLead = lead as Lead;
+
+  // ⚠️ THE ADMIN OVERRIDE PATH BYPASSES BOTH ALLOCATION PREDICATES. When
+  // `override` is set the RPC is `admin_assign_lead`, which writes its own
+  // UPDATE and consults neither `lead_retired_from_allocation` nor
+  // `lead_pool_barred` — the same gap 0102 had to close by hand for owned
+  // leads. So the contact-quality gate is asserted here, in the route.
+  //
+  // It is refused rather than silently honoured, and the message names the
+  // override so there is ONE verb for "sell it anyway" and one place that
+  // records who said so.
+  if (!passesQualityGate(typedLead)) {
+    return NextResponse.json(
+      {
+        error:
+          "This lead failed the contact-quality check: " +
+          describeLeadQuality(typedLead.lead_quality_codes as LeadQualityCode[]) +
+          ". Override it on the lead page if you want it assigned anyway.",
+        code: "lead_quality_blocked",
+      },
+      { status: 400 }
+    );
+  }
+
   const defaultPrice = leadPriceFor(typedLead.lead_type);
   const price = body.price ?? defaultPrice;
 

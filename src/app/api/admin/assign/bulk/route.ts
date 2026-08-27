@@ -5,6 +5,11 @@ import { isAdminUser } from "@/lib/auth";
 import { completeAssignment } from "@/lib/ingest";
 import type { Lead } from "@/lib/types";
 import { leadPriceFor } from "@/lib/plans";
+import {
+  describeLeadQuality,
+  passesQualityGate,
+  type LeadQualityCode,
+} from "@/lib/leadQuality";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -107,10 +112,38 @@ export async function POST(request: NextRequest) {
   if (leadsError) {
     return NextResponse.json({ error: leadsError.message }, { status: 500 });
   }
-  const leads = (leadsRaw ?? []) as Lead[];
+  const allLeads = (leadsRaw ?? []) as Lead[];
+
+  // ⚠️ THE ADMIN OVERRIDE PATH BYPASSES BOTH ALLOCATION PREDICATES. When
+  // `override` is set the RPC is `admin_assign_lead`, which writes its own
+  // UPDATE and consults neither `lead_retired_from_allocation` nor
+  // `lead_pool_barred` — the same gap 0102 had to close by hand for owned
+  // leads. So the contact-quality gate is asserted here, in the route.
+  //
+  // It is refused rather than silently honoured, and the message names the
+  // override so there is ONE verb for "sell it anyway" and one place that
+  // records who said so.
+  // Here the blocked leads are SKIPPED rather than failing the whole request:
+  // a bulk assign over a hundred leads must not be refused outright because one
+  // of them has a bad phone number. Each is reported as its own failure so the
+  // admin can see exactly which, and why.
+  const leads = allLeads.filter((lead) => passesQualityGate(lead));
+  const blockedLeads = allLeads.filter((lead) => !passesQualityGate(lead));
 
   const leadsAffected = new Set<string>();
   const failures: { lead_id: string; customer_id: string; error: string }[] = [];
+
+  for (const lead of blockedLeads) {
+    for (const customerId of customerIds) {
+      failures.push({
+        lead_id: lead.id,
+        customer_id: customerId,
+        error:
+          "Failed the contact-quality check: " +
+          describeLeadQuality(lead.lead_quality_codes as LeadQualityCode[]),
+      });
+    }
+  }
 
   // Phase 1 — do the assignments (fast, DB-only). The RPC locks the lead and
   // customer rows, so keep it sequential to respect capacity/credit order and

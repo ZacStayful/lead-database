@@ -1,6 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SyncMondayButton } from "@/components/admin/SyncMondayButton";
 import { ParseIncomeReportsButton } from "@/components/admin/ParseIncomeReportsButton";
+import { CheckLeadQualityButton } from "@/components/admin/CheckLeadQualityButton";
+import { passesQualityGate } from "@/lib/leadQuality";
 import {
   AdminLeadsTable,
   type LeadRow,
@@ -19,6 +21,9 @@ interface LeadQueryRow {
   created_at: string;
   owner_customer_id: string | null;
   owner_source: "import" | "manual" | null;
+  lead_quality_status: string | null;
+  lead_quality_codes: string[] | null;
+  lead_quality_override_at: string | null;
   owner: { business_name: string } | null;
   lead_assignments: {
     customers: { business_name: string } | null;
@@ -30,7 +35,7 @@ export default async function AdminLeadsPage() {
   const { data } = await admin
     .from("leads")
     .select(
-      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, owner_customer_id, owner_source, owner:customers!leads_owner_customer_id_fkey(business_name), lead_assignments(customers(business_name))"
+      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, owner_customer_id, owner_source, lead_quality_status, lead_quality_codes, lead_quality_override_at, owner:customers!leads_owner_customer_id_fkey(business_name), lead_assignments(customers(business_name))"
     )
     .order("created_at", { ascending: false });
 
@@ -46,6 +51,9 @@ export default async function AdminLeadsPage() {
     owner_customer_id: l.owner_customer_id,
     owner_source: l.owner_source,
     owner_name: l.owner?.business_name ?? null,
+    lead_quality_status: l.lead_quality_status,
+    lead_quality_codes: l.lead_quality_codes,
+    lead_quality_override_at: l.lead_quality_override_at,
     recipients: l.lead_assignments
       .map((a) => a.customers?.business_name)
       .filter((n): n is string => Boolean(n)),
@@ -55,10 +63,32 @@ export default async function AdminLeadsPage() {
   // admin: nobody can assign them, so including them would report a backlog
   // that no action could ever clear.
   const assignable = leads.filter((l) => !l.owner_customer_id);
-  const pendingCount = assignable.filter(
+
+  // A lead blocked on contact quality is not awaiting assignment either — no
+  // admin action clears it except an override, which is a decision rather than
+  // a queue. Counted separately for the same reason §18.1 keeps refilling and
+  // one-off supply apart: rolling it into "awaiting assignment" would report a
+  // backlog that working through the list can never reduce.
+  const qualityBlocked = assignable.filter(
+    (l) =>
+      !passesQualityGate({
+        lead_quality_status: l.lead_quality_status,
+        lead_quality_override_at: l.lead_quality_override_at,
+      })
+  );
+  const blockedCount = qualityBlocked.length;
+  const routable = assignable.filter(
+    (l) =>
+      passesQualityGate({
+        lead_quality_status: l.lead_quality_status,
+        lead_quality_override_at: l.lead_quality_override_at,
+      })
+  );
+
+  const pendingCount = routable.filter(
     (l) => l.assignment_count < l.max_assignments
   ).length;
-  const unassignedCount = assignable.filter((l) => l.assignment_count === 0).length;
+  const unassignedCount = routable.filter((l) => l.assignment_count === 0).length;
 
   // Approved (real) customers — the pool the bulk assigner offers, with their
   // per-product credit counts for context.
@@ -139,6 +169,14 @@ export default async function AdminLeadsPage() {
                 {unassignedCount > 0 && ` (${unassignedCount} with none yet)`}
               </>
             )}
+            {blockedCount > 0 && (
+              <>
+                {" · "}
+                <span className="font-medium text-red-700">
+                  {blockedCount} blocked on contact quality
+                </span>
+              </>
+            )}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Tick leads below, then choose who receives them — old leads stay put
@@ -152,6 +190,7 @@ export default async function AdminLeadsPage() {
             label="Sync GR from Monday"
           />
           <ParseIncomeReportsButton />
+          <CheckLeadQualityButton />
         </div>
       </div>
 
