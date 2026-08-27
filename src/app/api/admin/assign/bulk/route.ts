@@ -47,6 +47,12 @@ async function inChunks<T>(
  * (still honouring capacity and the paused-customer block); otherwise the
  * credit-gated assign_lead_to_customer is used and any pair the customer can't
  * legitimately receive is reported as a per-pair failure rather than aborting.
+ *
+ * Since 0110 that includes the customer's LEAD FILTER, on both branches. This
+ * screen is a leads x customers cross product, so marking every pair would be a
+ * matrix; the refusal is reported per pair instead, which is how it already
+ * reports capacity, product and pause. allow_filter_mismatch=true places them
+ * anyway.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient();
@@ -62,6 +68,7 @@ export async function POST(request: NextRequest) {
     lead_ids?: string[];
     customer_ids?: string[];
     override?: boolean;
+    allow_filter_mismatch?: boolean;
   };
   try {
     body = await request.json();
@@ -74,6 +81,12 @@ export async function POST(request: NextRequest) {
     new Set((body.customer_ids ?? []).filter(Boolean))
   );
   const override = body.override === true;
+
+  // A SEPARATE flag from `override` (0110): that one bypasses the credit gate,
+  // this one bypasses what the customer asked for. Strict true — without it
+  // both RPC branches refuse a mismatch, and each refusal lands in `failures`
+  // per pair, exactly as capacity, product and pause refusals already do.
+  const allowFilterMismatch = body.allow_filter_mismatch === true;
 
   if (leadIds.length === 0 || customerIds.length === 0) {
     return NextResponse.json(
@@ -126,6 +139,7 @@ export async function POST(request: NextRequest) {
           p_customer_id: customerId,
           p_price: price,
           p_lead_type: lead.lead_type,
+          p_allow_filter_mismatch: allowFilterMismatch,
         }
       );
 
