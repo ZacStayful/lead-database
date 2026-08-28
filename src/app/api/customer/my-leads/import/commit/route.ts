@@ -11,6 +11,7 @@ import {
 } from "@/lib/leadImport";
 import { createOwnedLeads } from "@/lib/customerLeads";
 import { analysisQuote, describeIneligibility } from "@/lib/leadAnalysis";
+import { normaliseUkMobile } from "@/lib/leadQuality";
 import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -179,6 +180,19 @@ export async function POST(request: NextRequest) {
   // never turn that into an error — they simply do not see the offer.
   const analysis = await quoteAnalysis(admin, result.leadIds);
 
+  // ── Numbers we could not make sense of ────────────────────────────
+  //
+  // toRpcRow has already normalised every UK mobile it could recognise, in
+  // whatever shape the spreadsheet held it (§36.2). What is left is numbers
+  // that are genuinely unusable — a digit short, a landline, a placeholder —
+  // and the customer needs to hear that HERE rather than discovering it one
+  // lead at a time when a message will not send.
+  //
+  // Counted after the commit, over the leads actually created, for the same
+  // reason the analysis quote is: before it, duplicates and blank rows would
+  // be counted as problems the customer cannot act on.
+  const unmessageable = await countUnmessageable(admin, result.leadIds);
+
   return NextResponse.json({
     ok: true,
     imported: result.created,
@@ -186,7 +200,34 @@ export async function POST(request: NextRequest) {
     empty: result.empty,
     total: rows.length,
     analysis,
+    unmessageable,
   });
+}
+
+/**
+ * How many of the new leads carry a phone number nothing can message.
+ *
+ * Best-effort, like the analysis quote beside it: the import has succeeded and
+ * the leads are the customer's, so a failure to count is a missing warning
+ * rather than an error. An explicitly FOREIGN number is not counted — a
+ * landlord abroad is a fact, and WhatsApp reaches them (§36.2).
+ */
+async function countUnmessageable(
+  admin: ReturnType<typeof createAdminClient>,
+  leadIds: string[]
+): Promise<number> {
+  if (!leadIds.length) return 0;
+  try {
+    const { data, error } = await admin.from("leads").select("phone").in("id", leadIds);
+    if (error || !data) return 0;
+    return (data as { phone: string | null }[]).filter((l) => {
+      const verdict = normaliseUkMobile(l.phone);
+      return !verdict.ok && verdict.reason !== "foreign";
+    }).length;
+  } catch (err) {
+    console.error("import/commit: phone count failed", err);
+    return 0;
+  }
 }
 
 /**

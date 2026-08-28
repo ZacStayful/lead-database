@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { extractPostcode, postcodeArea } from "./postcode";
+import { normaliseUkMobile } from "./leadQuality";
 import type { LeadType } from "./types";
 
 /** How an owned lead was created. */
@@ -175,6 +176,30 @@ function clean(value: string | null | undefined): string {
 }
 
 /**
+ * A UK mobile in whatever form the customer typed it → the `07…` national form.
+ *
+ * A customer should not have to know what shape we want. A spreadsheet column
+ * holds `07700 900123`, `+44 7700 900123`, `447700900123` and `7700900123` in
+ * the same forty rows — all the same number, and Excel will have eaten the
+ * leading zero on at least one of them. `normaliseUkMobile` (§36.2) already
+ * resolves every one of those to a single national form, and it is the same
+ * rule the send path validates against, so a number stored here is a number
+ * that can be messaged.
+ *
+ * ⚠️ ANYTHING IT CANNOT RESOLVE IS STORED EXACTLY AS TYPED, never blanked. An
+ * overseas landlord is a fact rather than a mistake (§36.2), and a number one
+ * digit short is something the operator has to be able to SEE in order to
+ * correct — destroying it would leave them with an empty field and no idea what
+ * they had entered. The same argument §36.4 makes for keeping a failed lead
+ * rather than deleting it.
+ */
+function tidyPhone(raw: string): string {
+  if (!raw) return "";
+  const uk = normaliseUkMobile(raw);
+  return uk.ok ? uk.value : raw;
+}
+
+/**
  * Shape one row for the RPC, resolving the postcode.
  *
  * Postcode derivation happens HERE rather than in SQL because
@@ -193,6 +218,7 @@ function clean(value: string | null | undefined): string {
  */
 export function toRpcRow(row: OwnedLeadInput): Record<string, string> {
   const rawAddress = clean(row.address);
+  const phone = tidyPhone(clean(row.phone));
   const explicit = extractPostcode(clean(row.postcode));
   const fromAddress = extractPostcode(rawAddress);
   const postcode = explicit ?? fromAddress;
@@ -205,7 +231,7 @@ export function toRpcRow(row: OwnedLeadInput): Record<string, string> {
   return {
     name: clean(row.name),
     email: clean(row.email),
-    phone: clean(row.phone),
+    phone,
     address,
     bedrooms: clean(row.bedrooms),
     profile: clean(row.profile),

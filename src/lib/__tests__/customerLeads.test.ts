@@ -8,6 +8,44 @@ import {
 } from "../customerLeads";
 
 describe("toRpcRow", () => {
+  /**
+   * A customer should not have to know what shape we want. One spreadsheet
+   * column holds all of these, and Excel will have eaten the leading zero off
+   * at least one of them.
+   */
+  it("normalises a UK mobile however it was typed", () => {
+    for (const raw of [
+      "07700 900123",
+      "07700900123",
+      "+44 7700 900123",
+      "+447700900123",
+      "447700900123",
+      "7700900123",
+      "(07700) 900123",
+    ]) {
+      expect(toRpcRow({ phone: raw }).phone).toBe("07700900123");
+    }
+  });
+
+  /**
+   * ⚠️ THE NUMBER THAT BROKE THE FIRST LIVE SEND. +44778643769 is nine digits
+   * after the country code where a UK mobile has ten, so TimelinesAI rejected
+   * it with a bare http_400. It is stored EXACTLY as typed rather than blanked
+   * or "corrected": the operator has to be able to see it to fix it.
+   */
+  it("keeps an unusable number exactly as typed, never blanking it", () => {
+    expect(toRpcRow({ phone: "+44778643769" }).phone).toBe("+44778643769");
+    expect(toRpcRow({ phone: "0117 496 0000" }).phone).toBe("0117 496 0000");
+  });
+
+  it("leaves an overseas number alone — abroad is a fact, not a mistake", () => {
+    expect(toRpcRow({ phone: "+31 6 12345678" }).phone).toBe("+31 6 12345678");
+  });
+
+  it("stores an empty phone as an empty string, as before", () => {
+    expect(toRpcRow({ name: "Amie" }).phone).toBe("");
+  });
+
   it("reads the postcode out of the address, as it always has", () => {
     const row = toRpcRow({ address: "12 Bourneside Road, Bristol BS4 3AA" });
     expect(row.postcode).toBe("BS4 3AA");
@@ -53,11 +91,14 @@ describe("toRpcRow", () => {
     expect(row.address).toBe("12 Foo St, Bristol BS7 8PL");
   });
 
-  it("trims and stringifies everything, keeping phone text intact", () => {
+  it("trims and stringifies everything", () => {
     const row = toRpcRow({ name: "  Jane  ", phone: " 07700 900123 ", bedrooms: " 3 " });
     expect(row.name).toBe("Jane");
-    // A leading zero survives because nothing here is ever coerced to a number.
-    expect(row.phone).toBe("07700 900123");
+    // The leading zero is still the thing that matters — nothing here is ever
+    // coerced to a number, which is what would eat it. The internal space is
+    // gone now because a recognised UK mobile is normalised to its national
+    // form, so what is stored is what the send path can dial.
+    expect(row.phone).toBe("07700900123");
     expect(row.bedrooms).toBe("3");
   });
 });

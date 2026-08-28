@@ -38,6 +38,7 @@ import {
 import { sendEmail } from "@/lib/messaging/resend";
 import { sendMessage as sendWhatsapp } from "@/lib/messaging/timelines";
 import { toE164 } from "@/lib/messaging/whatsappIdentity";
+import { normaliseUkMobile } from "@/lib/leadQuality";
 import {
   renderOperatorHtml,
   sanitiseHeaderValue,
@@ -462,9 +463,40 @@ export async function POST(request: NextRequest) {
       return fail("credential_unreadable", "Your WhatsApp connection needs reconnecting.", 409);
     }
 
-    const phone = toE164(recipient);
+    // ⚠️ VALIDATE WITH THE STRICT RULE, NOT THE MATCHING ONE.
+    //
+    // toE164 accepts anything normalisePhone accepts, and that is deliberately
+    // loose: it is the 0070 IDENTITY rule (seven digits, not all zeros), whose
+    // job is deciding whether two records describe the same person. It is not a
+    // test of whether a number can receive anything.
+    //
+    // So a number one digit short — +44778643769, nine digits after the country
+    // code where a UK mobile has ten — sailed through to TimelinesAI, which
+    // rejected it with a bare `http_400`. The operator was told "the message
+    // could not be sent (http_400)", which names neither the problem nor the
+    // fix. §36 already owns the strict rule; this is the seam where it was not
+    // being used.
+    //
+    // An explicitly FOREIGN number is a fact, not an error (§36.2) — landlords
+    // abroad exist and WhatsApp is how you reach them — so it goes through to
+    // the provider as E.164 and the provider decides.
+    const uk = normaliseUkMobile(recipient);
+
+    if (!uk.ok && uk.reason !== "foreign") {
+      return fail(
+        "bad_phone",
+        uk.reason === "not_mobile"
+          ? "That number is not a UK mobile, so it cannot receive WhatsApp. Check the lead's phone number — a digit is often missing."
+          : uk.reason === "placeholder"
+            ? "That lead's phone number is a placeholder, not a real number."
+            : "That lead has no usable phone number.",
+        409
+      );
+    }
+
+    const phone = uk.ok ? `+44${uk.value.slice(1)}` : toE164(recipient);
     if (!phone) {
-      return fail("bad_phone", "That phone number does not look valid.", 409);
+      return fail("bad_phone", "That lead has no usable phone number.", 409);
     }
 
     const sent = await sendWhatsapp(token, {
@@ -474,11 +506,22 @@ export async function POST(request: NextRequest) {
     });
 
     if (!sent.ok) {
+      // ⚠️ THE VENDOR'S OWN EXPLANATION WAS BEING THROWN AWAY. `sent.detail`
+      // carries what TimelinesAI actually said, and a bare `http_400` in front
+      // of an operator names neither the problem nor the fix. Always logged; an
+      // admin sees it, a customer does not — the messagingConfigError split.
+      console.error("[messaging/send] whatsapp send failed", {
+        code: sent.code,
+        detail: sent.detail,
+        messageId,
+      });
       return fail(
         sent.code,
         sent.code === "invalid_token"
           ? "TimelinesAI rejected your token. Please reconnect WhatsApp."
-          : `The message could not be sent (${sent.code}).`
+          : isAdminUser(user) && sent.detail
+            ? `WhatsApp rejected the message (${sent.code}): ${String(sent.detail).slice(0, 200)}`
+            : `The message could not be sent (${sent.code}).`
       );
     }
 

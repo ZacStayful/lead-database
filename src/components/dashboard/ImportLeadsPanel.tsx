@@ -55,6 +55,8 @@ interface ImportResult {
    * upsell that cannot be priced is simply not offered.
    */
   analysis: AnalysisOffer | null;
+  /** Created leads whose phone nothing can message. Foreign numbers excluded. */
+  unmessageable: number;
 }
 
 /** Below this the mapping is flagged for a look rather than presented as settled. */
@@ -209,6 +211,21 @@ export function ImportLeadsPanel({ available }: { available: LeadType[] }) {
             {result.empty > 0 && `, ${result.empty} blank row${result.empty === 1 ? "" : "s"} ignored`}
             .
           </p>
+          {/*
+            Phone numbers are normalised on the way in, whatever shape the
+            spreadsheet held them in — so this names only the ones that are
+            genuinely unusable: a digit short, a landline, a placeholder. Said
+            here rather than left to be discovered one lead at a time when a
+            message will not send.
+          */}
+          {result.unmessageable > 0 && (
+            <p className="text-sm text-amber-700 dark:text-amber-500">
+              {result.unmessageable} of them{" "}
+              {result.unmessageable === 1 ? "has a phone number" : "have phone numbers"}{" "}
+              we can&apos;t message — usually a missing digit or a landline. The
+              leads are saved; correct the number on the lead to message them.
+            </p>
+          )}
         </div>
         {/*
           THE OFFER SITS HERE, after the import has committed, and that
