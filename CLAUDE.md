@@ -6398,6 +6398,51 @@ Two rules inside it:
   Sent. `delivered_at` / `read_at` are first-observation-wins, the
   `first_contacted_at` discipline (§6).
 
+### 40.9A — ⚠️ Two rules about a phone number, and the send path used the wrong one
+
+The first live send failed with `The message could not be sent (http_400)`.
+The number was `+44778643769` — **nine digits after the country code where a UK
+mobile has ten**. TimelinesAI was right to refuse it. What was wrong was that it
+ever got that far, and that the operator was then told nothing useful.
+
+This codebase has two phone predicates and they answer different questions:
+
+| | Question | Used by |
+|---|---|---|
+| `normalisePhone` / `normalised_phone` (0070) | **Are these two records the same person?** Seven digits, not all zeros — deliberately loose, because under-matching costs a duplicate | duplicate detection, thread keying, `toE164` |
+| `normaliseUkMobile` (§36.2) | **Is this a UK mobile?** Strict `07\d{9}` after the country-code dance | the lead quality gate |
+
+`toE164` is built on the first, so the send path was validating deliverability
+with the *identity* rule. It now consults `normaliseUkMobile` and refuses before
+any provider call, saying that a digit is probably missing. **An explicitly
+foreign number still goes through** — a landlord abroad is a fact, not a mistake
+— and the provider decides.
+
+The vendor's own explanation was also being discarded: `sent.detail` held
+whatever TimelinesAI said and nothing read it. It is now always logged, and
+shown to an admin (the `messagingConfigError` split).
+
+**Customer-added leads are normalised on the way in.** `toRpcRow` is the one
+choke point both the manual add and the bulk import pass through, so
+`07700 900123`, `+44 7700 900123`, `447700900123` and `7700900123` all store as
+`07700900123` — the postcode precedent in that same function, applied to phones.
+A customer should not have to know what shape we want, and Excel will have eaten
+a leading zero off at least one column.
+
+⚠️ **Anything it cannot resolve is stored EXACTLY as typed, never blanked.** A
+number one digit short is something the operator has to be able to SEE to
+correct; §36.4 makes the same argument for keeping a failed lead rather than
+deleting it. The import result names how many of the new leads carry a number
+nothing can message — counted after the commit over the leads actually created,
+because before it duplicates and blank rows would be counted as problems the
+customer cannot act on.
+
+⚠️ **Customer-added leads still carry `lead_quality_status = 'pending'`.** The
+§36 gate runs at ingest and its backfill skips owned leads, so nothing judges
+them. That is harmless for allocation — owned leads are never allocated — but it
+means the phone verdict above is the only check they get, and a §32.4 resale
+candidate reaches qualification unjudged.
+
 ### 40.10 — Send caps are enforced, not merely displayed
 
 The setup panel told the operator *"Sending is limited to 40 a day to protect
