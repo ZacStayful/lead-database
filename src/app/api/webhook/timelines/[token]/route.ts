@@ -34,7 +34,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptSecret, timelinesTokenAad } from "@/lib/crypto/secretBox";
 import { getMessage, mapStatus } from "@/lib/messaging/timelines";
-import { normalisePhone, isDialableJid } from "@/lib/messaging/whatsappIdentity";
+import { normalisePhone, resolveWebhookIdentity } from "@/lib/messaging/whatsappIdentity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,15 +43,26 @@ export const maxDuration = 60;
 /** Under TimelinesAI's 5s ceiling, leaving room to write. */
 const READBACK_TIMEOUT_MS = 3000;
 
+/**
+ * ⚠️ WRITTEN FROM THE DOCS, AND THE DOCS ARE NOT THE WIRE. Every field here is
+ * optional and every one is treated as a HINT, because the shape that actually
+ * arrives has already been wrong once: `chat.jid` was assumed and is not there,
+ * which silently discarded twenty events. Nothing load-bearing may be read from
+ * this — the read-back is the source of truth. Both nestings of the uid are
+ * accepted for the same reason.
+ */
 interface Payload {
   event_type?: string;
   chat?: { chat_id?: number | string; phone?: string | null; jid?: string | null };
   message?: {
     message_uid?: string;
+    uid?: string;
     text?: string | null;
     direction?: string;
     timestamp?: string;
   };
+  message_uid?: string;
+  uid?: string;
   whatsapp_account?: { phone?: string | null };
 }
 
@@ -107,14 +118,33 @@ export async function POST(
     return NextResponse.json({ received: true });
   }
 
-  const uid = payload.message?.message_uid;
-  if (!uid) return NextResponse.json({ received: true, ignored: "no_uid" });
+  const uid =
+    payload.message?.message_uid ??
+    payload.message?.uid ??
+    payload.message_uid ??
+    payload.uid;
+  if (!uid) {
+    console.warn("[webhook/timelines] dropped: no_uid", { eventType });
+    return NextResponse.json({ received: true, ignored: "no_uid" });
+  }
 
   // ---- Layer 2: claim by INSERT -------------------------------------------
   const claimId = `timelines:${eventType}:${uid}`;
-  const { error: claimErr } = await admin
-    .from("message_webhook_events")
-    .insert({ id: claimId, provider: "timelinesai", event_type: eventType });
+  const { error: claimErr } = await admin.from("message_webhook_events").insert({
+    id: claimId,
+    provider: "timelinesai",
+    event_type: eventType,
+    // ⚠️ THE BODY IS STORED ON EVERY EVENT, not only the deferred ones.
+    // Diagnosing why replies were being dropped needed a round trip to the
+    // vendor, because twenty rows had been claimed and not one had kept what
+    // was actually sent. It is the only part of this we cannot reconstruct
+    // afterwards, and it costs a jsonb column.
+    payload: payload as unknown as Record<string, unknown>,
+    // `verified` is NOT NULL DEFAULT true, so leaving it unset on the happy
+    // path made every row read `true` whatever happened. Claimed but not yet
+    // read back is false; the read-back below is what promotes it.
+    verified: false,
+  });
 
   if (claimErr) {
     if ((claimErr as { code?: string }).code === "23505") {
@@ -134,20 +164,47 @@ export async function POST(
     const verified = await getMessage(token, uid, READBACK_TIMEOUT_MS);
 
     if (!verified.ok) {
-      // Could not confirm inside the budget. Keep the payload and let the
-      // maintenance pass promote it rather than trusting an unsigned body.
-      await admin
-        .from("message_webhook_events")
-        .update({ verified: false, payload: payload as unknown as Record<string, unknown> })
-        .eq("id", claimId);
+      // Could not confirm inside the budget, so nothing is trusted and nothing
+      // is written. The row keeps `verified: false` and its payload.
+      //
+      // ⚠️ KNOWN GAP: nothing promotes it afterwards. An earlier comment here
+      // claimed a maintenance pass would; there is none, so an event that
+      // cannot be read back inside 3 seconds is lost. Recovering it means
+      // extracting the match-and-store below into something the poller cron can
+      // re-run. Recorded in CLAUDE.md §40.8 rather than built here.
+      console.warn("[webhook/timelines] deferred: read-back failed", {
+        claimId,
+        code: verified.code,
+      });
       return NextResponse.json({ received: true, deferred: true });
     }
 
+    await admin
+      .from("message_webhook_events")
+      .update({ verified: true })
+      .eq("id", claimId);
+
     // ---- Layer 4: match to one of THIS customer's leads, or discard --------
-    const jid = payload.chat?.jid ?? null;
-    const rawPhone = isDialableJid(jid) ? String(jid).split("@")[0] : payload.chat?.phone ?? null;
+    //
+    // ⚠️ BOTH FACTS COME FROM THE READ-BACK, NOT THE BODY. This is the bug that
+    // stopped every reply reaching the system for a day: the counterparty was
+    // read from `payload.chat.jid`, which is not in the shape the body actually
+    // arrives in, so all 20 events were dropped here with a 200. See
+    // resolveWebhookIdentity for the full account.
+    const { direction, rawPhone } = resolveWebhookIdentity({
+      message: verified.data,
+      bodyJid: payload.chat?.jid ?? null,
+      bodyPhone: payload.chat?.phone ?? null,
+      bodyDirection: payload.message?.direction ?? null,
+    });
+
     const key = normalisePhone(rawPhone);
-    if (!key) return NextResponse.json({ received: true, ignored: "not_dialable" });
+    if (!key) {
+      // Logged, because a silent 200 is what made this invisible: twenty events
+      // arrived, every one was discarded, and nothing anywhere said so.
+      console.warn("[webhook/timelines] dropped: not_dialable", { claimId });
+      return NextResponse.json({ received: true, ignored: "not_dialable" });
+    }
 
     // PostgREST cannot call normalised_phone in a filter, so the comparison is
     // done here over this customer's OWN assignments only. Scoping the query by
@@ -175,13 +232,9 @@ export async function POST(
     // Not one of their leads — drop it. This is the containment rule, and it is
     // the reason capturing phone-sent messages is safe to do at all.
     if (!assignmentId) {
+      console.warn("[webhook/timelines] dropped: no_matching_lead", { claimId });
       return NextResponse.json({ received: true, ignored: "no_matching_lead" });
     }
-
-    const direction =
-      (verified.data.direction ?? payload.message?.direction ?? "").toLowerCase() === "received"
-        ? "inbound"
-        : "outbound";
 
     // Thread per (customer, channel, counterparty).
     const { data: existingThread } = await admin

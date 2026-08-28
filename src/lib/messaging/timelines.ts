@@ -177,10 +177,33 @@ export async function sendChatMessage(
   return call(token, `/chats/${chatId}/messages`, { method: "POST", body: { text } });
 }
 
+/**
+ * ⚠️ VERIFIED AGAINST A LIVE MESSAGE, not written from the docs.
+ *
+ * The first cut of this interface declared a `direction` field, which the API
+ * does not return — the real discriminator is `from_me`, and the counterparty is
+ * `sender_phone` or `recipient_phone` depending on which way the message went.
+ * Reading the absent `direction` meant every webhook-stored message resolved to
+ * `outbound`, including a landlord's reply.
+ *
+ * A real response, read back from the live workspace:
+ *
+ *   { uid, chat_id, timestamp, sender_phone, sender_name, recipient_phone,
+ *     recipient_name, from_me, text, status, origin, message_type, … }
+ *
+ * `message_uid` is kept as an optional alias because the WEBHOOK body uses that
+ * name; the API's own field is `uid`.
+ */
 export interface TimelinesMessage {
+  uid?: string;
   message_uid?: string;
   text?: string;
-  direction?: string;
+  /** true when the operator sent it. The API has no `direction` field. */
+  from_me?: boolean;
+  sender_phone?: string | null;
+  sender_name?: string | null;
+  recipient_phone?: string | null;
+  recipient_name?: string | null;
   status?: string;
   timestamp?: string;
   chat_id?: number | string;

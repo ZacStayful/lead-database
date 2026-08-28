@@ -6381,6 +6381,44 @@ for a day. Recorded because the shape recurs (§23.10, §25's `items(ids:)`
 pagination, §27.8's `!inner`): the pieces either side were tested and the seam
 between them was not.
 
+#### ⚠️ And then it dropped everything, for the same reason one layer down
+
+Twenty events arrived, every one was claimed, and `lead_messages` held nothing
+but outbound sends from the composer. The receiver took the counterparty from
+`payload.chat.jid` — a field the body does not carry in the shape assumed — so
+`rawPhone` was null and every event died at `not_dialable` with a 200.
+
+Two lines further on, the same mistake again: `TimelinesMessage` declared a
+`direction` field the API does not return. The real discriminator is
+**`from_me`**, and the counterparty is `sender_phone` or `recipient_phone`
+depending on which way the message went. So anything that HAD matched would have
+been filed as `outbound` — a landlord's reply included.
+
+**The principle both bugs broke is layer 3's own.** The route fetches the
+authoritative message precisely so we believe the API and not an unsigned body,
+and then reached back into that body for the two facts that decide where the
+message goes. `resolveWebhookIdentity()` in `whatsappIdentity.ts` is now the one
+place either is derived: read-back first, body only as a fallback, and
+`normalisePhone` still the gate so the LID and `"+0"` traps hold either way.
+
+Three things changed so this class of bug is visible next time:
+
+- **The payload is stored on EVERY event**, not only deferred ones. Diagnosing
+  this needed a round trip to the vendor because twenty claimed rows had kept
+  nothing of what was sent — the one part that cannot be reconstructed later.
+- **Every drop is logged.** `not_dialable`, `no_matching_lead` and `no_uid`
+  returned a 200 with a note nobody could see, which is exactly why twenty
+  discarded events looked healthy.
+- **`verified` means something.** It is `NOT NULL DEFAULT true` and only the
+  failure path ever wrote it, so every row read `true` whatever happened. The
+  claim now inserts `false` and the read-back promotes it.
+
+⚠️ **KNOWN GAP: a deferred event is lost for ever.** When the read-back cannot
+finish inside the 3-second budget the row keeps `verified: false`, and an
+earlier comment claimed a maintenance pass would promote it. There is no such
+pass. Recovering one means extracting the match-and-store step into something
+the poller cron can re-run.
+
 #### Phone-sent messages are captured, and that is the point
 
 `message:sent:new` fires for messages the operator sends from **their own

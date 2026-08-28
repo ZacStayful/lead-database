@@ -92,3 +92,60 @@ export function toE164(raw: string | null | undefined): string | null {
   if (cleaned.startsWith("0")) return cleaned.replace(/^0/, "+44");
   return `+${cleaned}`;
 }
+
+/**
+ * Who a webhook message is with, and which way it went — decided from the
+ * READ-BACK, not from the request body.
+ *
+ * ⚠️ THIS IS WHY REPLIES NEVER REACHED THE SYSTEM. The receiver used to take the
+ * counterparty from `payload.chat.jid` / `.phone` and the direction from a
+ * `direction` field on the read-back. The first does not exist in the shape the
+ * body actually arrives in, so every event was dropped as `not_dialable`; the
+ * second does not exist on the API at all, so anything that had matched would
+ * have been filed as outbound — a landlord's reply included.
+ *
+ * Layer 3 of the receiver exists precisely so we believe the API and not an
+ * unsigned body. Reaching back into that body for the two facts that decide
+ * where a message goes was the whole bug, in three lines.
+ *
+ * The body is still consulted, but only as a FALLBACK for what the API omitted.
+ */
+export function resolveWebhookIdentity(p: {
+  /** The read-back. Authoritative. */
+  message: {
+    from_me?: boolean;
+    sender_phone?: string | null;
+    recipient_phone?: string | null;
+  } | null;
+  /** The unsigned body, used only where the API said nothing. */
+  bodyJid?: string | null;
+  bodyPhone?: string | null;
+  /** Some payloads carry "received" / "sent" where the API carries from_me. */
+  bodyDirection?: string | null;
+}): { direction: "inbound" | "outbound"; rawPhone: string | null } {
+  const fromMe = p.message?.from_me;
+  const direction: "inbound" | "outbound" =
+    typeof fromMe === "boolean"
+      ? fromMe
+        ? "outbound"
+        : "inbound"
+      : (p.bodyDirection ?? "").toLowerCase() === "received"
+        ? "inbound"
+        : "outbound";
+
+  // The counterparty is the OTHER end, which swaps with the direction.
+  const fromApi =
+    direction === "inbound" ? p.message?.sender_phone : p.message?.recipient_phone;
+
+  const fromBody = isDialableJid(p.bodyJid)
+    ? String(p.bodyJid).split("@")[0]
+    : (p.bodyPhone ?? null);
+
+  // normalisePhone is the gate either way: it is what rejects the live "+0"
+  // chat and anything under seven digits.
+  const candidate = fromApi ?? fromBody;
+  return {
+    direction,
+    rawPhone: candidate && normalisePhone(candidate) ? candidate : null,
+  };
+}
