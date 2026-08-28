@@ -1,5 +1,5 @@
 /**
- * Send one message to a landlord (§28).
+ * Send one message to a landlord (§40).
  *
  * SESSION-ONLY. This acts with the customer's stored credential to message a
  * third party; an API key that could reach it would impersonate them outward.
@@ -23,14 +23,18 @@
  * failure: a silently failed message to a landlord is the worst outcome here.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   decryptSecret,
   resendKeyAad,
   timelinesTokenAad,
 } from "@/lib/crypto/secretBox";
-import { assignmentSendable, messagingEnabled } from "@/lib/messaging/service";
+import {
+  assignmentSendable,
+  messagingActiveFor,
+  enabledChannels,
+} from "@/lib/messaging/service";
 import { sendEmail } from "@/lib/messaging/resend";
 import { sendMessage as sendWhatsapp } from "@/lib/messaging/timelines";
 import { toE164 } from "@/lib/messaging/whatsappIdentity";
@@ -58,6 +62,7 @@ export async function POST(request: NextRequest) {
     subject?: unknown;
     body?: unknown;
     client_token?: unknown;
+    draft_id?: unknown;
   };
   try {
     body = await request.json();
@@ -69,6 +74,7 @@ export async function POST(request: NextRequest) {
   const channel = body.channel === "email" || body.channel === "whatsapp" ? body.channel : null;
   const text = typeof body.body === "string" ? body.body.trim() : "";
   const clientToken = typeof body.client_token === "string" ? body.client_token : "";
+  const draftId = typeof body.draft_id === "string" ? body.draft_id : null;
 
   if (!assignmentId || !channel) {
     return NextResponse.json({ error: "assignment_id and channel are required." }, { status: 400 });
@@ -82,10 +88,26 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
-  if (!(await messagingEnabled(admin))) {
+  // messagingActiveFor, not messagingEnabled: an admin rehearsing on production
+  // with the switch off must be able to send, or the composer opens correctly
+  // and then 503s — which is the same bug one screen later.
+  if (!(await messagingActiveFor(admin, isAdminUser(user)))) {
     return NextResponse.json(
       { error: "Messaging is currently switched off.", code: "disabled" },
       { status: 503 }
+    );
+  }
+
+  // The UI hides email, but hiding is presentation. This is what stops a
+  // hand-rolled POST reaching the dormant email path.
+  const allowedChannels = await enabledChannels(admin, isAdminUser(user));
+  if (!allowedChannels.includes(channel)) {
+    return NextResponse.json(
+      {
+        error: "That channel is not available on your account.",
+        code: "channel_disabled",
+      },
+      { status: 409 }
     );
   }
 
@@ -131,7 +153,7 @@ export async function POST(request: NextRequest) {
   const cols =
     channel === "email"
       ? "id, domain, status, api_key_ciphertext, from_local_part, from_display_name, reply_local_prefix"
-      : "id, status, token_ciphertext, whatsapp_account_phone, daily_send_cap";
+      : "id, status, token_ciphertext, whatsapp_account_phone, daily_send_cap, min_send_interval_secs";
   const { data: conn } = await admin
     .from(table)
     .select(cols)
@@ -151,6 +173,70 @@ export async function POST(request: NextRequest) {
       },
       { status: 409 }
     );
+  }
+
+  // ---- Send limits, which the setup panel PROMISES --------------------------
+  //
+  // ⚠️ These columns were stored, shown to the operator as "Sending is limited
+  // to N a day to protect your number", and then never read. A stated safety
+  // limit that does nothing is worse than no limit, and the risk here lands on
+  // the customer's own WhatsApp number, not ours.
+  //
+  // Counts only messages that actually went out — a failed send consumed no
+  // WhatsApp quota and must not consume the operator's allowance either.
+  if (channel === "whatsapp") {
+    const wa = conn as unknown as {
+      daily_send_cap?: number | null;
+      min_send_interval_secs?: number | null;
+    };
+    const cap = wa.daily_send_cap ?? 40;
+    const interval = wa.min_send_interval_secs ?? 45;
+
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { count: sentToday } = await admin
+      .from("lead_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("customer_id", customer.id)
+      .eq("channel", "whatsapp")
+      .eq("direction", "outbound")
+      .neq("status", "failed")
+      .gte("created_at", dayAgo);
+
+    if ((sentToday ?? 0) >= cap) {
+      return NextResponse.json(
+        {
+          error: `You have sent ${sentToday} WhatsApp messages in the last 24 hours, which is the limit on your account. This protects your number from being restricted by WhatsApp.`,
+          code: "daily_cap_reached",
+        },
+        { status: 429 }
+      );
+    }
+
+    const { data: lastSent } = await admin
+      .from("lead_messages")
+      .select("sent_at")
+      .eq("customer_id", customer.id)
+      .eq("channel", "whatsapp")
+      .eq("direction", "outbound")
+      .not("sent_at", "is", null)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const lastAt = (lastSent as { sent_at: string | null } | null)?.sent_at;
+    if (lastAt) {
+      const waitedSecs = (Date.now() - new Date(lastAt).getTime()) / 1000;
+      if (waitedSecs < interval) {
+        return NextResponse.json(
+          {
+            error: `Please wait ${Math.ceil(interval - waitedSecs)} more seconds before sending again. Messaging in quick succession is what gets a number restricted.`,
+            code: "too_soon",
+            retry_after_seconds: Math.ceil(interval - waitedSecs),
+          },
+          { status: 429 }
+        );
+      }
+    }
   }
 
   // ---- Thread -------------------------------------------------------------
@@ -208,6 +294,43 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Give the email a subject." }, { status: 400 });
   }
 
+  // ---- Provenance -----------------------------------------------------------
+  // Read the draft back from OUR ledger and compare here. Never trust a
+  // client-supplied "unchanged" flag: the whole point of these columns is to
+  // answer "do drafted messages convert better", and a caller that can assert
+  // the answer makes the question meaningless.
+  //
+  // Normalised comparison, so a stray newline or a doubled space is not an
+  // "edit" — that would make the edited population meaningless in the other
+  // direction.
+  let generatedBy: "human" | "llm" = "human";
+  let editedAfterGeneration: boolean | null = null;
+  let draftModelId: string | null = null;
+  let draftPromptVersion: string | null = null;
+
+  if (draftId) {
+    const { data: draftRow } = await admin
+      .from("message_draft_requests")
+      .select("id, draft_text, model_id, prompt_version")
+      .eq("id", draftId)
+      .eq("customer_id", customer.id)
+      .maybeSingle();
+
+    const d = draftRow as {
+      draft_text: string | null;
+      model_id: string | null;
+      prompt_version: string | null;
+    } | null;
+
+    if (d?.draft_text) {
+      const norm = (v: string) => v.trim().replace(/\s+/g, " ");
+      generatedBy = "llm";
+      editedAfterGeneration = norm(d.draft_text) !== norm(text);
+      draftModelId = d.model_id;
+      draftPromptVersion = d.prompt_version;
+    }
+  }
+
   const { data: claimed, error: claimErr } = await admin
     .from("lead_messages")
     .insert({
@@ -224,7 +347,11 @@ export async function POST(request: NextRequest) {
       to_address: channel === "email" ? recipient : null,
       to_phone: channel === "whatsapp" ? recipient : null,
       body_text: text,
-      generated_by: "human",
+      generated_by: generatedBy,
+      edited_after_generation: editedAfterGeneration,
+      draft_id: draftId,
+      model_id: draftModelId,
+      prompt_version: draftPromptVersion,
       sent_by_user_id: user.id,
     })
     .select("id, status")
@@ -382,6 +509,21 @@ export async function POST(request: NextRequest) {
     event_type: "sent",
     occurred_at: new Date().toISOString(),
   });
+
+  // The engagement signal. Written on the SERVICE ROLE and only after the
+  // provider accepted the message — it is weighted 0.60, above tel_click, and
+  // it flips the assignment to contacted via the 0118 trigger.
+  //
+  // ⚠️ message_sent must never be added to CLIENT_LEAD_EVENT_TYPES. A customer
+  // able to POST it could shield every lead they hold from escalation and from
+  // the expired pool.
+  await admin
+    .from("lead_events")
+    .insert({ assignment_id: a.id, event_type: "message_sent" })
+    .then(
+      () => undefined,
+      () => undefined
+    );
 
   return NextResponse.json({ ok: true, message_id: messageId });
 }

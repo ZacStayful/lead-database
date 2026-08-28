@@ -1,7 +1,7 @@
 /**
  * The reversible-secret primitive and the reply-address token.
  *
- * These two are the security boundary of §28: one holds credentials to a
+ * These two are the security boundary of §40: one holds credentials to a
  * customer's email account and WhatsApp number, the other decides which
  * conversation an inbound reply belongs to. Both are tested for their FAILURE
  * behaviour first — §23.10's lesson that a happy-path suite reports "verified"

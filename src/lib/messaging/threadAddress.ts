@@ -1,5 +1,5 @@
 /**
- * Reply-address tokens — the primary correlation route for inbound email (§28).
+ * Reply-address tokens — the primary correlation route for inbound email (§40).
  *
  * A landlord's reply is matched back to a thread by the token in the address it
  * was sent to: reply-<handle><sep><mac>@leads.theiragency.co.uk

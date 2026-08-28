@@ -1,5 +1,5 @@
 /**
- * Resend, called with the CUSTOMER'S OWN key (§28).
+ * Resend, called with the CUSTOMER'S OWN key (§40).
  *
  * Raw fetch, no SDK — the src/lib/sms.ts rule. Two extra reasons here: the repo
  * pins resend ^4.0.0, which predates parts of this surface, and the module-level

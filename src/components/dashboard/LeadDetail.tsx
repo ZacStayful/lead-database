@@ -14,7 +14,7 @@ import {
   pipelineLabel,
   stagesForLeadType,
 } from "@/components/dashboard/pipelineStage";
-import { LeadNotes } from "@/components/dashboard/LeadNotes";
+import { LeadNotes, type TimelineMessage } from "@/components/dashboard/LeadNotes";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
@@ -57,6 +57,7 @@ export function LeadDetail({
   signedCountBefore,
   presentationConfigured,
   messageChannels,
+  messages,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -69,10 +70,12 @@ export function LeadDetail({
   /** False when the operator has never set their presentation terms up (§26). */
   presentationConfigured: boolean;
   /**
-   * Per-channel messaging state (§28), resolved server-side. Empty when the
+   * Per-channel messaging state (§40), resolved server-side. Empty when the
    * feature is switched off, in which case the buttons render nothing at all.
    */
   messageChannels?: ChannelAvailability[];
+  /** Sent and received messages, shown in the timeline beside the notes. */
+  messages?: TimelineMessage[];
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -940,6 +943,7 @@ export function LeadDetail({
       <LeadNotes
         assignmentId={assignment.id}
         initialNotes={notes}
+        messages={messages}
         onNoteAdded={() => setHasNotes(true)}
       />
     </div>

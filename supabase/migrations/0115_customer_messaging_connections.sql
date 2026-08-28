@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 0115 — Per-customer messaging connections (§28)
+-- 0115 — Per-customer messaging connections (§40)
 --
 -- Operators message landlords from the dashboard: email through THEIR OWN
 -- Resend account, WhatsApp through THEIR OWN TimelinesAI workspace. This
@@ -139,7 +139,7 @@ create unique index if not exists customer_email_domains_domain_idx
   on public.customer_email_domains (domain);
 
 comment on table public.customer_email_domains is
-  'One sending subdomain per customer, provisioned inside the CUSTOMER''S own Resend account (§28). '
+  'One sending subdomain per customer, provisioned inside the CUSTOMER''S own Resend account (§40). '
   'One row per customer today; lifting that is a matter of dropping the unique index, because the '
   'send path already resolves a domain per message rather than per customer.';
 comment on column public.customer_email_domains.domain is
@@ -220,7 +220,7 @@ create unique index if not exists customer_whatsapp_connections_customer_idx
   on public.customer_whatsapp_connections (customer_id);
 
 comment on table public.customer_whatsapp_connections is
-  'One TimelinesAI workspace per customer (§28). TimelinesAI is a QR-LINKED DEVICE, not the '
+  'One TimelinesAI workspace per customer (§40). TimelinesAI is a QR-LINKED DEVICE, not the '
   'official WhatsApp Business API — confirmed live, accounts return a WhatsApp WID rather than a '
   'Meta phone-number-id. That is why the ban-risk guardrails here are columns and not comments.';
 comment on column public.customer_whatsapp_connections.webhook_token is

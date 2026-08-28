@@ -1,5 +1,5 @@
 /**
- * Reversible secret storage — the first in this codebase (§28).
+ * Reversible secret storage — the first in this codebase (§40).
  *
  * Every other credential here is a ONE-WAY sha256 hash (customer_api_keys.key_hash,
  * src/lib/api/keys.ts) or a process env var. A customer's Resend key and

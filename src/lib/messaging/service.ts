@@ -1,6 +1,6 @@
 /**
  * Server-side messaging state: what a customer has connected, and what the two
- * buttons on a lead should therefore do (§28).
+ * buttons on a lead should therefore do (§40).
  *
  * ONE DEFINITION OF SEND ELIGIBILITY, shared by the send route and the button —
  * the same discipline customer_can_see_pool_lead uses for the pool (§19.4) and
@@ -34,6 +34,55 @@ export async function messagingEnabled(admin: Admin): Promise<boolean> {
     .maybeSingle();
   if (error) return false;
   return (data as { value?: string } | null)?.value === "true";
+}
+
+/**
+ * Is messaging live FOR THIS VIEWER?
+ *
+ * `messaging_enabled` is a fact about the PLATFORM. Admin preview is the entire
+ * reason the switch can stay off during rollout, so it has to mean the same
+ * thing on every surface — visibility, connectedness AND sending — or the
+ * rehearsal it exists for is impossible.
+ *
+ * ⚠️ It follows, and is worth saying out loud because nothing else does: while
+ * the switch is off, an ADMIN's own customer row sends real WhatsApp messages to
+ * real landlords. That is the intent. It is the only way to test the thing.
+ */
+export async function messagingActiveFor(
+  admin: Admin,
+  isAdmin: boolean
+): Promise<boolean> {
+  if (isAdmin) return true;
+  return messagingEnabled(admin);
+}
+
+/** Fails CLOSED, like messagingEnabled. */
+export async function emailChannelEnabled(admin: Admin): Promise<boolean> {
+  const { data, error } = await admin
+    .from("system_settings")
+    .select("value")
+    .eq("key", "messaging_email_enabled")
+    .maybeSingle();
+  if (error) return false;
+  return (data as { value?: string } | null)?.value === "true";
+}
+
+/**
+ * Which channels this viewer may use. WhatsApp first — it is the only one
+ * customers see.
+ *
+ * Email is built and tested but hidden: seven DNS records, three of them
+ * 60-character DKIM CNAMEs, is not a thing a property operator completes. The
+ * code stays dormant rather than deleted so the four-layer MX-on-apex defence
+ * survives for whenever it is wanted again.
+ */
+export async function enabledChannels(
+  admin: Admin,
+  isAdmin: boolean
+): Promise<MessageChannel[]> {
+  const channels: MessageChannel[] = ["whatsapp"];
+  if ((await emailChannelEnabled(admin)) || isAdmin) channels.push("email");
+  return channels;
 }
 
 export async function getEmailDomain(
@@ -153,22 +202,32 @@ export async function channelAvailability(
     preview?: boolean;
   }
 ): Promise<ChannelAvailability[]> {
-  const [enabled, domain, whatsapp, counts] = await Promise.all([
+  const preview = Boolean(p.preview);
+  const [enabled, allowed, domain, whatsapp, counts] = await Promise.all([
     messagingEnabled(admin),
+    enabledChannels(admin, preview),
     getEmailDomain(admin, p.customerId),
     getWhatsappConnection(admin, p.customerId),
     threadCounts(admin, p.assignment.id),
   ]);
 
   // Nothing renders at all for an ordinary customer until the switch is on.
-  if (!enabled && !p.preview) return [];
+  if (!enabled && !preview) return [];
 
   const { sendable, reason } = assignmentSendable(p.assignment);
 
-  const emailConnected = enabled && domain?.status === "verified";
-  const waConnected = enabled && whatsapp?.status === "connected";
+  // ⚠️ Connectedness is a fact about THIS CUSTOMER'S ACCOUNT, and the kill
+  // switch is not part of it. The switch decides whether the surface is visible
+  // (the early return above) and whether a send may go out (the send route).
+  //
+  // These two lines used to read `enabled && …`, which was dead logic for a
+  // customer — the early return had already caught them — and wrong for an
+  // admin: a CONNECTED admin was reported as not connected, so the modal
+  // offered setup for ever. That was the bug.
+  const emailConnected = domain?.status === "verified";
+  const waConnected = whatsapp?.status === "connected";
 
-  return [
+  const all = [
     {
       channel: "email",
       connected: Boolean(emailConnected),
@@ -192,6 +251,11 @@ export async function channelAvailability(
       unreadInbound: counts.whatsapp.unread,
     },
   ];
+
+  // WhatsApp first, and email only where it is enabled for this viewer.
+  return allowed
+    .map((c) => all.find((entry) => entry.channel === c))
+    .filter((entry): entry is ChannelAvailability => Boolean(entry));
 }
 
 /**

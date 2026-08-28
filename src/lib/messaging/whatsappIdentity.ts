@@ -1,5 +1,5 @@
 /**
- * Matching a WhatsApp chat to a landlord (§28).
+ * Matching a WhatsApp chat to a landlord (§40).
  *
  * ⚠️ TWO CHECKS ARE REQUIRED, NOT ONE. Both traps below were found in LIVE data
  * from the real workspace, not inferred from documentation.

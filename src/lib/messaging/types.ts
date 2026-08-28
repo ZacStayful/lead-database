@@ -1,5 +1,5 @@
 /**
- * Shared types and the PUBLIC COLUMN LISTS for §28 messaging.
+ * Shared types and the PUBLIC COLUMN LISTS for §40 messaging.
  *
  * The column lists are the discipline LIST_COLUMNS uses in
  * src/app/api/customer/api-keys/route.ts, which never selects key_hash: no route

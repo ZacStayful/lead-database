@@ -67,7 +67,21 @@ export default async function LeadDetailPage({
   const nextLeadId =
     idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].lead_id : null;
 
-  // Messaging state for the two buttons (§28). Resolved server-side on the
+  // The lead's own messages, for the timeline (§40). Rendered alongside notes
+  // rather than written AS notes — a lead_notes row is a claim about operator
+  // work that a dozen routing predicates read, and one per message would have
+  // changed lead allocation by accident.
+  const { data: messageData } = await admin
+    .from("lead_messages")
+    .select(
+      "id, channel, direction, status, subject, body_text, created_at, read_at, first_opened_at, first_clicked_at"
+    )
+    .eq("assignment_id", assignment.id)
+    .eq("customer_id", customer.id)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  // Messaging state for the two buttons (§40). Resolved server-side on the
   // admin client, because the connection tables are deny-all to the browser.
   const messageChannels = await channelAvailability(admin, {
     customerId: customer.id,
@@ -90,6 +104,7 @@ export default async function LeadDetailPage({
       signedCountBefore={signedCountBefore ?? 0}
       presentationConfigured={customer.presentation_settings_updated_at != null}
       messageChannels={messageChannels}
+      messages={(messageData ?? []) as never}
     />
   );
 }

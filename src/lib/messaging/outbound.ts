@@ -1,5 +1,5 @@
 /**
- * Composing and sending one message as the customer (§28).
+ * Composing and sending one message as the customer (§40).
  *
  * NO STAYFUL BRANDING. This deliberately does not reuse shell(), button(),
  * BRAND or fromAddress() from src/lib/emails.ts — the entire point of the

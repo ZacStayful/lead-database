@@ -171,7 +171,13 @@ function marketFrom(lead: SeedLead): PresentationMarket | null {
  * stated none of this would arrive claiming a market occupancy of 0% and a comp
  * set of nothing. Absence is tested before the number is.
  */
-function numOrNull(value: unknown, allowZero = false): number | null {
+/**
+ * Exported since §40: the draft context needs the SAME coercion, because
+ * `Number(null) === 0` is the trap that would turn "we have no figure" into a
+ * confident zero. Two copies of this would eventually differ on the allowZero
+ * handling, and the one that lost it would be the one writing to a landlord.
+ */
+export function numOrNull(value: unknown, allowZero = false): number | null {
   if (value == null || value === "") return null;
   const n = Number(value);
   if (!Number.isFinite(n)) return null;

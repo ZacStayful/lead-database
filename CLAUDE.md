@@ -6082,3 +6082,376 @@ new-lead notification. **Do not revert 0060.**
 applying it ahead of the deploy is inert. Deployed the other way round, the
 `releasable_filter_assignments` call fails open and filters apply exactly as they
 did before — which is the safe direction for the window.
+
+---
+
+## 40. Messaging a landlord from the database *(0115–0118)*
+
+An operator connects **their own** TimelinesAI workspace, and messages the
+landlord from the lead page. What was sent, what came back, and every delivery
+signal in between is stored against the assignment.
+
+⚠️ **This section was written as §28 in the code and that number was already
+taken** by the filter volume forecast. Everything messaging now says §40; the
+filter-forecast `§28` references in `filterPrediction.ts`, `filterRelease.ts`,
+`planChanges.ts`, the Stripe webhook and 0109/0111/0114 are the original sense
+and were deliberately left alone.
+
+`/dashboard/settings/messaging` · `POST /api/customer/messaging/{send,draft}` ·
+`/api/webhook/timelines/[token]` · `/api/cron/poll-whatsapp-status`.
+
+### 40.1 — Why the customer owns the connection
+
+The alternative is one Stayful WhatsApp number and one Stayful sending domain
+for the whole book. Both fail for the same reason: the landlord would be
+messaged by us and reply to us, when the entire product is that the **operator**
+is the one making contact. It also concentrates the risk — a QR-linked WhatsApp
+sending at volume is the classic profile for restriction, and one restricted
+number would take every customer's messaging down at once.
+
+So the credential is theirs, encrypted per customer, and the number at risk is
+their own. That is stated plainly in the setup panel rather than buried, because
+it is the customer's decision to take.
+
+**AES-256-GCM in `src/lib/crypto/secretBox.ts`**, with the AAD bound to
+`<purpose>:<customer_id>` — so a ciphertext lifted from one customer's row
+cannot be decrypted against another's. Supabase Vault was the obvious reach and
+is wrong here: the service role can read `vault.decrypted_secrets`, so every
+route in the app would be one typo from a plaintext workspace token.
+
+### 40.2 — What these vendors actually are, verified rather than assumed
+
+| | |
+|---|---|
+| TimelinesAI | A **QR-linked device**, like WhatsApp Web — NOT the official WhatsApp Business API. The connected account returns `447957516879@s.whatsapp.net`, a WhatsApp WID, not a Meta phone-number-id. No templates, no 24-hour window, and real ban risk at volume |
+| Webhook auth | **None at all.** Their spec states request authentication and custom headers are unsupported |
+| Delivered / read | **No webhook exists.** Polled, which is why §40.6 exists |
+| Rate limit | 30 req/s **per IP**, and every tenant shares Vercel's egress — one bucket for the whole platform, unlike Resend's per-account limit |
+| Resend | No OAuth; two key scopes only. Returns **400, not 401**, for an invalid key — verified live |
+
+Two traps found in the live workspace rather than in the docs, both now guarded
+in `whatsappIdentity.ts`: WhatsApp **LID** identifiers, which are not phone
+numbers and must never be matched as one; and a chat whose number is literally
+`"+0"`, which passes a naive `@s.whatsapp.net` JID check and is rejected by
+`normalised_phone` (0070) instead.
+
+### 40.3 — ⚠️ Preview means LIVE FOR THIS VIEWER, on all three surfaces
+
+`messaging_enabled` is a fact about the **platform**. Admin preview is the whole
+reason it can stay off during rollout, so it has to mean the same thing
+everywhere — visibility, connectedness *and* sending — or the rehearsal it
+exists for is impossible. `messagingActiveFor(admin, isAdmin)` is the one
+definition.
+
+This was the phase-2 bug, and it is worth recording precisely because the
+half-fix looks complete. `channelAvailability` read:
+
+```ts
+const waConnected = enabled && whatsapp?.status === "connected";
+```
+
+`enabled` was answering three different questions and preview only overrode the
+first. A **connected** admin therefore read as not connected and the modal
+offered setup for ever. **Connectedness is a fact about the customer's account
+and was never the switch's business** — the `&&` was dead logic for a customer
+(the early return already caught them) and wrong for an admin. Fixing that line
+alone would still have 503'd on Send, which gates separately.
+
+⚠️ **It follows, and nothing else says it: while the switch is off, an admin's
+own customer row sends real WhatsApp messages to real landlords.** That is the
+intent. It is the only way to test the thing.
+
+### 40.4 — Email is hidden, not deleted
+
+Seven DNS records, three of them 60-character DKIM CNAMEs, is not something a
+property operator completes. Measured against the first real user, not guessed.
+
+`messaging_email_enabled`, seeded `false` (0117), with the same admin bypass.
+Hidden means **absent from the channel list**, not a disabled button — and the
+send route and the domain route each refuse the channel independently, so the
+API is not a way round the UI.
+
+The code stays dormant rather than deleted, because what would be thrown away is
+the four-layer defence against putting an MX record on a customer's **apex**
+domain. `stayful.co.uk` resolves MX to `smtp.google.com`; an apex mistake stops
+a live Google Workspace receiving mail. The sending name is **constructed** from
+a website domain plus a prefix — a customer cannot supply a finished subdomain
+even deliberately — and `preflightDns` refuses a target that already receives
+mail. `domainRules.test.ts` is the highest-value test file in the feature.
+
+### 40.5 — "Generate a draft"
+
+A button in the composer that writes a first WhatsApp about that specific
+property. It **never sends by itself**; the operator edits and sends.
+
+The model integration follows `claudeMapping.ts` exactly — client constructed
+inside the call with a timeout, `messages.parse` with `zodOutputFormat`,
+`effort: "low"`, and its **never-throw discipline**. A draft button that 500s is
+worse than one that quietly offers an empty box.
+
+#### ⚠️ The PDF is already in the database
+
+The ask was to use "the PDF that is attached". Its contents are already
+extracted into cross-checked columns by §25/§26/§38. Feeding those is strictly
+better than re-parsing: they cannot drift into OCR noise, they cost no download,
+and re-extraction would reintroduce §25's pdf.js buffer-detach hazard. **No PDF
+reading. The structured figures ARE the PDF.**
+
+#### ⚠️ Do NOT reuse `buildPresentationSeed()`
+
+Its stated contract is that the seed must be **complete**, so it fills every gap
+with `TOOL_INCOME_DEFAULTS` — gross £60,000, £185 a night, 60% occupancy. Right
+for a form, catastrophic for a prompt: half the live book has no analysis (15 of
+30 when this was written), and the model would tell those landlords their
+property grosses £60,000 on the strength of a placeholder.
+
+`src/lib/messaging/draftContext.ts` states the inverse rule at the top of the
+file and is the only reason it exists as a separate module:
+
+> **ABSENT IS NULL, AND NULL IS OMITTED. Never a default, ever.**
+
+The one thing shared is `numOrNull`, which encodes the `Number(null) === 0`
+trap — exported from `presentationSeed.ts` rather than written twice.
+
+#### The exclusion list, and why each column is on it
+
+| Excluded | Why |
+|---|---|
+| `net_annual_income` | Net of **Stayful's** 15%, and rendered nowhere by design (§26.1). It is not the operator's net and never was |
+| Any fee, theirs or ours | The report's 15% is ours; `presentation_settings.fee` has a `basis` of net or gross that changes the number materially. A first message settles it by quoting neither — including "no fee", which is still a price claim |
+| `risk_score` | **Inverted**: 0 means LOW risk. A model told "risk 12" writes "low risk"; told "risk 88" it may still reassure. The report's own `risk_label` wording is passed instead |
+| `market_occupancy_rate` when 0 | A real value meaning **no comparable listings were found**, not 0% occupancy |
+| Comp-set figures, `income_estimate` | `income_estimate` is the operator's own typed number (§25) and says nothing to the landlord |
+
+`lead_profile` is included, and **must be viewer-scoped first**. On a
+marketplace lead it is Stayful's qualification blurb and the best material here;
+on an imported one it is whatever the spreadsheet had left over — §32.8 spells
+it out as *"margins, source attribution, 'will take 12%, spoke to Dave'"*. On a
+**resold** lead, selecting it straight from `leads` would have the model
+paraphrase another operator's private margin note into a WhatsApp to the
+landlord. The route calls `viewerScopedLead(lead, customer.id)` before building
+context, and the prompt fences what survives as background never to be quoted.
+
+#### Three layers, and the third one REJECTS
+
+Omission, then the prompt's prohibitions, then `validateDraft()` — pure and unit
+tested. It refuses any `£` or `%` when no figures were supplied, any money
+figure that does not round-trip to a supplied one within 5%, any pricing word,
+**any URL** (the strongest spam signal in a cold WhatsApp, and the number at
+risk is the operator's), over 480 characters, and a message that never uses the
+landlord's name.
+
+⚠️ **It rejects; it does not repair, and the fallback is the EMPTY TEXTAREA.** A
+truncated message or one with a number quietly deleted is worse than no draft,
+because the operator sends it believing we checked it. And unlike
+`claudeMapping.ts` there is no duller fallback: a canned template pasted into
+WhatsApp is exactly the mass-outreach pattern that gets a number restricted.
+
+Only bare-marked numbers are checked. A bedroom count or "before 6" is not a
+figure, and refusing those would refuse perfectly good messages.
+
+`generated_by` records `llm` for an unedited draft and `human` for one the
+operator rewrote — resolved **server-side** by re-reading
+`message_draft_requests.draft_text` and comparing normalised text, not by
+trusting a client flag. That distinction is what will answer "which messages
+convert".
+
+### 40.6 — Messages are RENDERED in the timeline, never written as notes
+
+The ask was "store sent messages as a note so this is trackable". Investigating
+how turned up the reason not to.
+
+⚠️ **`lead_notes` is not a log. Around twenty-five predicates read it, and a row
+in it is a CLAIM THAT THE OPERATOR DID WORK.** The four load-bearing ones:
+
+| Reader | What one note does |
+|---|---|
+| `lead_pool_barred()` (0073) | **Permanently bars the lead from the expired pool** (§19.3) |
+| `get_assignment_engagement_scores` (0063) | `note_added` is 0.40 against a day-10 threshold of 0.35 — one note alone exempts the lead from escalation |
+| `discard_lead_assignment` (0010) | Refuses to discard a lead carrying any note |
+| `releasable_filter_assignments` (0114) | Reads it as "touched", so it **blocks the credit refund** when a filter is applied (§39.2) |
+
+Plus `lead_last_activity_at`, the capacity model, the scoreboard, churn risk,
+`get_operator_proof`'s "Write it down" row, and `GET /v1/leads/{id}/notes` — so
+a customer's own MCP agent would read their outbound WhatsApps back as notes.
+
+So `LeadNotes.tsx` takes a `messages` prop and renders **one merged
+time-ordered list**: a typed note looks exactly as it did, a message carries a
+channel badge and its delivery state, which a note could never show anyway. The
+trackability the ask was for, without four routing changes by accident.
+
+Reporting on messages therefore joins `lead_messages`, never `lead_notes`.
+
+### 40.7 — A sent message is contact. An inbound reply is not. *(0118)*
+
+The one routing effect that **is** wanted, and the only migration in this phase
+that changes who gets leads.
+
+The evidence hierarchy is incoherent without it. §6 excludes `mailto_click`
+*"because a mailto click guarantees nothing was sent"* and includes `tel_click`
+because it is an attempt to ring. **A delivered WhatsApp with a provider message
+id is stronger than both** — not an attempt at contact, it *is* contact. Left
+out, genuinely-worked leads escalate to a competitor at day 10 and pool at 25.
+
+Measured before it shipped: 352 assignments, **12 contact clicks in total**
+against 577 `detail_opened`, while 210 assignments carry `first_contacted_at`.
+Roughly 198 assert contact with no evidence at all. That gap is the reason this
+feature exists.
+
+- Through **`lead_events`**, not a second trigger on `lead_messages` —
+  `lead_events` is "the engagement basis for everything" (§3) and already owns
+  this route into `mark_assignment_contacted`. A parallel trigger would be a
+  second undocumented path, and it would not be weightable.
+- `message_sent` is weighted **0.60**, above `tel_click`'s 0.50.
+- ⚠️ **A weight row alone is a silent no-op.** `get_assignment_engagement_scores`
+  has a FIXED `present` CTE, so the signal must be added in **four** places: the
+  CTE, the weighted sum, the `passive_only` negation and the breakdown jsonb.
+  Missing the third would let a messaged lead still read as passively held,
+  which the caller treats as inactive whatever the score says.
+- ⚠️ **`message_sent` must never enter `CLIENT_LEAD_EVENT_TYPES`** — the §3 trust
+  boundary. A customer able to POST it could shield every lead they hold.
+
+**Inbound gets no trigger and no weight, deliberately.** A landlord replying is
+the landlord's act — the `nudge_sent` rule (§3) in a more damaging form. An
+operator who sends one message, gets an eager reply and then ignores it for
+three weeks is exactly who escalation exists to take the lead from, and letting
+the landlord's own reply shield it would be this feature's worst failure. It is
+also the sharpest argument against the note mechanism above: a note row for an
+inbound reply would have done precisely that, silently, at 0.40.
+
+#### ⚠️ `lead_last_activity_at` was an EXCLUSION filter, and that is now fixed
+
+It read `and e.event_type <> 'nudge_sent'`, so **every event type added to the
+vocabulary would silently start feeding the §19.2 pool clock**, with nothing to
+review and nobody deciding. 0117 added two types; both would have been swept in
+automatically, `message_received` included.
+
+For the pool clock specifically, including both is right — the pool asks "is
+this lead alive", and a landlord who replied three days ago plainly is. But that
+must be a decision, not an accident. 0118 flips it to an **explicit inclusion
+list**. Behaviour-identical on today's data, and verified as such: both
+`lead_last_activity_at` over 200 leads and `get_assignment_engagement_scores`
+over 200 assignments fingerprinted **identical** before and after the apply.
+
+⚠️ **Knock-on for §12 Deferred:** flipping to `contacted` makes the lead
+**undiscardable** (discard requires `status = 'new'`), widening the gap §5E
+already records for `tel_click`. Sending a message is a far more deliberate act
+than clicking a phone number, so it is the right trade — but it is a new way to
+lose the discard button. Reject still covers the case.
+
+### 40.8 — The inbound receiver, and the four defences
+
+TimelinesAI **cannot sign a webhook**, so nothing from one is trusted:
+
+1. An unguessable token in the URL path — payloads carry no tenant identifier,
+   so the URL is how we know whose workspace an event describes.
+2. **Claim by INSERT** into `message_webhook_events` — the `stripe_events`
+   discipline. The claim is deleted on a throw so a retry works.
+3. ⚠️ **Read-back before any state change.** `getMessage()` against that
+   customer's own workspace is the decisive defence; an unverifiable payload is
+   stored `verified: false` and changes nothing. Where the read-back cannot
+   finish inside TimelinesAI's 5-second budget, verification is deferred rather
+   than skipped.
+4. **Match to a lead, or discard.** Not stored as an unmatched thread — dropped.
+
+⚠️ **This route was registered in phase 1 and did not exist.** The connect route
+creates four webhooks pointing at it, so the live workspace was POSTing to a 404
+for a day. Recorded because the shape recurs (§23.10, §25's `items(ids:)`
+pagination, §27.8's `!inner`): the pieces either side were tested and the seam
+between them was not.
+
+#### Phone-sent messages are captured, and that is the point
+
+`message:sent:new` fires for messages the operator sends from **their own
+WhatsApp app**. Those are captured — matched to one of that customer's own leads
+via `matchKeyFromChat()`, and **anything else discarded before any write**.
+
+This is the highest-value part of the feature. The 12-clicks-against-352-
+assignments gap is precisely operators working leads on their phone where we
+cannot see it; capturing it closes the blind spot without asking anyone to
+change how they work. The match-or-discard rule is the containment: the
+workspace holds hundreds of chats that are nothing to do with any landlord, and
+a personal conversation must never enter the database because a number happened
+to be in range.
+
+### 40.9 — The status poller
+
+`/api/cron/poll-whatsapp-status`, every five minutes. TimelinesAI has no
+delivered/read webhook, so `next_poll_at` — written on every outbound send since
+phase 1 — is read here. Until this existed nothing read it, and every WhatsApp
+sat at `sent` for ever while the timeline offered two states it could never
+reach.
+
+Bounded three ways: **backoff** (1m → 5m → 15m → 1h → 6h, abandoned at 48h),
+**round-robin by customer** so one operator's morning burst cannot starve
+everyone else, and a **wall clock** plus the shared per-second budget through
+`consume_provider_budget`, which fails CLOSED.
+
+Two rules inside it:
+
+- ⚠️ **A poll never marks anything `failed` on OUR error.** A timeout, a 429 or
+  an unreadable token defers; only the vendor's own `failed` writes `failed`.
+  The opposite turns a bad afternoon on their side into a lead history saying
+  the operator never reached the landlord.
+- Statuses are **ranked**, not last-wins. `status_history` has no documented
+  ordering guarantee, and a poll must never walk a message back from Read to
+  Sent. `delivered_at` / `read_at` are first-observation-wins, the
+  `first_contacted_at` discipline (§6).
+
+### 40.10 — Send caps are enforced, not merely displayed
+
+The setup panel told the operator *"Sending is limited to 40 a day to protect
+your number"* and the send route selected `daily_send_cap` and dropped it. **A
+stated safety limit that does nothing is worse than none**, on the one risk
+borne by the customer's own phone number. Both `daily_send_cap` and
+`min_send_interval_secs` are now enforced (429 `daily_cap_reached` / `too_soon`),
+and drafts are capped separately at 3 per assignment per day and 50 per customer
+per day from `message_draft_requests`.
+
+### 40.11 — Two external links that must not drift
+
+`TIMELINES_SIGNUP_URL` carries `refby=5adca00be2612e9c` — **a referral link**,
+and a code that silently drops off one of its two placements is revenue nothing
+would ever alert us to. `TIMELINES_SETUP_VIDEO_URL` is the setup walkthrough,
+offered above the setup steps and beside "Begin setup" in the composer's
+not-connected state — the two moments people actually stall.
+
+Both are **exported constants with a unit test pinning the parameter**, never
+URLs typed into JSX. Same discipline as `featureRequest.ts` (§21.8).
+
+⚠️ **The Drive file must be shared "Anyone with the link → Viewer".** Restricted,
+every customer lands on a request-access page, which reads as the product being
+broken rather than the video being missing.
+
+### Verification
+
+`npm run test` — 111 cases across the messaging suite, among them: the apex
+defence (the file that stops us breaking a customer's live Google Workspace),
+the crypto AAD binding, the LID and `"+0"` identity traps, prompt assembly
+asserted against the **rendered prompt** rather than the context object, the
+`channelAvailability` preview regression in both directions, every
+`validateDraft` rejection, and the `refby` parameter.
+
+Against the live systems rather than the docs: Resend's endpoints probed (400,
+not 401, for a bad key), the real TimelinesAI workspace read back
+(`connected`, `+447957516879`, four webhooks registered, quota 29/500), and
+`normalisePhone` checked against the SQL `normalised_phone` over ten cases.
+
+0115–0118 applied to `znlfwbnvhlacwzgfalcf`. 0118 was applied alone, with
+`lead_last_activity_at` (200 leads) and `get_assignment_engagement_scores` (200
+assignments) fingerprinted before and after — **identical**. ACLs re-audited
+`service_role`-only on both replaced functions, invariant 7's four
+`authenticated`-executable functions re-checked, and `message_draft_requests`
+confirmed RLS on with zero policies.
+
+**Not yet exercised:** an inbound reply against real webhook traffic, and the
+draft call against the live Anthropic API — `ANTHROPIC_API_KEY` must be set in
+Vercel **and the project redeployed**, since Vercel bakes env vars in at build
+time. That is the same trap that cost the previous round.
+
+### Deployment order — migrations BEFORE code, and 0117 BEFORE 0118
+
+0115, 0116 and 0117 are additive and inert; nothing reads them until the code
+ships. 0118 touches allocation and is revertible on its own — deployed
+0117-only, everything works and messages simply do not mark contacted, which is
+the safe direction for the window between them.

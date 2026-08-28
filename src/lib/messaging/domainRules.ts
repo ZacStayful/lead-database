@@ -1,5 +1,5 @@
 /**
- * The MX-on-apex defence (§28).
+ * The MX-on-apex defence (§40).
  *
  * ⚠️ PUTTING AN MX RECORD ON A CUSTOMER'S APEX DOMAIN WOULD DESTROY THEIR REAL
  * EMAIL. It is the most damaging thing this feature can do and it would be

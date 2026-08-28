@@ -50,6 +50,10 @@
     {
       "path": "/api/cron/run-lead-analysis",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/poll-whatsapp-status",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

@@ -1,5 +1,5 @@
 /**
- * Re-check DNS verification for the customer's sending domain (§28).
+ * Re-check DNS verification for the customer's sending domain (§40).
  *
  * Session-only, like every route that acts with a stored credential.
  *
@@ -11,8 +11,9 @@
  * sit polling Resend. The UI backs off too, but the server is what enforces it.
  */
 import { NextResponse } from "next/server";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { emailChannelEnabled } from "@/lib/messaging/service";
 import { decryptSecret, resendKeyAad } from "@/lib/crypto/secretBox";
 import {
   getSendingDomain,
@@ -31,6 +32,18 @@ export async function POST() {
   const { user, customer } = await getCurrentCustomer();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!customer) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Email is dormant for customers. Hiding the UI is presentation; this is what
+  // stops a hand-rolled request reaching the seven-DNS-record flow.
+  {
+    const gate = createAdminClient();
+    if (!(await emailChannelEnabled(gate)) && !isAdminUser(user)) {
+      return NextResponse.json(
+        { error: "Email messaging is not available on your account.", code: "channel_disabled" },
+        { status: 409 }
+      );
+    }
+  }
 
   const admin = createAdminClient();
   const { data: row } = await admin

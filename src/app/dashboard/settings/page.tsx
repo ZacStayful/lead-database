@@ -10,7 +10,7 @@ import { ApiAccessPanel, type ApiKeyRow } from "@/components/dashboard/ApiAccess
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getEmailDomain, getWhatsappConnection, messagingEnabled } from "@/lib/messaging/service";
+import { getEmailDomain, getWhatsappConnection, messagingActiveFor } from "@/lib/messaging/service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { holdsProduct } from "@/lib/products";
 import { recentRequestsForCustomer, usageForKeys } from "@/lib/api/usage";
@@ -33,7 +33,7 @@ export default async function SettingsPage() {
   let apiKeys: ApiKeyRow[] = [];
   let apiUsage: Awaited<ReturnType<typeof usageForKeys>> = {};
   let apiRecent: Awaited<ReturnType<typeof recentRequestsForCustomer>> = [];
-  // §28 messaging connection state, for the status pills on the card below.
+  // §40 messaging connection state, for the status pills on the card below.
   let emailDomain: Awaited<ReturnType<typeof getEmailDomain>> = null;
   let whatsappConnection: Awaited<ReturnType<typeof getWhatsappConnection>> = null;
   let showMessaging = false;
@@ -54,9 +54,9 @@ export default async function SettingsPage() {
       recentRequestsForCustomer(customer.id, 20, admin),
     ]);
 
-    // §28 is hidden from ordinary customers until messaging_enabled is flipped;
+    // §40 is hidden from ordinary customers until messaging_enabled is flipped;
     // admins see it throughout so the flow can be tested on production first.
-    showMessaging = (await messagingEnabled(admin)) || isAdminUser(user);
+    showMessaging = await messagingActiveFor(admin, isAdminUser(user));
     if (showMessaging) {
       [emailDomain, whatsappConnection] = await Promise.all([
         getEmailDomain(admin, customer.id),
@@ -108,7 +108,7 @@ export default async function SettingsPage() {
       )}
 
       {/*
-        Messaging (§28). A link rather than an inline card: the setup needs room
+        Messaging (§40). A link rather than an inline card: the setup needs room
         for seven DNS records, and the same page is deep-linked from a lead's
         "Begin setup" button with ?channel= and ?return=.
       */}
@@ -119,20 +119,17 @@ export default async function SettingsPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Send emails and WhatsApp messages to landlords from inside a lead,
-              from your own domain and your own number, and see their replies here.
+              Message landlords on WhatsApp from inside a lead, from your own
+              number, and see their replies here.
             </p>
             <div className="flex flex-wrap gap-2 text-sm">
-              <span className="rounded-full border px-3 py-1">
-                Email: {emailDomain?.status === "verified" ? "connected" : emailDomain ? "setup started" : "not set up"}
-              </span>
               <span className="rounded-full border px-3 py-1">
                 WhatsApp: {whatsappConnection?.status === "connected" ? "connected" : "not set up"}
               </span>
             </div>
             <Button asChild variant="outline">
               <Link href="/dashboard/settings/messaging">
-                {emailDomain || whatsappConnection ? "Manage messaging" : "Set up messaging"}
+                {whatsappConnection ? "Manage messaging" : "Set up messaging"}
               </Link>
             </Button>
           </CardContent>

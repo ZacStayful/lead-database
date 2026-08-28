@@ -1,5 +1,5 @@
 /**
- * TimelinesAI, called with the CUSTOMER'S OWN workspace token (§28).
+ * TimelinesAI, called with the CUSTOMER'S OWN workspace token (§40).
  *
  * Raw fetch, no SDK, AbortController timeout, { ok, code } results that never
  * throw into the caller — the src/lib/sms.ts contract.
@@ -23,6 +23,27 @@ import type { VendorResult } from "./types";
 import type { TimelinesChat } from "./whatsappIdentity";
 
 const BASE = "https://app.timelines.ai/integrations/api";
+
+/**
+ * ⚠️ THE SIGNUP LINK IS A REFERRAL LINK. Every route we send a customer to
+ * TimelinesAI by must carry `refby`. It appears in more than one place, and a
+ * referral code that silently drops off one of them is revenue nothing would
+ * ever alert us to — so it lives here once, and a unit test pins the parameter.
+ * Same discipline as featureRequest.ts being the one definition of that path.
+ */
+export const TIMELINES_SIGNUP_URL = "https://timelines.ai/?refby=5adca00be2612e9c";
+
+/**
+ * A walkthrough of connecting TimelinesAI to the lead database. Offered at the
+ * two moments people actually stall: above the setup steps, and beside "Begin
+ * setup" before they commit to the detour.
+ *
+ * ⚠️ This must be shared "Anyone with the link → Viewer" in Drive. Restricted,
+ * every customer lands on a request-access page, which reads as the product
+ * being broken rather than the video being missing.
+ */
+export const TIMELINES_SETUP_VIDEO_URL =
+  "https://drive.google.com/file/d/1SGch1SqKmYtX3Vzm8DxvnICGdcx5S3ei/view";
 const TIMEOUT_MS = 8_000;
 
 async function call<T>(

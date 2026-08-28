@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The messaging setup wizard (§28).
+ * The messaging setup wizard (§40).
  *
  * Seven DNS records is a lot to ask of a property operator, so this screen has
  * to do real work: the correct subdomain is pre-filled and CONSTRUCTED rather
@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertTriangle, Check, Copy, Loader2, RefreshCw, ArrowLeft, Mail, MessageCircle,
+  AlertTriangle, Check, Copy, Loader2, RefreshCw, ArrowLeft, Mail, MessageCircle, PlayCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,10 @@ import { Badge } from "@/components/ui/badge";
 import type {
   DnsRecord, EmailDomainPublic, WhatsappConnectionPublic,
 } from "@/lib/messaging/types";
+import {
+  TIMELINES_SIGNUP_URL,
+  TIMELINES_SETUP_VIDEO_URL,
+} from "@/lib/messaging/timelines";
 
 const PURPOSE_LABEL: Record<string, string> = {
   sending: "Sending — proves the mail is really from you",
@@ -33,18 +37,23 @@ export function MessagingSetupPanel({
   initialDomain,
   initialWhatsapp,
   companyDomainGuess,
+  emailEnabled = false,
 }: {
   initialDomain: EmailDomainPublic | null;
   initialWhatsapp: WhatsappConnectionPublic | null;
   companyDomainGuess: string | null;
+  /** Email is dormant for customers; admins can still reach it. */
+  emailEnabled?: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
   const requested = params.get("channel");
   const returnTo = params.get("return");
 
+  // WhatsApp is the only channel customers see, so it is the default and the
+  // ?channel=email deep link is ignored when email is off.
   const [tab, setTab] = useState<"email" | "whatsapp">(
-    requested === "whatsapp" ? "whatsapp" : "email"
+    emailEnabled && requested === "email" ? "email" : "whatsapp"
   );
 
   return (
@@ -56,24 +65,26 @@ export function MessagingSetupPanel({
         </Button>
       )}
 
-      <div className="flex gap-2">
-        <Button
-          variant={tab === "email" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setTab("email")}
-        >
-          <Mail className="mr-2 h-4 w-4" /> Email
-        </Button>
-        <Button
-          variant={tab === "whatsapp" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setTab("whatsapp")}
-        >
-          <MessageCircle className="mr-2 h-4 w-4" /> WhatsApp
-        </Button>
-      </div>
+      {emailEnabled && (
+        <div className="flex gap-2">
+          <Button
+            variant={tab === "email" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTab("email")}
+          >
+            <Mail className="mr-2 h-4 w-4" /> Email
+          </Button>
+          <Button
+            variant={tab === "whatsapp" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setTab("whatsapp")}
+          >
+            <MessageCircle className="mr-2 h-4 w-4" /> WhatsApp
+          </Button>
+        </div>
+      )}
 
-      {tab === "email" ? (
+      {emailEnabled && tab === "email" ? (
         <EmailSetup initial={initialDomain} domainGuess={companyDomainGuess} returnTo={returnTo} />
       ) : (
         <WhatsappSetup initial={initialWhatsapp} returnTo={returnTo} />
@@ -465,12 +476,27 @@ function WhatsappSetup({
         <CardTitle>Message landlords on WhatsApp</CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
+        <a
+          href={TIMELINES_SETUP_VIDEO_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-3 rounded-md border bg-muted/40 p-3 text-sm hover:bg-muted"
+        >
+          <PlayCircle className="h-5 w-5 shrink-0 text-primary" />
+          <span>
+            <span className="font-medium">Watch the setup walkthrough</span>
+            <span className="block text-muted-foreground">
+              Two minutes, start to finish — easier than reading the steps below.
+            </span>
+          </span>
+        </a>
+
         <div className="space-y-2 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Before you start, you&apos;ll need:</p>
           <ol className="list-decimal space-y-1 pl-5">
             <li>
               A{" "}
-              <a href="https://timelines.ai" target="_blank" rel="noreferrer" className="underline">
+              <a href={TIMELINES_SIGNUP_URL} target="_blank" rel="noreferrer" className="underline">
                 TimelinesAI
               </a>{" "}
               account — from $25 a month, per WhatsApp number.

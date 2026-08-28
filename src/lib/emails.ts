@@ -59,7 +59,7 @@ function feedbackTo(): string {
 }
 
 /**
- * Exported since §28: the per-customer message sender in
+ * Exported since §40: the per-customer message sender in
  * src/lib/messaging/outbound.ts renders operator-typed text into HTML and must
  * escape it with THIS function rather than a copy. §22.5 makes escaping
  * load-bearing, and two implementations of it would eventually disagree —

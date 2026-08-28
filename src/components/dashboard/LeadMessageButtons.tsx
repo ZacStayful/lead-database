@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Send email" and "Send WhatsApp" on a lead, and the composer behind them (§28).
+ * "Send email" and "Send WhatsApp" on a lead, and the composer behind them (§40).
  *
  * THE BUTTONS ARE ALWAYS VISIBLE. §18E's rule: a hidden button reads as a
  * missing feature, and an offered one that 400s reads as a bug. A button that
@@ -21,7 +21,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, MessageCircle, Loader2, AlertCircle, ExternalLink } from "lucide-react";
+import {
+  Mail, MessageCircle, Loader2, AlertCircle, ExternalLink, Sparkles, PlayCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -32,6 +34,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { ChannelAvailability, MessageChannel } from "@/lib/messaging/types";
+import { TIMELINES_SETUP_VIDEO_URL } from "@/lib/messaging/timelines";
 
 interface ThreadMessage {
   id: string;
@@ -207,6 +210,9 @@ function MessageDialog({
   const [error, setError] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadMessage[] | null>(null);
   const [clientToken, setClientToken] = useState(() => crypto.randomUUID());
+  const [drafting, setDrafting] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftNote, setDraftNote] = useState<string | null>(null);
 
   const loadThread = useCallback(async () => {
     try {
@@ -231,6 +237,47 @@ function MessageDialog({
     return `/dashboard/settings/messaging?channel=${channel}&return=${back}`;
   }, [channel, leadId]);
 
+  async function generateDraft() {
+    // ⚠️ Never silently overwrite something the operator has typed. This file
+    // already states the principle for the failed-send case, and it applies
+    // just as much to a helpful button that eats a half-written message.
+    if (bodyText.trim().length > 0) {
+      const ok = window.confirm(
+        "Replace what you have written with a generated draft?"
+      );
+      if (!ok) return;
+    }
+
+    setDrafting(true);
+    setDraftNote(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/customer/messaging/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignment_id: assignmentId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // A failed draft is not a failed action — it is a blank page, which is
+        // where they started. Muted, never the red error block.
+        setDraftNote(data.error ?? "We could not write a draft just now.");
+        return;
+      }
+      setBodyText(data.text ?? "");
+      setDraftId(data.draft_id ?? null);
+      setDraftNote(
+        data.had_figures
+          ? "Written from this property's analysis. Read it before you send."
+          : "This property has no analysis, so the draft quotes no figures. Read it before you send."
+      );
+    } catch {
+      setDraftNote("We could not reach the server. Write the message yourself.");
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   async function send() {
     setSending(true);
     setError(null);
@@ -244,6 +291,7 @@ function MessageDialog({
           subject: channel === "email" ? subject : undefined,
           body: bodyText,
           client_token: clientToken,
+          draft_id: draftId,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -258,6 +306,8 @@ function MessageDialog({
 
       setBodyText("");
       setSubject("");
+      setDraftId(null);
+      setDraftNote(null);
       setClientToken(crypto.randomUUID());
       await loadThread();
       router.refresh();
@@ -350,9 +400,27 @@ function MessageDialog({
               </div>
             )}
             <div className="space-y-1">
-              <label htmlFor="msg-body" className="text-sm font-medium">
-                Message
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="msg-body" className="text-sm font-medium">
+                  Message
+                </label>
+                {channel === "whatsapp" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={generateDraft}
+                    disabled={drafting || sending}
+                  >
+                    {drafting ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="mr-2 h-4 w-4" />
+                    )}
+                    {bodyText.trim() ? "Generate another" : "Generate a draft"}
+                  </Button>
+                )}
+              </div>
               <textarea
                 id="msg-body"
                 value={bodyText}
@@ -362,6 +430,9 @@ function MessageDialog({
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 placeholder={`Hi ${leadName.split(" ")[0] ?? ""}, …`}
               />
+              {draftNote && (
+                <p className="text-xs text-muted-foreground">{draftNote}</p>
+              )}
             </div>
           </div>
         )}
@@ -384,6 +455,15 @@ function MessageDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
             Cancel
           </Button>
+
+          {sendable && !connected && channel === "whatsapp" && (
+            <Button variant="ghost" asChild>
+              <a href={TIMELINES_SETUP_VIDEO_URL} target="_blank" rel="noreferrer">
+                <PlayCircle className="mr-2 h-4 w-4" />
+                Watch the setup
+              </a>
+            </Button>
+          )}
 
           {sendable && !connected && (
             <Button onClick={() => router.push(setupHref)}>

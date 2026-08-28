@@ -1,5 +1,5 @@
 /**
- * The conversation on one assignment (§28).
+ * The conversation on one assignment (§40).
  *
  * Reading is deliberately NOT gated on assignment status: a rejected or closed
  * lead is still one the customer paid for (invariant 4), and the thread is their

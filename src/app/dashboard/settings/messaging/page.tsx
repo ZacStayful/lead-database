@@ -1,5 +1,5 @@
 /**
- * Messaging setup (§28) — where "Begin setup" from a lead lands.
+ * Messaging setup (§40) — where "Begin setup" from a lead lands.
  *
  * A page of its own rather than a card on /dashboard/settings, because seven
  * DNS records need room to breathe and because the flow deep-links into it with
@@ -12,7 +12,12 @@ import { ArrowLeft } from "lucide-react";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { holdsProduct } from "@/lib/products";
-import { getEmailDomain, getWhatsappConnection, messagingEnabled } from "@/lib/messaging/service";
+import {
+  getEmailDomain,
+  getWhatsappConnection,
+  messagingActiveFor,
+  emailChannelEnabled,
+} from "@/lib/messaging/service";
 import { MessagingSetupPanel } from "@/components/dashboard/MessagingSetupPanel";
 
 export const dynamic = "force-dynamic";
@@ -38,14 +43,19 @@ export default async function MessagingSettingsPage() {
 
   // Hidden from ordinary customers until messaging_enabled is flipped. Admins
   // reach it throughout, which is what makes a production rehearsal possible.
-  if (!(await messagingEnabled(admin)) && !isAdminUser(user)) {
+  if (!(await messagingActiveFor(admin, isAdminUser(user)))) {
     redirect("/dashboard/settings");
   }
 
-  const [domain, whatsapp] = await Promise.all([
+  const isAdmin = isAdminUser(user);
+  const [domain, whatsapp, emailOn] = await Promise.all([
     getEmailDomain(admin, customer.id),
     getWhatsappConnection(admin, customer.id),
+    emailChannelEnabled(admin),
   ]);
+  // Dormant for customers, reachable by admins — the same posture as the
+  // feature's own kill switch.
+  const emailEnabled = emailOn || isAdmin;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
@@ -59,8 +69,8 @@ export default async function MessagingSettingsPage() {
         </Link>
         <h1 className="mt-2 text-2xl font-semibold">Messaging</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Send emails and WhatsApp messages to landlords from inside a lead, and
-          see their replies here.
+          Message landlords on WhatsApp from inside a lead, and see their
+          replies here.
         </p>
       </div>
 
@@ -69,6 +79,7 @@ export default async function MessagingSettingsPage() {
           initialDomain={domain}
           initialWhatsapp={whatsapp}
           companyDomainGuess={domainFromEmail(customer.email)}
+          emailEnabled={emailEnabled}
         />
       </Suspense>
     </div>

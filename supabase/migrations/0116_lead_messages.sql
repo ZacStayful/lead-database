@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 0116 — The message spine: threads, messages, per-message events (§28)
+-- 0116 — The message spine: threads, messages, per-message events (§40)
 --
 -- Stores what was sent to a landlord, what came back, and every delivery signal
 -- in between. Additive and inert: nothing reads these tables until the code
@@ -235,7 +235,7 @@ create index if not exists lead_messages_poll_idx
     and status in ('queued','sent','delivered') and next_poll_at is not null;
 
 comment on table public.lead_messages is
-  'Every message to or from a landlord, both channels in one table (§28). The v2 learning loop '
+  'Every message to or from a landlord, both channels in one table (§40). The v2 learning loop '
   'reads template_key/variant_key/generated_by as features and lead_assignments.status as the label.';
 comment on column public.lead_messages.idempotency_key is
   'Claimed by INSERT before the provider is called. NOTE: email is safely re-sent under the same '

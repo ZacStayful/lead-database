@@ -1,5 +1,5 @@
 /**
- * Connecting a customer's own TimelinesAI workspace (§28).
+ * Connecting a customer's own TimelinesAI workspace (§40).
  *
  * SESSION-ONLY. This stores a credential that can send WhatsApp messages from
  * the customer's own number; an API key able to reach it would impersonate them
