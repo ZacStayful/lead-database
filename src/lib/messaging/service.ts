@@ -11,6 +11,8 @@
  * to the browser and hold credentials, so nothing may reach them any other way.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { cryptoConfigured, activeKeyVersion } from "@/lib/crypto/secretBox";
+import { threadTokensConfigured } from "./threadAddress";
 import {
   EMAIL_DOMAIN_PUBLIC_COLUMNS,
   WHATSAPP_PUBLIC_COLUMNS,
@@ -190,6 +192,50 @@ export async function channelAvailability(
       unreadInbound: counts.whatsapp.unread,
     },
   ];
+}
+
+/**
+ * Why messaging cannot be configured, said usefully.
+ *
+ * A customer must not be shown our environment variable names, so they get the
+ * generic line and a route to support. An ADMIN is the person actually doing the
+ * setup, and telling them "contact support" is telling them to contact
+ * themselves — so they get the specific missing variable.
+ *
+ * This exists because the first real test of the flow hit the generic message
+ * and it explained nothing to the one person who could act on it.
+ */
+export function messagingConfigError(isAdmin: boolean): {
+  error: string;
+  code: string;
+  missing?: string[];
+} {
+  const missing: string[] = [];
+  if (!cryptoConfigured()) {
+    missing.push(
+      process.env[`MESSAGING_ENCRYPTION_KEY_V${activeKeyVersion()}`]
+        ? `MESSAGING_ENCRYPTION_KEY_V${activeKeyVersion()} (set, but not a valid 32-byte base64 or hex key)`
+        : `MESSAGING_ENCRYPTION_KEY_V${activeKeyVersion()}`
+    );
+  }
+  if (!threadTokensConfigured()) missing.push("MESSAGING_TOKEN_SECRET");
+
+  if (!isAdmin) {
+    return {
+      error:
+        "Messaging is not switched on for your account yet. Please contact support and we will set it up with you.",
+      code: "not_configured",
+    };
+  }
+
+  return {
+    code: "not_configured",
+    missing,
+    error:
+      `Messaging env vars are missing on this deployment: ${missing.join(", ")}. ` +
+      "Add them in Vercel → Settings → Environment Variables (Production), then REDEPLOY — " +
+      "Vercel bakes env vars in at build time, so an existing deployment cannot see a variable added after it was built.",
+  };
 }
 
 /**

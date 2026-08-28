@@ -13,7 +13,7 @@
  * cannot supply an apex even deliberately.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { holdsProduct } from "@/lib/products";
 import { APP_URL } from "@/lib/env";
@@ -37,6 +37,8 @@ import {
   WEBHOOK_EVENTS,
 } from "@/lib/messaging/resend";
 import { EMAIL_DOMAIN_PUBLIC_COLUMNS } from "@/lib/messaging/types";
+import { messagingConfigError } from "@/lib/messaging/service";
+import { threadTokensConfigured } from "@/lib/messaging/threadAddress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,16 +76,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!cryptoConfigured()) {
-    // The sms.ts posture: inert until configured, and legible about it.
-    return NextResponse.json(
-      {
-        error:
-          "Messaging is not configured on this deployment yet. Please contact support.",
-        code: "not_configured",
-      },
-      { status: 503 }
-    );
+  // Inert until configured (the sms.ts posture) — but legible to whoever can
+  // actually fix it. An admin is told which variable is missing; a customer is
+  // pointed at support.
+  if (!cryptoConfigured() || !threadTokensConfigured()) {
+    return NextResponse.json(messagingConfigError(isAdminUser(user)), { status: 503 });
   }
 
   let body: {

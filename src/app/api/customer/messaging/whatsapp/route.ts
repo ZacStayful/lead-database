@@ -14,7 +14,7 @@
  * at risk of being restricted. risk_acknowledged_at records that we said so.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { holdsProduct } from "@/lib/products";
 import { APP_URL } from "@/lib/env";
@@ -36,6 +36,8 @@ import {
   WEBHOOK_EVENTS,
 } from "@/lib/messaging/timelines";
 import { WHATSAPP_PUBLIC_COLUMNS } from "@/lib/messaging/types";
+import { messagingConfigError } from "@/lib/messaging/service";
+import { threadTokensConfigured } from "@/lib/messaging/threadAddress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,15 +71,11 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  if (!cryptoConfigured()) {
-    return NextResponse.json(
-      {
-        error:
-          "Messaging is not configured on this deployment yet. Please contact support.",
-        code: "not_configured",
-      },
-      { status: 503 }
-    );
+  // Inert until configured (the sms.ts posture) — but legible to whoever can
+  // actually fix it. An admin is told which variable is missing; a customer is
+  // pointed at support.
+  if (!cryptoConfigured() || !threadTokensConfigured()) {
+    return NextResponse.json(messagingConfigError(isAdminUser(user)), { status: 503 });
   }
 
   let body: {
