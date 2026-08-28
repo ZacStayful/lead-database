@@ -21,6 +21,7 @@ import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
 import { AnalysisOfferPanel } from "@/components/dashboard/AnalysisOfferPanel";
 import { LEAD_ANALYSIS_PRICE_PENCE, analysability } from "@/lib/leadAnalysis";
 import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
+import { LeadMessageButtons } from "@/components/dashboard/LeadMessageButtons";
 import type {
   AssignmentWithLead,
   ClientLeadEventType,
@@ -28,6 +29,7 @@ import type {
   LeadFile,
 } from "@/lib/types";
 import type { LeadSource } from "@/lib/leadOrder";
+import type { ChannelAvailability } from "@/lib/messaging/types";
 import {
   ArrowLeft,
   BarChart3,
@@ -54,6 +56,7 @@ export function LeadDetail({
   nextLeadId,
   signedCountBefore,
   presentationConfigured,
+  messageChannels,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -65,6 +68,11 @@ export function LeadDetail({
   signedCountBefore: number;
   /** False when the operator has never set their presentation terms up (§26). */
   presentationConfigured: boolean;
+  /**
+   * Per-channel messaging state (§28), resolved server-side. Empty when the
+   * feature is switched off, in which case the buttons render nothing at all.
+   */
+  messageChannels?: ChannelAvailability[];
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -490,6 +498,17 @@ export function LeadDetail({
             value={formatDate(assignment.assigned_at)}
           />
         </div>
+
+        {messageChannels && messageChannels.length > 0 && (
+          <div className="mt-4">
+            <LeadMessageButtons
+              assignmentId={assignment.id}
+              leadId={assignment.lead_id}
+              leadName={lead.lead_name}
+              channels={messageChannels}
+            />
+          </div>
+        )}
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <FieldRow label="Bedrooms" value={lead.bedrooms} />

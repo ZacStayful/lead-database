@@ -1,9 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { viewerScopedLead } from "@/lib/customerLeads";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/dashboard/LeadDetail";
 import { fetchOrderedAssignments, parseSource } from "@/lib/leadOrder";
+import { channelAvailability } from "@/lib/messaging/service";
 import type { AssignmentWithLead, LeadNote, LeadFile } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,17 @@ export default async function LeadDetailPage({
   const nextLeadId =
     idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].lead_id : null;
 
+  // Messaging state for the two buttons (§28). Resolved server-side on the
+  // admin client, because the connection tables are deny-all to the browser.
+  const messageChannels = await channelAvailability(admin, {
+    customerId: customer.id,
+    assignment,
+    lead: assignment.lead,
+    // Admins see the buttons while messaging_enabled is still false, so the
+    // whole flow can be exercised on production before any customer sees it.
+    preview: isAdminUser(user),
+  });
+
   return (
     <LeadDetail
       assignment={assignment}
@@ -77,6 +89,7 @@ export default async function LeadDetailPage({
       nextLeadId={nextLeadId}
       signedCountBefore={signedCountBefore ?? 0}
       presentationConfigured={customer.presentation_settings_updated_at != null}
+      messageChannels={messageChannels}
     />
   );
 }

@@ -58,7 +58,14 @@ function feedbackTo(): string {
   return process.env.FEEDBACK_EMAIL ?? "zac@stayful.co.uk";
 }
 
-function esc(v: string): string {
+/**
+ * Exported since §28: the per-customer message sender in
+ * src/lib/messaging/outbound.ts renders operator-typed text into HTML and must
+ * escape it with THIS function rather than a copy. §22.5 makes escaping
+ * load-bearing, and two implementations of it would eventually disagree —
+ * silently, and in the direction that matters.
+ */
+export function esc(v: string): string {
   return v
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
