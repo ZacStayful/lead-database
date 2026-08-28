@@ -186,25 +186,35 @@ const ENQUIRY_START_DATE_COLUMN = "date_mm5ft19y";
 const ENQUIRY_END_DATE_COLUMN = "date_mm5fxrbn";
 
 /**
- * The five Status labels this system owns.
+ * The six Status labels this system owns.
  *
  * CASING IS EXACT AND INCONSISTENT between the two customer labels: capital C in
  * "Management Customer", lower-case r and c in "Guaranteed rent customer". A
  * mismatch is a hard ColumnValueException, which is the behaviour we want —
  * see setEnquiryStatus.
  *
- * The indexes in the comments are for reference only and must NEVER be used to
- * derive a value by position: index 5 is a deleted label and does not exist, so
- * position and index disagree. The remaining five labels on this column
- * (Web meeting sat/booked/no show, In the future, In the future due to call) are
- * the sales pipeline's and are never written from here.
+ * The ids in the comments are for reference only and must NEVER be used to
+ * derive a value by position: label id 5 was deleted, so id and display position
+ * disagree. The column carries thirteen labels in total; the other seven
+ * (Web meeting sat/booked/no show, In the future, In the future due to call,
+ * Abandoned, Cancelled due to contact) are the sales pipeline's and are never
+ * written from here.
+ *
+ * CANCELLING vs CANCELLED is the distinction this file exists to keep. A
+ * customer who has ASKED to cancel is still paying and still owed leads until
+ * their period ends — they read as Cancelling. Cancelled means the service has
+ * actually stopped. Collapsing the two put still-paying customers in the
+ * Cancelled group, which is what §23.6's original "show it at the moment it is
+ * requested" rule got wrong. mondayStatusLabelFor() is where the two are told
+ * apart.
  */
 export const ENQUIRY_STATUS = {
-  cancelled: "Cancelled", //                        index 0
-  management_customer: "Management Customer", //     index 1  — capital C
-  card_declined: "Wants to pay card declined", //    index 3
-  guaranteed_rent_customer: "Guaranteed rent customer", // index 9 — lower r, c
-  paused: "Paused", //                               index 10
+  cancelled: "Cancelled", //                        label id 0
+  management_customer: "Management Customer", //     label id 1  — capital C
+  card_declined: "Wants to pay card declined", //    label id 3
+  guaranteed_rent_customer: "Guaranteed rent customer", // label id 9 — lower r, c
+  paused: "Paused", //                               label id 10
+  cancelling: "Cancelling", //                       label id 19
 } as const;
 
 export type EnquiryStatusLabel =

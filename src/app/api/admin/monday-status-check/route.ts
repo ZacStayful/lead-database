@@ -40,12 +40,17 @@ export const maxDuration = 60;
  * doing — measured on live data, the hand-maintained labels already agree with the
  * rule for all 21 customers, so there is nothing to correct.
  *
- * There is deliberately NO cron entry for this. Nothing outside the lifecycle
- * hooks recomputes a label, which is what keeps the cancel-at-click behaviour
- * consistent: cancel_at_period_end is stored nowhere (§21), so a scheduled
- * write-mode reconciliation would recompute a just-cancelled customer as
- * "Management Customer" and flip them back. A scheduled version needs either a
- * stored flag or a live Stripe read first.
+ * There is deliberately NO cron entry for this, but the reason has expired.
+ * cancel_at_period_end IS stored (0087) and mondayStatusLabelFor() is a pure
+ * function of the row, so a scheduled write-mode reconciliation could no longer
+ * recompute a just-cancelled customer as "Management Customer" and flip them
+ * back — which is what this comment used to say made one impossible.
+ *
+ * One is now worth having rather than merely safe: since the Cancelling/Cancelled
+ * split (§23.2) the flip to Cancelled is driven solely by
+ * customer.subscription.deleted, so a single missed webhook strands an item on
+ * Cancelling for ever. cancel_effective_at (0101) is the column that would catch
+ * it. Still not built.
  */
 
 type CheckRow = MondayStatusCandidate &

@@ -31,11 +31,13 @@ import {
   type PauseFacts,
 } from "@/lib/pauseOutlook";
 import { pauseMonthsLabel, pauseReasonLabel } from "@/lib/pauseOptions";
+import { pendingCancellation } from "@/lib/cancelOptions";
 
 type Tab =
   | "all"
   | "active"
   | "paused"
+  | "cancelling"
   | "waitlisted"
   | "invited"
   | "cancelled"
@@ -45,11 +47,59 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "all", label: "All" },
   { key: "active", label: "Active" },
   { key: "paused", label: "Paused" },
+  { key: "cancelling", label: "Cancelling" },
   { key: "waitlisted", label: "Waitlisted" },
   { key: "invited", label: "Invited" },
   { key: "cancelled", label: "Cancelled" },
   { key: "archived", label: "Archived" },
 ];
+
+/**
+ * Is either product scheduled to stop?
+ *
+ * Deliberately NOT keyed on account_status, which is what the "cancelled" tab
+ * uses: the cancel route never writes that column, so a customer who has asked
+ * to leave stays account_status = 'active' for their whole last paid period and
+ * the cancelled tab cannot see them. Until this tab existed a pending
+ * cancellation was invisible everywhere in admin except the Monday label cell —
+ * which is how the board came to say Cancelled while the app said active.
+ */
+const isCancelling = (c: Customer) =>
+  pendingCancellation(c, "management").pending ||
+  pendingCancellation(c, "guaranteed_rent").pending;
+
+/** "leaves 13 Sep" — the last day of service, not the day they asked. */
+function leavingOn(effectiveAt: string | null): string {
+  if (!effectiveAt) return "date unknown";
+  const d = new Date(effectiveAt);
+  if (Number.isNaN(d.getTime())) return "date unknown";
+  return `leaves ${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
+}
+
+/**
+ * "Cancelling — leaves 13 Sep", per product.
+ *
+ * Sits beside the subscription badge rather than replacing it, because both
+ * facts are true and the second does not cancel the first: they ARE still
+ * active, still being billed and still owed leads until the date shown.
+ */
+function CancellingBadge({
+  customer,
+  leadType,
+  label,
+}: {
+  customer: Customer;
+  leadType: LeadType;
+  label: string | null;
+}) {
+  const { pending, effectiveAt } = pendingCancellation(customer, leadType);
+  if (!pending) return null;
+  return (
+    <Badge variant="warning">
+      {label ? `${label} cancelling` : "Cancelling"} — {leavingOn(effectiveAt)}
+    </Badge>
+  );
+}
 
 /**
  * Secondary filter on the Paused tab: is this customer coming back?
@@ -233,14 +283,18 @@ export function AdminCustomersTable({
     let list = customers.filter((c) =>
       tab === "archived" ? isArchived(c) : !isArchived(c)
     );
-    // "paused" is not an account_status, so it can never match the comparison
-    // below — it joins "all" and "archived" as a pass-through and filters itself.
+    // "paused" and "cancelling" are not account_status values, so neither can
+    // match the comparison below — each filters itself, as "all" and "archived"
+    // do. "cancelling" in particular must NOT fall through to that comparison:
+    // a customer who has asked to leave is still account_status = 'active'.
     list = list.filter((c) =>
       tab === "all" || tab === "archived"
         ? true
         : tab === "paused"
           ? isPaused(c)
-          : accountStatus(c) === tab
+          : tab === "cancelling"
+            ? isCancelling(c)
+            : accountStatus(c) === tab
     );
     if (tab === "paused" && band !== "all") {
       list = list.filter(
@@ -567,6 +621,16 @@ export function AdminCustomersTable({
                       {!showsManagement(c) && !showsGr(c) && (
                         <Badge variant="muted">{c.subscription_status}</Badge>
                       )}
+                      <CancellingBadge
+                        customer={c}
+                        leadType="management"
+                        label={showsGr(c) ? "Mgmt" : null}
+                      />
+                      <CancellingBadge
+                        customer={c}
+                        leadType="guaranteed_rent"
+                        label={showsManagement(c) ? "GR" : null}
+                      />
                     </div>
                   </TableCell>
                   <TableCell>
@@ -926,8 +990,13 @@ function PauseDetailCell({
  *
  * Read live from Stripe rather than from our own columns: a scheduled
  * cancellation leaves the subscription "active" in Stripe, so our
- * subscription_status says active and cancel_at_period_end is stored nowhere.
- * An unreachable Stripe renders as "couldn't check" and never as healthy.
+ * subscription_status says active. An unreachable Stripe renders as "couldn't
+ * check" and never as healthy.
+ *
+ * cancel_at_period_end IS stored (0087) — this comment used to say it was not —
+ * and CancellingBadge above reads it on every tab. The two answer different
+ * questions: that one reports what the customer asked for, this one asks Stripe
+ * whether the subscription would actually take money when the pause lifts.
  */
 function BillingHealthCell({ health }: { health: BillingHealth | undefined }) {
   if (!health) {

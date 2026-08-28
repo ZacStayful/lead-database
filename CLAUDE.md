@@ -1979,26 +1979,40 @@ this is the opposite direction and the app already writes to this board directly
 
 | | Owner |
 |---|---|
-| The five subscription labels | **This code** |
-| The five sales labels (`Web meeting booked/sat/no show`, `In the future`, `In the future due to call`) | Sales, by hand — never written from code |
+| The six subscription labels | **This code** |
+| The seven sales labels (`Web meeting booked/sat/no show`, `In the future`, `In the future due to call`, `Abandoned`, `Cancelled due to contact`) | Sales, by hand — never written from code |
 | Group placement | The board's own automations |
 | `Customer start date` / `Customer end date` | **This code** (see 23.3) |
 
-Ten "when status changes to X, move item to group Y" automations place every item,
-and all 34 items currently sit in the group matching their label. So the code sets
-one cell and the grouping follows. **Verified against the live board that an
-API-driven column change does fire those automations** — the whole design rests on
-it, so re-check that before assuming a future board behaves the same way.
+"When status changes to X, move item to group Y" automations place every item, so
+the code sets one cell and the grouping follows. **Verified against the live board
+that an API-driven column change does fire those automations** — the whole design
+rests on it, so re-check that before assuming a future board behaves the same way.
 
 `setEnquiryStatus()` writes with `create_labels_if_missing: false`, so a wrong or
-mis-cased label **fails loudly** rather than adding an eleventh label to a column
-the grouping depends on. Verified: `"Guaranteed Rent Customer"` is rejected.
+mis-cased label **fails loudly** rather than adding a label to a column the
+grouping depends on. Verified: `"Guaranteed Rent Customer"` is rejected. The
+corollary is a deployment order: **a new label must exist on the board BEFORE the
+code that writes it ships**, or every push for that state fails.
 
 ⚠️ **Casing is exact and inconsistent between the two customer labels**:
 `Management Customer` (capital C) but `Guaranteed rent customer` (lower r, lower
-c). ⚠️ **Label index 5 does not exist** — a deleted label — so an index must never
-be derived from position. `ENQUIRY_STATUS` in `monday.ts` is the only place these
-strings should live.
+c). `ENQUIRY_STATUS` in `monday.ts` is the only place these strings should live.
+
+⚠️ **Never derive a label value by position.** The column carries **thirteen**
+labels and their ids do not match their display order: label **id 5 is deleted**
+(so id 5 does not exist, while display position 5 does), and `Cancelling` is
+**id 19** at position 13. `labels_positions_v2` is the id→position map, and
+`color_mapping` remaps two colours (label 9 → colour 15, label 10 → colour 14) —
+which matters only if the column settings are ever rewritten, because the colour
+enum is numeric and the rest of this column pairs colour-int to label-id.
+
+⚠️ **This section previously said the column had ten labels and that "index 5 does
+not exist".** Both were out of date: sales added `Abandoned` and `Cancelled due to
+contact` on 17–21 Aug 2026, and this feature added `Cancelling`. There are also
+now **two columns titled "Customer start date"** — `date_mm5ft19y`, the one the app
+writes, and `date_mm6fhgrn`, added 17 Aug and empty on every item — plus an unused
+`Customer cancelled date` (`date_mm6f8wy`). Do not write to the latter two.
 
 ### 23.2 — The label rule
 
@@ -2010,14 +2024,55 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
 | # | Condition | Label |
 |---|---|---|
 | 0 | `is_active = false` | **`null`** |
-| 1 | management cancelling-or-cancelled **and GR not still there** | `Cancelled` |
+| 1 | management cancelling-or-cancelled **and GR not still there** | `Cancelling` / `Cancelled` |
 | 2 | `paused_at is not null` | `Paused` |
 | 3 | management `subscription_status = 'past_due'` | `Wants to pay card declined` |
 | 4 | holds management, not cancelling | `Management Customer` |
 | 5 | GR active and not cancelling | `Guaranteed rent customer` |
 | 6 | GR `past_due` and not cancelling | `Wants to pay card declined` |
-| 7 | GR cancelling-or-cancelled, management not held | `Cancelled` |
+| 7 | GR cancelling-or-cancelled, management not held | `Cancelling` / `Cancelled` |
 | 8 | otherwise | **`null`** |
+
+### `Cancelling` is not `Cancelled`, and conflating them was a real defect
+
+⚠️ **This rule used to return `Cancelled` for a customer who had merely ASKED to
+cancel**, and §23.6 recorded that as deliberate — "a cancellation shows at the
+moment it is requested rather than a billing period later". **That decision is
+reversed.** The billing portal and the in-app cancel flow both cancel *at period
+end*, so `cancel_at_period_end = true` describes somebody who is still paying,
+still `subscription_status = 'active'`, and still being delivered leads for up to
+a month. Writing `Cancelled` filed them under the board's Cancelled group the
+second they clicked, which reads as churn that has not happened.
+
+It was found live on two customers, both of whom had cancelled citing lead
+quality and neither of whom had left: james hoare (management, paid 13 Aug,
+cancelled 24 Aug, service to **13 Sep**) and Karey Summers (GR, paid 10 Aug,
+cancelled 27 Aug, service to **10 Sep**).
+
+The two states are now separated by whether service has actually stopped:
+
+| | Test | Label |
+|---|---|---|
+| Scheduled to end | `(gr_)cancel_at_period_end = true` and not yet ended | `Cancelling` |
+| Ended | `subscription_status = 'canceled'`, or `account_status = 'cancelled'` with `subscription_status` neither `active` nor `past_due`; GR: `gr_subscription_status = 'canceled'` | `Cancelled` |
+
+**`leavingLabel` is derived ONCE, not decided inside rules 1 and 7.** The question
+is about the customer, not the branch that happens to fire: somebody whose
+management subscription has already ended while GR is still serving out a paid
+period is still receiving leads, and a per-branch test labels them `Cancelled` —
+the same error, one product over. `stillServing` asks whether *either* product is
+still running against a pending cancellation.
+
+**Nothing drives the flip to `Cancelled` except Stripe.** At the period end
+`customer.subscription.deleted` arrives, the webhook writes
+`subscription_status = 'canceled'` and clears the pending flag, and the next push
+writes `Cancelled`. There is no cron behind it: if that event were ever missed the
+item would sit at `Cancelling` indefinitely. `cancel_effective_at` (0101) is
+stored and would make a reconciliation cheap — see 23.6 on why one is now safe to
+build — but none exists.
+
+`src/lib/__tests__/mondayStatus.test.ts` covers all of this: 20 cases, and it was
+confirmed that 9 of them fail against the pre-split rule before being kept.
 
 - **`null` means "do not write", and rules 0 and 8 are the safety mechanism for
   the whole feature.** A waitlisted prospect sitting at `Web meeting booked` has no
@@ -2033,6 +2088,10 @@ the same discipline as `announcementTargetsCustomer()` (§22) and
 - **Cancellation outranks held, GR outranks cancellation.** Somebody who cancels
   management but keeps GR reads `Guaranteed rent customer` — still a paying
   customer. Management-wins applies only between two *live* products.
+- **Cancellation still outranks `Paused`**, so a paused customer who cancels reads
+  `Cancelling`. That ordering was kept: leaving is the more important fact, and
+  `Cancelling` states it without claiming they have already gone — which is what
+  made the old ordering wrong rather than the ordering itself.
 - **Management cancellation is derived from `subscription_status`, never
   `account_status`** — see 23.6.
 
@@ -2053,10 +2112,31 @@ label is automated:
 - `7920935830` (status → `Cancelled`) set **Customer end date = Now**, which with
   `Cancelled` written at click records the request date, not the end of service.
 
-**Prerequisite, done on the Monday side:** delete `7920935830` (its group move is
-already duplicated by `7921870420`) and strip the start-date action from
-`7920935809`, which cannot be deleted because it is the only automation moving
-items into `group_mm5f9by1`.
+⚠️ **This section used to say "Prerequisite, DONE on the Monday side". It was
+never done.** Both automations are still live, and the cost was measured: when the
+two pending cancellations of §23.2 were labelled, `7920935830` overwrote the real
+end-of-service dates the app had just written — **13 Sep → 24 Aug** for james
+hoare, **10 Sep → 27 Aug** for Karey Summers, each within four seconds. Because the
+app writes only on transitions and compares against the `monday_status_label`
+cache (§23.4), it never re-corrected them; both cells had to be repaired by hand.
+
+The state of the four automations, and what still needs doing on the Monday side:
+
+| Automation | What it does | Action |
+|---|---|---|
+| `7920935830` | Status → `Cancelled`: move to group **and set Customer end date = Now** | **Delete.** This is the one destroying data; its group move is already duplicated by `7921870420`. |
+| `7921870420` | Status → `Cancelled`: move to group only | **Keep** — it is what makes deleting the above safe. |
+| `7920935809` | Status → `Management Customer`: move to `group_mm5f9by1` **and set `date_mm5ft19y` = Now** | **Strip the date action only.** It cannot be deleted: it is the sole automation moving items into that group. |
+| `7921982789` | Added 17 Aug — a duplicate of the above stamping `date_mm6fhgrn` | **Delete.** |
+| `7922497242` | Status → `Cancelling`: move to the `Cancelling` group, no date action | Added by this change. Correct as built. |
+
+⚠️ **The API token cannot do any of this.** It can CREATE automations —
+`7922497242` was created with it — but `manage_automations` returns
+`USER_UNAUTHORIZED` on both delete and deactivate for automations created in the
+Monday UI. Verified against `7920935830` and `7921982789`. **These four edits must
+be made by hand in Monday**, and until `7920935830` is gone it will corrupt the
+Customer end date of the next customer who genuinely reaches `Cancelled` — the
+first of whom is james hoare on 13 Sep 2026.
 
 The code then writes status and both dates in one
 `change_multiple_column_values` call, so they can never be half applied:
@@ -2164,13 +2244,23 @@ silently undone on the board for the rest of the customer's paid period.
 
 A rule that must not vary by caller cannot take a parameter every caller has to
 remember. `mondayStatusLabelFor()` is now a pure function of the row, so all hooks
-necessarily agree. Both products have the flag, so a GR cancellation shows at the
-moment it is requested rather than a billing period later.
+necessarily agree. Both products have the flag, so a departure shows on the board
+at the moment it is requested rather than a billing period later.
+
+⚠️ **What that fact is REPORTED AS has since changed.** This paragraph used to end
+"...shows at the moment it is requested", with the label being `Cancelled` — which
+put still-paying customers in the Cancelled group. Showing it immediately was
+right; calling it `Cancelled` was not. A requested cancellation now writes
+`Cancelling` and only a subscription that has actually ended writes `Cancelled`
+(§23.2). The flag is still read by every hook, and still at the moment it is set.
 
 This also removes the blocker on a **reconciliation cron** — the reason there was
 none is that a scheduled job could not see a pending cancellation and would have
 flipped a leaving customer back. It could now be written safely. Still not built,
 because event-driven writes plus the check tool have covered everything so far.
+Since §23.2 it has one more job worth doing: `Cancelling` → `Cancelled` is driven
+solely by `customer.subscription.deleted`, so a missed event strands an item, and
+`cancel_effective_at` (0101) is exactly the column that would catch it.
 
 ### 23.7 — GR customers and the status-less board
 
@@ -2182,6 +2272,38 @@ exists for exactly this: the writer refuses a non-status board
 lists them as orphans for the same hand-fix Karey already had. At a GR population
 of one that is proportionate; automating it means either creating the item on
 18420649520 from the GR enquiry path or letting the sync create one.
+
+### 23.7A — Admin had no view of a pending cancellation
+
+The other half of the §23.2 defect, and the reason it read as a sync bug rather
+than a labelling one. **No admin surface read `cancel_at_period_end` or
+`cancel_effective_at` at all.** A customer who had asked to leave rendered as a
+plain green `active` subscriber: `active` badge (the cancel route never writes
+`account_status`, so the Cancelled tab could not see them either), `Mgmt active`
+in Billing, counted in MRR and in active customers. The only place the fact
+appeared anywhere in the app was the Monday cell — showing `Cancelled`, our cache
+of what we last wrote to the board. So Monday said Cancelled, the app said active,
+and neither was lying.
+
+`BillingHealthCell` would have said "Cancels at period end", but it is fed by a
+live Stripe lookup scoped to `pausedCustomers` and rendered only under the Paused
+tab, so it is unreachable for anybody who is not also paused.
+
+`pendingCancellation(customer, leadType)` in `src/lib/cancelOptions.ts` is now the
+single definition, resolved through the existing `cancelColumns()` so the GR
+branch is structurally unable to read a management column (invariant 6 — a GR-only
+customer sits at `account_status = 'waitlisted'` for ever, §18A). The admin
+customers table gained a **Cancelling** tab keyed on it, and a
+`Cancelling — leaves 13 Sep` badge beside the per-product subscription badge.
+
+**The account badge deliberately still reads `active`.** They are active. The new
+badge carries the extra fact rather than replacing a true one — the same
+"always two numbers, never one" discipline §21 applies to paused customers.
+
+**Still counted in full in MRR and in the active-customer counts**, deliberately:
+they are paying for the period. §21 sets the precedent for reporting such
+customers *beside* a headline rather than silently inside it, so this is a
+reasonable thing to change later; it has not been changed.
 
 ### 23.8 — `GET /api/admin/monday-status-check`
 

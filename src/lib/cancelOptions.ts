@@ -157,3 +157,43 @@ export function cancelColumns(leadType: LeadType): CancelColumns {
         effectiveAt: "cancel_effective_at",
       };
 }
+
+/** What a surface needs to say "leaving, and when". */
+export interface PendingCancellation {
+  pending: boolean;
+  /** ISO timestamp of the last day of service, null when Stripe gave us none. */
+  effectiveAt: string | null;
+}
+
+/**
+ * Whether this product is scheduled to cancel, and when it actually stops.
+ *
+ * ONE DEFINITION, because "is this customer leaving" is a question several
+ * surfaces ask and none of them should answer for themselves — the same
+ * discipline mondayStatusLabelFor() and announcementTargetsCustomer() follow.
+ *
+ * Resolved through cancelColumns() rather than by naming the columns again, so
+ * the GR branch is structurally unable to read a management column
+ * (invariant 6). That matters here specifically: a GR-only customer sits at
+ * account_status = 'waitlisted' for ever (§18A), so any admin surface tempted to
+ * answer this from the management columns reports a paying GR customer who is
+ * leaving as an unconverted prospect.
+ *
+ * NOT the same question as the Monday label rule's. This one is per product and
+ * strictly about a PENDING cancellation; that one is per customer and folds in
+ * subscriptions that have already ended. Neither is a fallback for the other.
+ */
+export function pendingCancellation(
+  customer: Partial<Record<CancelColumns["flag"] | CancelColumns["effectiveAt"], unknown>>,
+  leadType: LeadType
+): PendingCancellation {
+  const cols = cancelColumns(leadType);
+  const pending = customer[cols.flag] === true;
+  const raw = customer[cols.effectiveAt];
+  return {
+    pending,
+    // Only meaningful while pending. A stale effective date on a customer who
+    // changed their mind must never render as a leaving date.
+    effectiveAt: pending && typeof raw === "string" ? raw : null,
+  };
+}

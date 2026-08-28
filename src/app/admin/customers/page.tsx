@@ -114,8 +114,14 @@ export default async function AdminCustomersPage() {
     // Deliberately not answered from our own columns. A customer who schedules a
     // cancellation in the billing portal keeps status "active" in Stripe, so the
     // webhook writes subscription_status = 'active' and even NULLS cancelled_at —
-    // the row moves away from the truth, and cancel_at_period_end is stored
-    // nowhere. The only honest source is Stripe itself.
+    // the row moves away from the truth. This asks "can we actually re-bill this
+    // person right now", which wants the live answer rather than our cache of it.
+    //
+    // cancel_at_period_end IS stored (0087), and cancel_effective_at with it
+    // (0101) — an earlier version of this comment said neither was. They are what
+    // the Monday label rule and the admin Cancelling badge read. They are still
+    // not what this particular question should be answered from: they are written
+    // by our webhook, so they say what we last heard, not what Stripe holds now.
     //
     // allSettled so one failing lookup cannot blank the others, and any failure
     // renders as "couldn't check" rather than as a healthy default.

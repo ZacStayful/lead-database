@@ -103,31 +103,59 @@ export function mondayStatusLabelFor(
   // between a subscription event and the invoice that follows it. Keying on
   // subscription_status means a customer who is paying reads as a customer
   // whatever account_status says.
-  const managementCancelling =
-    c.cancel_at_period_end === true ||
+  //
+  // ENDED vs SCHEDULED TO END are separated deliberately, and the separation is
+  // the whole point of this rule. `cancel_at_period_end` means the customer has
+  // ASKED to leave; the subscription is still live, still billed for the period
+  // they have paid for, and still owed leads. `subscription_status = 'canceled'`
+  // means the service has actually stopped. Collapsing the two wrote `Cancelled`
+  // on still-paying customers the moment they clicked cancel, which dropped them
+  // out of the board's customer groups a fortnight early.
+  const managementEnded =
     c.subscription_status === "canceled" ||
     (c.account_status === "cancelled" &&
       c.subscription_status !== "active" &&
       c.subscription_status !== "past_due");
+  const managementCancelling =
+    managementEnded || c.cancel_at_period_end === true;
 
   // The GR equivalents. Symmetric on purpose (invariant 6): without
   // gr_cancel_at_period_end a departing GR customer would keep reading as a
   // customer for their whole last paid period, while a departing management
-  // customer showed as Cancelled immediately — the same fact reported a billing
+  // customer showed as leaving immediately — the same fact reported a billing
   // period apart for no reason a reader of the board could discover.
-  const grCancelling =
-    c.gr_cancel_at_period_end === true ||
-    c.gr_subscription_status === "canceled";
+  const grEnded = c.gr_subscription_status === "canceled";
+  const grCancelling = grEnded || c.gr_cancel_at_period_end === true;
+
   // "Still a GR relationship": active OR past_due (a billing problem is not a
   // departure) and not on the way out.
   const grStillThere = grHeld && !grCancelling;
 
+  // Which of the two leaving labels rules 1 and 6 should use.
+  //
+  // Derived ONCE rather than decided inside each branch, because the honest
+  // question is about the customer and not about the branch that happens to
+  // fire. Somebody whose management subscription has already ended while their
+  // GR subscription is still serving out a paid period is still being delivered
+  // leads, and a per-branch test reports them as Cancelled — which is exactly
+  // the error this rule is being changed to fix, reintroduced one product over.
+  const stillServing =
+    (c.cancel_at_period_end === true && !managementEnded) ||
+    (c.gr_cancel_at_period_end === true && !grEnded);
+  const leavingLabel = stillServing
+    ? ENQUIRY_STATUS.cancelling
+    : ENQUIRY_STATUS.cancelled;
+
   // 1. Cancellation outranks being active — the board is read as "who is leaving"
   //    and a pending cancellation is the thing worth seeing — but a LIVE GR
   //    subscription outranks the cancellation. Somebody who cancels management and
-  //    keeps GR is still a paying customer and must not read as Cancelled.
+  //    keeps GR is still a paying customer and must not read as leaving at all.
   //    Management-wins applies only between two live products.
-  if (managementCancelling && !grStillThere) return ENQUIRY_STATUS.cancelled;
+  //
+  //    Kept above Paused: a customer who is on their way out is the more
+  //    important fact about them, and Cancelling says it without claiming they
+  //    have already gone.
+  if (managementCancelling && !grStillThere) return leavingLabel;
 
   // 2. Before 'Management Customer', because a paused customer is
   //    account_status = 'active' AND subscription_status = 'active' — §21 keeps the
@@ -160,7 +188,7 @@ export function mondayStatusLabelFor(
   //    the cancellation event, so gr_cancelled_at would add no information and one
   //    more column whose staleness could disagree.
   if (!managementHeld && grCancelling) {
-    return ENQUIRY_STATUS.cancelled;
+    return leavingLabel;
   }
 
   // 7. No commercial state to report — a waitlisted or invited prospect. Their

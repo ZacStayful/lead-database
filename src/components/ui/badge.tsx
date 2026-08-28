@@ -15,6 +15,11 @@ const badgeVariants = cva(
         brand: "border-transparent bg-brand text-brand-foreground",
         muted:
           "border-transparent bg-muted text-muted-foreground",
+        // Still true, but on a clock — e.g. a subscription scheduled to cancel.
+        // Deliberately not `muted`: the customer is still active and still owed
+        // leads, so this must not read as a lapsed state.
+        warning:
+          "border-transparent bg-amber-100 text-amber-800",
       },
     },
     defaultVariants: {
