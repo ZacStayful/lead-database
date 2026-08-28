@@ -41,6 +41,23 @@ import type { FilterStatus, LeadType } from "@/lib/types";
 
 export type { AreaOption } from "@/components/filtering/AreaPicker";
 
+/** One held lead this filter would exclude, as returned by the apply 409. */
+interface ReleasableLead {
+  lead_id: string;
+  area: string | null;
+  bedrooms: string | null;
+  assigned_at: string;
+}
+
+/** The question the server asks before it will apply a narrowing filter. */
+interface ReleaseDecision {
+  count: number;
+  /** Credits left to spend this cycle. Zero is the case this feature exists for. */
+  balance: number;
+  releasable: ReleasableLead[];
+  forecast: VolumeForecast | null;
+}
+
 export interface FilterPanelProps {
   product: LeadType;
   productLabel: string;
@@ -81,7 +98,7 @@ const CONSENT_UNRELIABLE =
   "Too few leads have come through this selection for us to forecast its volume, so we can't tell you what to expect from it yet. You may receive fewer leads some months, and your monthly subscription amount stays the same regardless. Once enough leads have come through these areas, we'll be able to show you a number.";
 
 const MINI_GUIDE =
-  "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts, and from that date you return to the standard full allocation.";
+  "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range. If you're holding leads outside that range which you haven't opened yet, we'll ask whether to put them back into the pool; doing so refunds their credits so your filter can start delivering this month instead of next. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts, and from that date you return to the standard full allocation.";
 
 export function LeadFilteringPanel(props: FilterPanelProps) {
   const router = useRouter();
@@ -111,6 +128,12 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // The server's forecast when it disagreed with ours (409) — volumes moved
   // while the customer was choosing.
   const [restatedForecast, setRestatedForecast] = useState<VolumeForecast | null>(null);
+  // Leads the customer already holds that this filter would exclude, and that
+  // they have not opened. The server refuses the apply with a 409 until they
+  // say what should happen to them.
+  const [releaseDecision, setReleaseDecision] = useState<ReleaseDecision | null>(
+    null
+  );
 
   // How the customer picks locations: hand-pick areas, or a radius around
   // their own postcode that resolves to the areas the circle touches. Radius
@@ -191,6 +214,10 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     setAcknowledgedForecast(false);
     setAcknowledgedPoorValue(false);
     setRestatedForecast(null);
+    // The decision is about a SPECIFIC set of leads, derived from a specific
+    // selection. Change the selection and a different set is excluded, so the
+    // answer they gave no longer refers to anything.
+    setReleaseDecision(null);
   }, [selectedAreas, minBeds, maxBeds]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
@@ -302,6 +329,19 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
         // The server re-derives the forecast and refuses if ours is stale
         // (409) or unacknowledged (400). Both carry the current figures, so
         // show those rather than the number the customer was looking at.
+        if (data?.code === "existing_leads_decision_required") {
+          // Not an error the customer caused — a question only they can answer.
+          // Rendered as its own block rather than as an error line.
+          setReleaseDecision({
+            count: Number(data.count ?? 0),
+            balance: Number(data.balance ?? 0),
+            releasable: (data.releasable ?? []) as ReleasableLead[],
+            forecast: (data.forecast ?? null) as VolumeForecast | null,
+          });
+          return false;
+        }
+        // The server re-derives the forecast and refuses if ours is stale
+        // (409) or unacknowledged (400). Both carry the current figures.
         if (data?.forecast) {
           setRestatedForecast(data.forecast as VolumeForecast);
           setAcknowledgedForecast(false);
@@ -320,7 +360,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     }
   }
 
-  async function apply() {
+  async function apply(existingLeads?: "keep" | "discard") {
     // The radius details are recorded only when the selection genuinely came
     // from a resolved radius search — admin reads them to see what the
     // customer asked for. Routing reads the areas either way.
@@ -335,12 +375,20 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       radius_outcode: fromRadius ? radius.outcode : null,
       radius_miles: fromRadius ? radiusMiles : null,
       acknowledge_forecast: acknowledgedForecast,
+      // Sent in the SAME request as the acknowledgement and the quoted figure,
+      // so one round trip settles all three. Sending it separately would let a
+      // forecast that moved mid-decision 409 the apply and quietly throw away
+      // the choice the customer just made.
+      existing_leads: existingLeads ?? null,
       // The number on screen. If the server derives a different one, it refuses
       // and restates rather than recording the customer against a figure they
       // never saw.
       quoted_expected_leads: forecast.offerable ? forecast.expected : null,
     });
-    if (ok) setEditing(false);
+    if (ok) {
+      setEditing(false);
+      setReleaseDecision(null);
+    }
   }
 
   async function lift() {
@@ -769,10 +817,82 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               </p>
             )}
 
+            {/* Leads they already hold that this filter excludes.
+                Only ever shown for leads they have NOT opened — anything with a
+                note, a call, an email or even an expanded card is theirs and is
+                never offered up here. */}
+            {releaseDecision && (
+              <div className="space-y-3 rounded-md border-[0.5px] border-border bg-muted/40 px-4 py-3">
+                <p className="text-sm font-medium">
+                  You&rsquo;re holding {releaseDecision.count} lead
+                  {releaseDecision.count === 1 ? "" : "s"} outside this filter
+                  that you haven&rsquo;t opened.
+                </p>
+
+                <ul className="space-y-0.5 text-xs text-muted-foreground">
+                  {releaseDecision.releasable.slice(0, 8).map((l) => (
+                    <li key={l.lead_id}>
+                      {l.area ? labelFor(l.area, availableAreas) : "Unknown area"}
+                      {l.bedrooms ? ` · ${l.bedrooms} bed` : ""}
+                    </li>
+                  ))}
+                  {releaseDecision.releasable.length > 8 && (
+                    <li>
+                      and {releaseDecision.releasable.length - 8} more
+                    </li>
+                  )}
+                </ul>
+
+                {/* The trade, stated once and without overclaiming. Nothing
+                    here promises a replacement for each lead handed back —
+                    what they get is a filter that can deliver now rather than
+                    at renewal, and the credits to spend on it. */}
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Put them back and they return to the pool for other operators,
+                  and their credits come back to you. From then on you&rsquo;re
+                  matched to leads on your filter as they come in — we
+                  can&rsquo;t promise a replacement for each one, only that
+                  what you do receive will match.
+                </p>
+
+                {releaseDecision.balance === 0 &&
+                  releaseDecision.forecast?.offerable && (
+                    <p className="text-xs leading-relaxed text-amber-700">
+                      You have no leads left in this month&rsquo;s allocation, so
+                      keeping all of these means your filter can&rsquo;t deliver
+                      anything until your next billing date. If you keep them,
+                      we&rsquo;ll return up to{" "}
+                      {releaseDecision.forecast.expected} of the oldest unopened
+                      ones anyway, so the filter has room to work.
+                    </p>
+                  )}
+
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  <Button onClick={() => apply("discard")} disabled={busy}>
+                    {busy ? "Saving…" : "Put them back"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => apply("keep")}
+                    disabled={busy}
+                  >
+                    Keep my leads
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {error && <p className="text-sm text-amber-600">{error}</p>}
 
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={apply} disabled={busy || blocked}>
+            {/* While the question above is open, its two buttons ARE the
+                action row. A plain "Apply filter" here would send no choice
+                and simply be refused again. */}
+            <div
+              className={
+                releaseDecision ? "hidden" : "flex flex-wrap gap-2"
+              }
+            >
+              <Button onClick={() => apply()} disabled={busy || blocked}>
                 {busy
                   ? "Saving…"
                   : needsAcknowledgement

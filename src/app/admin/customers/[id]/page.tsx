@@ -72,6 +72,19 @@ export default async function AdminCustomerDetailPage({
     .maybeSingle();
   const offer = (offerRaw as PostCallOffer | null) ?? null;
 
+  // Leads this customer handed back when they applied a lead filter (0114).
+  // An admin looking at a shrinking lead count needs to see why it shrank —
+  // the same reason /admin/pool reports holders and entry basis that the
+  // customer view hides (CLAUDE.md §19.8). Audit only; nothing reads this to
+  // decide anything.
+  const { data: releasesRaw } = await admin
+    .from("filter_lead_releases")
+    .select("id, lead_id, lead_type, mode, released_at, areas")
+    .eq("customer_id", customer.id)
+    .order("released_at", { ascending: false })
+    .limit(20);
+  const releases = (releasesRaw ?? []) as FilterLeadRelease[];
+
   // Ingest-history aggregate for the filter card's predicted volume — the same
   // functions the customer's filtering panel runs. Best-effort: a failed fetch
   // costs the prediction row, never the page.
@@ -142,6 +155,8 @@ export default async function AdminCustomerDetailPage({
           <GrSubscriptionCard customer={customer} />
 
           <FilterCard customer={customer} volumeAggregate={volumeAggregate} />
+
+          <FilterReleasesCard releases={releases} />
 
         </div>
 
@@ -220,6 +235,62 @@ export default async function AdminCustomerDetailPage({
   );
 }
 
+
+interface FilterLeadRelease {
+  id: string;
+  lead_id: string | null;
+  lead_type: "management" | "guaranteed_rent";
+  mode: "discard" | "quota_refill";
+  released_at: string;
+  areas: string[] | null;
+}
+
+/**
+ * Leads returned to the pool when this customer applied a lead filter (0114).
+ *
+ * `discard` is the customer choosing to put non-matching leads back.
+ * `quota_refill` is them choosing to KEEP, at a spent allocation, where the
+ * forecast number of their oldest unopened non-matching leads was returned
+ * anyway so the filter had room to deliver. The second is the one an admin
+ * will be asked about, so it is labelled as what it is rather than as a
+ * discard.
+ *
+ * Renders nothing when the customer has never released a lead — which is most
+ * of them, and an empty card is noise.
+ */
+function FilterReleasesCard({ releases }: { releases: FilterLeadRelease[] }) {
+  if (releases.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Leads returned on filter apply</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          {releases.length} lead{releases.length === 1 ? "" : "s"} went back into
+          the pool, {releases.length === 1 ? "its credit" : "their credits"}{" "}
+          refunded. Newest first.
+        </p>
+        <ul className="space-y-1 text-xs">
+          {releases.map((r) => (
+            <li key={r.id} className="flex flex-wrap justify-between gap-2">
+              <span className="text-muted-foreground">
+                {formatDate(r.released_at)} ·{" "}
+                {r.lead_type === "guaranteed_rent" ? "GR" : "Management"}
+              </span>
+              <span>
+                {r.mode === "discard"
+                  ? "Chose to put back"
+                  : "Freed for the filter"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
 
 /**
  * Admin-only view of a customer's lead filter(s), including the internal
