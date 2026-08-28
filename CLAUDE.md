@@ -6413,11 +6413,49 @@ Three things changed so this class of bug is visible next time:
   failure path ever wrote it, so every row read `true` whatever happened. The
   claim now inserts `false` and the read-back promotes it.
 
-⚠️ **KNOWN GAP: a deferred event is lost for ever.** When the read-back cannot
-finish inside the 3-second budget the row keeps `verified: false`, and an
-earlier comment claimed a maintenance pass would promote it. There is no such
-pass. Recovering one means extracting the match-and-store step into something
-the poller cron can re-run.
+#### The recovery pass *(0119)*
+
+An event we could not read back inside the 3-second budget used to be lost for
+ever, and it looked exactly like a landlord who never replied — which is why
+nobody would ever have reported it.
+
+⚠️ **The vendor's own retries cannot rescue one.** TimelinesAI retries twice,
+but the receiver claims by INSERT *before* it reads back, so every retry
+short-circuits on 23505 and does nothing. Claiming first is right — it is what
+stops double-processing — and it makes recovery ours alone.
+
+`ingestTimelinesEvent` (`src/lib/messaging/ingestTimelinesEvent.ts`) is layers 3
+and 4 lifted out of the route **so that two callers can run them**: the webhook
+at 3s, and a second phase of `/api/cron/poll-whatsapp-status` at 8s. That cron
+already runs every five minutes, already holds a wall clock and already goes
+through `consume_provider_budget` — the shared 30-req/s TimelinesAI bucket a
+separate job would contend with blindly — so the pass lives there rather than in
+a cron of its own, after the status phase and inside its own `try/catch`.
+
+| | |
+|---|---|
+| Due | `verified = false`, `customer_id` set, `next_attempt_at <= now()` |
+| Backoff | `webhookRetry.ts` — 1m → 5m → 15m → 1h, then flat |
+| Give up | 24h after `received_at`: `next_attempt_at` nulled, **row kept** |
+| On our own error | Defer. Never settle an event because *we* failed |
+
+⚠️ **`customer_id` had to be added to the table for this to be possible at all.**
+The claim id is `timelines:<event_type>:<uid>` and carries no tenant, the payload
+has no reliable customer field, and the read-back needs *that* customer's token —
+so an event nobody can attribute is an event nobody can retry. The receiver knew
+it all along and simply never wrote it down.
+
+⚠️ **Retrying is only safe because the ingest is idempotent, and it was not.**
+The `lead_messages` insert dedupes on `(provider, provider_message_id)`, but the
+`unread_inbound_count` bump and the thread timestamps did not — so a second run
+showed the operator two unread replies where the landlord sent one. Already
+reachable before any retry existed, because the claim id carries the EVENT TYPE
+and one message can arrive under two of them. Both are now guarded on the insert
+having actually inserted.
+
+Existing rows are excluded by construction: they predate payload storage and
+carry `verified = true` from the old default, so the partial index never sees
+them.
 
 #### Phone-sent messages are captured, and that is the point
 

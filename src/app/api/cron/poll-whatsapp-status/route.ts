@@ -31,6 +31,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
 import { decryptSecret, timelinesTokenAad } from "@/lib/crypto/secretBox";
 import { getStatusHistory, mapStatus } from "@/lib/messaging/timelines";
+import {
+  ingestTimelinesEvent,
+  uidFromPayload,
+  type TimelinesWebhookPayload,
+} from "@/lib/messaging/ingestTimelinesEvent";
+import { retryDelayMs, retryExhausted } from "@/lib/messaging/webhookRetry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,6 +57,16 @@ const SCAN_LIMIT = 400;
  * customer's own Send button fail is a bad trade whichever way it is measured.
  */
 const RATE_CEILING_PER_SEC = 12;
+
+/** Deferred webhook events to consider per run. Bounds the query, not the work. */
+const RECOVERY_SCAN_LIMIT = 40;
+
+/**
+ * The recovery pass is not racing TimelinesAI's 5-second webhook ceiling, so it
+ * can afford to wait properly — which is the entire reason a deferred event has
+ * a second chance at all.
+ */
+const RECOVERY_READBACK_TIMEOUT_MS = 8000;
 
 /**
  * The ladder. Index by `poll_attempts` already made.
@@ -156,7 +172,11 @@ async function handle(request: NextRequest) {
 
   const due = (dueRows ?? []) as DueMessage[];
   if (due.length === 0) {
-    return NextResponse.json({ ok: true, due: 0, polled: 0, updated: 0 });
+    // ⚠️ Still run the recovery phase. An idle status queue is the NORMAL case,
+    // and returning here would mean deferred webhook events are only ever
+    // recovered on the minority of runs that also had a message to poll.
+    const recovered = dryRun ? null : await recoverDeferredEvents(admin, startedAt);
+    return NextResponse.json({ ok: true, due: 0, polled: 0, updated: 0, recovery: recovered });
   }
 
   const ordered = roundRobin(due);
@@ -329,6 +349,8 @@ async function handle(request: NextRequest) {
     }
   }
 
+  const recovered = await recoverDeferredEvents(admin, startedAt);
+
   return NextResponse.json({
     ok: true,
     due: ordered.length,
@@ -337,6 +359,7 @@ async function handle(request: NextRequest) {
     deferred,
     abandoned,
     stopped_for: stoppedFor,
+    recovery: recovered,
     ms: Date.now() - startedAt,
   });
 }
@@ -347,4 +370,146 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   return handle(request);
+}
+
+/**
+ * PHASE TWO — webhook events we could not verify in time (§40.8).
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE VENDOR'S OWN RETRIES CANNOT HELP US. TimelinesAI
+ * retries a failed delivery twice, but the receiver claims the event by INSERT
+ * BEFORE it reads back, so every retry short-circuits on 23505 and does nothing.
+ * Claiming first is right — it is what stops double-processing — and it makes
+ * recovery ours alone. Without this pass, a landlord's reply that arrived during
+ * a slow minute at the vendor is lost, and it looks exactly like a landlord who
+ * never replied, which is why nobody would ever report it.
+ *
+ * ⚠️ IT LIVES HERE RATHER THAN IN ITS OWN CRON on purpose. This route already
+ * runs every five minutes, already goes through consume_provider_budget — the
+ * SHARED 30-req/s TimelinesAI bucket, which a second job would contend with
+ * blindly — and already holds a wall clock. A separate cron would duplicate all
+ * three and compete with this one for the same ceiling.
+ *
+ * It runs AFTER the status phase and inside its own try/catch, so neither can
+ * cost the other its run.
+ */
+async function recoverDeferredEvents(
+  admin: ReturnType<typeof createAdminClient>,
+  startedAt: number
+): Promise<{ due: number; stored: number; dropped: number; deferred: number; abandoned: number } | null> {
+  const stats = { due: 0, stored: 0, dropped: 0, deferred: 0, abandoned: 0 };
+  try {
+    const { data, error } = await admin
+      .from("message_webhook_events")
+      .select("id, customer_id, payload, attempts, received_at")
+      .eq("provider", "timelinesai")
+      .eq("verified", false)
+      .not("customer_id", "is", null)
+      .not("next_attempt_at", "is", null)
+      .lte("next_attempt_at", new Date().toISOString())
+      .order("next_attempt_at", { ascending: true })
+      .limit(RECOVERY_SCAN_LIMIT);
+
+    if (error || !data) return stats;
+
+    type PendingEvent = {
+      id: string;
+      customer_id: string;
+      payload: TimelinesWebhookPayload | null;
+      attempts: number;
+      received_at: string;
+    };
+    const pending = data as unknown as PendingEvent[];
+    stats.due = pending.length;
+    if (!pending.length) return stats;
+
+    // One decrypt per customer, as the status phase does.
+    const creds = new Map<string, string | null>();
+    const credFor = async (customerId: string): Promise<string | null> => {
+      const cached = creds.get(customerId);
+      if (cached !== undefined) return cached;
+      const { data: row } = await admin
+        .from("customer_whatsapp_connections")
+        .select("token_ciphertext")
+        .eq("customer_id", customerId)
+        .maybeSingle();
+      const cipher = (row as { token_ciphertext: string | null } | null)?.token_ciphertext ?? null;
+      creds.set(customerId, cipher);
+      return cipher;
+    };
+
+    for (const ev of pending) {
+      if (Date.now() - startedAt > WALL_CLOCK_BUDGET_MS) break;
+
+      // Past the window, stop asking. The row is KEPT and only its due time
+      // nulled — it is the evidence the event arrived, and its payload is the
+      // only record of what was sent.
+      if (retryExhausted(ev.received_at)) {
+        await admin
+          .from("message_webhook_events")
+          .update({ next_attempt_at: null })
+          .eq("id", ev.id);
+        stats.abandoned++;
+        continue;
+      }
+
+      const uid = ev.payload ? uidFromPayload(ev.payload) : undefined;
+      if (!ev.payload || !uid) {
+        // Nothing to re-run from. Retire it rather than looping for a day.
+        await admin
+          .from("message_webhook_events")
+          .update({ next_attempt_at: null })
+          .eq("id", ev.id);
+        stats.abandoned++;
+        continue;
+      }
+
+      // The shared bucket, same ceiling as the status phase. Fails CLOSED.
+      const { data: budget, error: budgetErr } = await admin.rpc("consume_provider_budget", {
+        p_provider: "timelinesai",
+        p_window_seconds: 1,
+      });
+      const count = (budget as { count?: number } | null)?.count;
+      if (budgetErr || typeof count !== "number" || count > RATE_CEILING_PER_SEC) break;
+
+      const result = await ingestTimelinesEvent(admin, {
+        customerId: ev.customer_id,
+        tokenCiphertext: await credFor(ev.customer_id),
+        uid,
+        payload: ev.payload,
+        claimId: ev.id,
+        timeoutMs: RECOVERY_READBACK_TIMEOUT_MS,
+      });
+
+      if (result.outcome === "deferred") {
+        // ⚠️ Still OUR failure, not a verdict about the event. Back off; never
+        // mark it settled because we could not reach the vendor.
+        const attempts = (ev.attempts ?? 0) + 1;
+        await admin
+          .from("message_webhook_events")
+          .update({
+            attempts,
+            next_attempt_at: new Date(Date.now() + retryDelayMs(attempts)).toISOString(),
+          })
+          .eq("id", ev.id);
+        stats.deferred++;
+        continue;
+      }
+
+      // Read back successfully. `dropped` means it genuinely is not ours to
+      // keep, which is settled — retrying would not change the answer.
+      await admin
+        .from("message_webhook_events")
+        .update({ verified: true, next_attempt_at: null, attempts: (ev.attempts ?? 0) + 1 })
+        .eq("id", ev.id);
+
+      if (result.outcome === "stored") stats.stored++;
+      else stats.dropped++;
+    }
+
+    return stats;
+  } catch (e) {
+    // Its own failure must never cost the status phase its run.
+    console.error("[poll-whatsapp-status] recovery failed", e instanceof Error ? e.message : e);
+    return stats;
+  }
 }
