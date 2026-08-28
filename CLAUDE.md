@@ -6282,6 +6282,27 @@ trackability the ask was for, without four routing changes by accident.
 
 Reporting on messages therefore joins `lead_messages`, never `lead_notes`.
 
+#### ⚠️ Deleting a lead orphans its conversation, silently
+
+`lead_messages.assignment_id` and `.lead_id` are `ON DELETE SET NULL` (0116),
+and the timeline is keyed on `assignment_id`. So deleting a customer-owned lead
+(§30.7) leaves every message row intact and **unreachable** — the conversation
+disappears from the dashboard while the audit trail survives. The `message_sent`
+rows in `lead_events` do not survive at all: that FK is `ON DELETE CASCADE`
+(0043), so they go with the assignment.
+
+Both behaviours are right. What was wrong is that it happened with no warning:
+the delete confirmation promised only that "notes and files go with it". It now
+names the message count when there is one, and says the messages **stay in our
+records** rather than that they are deleted — because they are not, and copy
+that said otherwise would be a plain lie about what the database does (§19.7:
+copy is part of the mechanism). The count is free, since `LeadDetail` already
+holds the assignment's messages for the timeline.
+
+This is how the first live test lost its own evidence: the test leads were
+deleted mid-run, so three messages, two threads and every inbound reply ended
+up matching nothing.
+
 ### 40.7 — A sent message is contact. An inbound reply is not. *(0118)*
 
 The one routing effect that **is** wanted, and the only migration in this phase

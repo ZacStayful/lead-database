@@ -800,6 +800,25 @@ export function LeadDetail({
                     ? "Remove this lead from your database? Your notes and files on it go with it, and it cannot be undone."
                     : "Delete this lead for good? You added it yourself, so it is only in your database — its notes and files go with it, and it cannot be undone."}
                 </p>
+                {/*
+                  ⚠️ MESSAGES ARE NOT DELETED, AND THIS MUST NOT SAY THEY ARE.
+                  lead_messages.assignment_id is ON DELETE SET NULL (0116), so
+                  the rows survive and only the link to the lead goes. But the
+                  timeline is keyed on assignment_id, so the conversation
+                  vanishes from the dashboard — which happened silently during
+                  the first live test and is the reason this line exists.
+
+                  The count is free: `messages` is already scoped by the page to
+                  this assignment, so it is exactly the conversation at stake.
+                */}
+                {messages && messages.length > 0 && (
+                  <p className="mb-3 text-sm text-amber-700 dark:text-amber-500">
+                    This lead has {messages.length}{" "}
+                    {messages.length === 1 ? "message" : "messages"}. They stay in
+                    our records, but they will no longer appear anywhere in your
+                    dashboard.
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleDelete()}
