@@ -342,7 +342,12 @@ session by definition; see §15 for why it exists at all.
    claim bypasses the cap entirely** (§19), so `assignment_count` may exceed
    `max_assignments` — nothing enforces the comparison, and the two queries that
    subtract them clamp with `greatest(…, 0)`.
-4. Every delivered lead is chargeable. Reject does not refund.
+4. Every delivered lead is chargeable. Reject does not refund. **One narrow
+   exception, since 0114 (§39): a lead that is UNDELIVERED — untouched,
+   returned to the pool at the customer's own request when they apply a lead
+   filter that excludes it — is refunded.** The untouched predicate in
+   `releasable_filter_assignments` is what keeps that distinct from a refund on
+   worked-for value, and must never be loosened.
 5. Ingest is idempotent on `monday_item_id`; Stripe on `stripe_events`.
 6. Management and GR are fully parallel. Every balance/counter/pacing/eligibility
    branch must handle both `lead_type` values — and must not use a
@@ -5888,3 +5893,192 @@ a balance, counter, pacing or capacity column, so a lagging migration cannot
 affect lead allocation.
 
 The analyser's own change is independent and can land in either order (§38.2).
+
+---
+
+## 39. A new filter starts delivering now, not at renewal *(0114)*
+
+Applying a lead filter has always been instant (§28, 0026): the apply route
+writes `filter_status = 'active'` and `get_filtered_candidates_for_lead` honours
+it on the very next lead. What is **not** instant is supply.
+
+`(gr_)lead_balance` is the allocation gate (invariant 1), spent one credit per
+assignment and topped up only by `credit_invoice` on `invoice.paid`. A customer
+who has consumed this cycle's credits receives nothing — filtered or not — until
+renewal, so applying a filter mid-cycle looks exactly like a filter that
+"activates on billing cycles". The apply route made it slightly worse: a fresh
+enable clamps the balance to `min(balance, allocation)`, so applying a filter
+could only ever *reduce* what was left to spend.
+
+The leads that customer is already holding are the missing credits.
+
+`/api/customer/filter` (apply) · `LeadFilteringPanel` · `/admin/customers/[id]`
+
+### 39.1 — What "instant" means here, and what it does not
+
+It means the **filtered flow starts now**. It is **not** a lead-for-lead swap,
+and nothing promises a replacement for each lead returned. The customer is
+knowingly trading unused stock for the chance of leads on their filter as those
+arrive, and the apply confirmation captures consent to exactly that.
+
+Two consequences, both deliberate:
+
+- **No synchronous re-offer.** A released lead drops back under its
+  `max_assignments` cap and is redistributed by the ordinary machinery (§4).
+  Nothing in the apply path loops over `autoAssignLead`. That would be the
+  like-for-like swap this is explicitly not — and on a Hobby 60s function cap
+  (§2), against a route that already pages the whole leads table twice for the
+  forecast, a loop of `completeAssignment` calls (each an email, an SMS and five
+  round trips) is also how the route starts getting cut short mid-release.
+- **No stock guarantee.** Nothing counts or promises how many matching leads are
+  in the book right now. The volume forecast (§28) is the one expectation this
+  product sets; a second one would be a promise nobody has modelled.
+
+### 39.2 — The rule
+
+> A lead is releasable only if the customer has **not touched it** AND it
+> **fails the filter being applied**.
+
+| Situation | What happens |
+|---|---|
+| **Discard** | Release everything releasable. A credit back for each. |
+| **Keep**, credits remaining | Release nothing — nothing is in the way of the filter delivering. |
+| **Keep**, credits spent | Release `min(forecast − balance, releasable)`, oldest first. |
+| Nothing releasable | Release nothing. The filter is live and starts delivering at renewal. |
+
+That last row is the "applies next billing cycle" case, and it needs **no new
+`filter_status` value and no scheduled-apply machinery** — an `active` filter
+with an empty balance already behaves that way, and it correctly binds the admin
+swap (§34), admin force-assign (§35) and pool visibility (§19.4) meanwhile,
+which a `pending_apply` state would not.
+
+`src/lib/filterRelease.ts` holds the arithmetic and `canSpendRefund`; the
+predicate for *which* leads is `releasable_filter_assignments`, in SQL, because
+it has to agree with the router about what "matches this filter" means.
+
+### 39.3 — Why only NON-MATCHING leads, against the brief
+
+The brief asked that the forecast number simply be taken back from the existing
+allocation. Restricting it to leads that **fail** the new filter is what keeps
+this feature out of the routing engine entirely.
+
+Every candidate function excludes customers who already hold the lead via
+`not exists (select 1 from lead_assignments …)`. Releasing **deletes that row**,
+so the exclusion goes with it — and a released lead that *matched* could be
+re-offered straight back to the same customer, who would then spend the refunded
+credit on the lead they had just given up. Avoiding that otherwise needs an
+exclusion table consulted by three privileged predicates.
+
+Restricting releases to non-matching leads makes the customer's own active
+filter the exclusion mechanism, for free. It is also better behaviour: we only
+ever take back leads they have just told us they do not want.
+
+### 39.4 — ⚠️ The accepted gap: a lift reopens the door
+
+Deleting the assignment removes the "already holds it" guard. While the filter
+is **active** the released lead fails it, so nothing happens. But a **lift** sets
+`filter_status = 'off'`, and the lead becomes eligible for that customer again —
+through routing, and through the pool.
+
+**Accepted deliberately.** A lift is deferred to renewal (0026), so the window
+opens a month away at the earliest, by which time the lead is usually sold,
+pooled or expired; a customer who has lifted is asking for any lead again; they
+would pay full price; and they never opened it. Closing it means
+`create or replace` on `get_filtered_candidates_for_lead`,
+`get_unfiltered_candidates_for_lead` and `customer_can_see_pool_lead`, with the
+§11 ACL trap each time, for a benign outcome.
+
+`filter_lead_releases` records every release, so **if this ever becomes a real
+complaint the fix is a one-clause addition to those three and the data to prove
+it is already there.**
+
+### 39.5 — What 0114 does NOT touch
+
+`get_filtered_candidates_for_lead`, `get_unfiltered_candidates_for_lead`,
+`get_next_customers_for_lead`, `customer_can_see_pool_lead`,
+`get_escalation_candidates`, `assign_lead_to_customer` and `credit_invoice` are
+**all untouched**. That is the payoff for §39.3, and it is what lets a reviewer
+confirm the blast radius by inspection.
+
+Also untouched by the release: `(gr_)pool_debit` (invariant 12 — settled only
+inside `credit_invoice`) and `management_lifetime_leads_received` (invariant 9 —
+only counts up).
+
+### 39.6 — Three traps the predicate exists to avoid
+
+- **A swap-withdrawn lead (0059).** The swap withdraws a lead by clamping
+  `max_assignments` DOWN to `assignment_count`. Releasing another holder's copy
+  decrements the count while the clamp stays put, putting a deliberately
+  withdrawn lead back *under* its cap and straight into ordinary routing.
+  `l.withdrawn_at is null` bars it.
+- **A pool-claimed lead (§19.6).** A claim must never reopen its slot.
+  `discard_lead_assignment` sets `pool_expired_at` instead of decrementing for
+  exactly this reason; rather than reproduce that branch, a claimed lead is
+  simply not releasable — the operator rang the landlord before keeping it,
+  which is the opposite of untouched anyway.
+- **`nudge_sent`.** Excluded from the event scan for the usual reason (§3).
+  Counting our own reminders as the customer's activity would lock exactly the
+  leads nobody has touched — the ones this feature exists to recover.
+
+### 39.7 — The balance clamp moved into the RPC
+
+The apply route used to write `update[c.balance] = Math.min(balance, allocation)`
+from a value read at the *top* of the request — a blind read-modify-write, so any
+credit an ingest spent in between was silently handed back. It now happens inside
+`release_unmatched_assignments` under the customer row lock, alongside the
+refunds.
+
+⚠️ **The RPC is therefore called on every fresh enable, even with nothing to
+release**, and its `p_max <= 0` early return sits *below* the clamp. Move that
+return to the top and every customer with no releasable leads quietly stops being
+clamped.
+
+### 39.8 — Refusal order in the apply route is fixed
+
+`forecast_not_acknowledged` (400) → `forecast_changed` (409) →
+`existing_leads_decision_required` (409). The client sends
+`acknowledge_forecast`, `quoted_expected_leads` and `existing_leads` in **one**
+request, so a forecast that moves while the customer is deciding cannot 409 the
+apply and silently discard the choice they just made. The panel clears the
+decision in the same `useEffect([selectedAreas, minBeds, maxBeds])` that already
+voids the acknowledgement — the answer is about a specific set of leads, and a
+changed selection excludes a different set.
+
+The question is skipped entirely — filter applies, nothing released — when
+nothing is releasable, when no forecast could be offered (the Keep branch has no
+number to size a release with, and `null - balance` is `NaN`), or when
+`canSpendRefund` is false: paused (§21), archived (§18D) or cancelling (§29)
+accounts would be credited for leads they will never receive.
+
+The `releasable_filter_assignments` read **fails OPEN** — code deployed ahead of
+the migration must not refuse every filter apply on the platform. Same argument
+`autoAssignLead` makes for `lead_is_closed`.
+
+### 39.9 — 0060 is a hard dependency
+
+`notifications.lead_assignment_id` was created NO ACTION; deleting an assignment
+that had produced a notification raised a foreign-key violation until 0060 made
+it `ON DELETE CASCADE`. Every release deletes an assignment that *has* produced a
+new-lead notification. **Do not revert 0060.**
+
+### Verification
+
+- `npm run test` — `src/lib/__tests__/filterRelease.test.ts` covers the
+  arithmetic, including the not-offerable forecast and the per-product
+  `canSpendRefund` split (invariant 6: `paused_at` must never gate GR).
+- On a Supabase branch, with a customer at `lead_balance = 0` holding unworked
+  leads across mixed areas plus one worked lead: apply a narrowing filter and
+  check the 409 lists exactly the unworked non-matching ones; `discard` removes
+  them, decrements `assignment_count`, raises `lead_balance` by the same number,
+  lowers `leads_received_this_month`, and writes `filter_lead_releases`;
+  `keep` at zero balance releases exactly `min(forecast, releasable)`; `keep`
+  with balance ≥ forecast releases nothing.
+- Confirm a swap-withdrawn lead and a pool-claimed lead are never offered.
+- Re-apply the same filter twice — the second pass must release nothing.
+
+### Deployment order — migration BEFORE code
+
+0114 is purely additive (one table, two new functions) and redefines nothing, so
+applying it ahead of the deploy is inert. Deployed the other way round, the
+`releasable_filter_assignments` call fails open and filters apply exactly as they
+did before — which is the safe direction for the window.

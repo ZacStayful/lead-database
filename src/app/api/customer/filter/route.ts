@@ -9,10 +9,20 @@ import {
   predictMonthlyVolume,
 } from "@/lib/filterPrediction";
 import { forecastVolume } from "@/lib/filterForecast";
+import {
+  canSpendRefund,
+  releaseCount,
+  type ReleaseChoice,
+} from "@/lib/filterRelease";
 import type { Customer, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The apply path already pages the whole leads table twice to derive the
+// forecast, and now runs the release RPC on top. Still comfortably inside the
+// Hobby 60s function cap (CLAUDE.md §2), but the route declared no budget at
+// all before, which is how a route quietly starts being cut short.
+export const maxDuration = 60;
 
 type Action = "apply" | "lift" | "cancel_lift";
 
@@ -102,6 +112,7 @@ export async function POST(req: NextRequest) {
     radius_miles?: unknown;
     acknowledge_forecast?: unknown;
     quoted_expected_leads?: unknown;
+    existing_leads?: unknown;
   };
   try {
     body = await req.json();
@@ -173,6 +184,10 @@ export async function POST(req: NextRequest) {
     // the quote and the routing cannot disagree about what was selected.
     // ---------------------------------------------------------------------
     const allocation = Number(customer[c.allocation] ?? 0);
+    // Credits they can still spend. Read once, here, and used both to size the
+    // give-back and to report back to the panel. The WRITE that clamps it on a
+    // fresh enable happens under the row lock in the RPC, not from this value.
+    const balance = Number(customer[c.balance] ?? 0);
     const [aggregate, contention] = await Promise.all([
       fetchLeadVolumeAggregate(admin),
       fetchAreaContention(admin, product, customer.id),
@@ -218,6 +233,84 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ---------------------------------------------------------------------
+    // Leads they are already holding.
+    //
+    // Applying a filter has always been instant for FUTURE leads. It is supply
+    // that is not: `(gr_)lead_balance` gates allocation, so a customer who has
+    // spent this cycle's credits receives nothing — filtered or not — until
+    // `invoice.paid` tops them up, which is why filtering reads as something
+    // that "starts next month". Their untouched, non-matching held leads are
+    // the missing credits.
+    //
+    // ⚠️ ORDER MATTERS AND IS FIXED (see the two refusals above): forecast
+    // acknowledgement, then forecast freshness, then this. The client sends
+    // `acknowledge_forecast`, `quoted_expected_leads` and `existing_leads` in
+    // ONE request, so a forecast that moves while the customer is deciding
+    // cannot silently discard the choice they just made.
+    //
+    // The question is skipped entirely — filter applies, nothing released —
+    // when there is nothing to release, when no forecast could be offered (the
+    // keep branch has no number to size a release with), or when the account
+    // could not spend a refunded credit anyway.
+    const refundable = canSpendRefund(customer, product);
+    const { data: releasableRows, error: releasableError } = await admin.rpc(
+      "releasable_filter_assignments",
+      {
+        p_customer_id: customer.id,
+        p_lead_type: product,
+        // The server's own normalised selection, never the body's — the same
+        // values about to be written to filter_areas and matched by
+        // get_filtered_candidates_for_lead.
+        p_areas: areas.length > 0 ? areas : null,
+        p_min_bedrooms: min,
+        p_max_bedrooms: max,
+      }
+    );
+    if (releasableError) {
+      // Fail OPEN. The realistic failure is code deployed ahead of 0114, and
+      // refusing every filter apply across the platform until somebody noticed
+      // would be far worse than applying one without the give-back offer. Same
+      // argument autoAssignLead makes for `lead_is_closed`.
+      console.error("releasable_filter_assignments failed", releasableError);
+    }
+    const releasable = (releasableError ? [] : releasableRows ?? []) as Array<{
+      assignment_id: string;
+      lead_id: string;
+      postcode_area: string | null;
+      bedrooms: string | null;
+      assigned_at: string;
+    }>;
+
+    const choice: ReleaseChoice | null =
+      body.existing_leads === "keep" || body.existing_leads === "discard"
+        ? body.existing_leads
+        : null;
+
+    if (
+      choice === null &&
+      refundable &&
+      forecast.offerable &&
+      releasable.length > 0
+    ) {
+      return NextResponse.json(
+        {
+          error: "Tell us what to do with the leads you already have.",
+          code: "existing_leads_decision_required",
+          forecast,
+          balance,
+          releasable: releasable.map((r) => ({
+            lead_id: r.lead_id,
+            area: r.postcode_area,
+            bedrooms: r.bedrooms,
+            assigned_at: r.assigned_at,
+          })),
+          count: releasable.length,
+        },
+        { status: 409 }
+      );
+    }
+
     const update: Record<string, unknown> = {
       [c.status]: "active",
       [c.areas]: areas.length > 0 ? areas : null,
@@ -257,10 +350,17 @@ export async function POST(req: NextRequest) {
     // would have been indefensible. Nothing is owed now — a forecast creates no
     // liability — so there is nothing to spare and the exception has gone with
     // the column that tracked it.
-    if (currentStatus === "off") {
+    //
+    // ⚠️ THE CLAMP IS NO LONGER WRITTEN HERE. It moved into
+    // release_unmatched_assignments (0114), under the customer row lock,
+    // because doing it in this update is a blind read-modify-write: `balance`
+    // was read at the top of the request, and any credit an ingest spends in
+    // between is silently handed back. The RPC is called unconditionally on a
+    // fresh enable — even with nothing to release — so the clamp still happens
+    // exactly when it always did.
+    const freshEnable = currentStatus === "off";
+    if (freshEnable) {
       update[c.enabledAt] = new Date().toISOString();
-      const balance = Number(customer[c.balance] ?? 0);
-      update[c.balance] = Math.min(balance, allocation);
     }
 
     const { error } = await admin
@@ -269,6 +369,83 @@ export async function POST(req: NextRequest) {
       .eq("id", customer.id);
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // ---------------------------------------------------------------------
+    // Put the leads back.
+    //
+    // AFTER the update above, never before: the RPC evaluates the filter from
+    // the STORED columns, so calling it first would measure the filter the
+    // customer just replaced.
+    //
+    // This is not a lead-for-lead swap and makes no attempt to be one. The
+    // released leads drop back under their max_assignments cap and are
+    // redistributed by the ordinary machinery — the daily Monday sync and
+    // /api/admin/leads/assign-pending (CLAUDE.md §4: "Banked leads are
+    // inventory, not a backlog"). What the customer gets immediately is a
+    // filter that can actually deliver, and credits to spend on it.
+    let released = 0;
+    const plan = releaseCount({
+      choice: choice ?? "keep",
+      releasableCount: releasable.length,
+      // The clamp is applied inside the RPC; mirror it here so the count is
+      // sized against the same number.
+      balance: freshEnable ? Math.min(balance, allocation) : balance,
+      forecastExpected: forecast.offerable ? forecast.expected : null,
+      forecastOfferable: forecast.offerable,
+      blocked: !refundable,
+    });
+
+    if (plan.count > 0 || freshEnable) {
+      const { data: releasedCount, error: releaseError } = await admin.rpc(
+        "release_unmatched_assignments",
+        {
+          p_customer_id: customer.id,
+          p_lead_type: product,
+          p_max: plan.count,
+          p_mode: plan.mode,
+          p_clamp_to_allocation: freshEnable,
+        }
+      );
+      if (releaseError) {
+        // The filter is applied and live either way. Logged and swallowed so a
+        // failure to give leads back never fails the apply itself; the
+        // customer can re-apply to retry the give-back.
+        console.error("release_unmatched_assignments failed", releaseError);
+
+        // ⚠️ The clamp lives inside that RPC now, so a failure here would
+        // silently stop clamping a fresh enable — including for the whole
+        // window where this code is deployed ahead of 0114. Fall back to the
+        // write this route did before the RPC existed. It is the blind
+        // read-modify-write the RPC was meant to replace, but it is exactly
+        // what shipped previously, so the failure path is no worse than today.
+        if (freshEnable) {
+          const { error: clampError } = await admin
+            .from("customers")
+            .update({ [c.balance]: Math.min(balance, allocation) })
+            .eq("id", customer.id);
+          if (clampError) {
+            console.error("filter balance clamp fallback failed", clampError);
+          }
+        }
+      } else {
+        released = Number(releasedCount ?? 0);
+      }
+    }
+
+    if (released > 0) {
+      const { error: notifyError } = await admin.from("notifications").insert({
+        customer_id: customer.id,
+        notification_type: "filter_leads_released",
+        message:
+          `${released} lead${released === 1 ? "" : "s"} you hadn't opened ` +
+          `${released === 1 ? "has" : "have"} gone back into the pool, and ` +
+          `${released === 1 ? "its credit is" : "their credits are"} back on ` +
+          `your account. You'll now be matched to leads on your filter as they come in.`,
+      });
+      if (notifyError) {
+        console.error("filter release notification failed", notifyError);
+      }
     }
 
     // History, best-effort. "You told me four a month" is worth being able to
@@ -298,7 +475,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, status: "active", forecast });
+    return NextResponse.json({
+      ok: true,
+      status: "active",
+      forecast,
+      released,
+      refunded: released,
+    });
   }
 
   if (body.action === "lift") {
