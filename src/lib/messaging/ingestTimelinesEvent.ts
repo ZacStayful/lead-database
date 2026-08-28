@@ -20,6 +20,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret, timelinesTokenAad } from "@/lib/crypto/secretBox";
 import { getMessage, mapStatus } from "./timelines";
 import { normalisePhone, resolveWebhookIdentity } from "./whatsappIdentity";
+import { findOrCreateWhatsappThread } from "./threads";
 
 type Admin = SupabaseClient;
 
@@ -48,7 +49,7 @@ export type IngestOutcome =
   /** Written, or already present from our own send. */
   | { outcome: "stored"; direction: "inbound" | "outbound" }
   /** Deliberately not ours to keep. Terminal — never retried. */
-  | { outcome: "dropped"; reason: "not_dialable" | "no_matching_lead" | "no_thread" }
+  | { outcome: "dropped"; reason: "not_dialable" | "no_matching_lead" }
   /** OUR failure, not a verdict about the event. Retryable. */
   | { outcome: "deferred"; reason: string };
 
@@ -103,7 +104,9 @@ export async function ingestTimelinesEvent(
   });
 
   const key = normalisePhone(rawPhone);
-  if (!key) {
+  // Both, so `rawPhone` narrows to a string below. A key without a raw number
+  // is not reachable, but saying so here beats a cast further down.
+  if (!rawPhone || !key) {
     // Logged, because a silent 200 is what made this invisible: twenty events
     // arrived, every one was discarded, and nothing anywhere said so.
     console.warn("[timelines/ingest] dropped: not_dialable", { claimId: p.claimId });
@@ -146,32 +149,22 @@ export async function ingestTimelinesEvent(
   const assignmentId = hit.id;
   const leadId = hit.lead_id;
 
-  // Thread per (customer, channel, counterparty).
-  const { data: existingThread } = await admin
-    .from("lead_message_threads")
-    .select("id")
-    .eq("customer_id", p.customerId)
-    .eq("channel", "whatsapp")
-    .eq("counterparty_phone", rawPhone)
-    .maybeSingle();
+  // Thread per (customer, channel, counterparty), matched on the NORMALISED
+  // key — see threads.ts for why looking it up by the raw string discarded
+  // every reply on a number we had already messaged.
+  const threadId = await findOrCreateWhatsappThread(admin, {
+    customerId: p.customerId,
+    assignmentId,
+    leadId,
+    rawPhone,
+    phoneKey: key,
+    providerChatId: p.payload.chat?.chat_id ? String(p.payload.chat.chat_id) : null,
+  });
 
-  let threadId = (existingThread as { id: string } | null)?.id ?? null;
-  if (!threadId) {
-    const { data: made } = await admin
-      .from("lead_message_threads")
-      .insert({
-        customer_id: p.customerId,
-        assignment_id: assignmentId,
-        lead_id: leadId,
-        channel: "whatsapp",
-        counterparty_phone: rawPhone,
-        provider_chat_id: p.payload.chat?.chat_id ? String(p.payload.chat.chat_id) : null,
-      })
-      .select("id")
-      .maybeSingle();
-    threadId = (made as { id: string } | null)?.id ?? null;
-  }
-  if (!threadId) return { outcome: "dropped", reason: "no_thread" };
+  // ⚠️ DEFERRED, NOT DROPPED. Failing to make a thread is OUR failure, and a
+  // dropped event is never looked at again — that is a verdict reserved for an
+  // event genuinely not ours to keep.
+  if (!threadId) return { outcome: "deferred", reason: "no_thread" };
 
   const occurred =
     verified.data.timestamp ?? p.payload.message?.timestamp ?? new Date().toISOString();

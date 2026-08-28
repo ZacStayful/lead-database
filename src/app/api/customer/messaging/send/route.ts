@@ -37,8 +37,9 @@ import {
 } from "@/lib/messaging/service";
 import { sendEmail } from "@/lib/messaging/resend";
 import { sendMessage as sendWhatsapp } from "@/lib/messaging/timelines";
-import { toE164 } from "@/lib/messaging/whatsappIdentity";
+import { toE164, normalisePhone } from "@/lib/messaging/whatsappIdentity";
 import { normaliseUkMobile } from "@/lib/leadQuality";
+import { findOrCreateWhatsappThread } from "@/lib/messaging/threads";
 import {
   renderOperatorHtml,
   sanitiseHeaderValue,
@@ -240,44 +241,75 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ---- Thread -------------------------------------------------------------
-  const threadMatch =
-    channel === "email"
-      ? { counterparty_email: recipient.toLowerCase() }
-      : { counterparty_phone: recipient };
+  let newThread = false;
 
+  // ---- Thread -------------------------------------------------------------
+  //
+  // ⚠️ WHATSAPP MATCHES ON THE NORMALISED KEY, NOT THE RAW STRING. The unique
+  // index is (customer_id, counterparty_phone_norm); looking a thread up by the
+  // raw phone means the send path and the inbound webhook — which sees the same
+  // number in international form — miss each other's threads and then collide
+  // on insert. That is what discarded every reply (see threads.ts). This path
+  // got away with it only because it always uses the lead's stored phone.
   let threadId: string | null = null;
-  {
-    const q = admin
+
+  if (channel === "email") {
+    const { data: found } = await admin
       .from("lead_message_threads")
       .select("id")
       .eq("customer_id", customer.id)
-      .eq("channel", channel);
-    const { data: found } = await (channel === "email"
-      ? q.eq("counterparty_email", recipient.toLowerCase())
-      : q.eq("counterparty_phone", recipient)
-    ).maybeSingle();
-    threadId = (found as { id: string } | null)?.id ?? null;
-  }
-
-  if (!threadId) {
-    const { data: made, error: threadErr } = await admin
-      .from("lead_message_threads")
-      .insert({
-        customer_id: customer.id,
-        assignment_id: a.id,
-        lead_id: a.lead_id,
-        channel,
-        ...threadMatch,
-      })
-      .select("id")
+      .eq("channel", "email")
+      .eq("counterparty_email", recipient.toLowerCase())
       .maybeSingle();
-    if (threadErr || !made) {
-      console.error("[messaging/send] thread create failed", threadErr);
+    threadId = (found as { id: string } | null)?.id ?? null;
+
+    if (!threadId) {
+      const { data: made, error: threadErr } = await admin
+        .from("lead_message_threads")
+        .insert({
+          customer_id: customer.id,
+          assignment_id: a.id,
+          lead_id: a.lead_id,
+          channel: "email",
+          counterparty_email: recipient.toLowerCase(),
+        })
+        .select("id")
+        .maybeSingle();
+      if (threadErr || !made) {
+        console.error("[messaging/send] thread create failed", threadErr);
+        return NextResponse.json({ error: "Could not start the conversation." }, { status: 500 });
+      }
+      threadId = (made as { id: string }).id;
+      newThread = true;
+    }
+  } else {
+    const phoneKey = normalisePhone(recipient);
+    if (!phoneKey) {
+      return NextResponse.json({ error: "That lead has no usable phone number." }, { status: 409 });
+    }
+    const before = await admin
+      .from("lead_message_threads")
+      .select("id")
+      .eq("customer_id", customer.id)
+      .eq("channel", "whatsapp")
+      .eq("counterparty_phone_norm", phoneKey)
+      .maybeSingle();
+    const existed = Boolean((before.data as { id: string } | null)?.id);
+
+    threadId = await findOrCreateWhatsappThread(admin, {
+      customerId: customer.id,
+      assignmentId: a.id,
+      leadId: a.lead_id,
+      rawPhone: recipient,
+      phoneKey,
+    });
+    if (!threadId) {
       return NextResponse.json({ error: "Could not start the conversation." }, { status: 500 });
     }
-    threadId = (made as { id: string }).id;
+    newThread = !existed;
+  }
 
+  if (newThread) {
     // The reply-address token is minted once per thread and stored, so the
     // address a landlord replies to never changes underneath them.
     const token = mintThreadToken(threadId);

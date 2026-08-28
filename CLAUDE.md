@@ -6413,6 +6413,36 @@ Three things changed so this class of bug is visible next time:
   failure path ever wrote it, so every row read `true` whatever happened. The
   claim now inserts `false` and the read-back promotes it.
 
+#### ⚠️ And a SECOND bug, in the same path: the thread key
+
+Fixing the identity resolution was not enough — replies still vanished. The
+payload, once it was finally being stored, showed why: `chat.phone` had been
+there all along (`447788643769`), so the `not_dialable` theory was wrong. The
+events were dying one step later.
+
+`lead_message_threads` is UNIQUE on `(customer_id, counterparty_phone_norm)` —
+a generated `normalised_phone(counterparty_phone)`. Both call sites looked the
+thread up by the **raw string**. The send path stores what the lead's row holds
+(`07788643769`); an inbound webhook carries the same number as
+`+447788643769`. Different strings, same key — so the lookup missed, the insert
+then violated the unique index, and the event was discarded for having no
+thread. **Every reply on a number we had already messaged died there**, which is
+every reply worth having.
+
+`findOrCreateWhatsappThread()` in `threads.ts` is now the one definition, used
+by the send route and the webhook ingest, matching on the key the constraint
+uses and re-reading on 23505 — which also closes the genuine race between two
+events arriving together. The send path had the same bug latently and only got
+away with it because it always uses the lead's stored phone.
+
+`no_thread` also stopped being a `dropped` reason. Failing to create a thread is
+OUR failure, and `dropped` is terminal — that verdict is reserved for an event
+genuinely not ours to keep.
+
+⚠️ The lesson is the one this file keeps recording (§23.10, §25, §27.8): each
+piece was tested and the seam was not. Here there were two seams in nine lines,
+and fixing the first one made the second one the whole problem.
+
 #### The recovery pass *(0119)*
 
 An event we could not read back inside the 3-second budget used to be lost for
