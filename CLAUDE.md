@@ -7257,3 +7257,162 @@ Send one to yourself before enabling it for anybody.
 0122 first. Additive, and every default preserves today's behaviour: `mode`
 defaults to `'ai'`, so a step written before it applies keeps behaving exactly
 as it does. The admin page needs no migration at all and shipped ahead of it.
+
+### 40.15 — Sending with no connection at all: the wa.me hand-off *(0123, 0124)*
+
+§40.1 put the WhatsApp connection in the customer's hands deliberately. The bill
+for that decision is visible in production: **one of twenty-one active customers
+has a connected workspace.** For the other twenty, "Send WhatsApp" opened a modal
+that said *a TimelinesAI account (from $25 a month), one token pasted, roughly
+five minutes* — and then offered Cancel or Begin setup. Nothing was ever sent.
+
+The engagement table says the same thing from the other side. Across the whole
+book: **612 `detail_opened`, 10 `tel_click`, 2 `mailto_click`, 3 `message_sent`.**
+Operators open a lead sixty times for every time they act on one.
+
+So this adds a third way out of that modal. Compose the message here — the
+existing **Generate a draft** works, because that route never required a
+connection — then hand it to the operator's own WhatsApp through a `wa.me` deep
+link. The link carries who to message and what to say and nothing else, so their
+app opens with the text in the box and pressing send sends from **their** number.
+No account, no token, no fee, nothing to configure, and Stayful's number never
+appears in the conversation.
+
+It is the floor, not a replacement. The connected path keeps replies, delivery
+status, sequences and mass messaging; the modal says so in those words, and
+**Begin setup stays the primary action** until the operator explicitly chooses the
+hand-off, at which point the two swap emphasis rather than the upsell vanishing.
+
+#### ⚠️ A tap is a click, not a send
+
+The link leaves the browser and nothing comes back — no provider id, no receipt,
+no reply. So it is **not** `message_sent`, and it writes **no `lead_messages`
+row**: every status in that table is a delivery claim, and one we cannot observe
+would corrupt the thread view, the poller and the reporting joins.
+
+0117 already settled the shape of this argument — *"a customer able to POST it
+could shield every lead they hold"* — and the honest precedent is already in
+`CLIENT_LEAD_EVENT_TYPES`. `tel_click` is an attempt to ring, not proof of a
+call; a `wa.me` tap is the same kind of fact. Hence `whatsapp_click`, weighted
+**0.50**, reported through `POST /api/customer/events` like the other two.
+
+That route is also why **no new endpoint exists for this**. It is already the
+only way to write `lead_events`, and it already carries the ownership 404, the
+60-second dedupe and the 600/hour cap — so a double-tap costs nothing.
+
+On the weight: the obvious reading is 0.30, because `mailto_click` sits there
+precisely for opening a client "with no guarantee anything was sent", and on that
+test a hand-off is identical. It is 0.50 because of what it now **does**: it flips
+the assignment to contacted, and both signals already trusted to do that are
+≥ 0.50. A signal that marks a lead contacted while scoring below one that does
+not would make that table disagree with itself.
+
+#### ⚠️ Two limits it escapes, and one of them matters
+
+Every send limit counts rows in `lead_messages`, so a hand-off is invisible to
+all four. Quiet hours is the harmless half — the advisory notice is shown and
+nothing blocks.
+
+The **8-hour cross-operator cooldown** is the real cost: two operators holding
+the same landlord can now both message them the same day, which is exactly what
+§40.12 exists to prevent. Accepted deliberately. The alternative is letting a
+click feed the cooldown, and then one operator can block another for eight hours
+by tapping and never sending — including by accident, by opening the draft and
+changing their mind — while §19.7 forbids the block explaining itself, so the
+blocked operator would see a refusal for something that never happened. Stated
+here rather than discovered later; it is also an honest reason to connect.
+
+#### ⚠️ A click is contact, and that has three consequences
+
+`whatsapp_click` joins the `lead_events_mark_contacted` trigger, and 0124 puts it
+in every list that asks "has this operator done anything with this lead". So one
+tap:
+
+- flips the assignment to `contacted`, which makes it **undiscardable** — discard
+  requires `status = 'new'`. 0118 recorded the same consequence for
+  `message_sent`, and §5E records it as unresolved for `tel_click`;
+- takes it out of **`get_reclaim_candidates`**, so it is no longer taken back;
+- counts it as **worked** and resets the customer's `quiet_days`.
+
+One tap per lead is therefore enough to make a whole book look worked. That is
+the accepted price of treating a tap as contact, and the 0.50/0.60 gap to
+`message_sent` is what still separates it from a message with a provider id.
+
+#### ⚠️ TWELVE functions hard-code the event list, not the four §40.7 describes
+
+§40.7 says a new engagement signal needs adding in four places. That is true of
+`get_assignment_engagement_scores` alone and was read as the whole job. An audit
+of `pg_get_functiondef` on production found **27 mentions of `tel_click` across
+12 functions**: `get_assignment_engagement_scores` (7),
+`capture_engagement_snapshots` (4), `get_engagement_benchmarks` (3),
+`get_customer_risk`, `get_customer_scoreboard`, `get_paused_customer_facts`,
+`get_service_capacity` (2 each), and `get_customer_engagement_scores`,
+`get_lead_outcome_report`, `get_outcome_evidence`, `get_reclaim_candidates`,
+`lead_last_activity_at` (1 each).
+
+Two idioms run through them and the new signal belongs to both:
+`('detail_opened', 'tel_click', 'mailto_click')` is ANY activity;
+`('tel_click', 'mailto_click')` is a real CONTACT ATTEMPT.
+
+**The bodies in 0124 are production's, not the original migrations'.**
+`supabase/schema.sql` is stale (§459) and several had been revised in place, so
+each was taken from `pg_get_functiondef` and re-stated with the token added —
+which also makes the migration chain converge on what production actually runs.
+
+#### ⚠️ No backfill, and the step it leaves in the charts
+
+The signal counts from deployment forward only. No historical `lead_events` row
+is invented and no `customer_engagement_snapshots` row is rewritten, so nobody's
+score, risk band or reclaim status changes retroactively.
+
+The cost is a discontinuity on the deployment date: assignments after it can
+carry a signal earlier ones could not, so `worked_rate`, `contact_rate` and the
+benchmark series step upward for a reason that is not a change in operator
+behaviour. Do not read that step as one.
+
+### Verification
+
+`normaliseUkMobile` (§36) is the normaliser, **not** `toE164` — the latter is the
+loose 0070 identity rule, and §40.9A records what happened last time the send
+path used the wrong one. Ported into SQL and run over all 449 live leads:
+**410 UK mobiles + 22 foreign = 432 (96.2%) produce a working link**; 17 do not
+(11 landlines, 4 missing, 2 placeholders). Of the 188 currently held, **183
+(97.3%)**. The ~20% of rows stored as `+44` followed by a national trunk zero are
+the case that would silently have produced dead links; `leadQuality.ts:131` is
+the line that saves them, and there is a test named for it.
+
+**24 cases on the hand-off module**, built from the shapes the database actually
+holds rather than invented ones, plus the encoding half — line breaks, an
+ampersand that would otherwise truncate the message, apostrophes, accents and
+emoji all surviving the round trip — and the ceiling refusing rather than
+truncating, because half a sentence sent from the operator's own number is worse
+than a refusal. **871 vitest cases green**, lint clean, `next build` passes.
+
+Every one of the 12 rewritten bodies was verified byte-for-byte against
+production before the migration was considered done: ten hash-identical to
+`pg_get_functiondef` with the token inserted, `get_engagement_benchmarks`
+differing only by the stale comment corrected in it, and
+`get_assignment_engagement_scores` reducing exactly to the original when its four
+structural additions are stripped.
+
+0123 and 0124 were rehearsed inside a transaction on production and rolled back,
+including calling the rewritten scorer against 50 real assignments — the
+constraint, weight row, trigger and function were all confirmed absent
+afterwards. **Supabase branching needs the Pro plan and this project is on Free**,
+which is why the rehearsal was transactional rather than on a branch.
+
+**Not yet exercised:** a real handset. Open a lead with a real mobile on iOS and
+on Android, tap through, and confirm WhatsApp opens with the whole message —
+line breaks and all — and that it arrives from the operator's number and not
+Stayful's. Also unexercised: the three consequences above observed on live data
+rather than reasoned from the SQL.
+
+**Record the go-live date here when 0123/0124 are applied**, so a later reader
+can date the step in the benchmark series rather than puzzle over it.
+
+### Deployment order — migrations BEFORE code, and 0123 BEFORE 0124
+
+0123 first, and it is inert on its own: it adds the event type, the weight and
+the trigger arm, but nothing emits the event until the UI ships. 0124 is the half
+that changes behaviour — reclaim eligibility and engagement scoring — and is
+split out for exactly that reason. Code last.

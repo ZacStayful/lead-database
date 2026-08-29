@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import type { ChannelAvailability, MessageChannel } from "@/lib/messaging/types";
 import { TIMELINES_SETUP_VIDEO_URL } from "@/lib/messaging/timelines";
+import { handoffDigits, whatsappHandoffLink } from "@/lib/messaging/handoff";
 
 interface ThreadMessage {
   id: string;
@@ -104,11 +105,14 @@ export function LeadMessageButtons({
   assignmentId,
   leadId,
   leadName,
+  leadPhone,
   channels,
 }: {
   assignmentId: string;
   leadId: string;
   leadName: string;
+  /** The lead's stored phone, for the §40.15 hand-off. Free text from Monday. */
+  leadPhone?: string | null;
   channels: ChannelAvailability[];
 }) {
   const [open, setOpen] = useState<MessageChannel | null>(null);
@@ -128,6 +132,7 @@ export function LeadMessageButtons({
           assignmentId={assignmentId}
           leadId={leadId}
           leadName={leadName}
+          leadPhone={leadPhone}
           open={open === c.channel}
           onOpenChange={(v) => setOpen(v ? c.channel : null)}
         />
@@ -191,6 +196,7 @@ function MessageDialog({
   assignmentId,
   leadId,
   leadName,
+  leadPhone,
   open,
   onOpenChange,
 }: {
@@ -198,6 +204,7 @@ function MessageDialog({
   assignmentId: string;
   leadId: string;
   leadName: string;
+  leadPhone?: string | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
@@ -214,6 +221,43 @@ function MessageDialog({
   const [drafting, setDrafting] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState<string | null>(null);
+
+  /**
+   * §40.15 — the free path out of the unconnected modal. Off until they ask for
+   * it, because Begin setup is still the better answer and offering both at
+   * once would bury it.
+   */
+  const [handoffMode, setHandoffMode] = useState(false);
+
+  // Whether a hand-off is possible AT ALL for this lead: a landline or a
+  // placeholder has nothing to open. Independent of what they have typed.
+  const handoffPossible =
+    channel === "whatsapp" && handoffDigits(leadPhone) !== null;
+
+  // The link for what is currently in the box. Null while it is empty or over
+  // the ceiling, which is what disables the action.
+  const handoffLink = handoffMode ? whatsappHandoffLink(leadPhone, bodyText) : null;
+
+  /**
+   * Record the tap as whatsapp_click and forget it.
+   *
+   * ⚠️ NOT message_sent — 0117's rule, and the reason this goes through the
+   * ordinary client-events door rather than the messaging routes: the browser is
+   * the only witness, nothing comes back, and a customer able to POST
+   * message_sent could shield every lead they hold. That route already carries
+   * the ownership check, the 60-second dedupe and the hourly cap, so a
+   * double-tap costs nothing and a lost event never interrupts the send.
+   */
+  function recordHandoff() {
+    void fetch("/api/customer/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        assignment_id: assignmentId,
+        event_type: "whatsapp_click",
+      }),
+    }).catch(() => {});
+  }
 
   const loadThread = useCallback(async () => {
     try {
@@ -397,11 +441,48 @@ function MessageDialog({
                 </>
               )}
             </div>
+
+            {/*
+              §40.15 — the third way out of this modal.
+
+              Until now it ended in Cancel or Begin setup, and for the twenty of
+              twenty-one active customers with no TimelinesAI workspace that
+              meant nothing was ever sent. This offers the free floor instead: a
+              wa.me link that opens their OWN WhatsApp with the message already
+              written.
+
+              Deliberately stated with what it COSTS them, not just what it
+              gives. Overselling the free path would lose the upgrade, and §19.7
+              is the rule that copy is part of the mechanism.
+            */}
+            {channel === "whatsapp" && handoffPossible && !handoffMode && (
+              <div className="rounded-md border p-4">
+                <p className="text-sm font-medium">Or send it from your phone now</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Free, and nothing to set up. We will write the message here and
+                  open it in your own WhatsApp, ready to send.
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Replies go to your phone rather than back into this lead, and
+                  you will not see delivery or read receipts here.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => setHandoffMode(true)}
+                >
+                  <MessageCircle className="mr-2 h-4 w-4" />
+                  Write it here
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
-        {/* STATE: ready to compose. */}
-        {sendable && connected && (
+        {/* STATE: ready to compose — connected, or handing off to their phone. */}
+        {sendable && (connected || handoffMode) && (
           <div className="space-y-3">
             {channel === "email" && (
               <div className="space-y-1">
@@ -475,7 +556,7 @@ function MessageDialog({
             Cancel
           </Button>
 
-          {sendable && !connected && channel === "whatsapp" && (
+          {sendable && !connected && channel === "whatsapp" && !handoffMode && (
             <Button variant="ghost" asChild>
               <a href={TIMELINES_SETUP_VIDEO_URL} target="_blank" rel="noreferrer">
                 <PlayCircle className="mr-2 h-4 w-4" />
@@ -484,11 +565,54 @@ function MessageDialog({
             </Button>
           )}
 
+          {/*
+            Begin setup stays, and stays PRIMARY until they have chosen the
+            hand-off. Once they have, the thing they asked for becomes the
+            primary action and this steps back to outline — the upsell is still
+            on screen, it has just stopped competing with what they are doing.
+          */}
           {sendable && !connected && (
-            <Button onClick={() => router.push(setupHref)}>
+            <Button
+              variant={handoffMode ? "outline" : "default"}
+              onClick={() => router.push(setupHref)}
+            >
               {setupStarted ? "Continue setup" : "Begin setup"}
               <ExternalLink className="ml-2 h-4 w-4" />
             </Button>
+          )}
+
+          {/*
+            ⚠️ AN ANCHOR, NOT A FETCH. The whole point is that the message leaves
+            from THEIR WhatsApp and their number — nothing is sent from here, so
+            there is nothing to await and no failure to report. The event is
+            fired and forgotten alongside it.
+          */}
+          {sendable && !connected && handoffMode && (
+            handoffLink ? (
+              <Button asChild>
+                <a
+                  href={handoffLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={recordHandoff}
+                >
+                  <MessageCircle className="mr-2 h-4 w-4" />
+                  Open WhatsApp
+                </a>
+              </Button>
+            ) : (
+              <Button
+                disabled
+                title={
+                  bodyText.trim().length === 0
+                    ? "Write a message first."
+                    : "That message is too long to hand to WhatsApp."
+                }
+              >
+                <MessageCircle className="mr-2 h-4 w-4" />
+                Open WhatsApp
+              </Button>
+            )
           )}
 
           {sendable && connected && (
