@@ -24,6 +24,7 @@ export default async function AdminLayout({
     { href: "/admin/offers", label: "Offers" },
     { href: "/admin/training", label: "Training" },
     { href: "/admin/announcements", label: "Announcements" },
+    { href: "/admin/messaging", label: "Messaging" },
     { href: "/admin/api", label: "API" },
     { href: "/dashboard", label: "Customer portal" },
   ];
