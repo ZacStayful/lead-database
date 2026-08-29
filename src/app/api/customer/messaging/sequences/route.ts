@@ -26,7 +26,7 @@ export async function GET() {
       .from("message_sequences")
       .select(
         "id, name, lead_type, channel, trigger, is_active, created_at, " +
-          "message_sequence_steps(step_number, delay_days, brief)"
+          "message_sequence_steps(step_number, delay_days, brief, mode, body_template)"
       )
       .eq("customer_id", customer.id)
       .is("archived_at", null)
@@ -94,11 +94,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const verdict = validateSequenceInput(body);
-  if (!verdict.ok) return NextResponse.json({ error: verdict.error }, { status: 400 });
-
+  // The booking link is read HERE and passed in, so sequenceInput.ts stays pure
+  // and the create and update routes cannot disagree about whether
+  // {{booking_link}} is usable.
   const leadType =
     body.lead_type === "guaranteed_rent" ? "guaranteed_rent" : "management";
+
+  const verdict = validateSequenceInput({
+    ...body,
+    hasBookingLink: Boolean(customer.messaging_booking_link),
+    leadType,
+  });
+  if (!verdict.ok) return NextResponse.json({ error: verdict.error }, { status: 400 });
+
   const trigger = body.trigger === "on_assignment" ? "on_assignment" : "manual";
 
   const { data: created, error } = await admin
@@ -138,6 +146,8 @@ export async function POST(request: NextRequest) {
       step_number: i + 1,
       delay_days: s.delay_days,
       brief: s.brief,
+      mode: s.mode,
+      body_template: s.body_template,
     }))
   );
 

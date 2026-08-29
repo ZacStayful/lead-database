@@ -19,9 +19,11 @@ import { SequenceBuilder, type SequenceView } from "./SequenceBuilder";
 export function SequencePanel({
   sequences,
   hasBothProducts,
+  hasBookingLink,
 }: {
   sequences: SequenceView[];
   hasBothProducts: boolean;
+  hasBookingLink: boolean;
 }) {
   const router = useRouter();
   const [creating, setCreating] = useState(sequences.length === 0);
@@ -52,6 +54,7 @@ export function SequencePanel({
             key={s.id}
             existing={s}
             hasBothProducts={hasBothProducts}
+            hasBookingLink={hasBookingLink}
             onDone={() => setEditing(null)}
           />
         ) : (
@@ -79,7 +82,11 @@ export function SequencePanel({
                       ? "Straight away"
                       : `After ${step.delay_days} day${step.delay_days === 1 ? "" : "s"}`}
                   </span>
-                  {step.brief ? ` — ${step.brief}` : ""}
+                  {step.mode === "manual"
+                    ? " — your own words"
+                    : step.brief
+                      ? ` — ${step.brief}`
+                      : ""}
                 </li>
               ))}
             </ol>
@@ -127,6 +134,7 @@ export function SequencePanel({
       {creating ? (
         <SequenceBuilder
           hasBothProducts={hasBothProducts}
+          hasBookingLink={hasBookingLink}
           onDone={sequences.length === 0 ? undefined : () => setCreating(false)}
         />
       ) : (

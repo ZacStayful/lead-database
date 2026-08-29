@@ -183,6 +183,16 @@ export interface Customer {
    * silence the prompt about terms the operator has never reviewed.
    */
   presentation_brand_updated_at: string | null;
+  /**
+   * The operator's own booking/calendar URL, inserted into a hand-written
+   * follow-up as {{booking_link}} (§40.14, 0122).
+   *
+   * ⚠️ It is the ONLY way a link can reach a templated message. validateTemplate
+   * refuses a typed URL, because a link in a cold WhatsApp is the strongest
+   * spam signal there is and the number at risk belongs to the operator — so
+   * one stored, checked link is offered instead of forty pasted ones.
+   */
+  messaging_booking_link: string | null;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).

@@ -42,11 +42,13 @@ import {
   isDraftingConfigured,
 } from "@/lib/messaging/draftMessage";
 import {
+  advanceRun,
   loadSteps,
   sequenceSettings,
   stopRun,
 } from "@/lib/messaging/sequences";
 import { nextStepNumber } from "@/lib/messaging/cadence";
+import { renderTemplate } from "@/lib/messaging/mergeFields";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -110,11 +112,15 @@ async function handle(request: NextRequest) {
   if (!settings.enabled) {
     return NextResponse.json({ ok: true, skipped: "sequences_disabled" });
   }
-  if (!isDraftingConfigured()) {
-    // Logged rather than silent: a missing key here means every ladder in the
-    // business quietly stops advancing, which nothing else would report.
-    console.error("[draft-sequence-messages] ANTHROPIC_API_KEY is not set");
-    return NextResponse.json({ ok: true, skipped: "drafting_not_configured" });
+  // ⚠️ NOT AN EARLY RETURN ANY MORE. A hand-written step needs no model at all,
+  // so a missing key must stop the AI steps and let the manual ones through —
+  // otherwise one absent env var silently freezes every ladder in the business,
+  // including the ones that never needed a model.
+  const modelAvailable = isDraftingConfigured();
+  if (!modelAvailable) {
+    console.error(
+      "[draft-sequence-messages] ANTHROPIC_API_KEY is not set — AI steps will be skipped, hand-written steps still send"
+    );
   }
 
   const now = new Date();
@@ -158,6 +164,9 @@ async function handle(request: NextRequest) {
     stopped: 0,
     rejected: 0,
     capped: 0,
+    manual: 0,
+    /** Leads a hand-written step could not reach — a field they have no value for. */
+    missingField: 0,
   };
 
   // ⚠️ THE DAILY CEILING IS PER CUSTOMER AND COUNTS origin = 'sequence' ONLY
@@ -271,9 +280,98 @@ async function handle(request: NextRequest) {
 
     const { data: customerRow } = await admin
       .from("customers")
-      .select("business_name, contact_name")
+      .select("business_name, contact_name, messaging_booking_link")
       .eq("id", run.customer_id)
       .maybeSingle();
+
+    const operator = (customerRow ?? {}) as {
+      business_name?: string | null;
+      contact_name?: string | null;
+      messaging_booking_link?: string | null;
+    };
+
+    // ⚠️ viewerScopedLead FIRST, and it matters more here than anywhere. On a
+    // resold imported lead, lead_profile holds the UPLOADING operator's private
+    // working notes — margins, "will take 12%, spoke to Dave". The interactive
+    // route scopes one lead at a time because a person asked for it; this scopes
+    // two hundred without anybody watching.
+    const scoped = viewerScopedLead(
+      assignment.lead as never,
+      run.customer_id
+    ) as unknown as Record<string, unknown>;
+
+    // ---- The one place the two kinds of step diverge -----------------------
+    //
+    // A hand-written step is rendered here rather than at send time, and that
+    // is deliberate: it costs nothing and needs no model, so rendering later
+    // would be tempting — and it would take the message out of the REVIEW
+    // QUEUE, which is the consent the whole design rests on (§40.13). Drafting
+    // it now also means the operator reads the resolved text, with the real
+    // name in it, rather than their own template.
+    if (step?.mode === "manual") {
+      const rendered = renderTemplate(step.body_template ?? "", {
+        lead: scoped as never,
+        customer: operator,
+      });
+
+      if (!rendered.ok) {
+        // ⚠️ SKIP THE LEAD, NEVER SEND A MESSAGE WITH A HOLE IN IT. "Hi , about
+        // your place at ?" would go from a real person's number to a member of
+        // the public. The operator was told the reach before they saved
+        // (fieldCoverage), so this is the outcome they chose rather than a
+        // surprise — and the run ADVANCES, because the next step may not need
+        // the field this one did.
+        await admin.from("message_sequence_drafts").insert({
+          run_id: run.id,
+          customer_id: run.customer_id,
+          step_number: stepNumber,
+          body: step.body_template ?? "",
+          state: "skipped",
+          skip_reason: `missing_field:${rendered.missing.join(",")}`,
+          send_after: now.toISOString(),
+        });
+        await advanceRun(admin, {
+          runId: run.id,
+          sequenceId: run.sequence_id,
+          completedStep: stepNumber,
+          sentAt: now,
+        });
+        stats.missingField += 1;
+        continue;
+      }
+
+      const sendAfterManual = new Date(
+        Math.max(new Date(run.next_due_at).getTime(), now.getTime())
+      );
+      const { error: manualErr } = await admin.from("message_sequence_drafts").insert({
+        run_id: run.id,
+        customer_id: run.customer_id,
+        step_number: stepNumber,
+        body: rendered.text,
+        // No model, so no ledger row: message_draft_requests is the MODEL's
+        // ledger and its rate limits are about model spend.
+        draft_id: null,
+        state: "pending",
+        send_after: sendAfterManual.toISOString(),
+      });
+      if (manualErr) {
+        if ((manualErr as { code?: string }).code === "23505") {
+          stats.alreadyDrafted += 1;
+        } else {
+          console.error("[draft-sequence-messages] manual queue insert failed", manualErr);
+          stats.rejected += 1;
+        }
+        continue;
+      }
+      stats.manual += 1;
+      continue;
+    }
+
+    // ---- Everything below is the AI path ----------------------------------
+    if (!modelAvailable) {
+      stats.rejected += 1;
+      continue;
+    }
 
     // What has already gone to this landlord, so the model does not repeat
     // itself or start over. Outbound only: an inbound reply STOPS the run, so
@@ -314,21 +412,11 @@ async function handle(request: NextRequest) {
       };
     }
 
-    // ⚠️ viewerScopedLead FIRST, and it matters more here than anywhere. On a
-    // resold imported lead, lead_profile holds the UPLOADING operator's private
-    // working notes — margins, "will take 12%, spoke to Dave". The interactive
-    // route scopes one lead at a time because a person asked for it; this scopes
-    // two hundred without anybody watching.
-    const scoped = viewerScopedLead(
-      assignment.lead as never,
-      run.customer_id
-    ) as unknown as Record<string, unknown>;
-
     const ctx = buildDraftContext({
       lead: scoped,
       customer: {
-        business_name: (customerRow as { business_name?: string } | null)?.business_name ?? null,
-        contact_name: (customerRow as { contact_name?: string } | null)?.contact_name ?? null,
+        business_name: operator.business_name ?? null,
+        contact_name: operator.contact_name ?? null,
       },
       step: stepContext,
     });

@@ -175,7 +175,11 @@ export default async function FollowUpsPage() {
 
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Your sequences</h2>
-        <SequencePanel sequences={sequences} hasBothProducts={hasBothProducts} />
+        <SequencePanel
+          sequences={sequences}
+          hasBothProducts={hasBothProducts}
+          hasBookingLink={Boolean(customer.messaging_booking_link)}
+        />
       </section>
     </div>
   );

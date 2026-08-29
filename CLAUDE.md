@@ -7073,3 +7073,187 @@ and for a sharper reason: what it gates sends unattended messages from a real
 person's own number to members of the public. `ANTHROPIC_API_KEY` must be set in
 Vercel **and the project redeployed** — env vars are baked in at build time,
 which is the trap §40's own verification section already records.
+
+---
+
+### 40.14 — The switches, and writing the message yourself *(0122)*
+
+Two things that came out of using §40.13 for a day.
+
+#### The switches had no UI at all
+
+`messaging_sequences_enabled` ships `false`, and the only way to change it was
+SQL against production. Every messaging setting was in the same state:
+`messaging_enabled`, the email channel, quiet hours, the cross-operator
+cooldown, the TimelinesAI ceiling and the two sequence limits. `/admin/api` had
+had a proper kill switch since §27; messaging had nothing. **A kill switch
+nobody can reach is not a kill switch.**
+
+`/admin/messaging` now holds all nine, on `ApiKillSwitch`'s shape: switching OFF
+confirms inline and names what stops, switching on does not, because restoring
+service is not something anybody needs protecting from.
+
+⚠️ **THE KEY COMES FROM AN ALLOW-LIST, NEVER FROM THE BODY.** `system_settings`
+is one table that also holds `escalation_enabled`, `pool_enabled`,
+`max_active_customers` and the pool clocks, so a route that upserts whatever it
+is handed could stop lead allocation for the whole platform from the messaging
+screen. §16 set the precedent for the capacity route — "a request can never name
+a key the reader does not know" — and `adminSettings.ts` is the same rule with
+more keys. A test asserts the list against a literal rather than deriving it
+from the source (§27.2), and separately that six allocation keys are refused.
+
+⚠️ **The quiet-hours pair is judged against what will be STORED**, not against
+what happens to be in the request. An admin moving only the start must still be
+checked against the end already in the database, or `start = 20` lands beside a
+stored `end = 20` and the window never opens again — every manual send refused
+and every scheduled step rescheduled for ever.
+
+⚠️ **One real bug, caught by the test rather than by review:** `Number(true)` is
+`1` and `Number(null)` is `0`, both finite integers, so a boolean posted against
+a number field would have stored as `"1"` and a null as `"0"` — and a cooldown
+of 0 disables the cross-operator guard entirely. The type check comes before the
+coercion.
+
+The live position sits beside the switches — connected numbers, active
+sequences, leads mid-sequence, messages in review, 24h sent/replied/failed. A
+switch with no reading next to it is a switch nobody dares press.
+
+#### Hand-written steps
+
+A step may be written by the operator instead of the model, with `{{fields}}`
+filled in per lead so it still reads as being about that landlord.
+
+⚠️ **PER STEP, NOT PER SEQUENCE**, which is why `mode` is on
+`message_sequence_steps`. The useful ladder is mixed: let the model open, where
+it has the property's own figures, then chase in the operator's own words. A
+sequence-level flag would force two sequences, and a lead may only be in one
+(0121's unique on `assignment_id`).
+
+`src/lib/messaging/mergeFields.ts` is the whole of it, and pure.
+
+⚠️ **THE CATALOGUE IS CLOSED AND EVERY FIELD HAS A NAMED RESOLVER.** Nothing
+takes a column name from the browser and reads it — the §27.1 standing rule.
+Without it `{{lead_profile}}` pastes the *uploading* operator's private working
+notes into a message to the landlord on a resold imported lead (§32.8), and
+`{{lead_quality_override_note}}` pastes an admin's private note. An unknown
+field is a **save-time** error, never an empty string at send time.
+
+Deliberately absent, each for its own reason: `lead_profile` (above); any fee or
+percentage (the report's 15% is *Stayful's* — §26.1); `net_income` (net of that
+fee, rendered nowhere by design); and `{{town}}`, because `extractCity()`
+resolves on 173 of 446 addresses **and is wrong on the common shape** — "212
+Gill Avenue, Bristol BS16 2PH" has its postcode-bearing last segment filtered
+out and returns the street. A field that is confidently wrong is worse than one
+that is missing.
+
+#### ⚠️ What checking the live data changed, twice
+
+**The design question is not substitution, it is absence** — and the first
+reading of the numbers was wrong in a way that would have shipped bad copy.
+
+Across the whole `leads` table the analysis figures fill on **39%**, which reads
+as "a field to use with care". Split by product they fill on **90% of management
+leads and on NOT ONE of 252 guaranteed rent leads** — §25's analysis is
+management-only by design, and `IncomeProjection` used to refuse a GR lead
+outright. So `{{income}}` on a GR sequence reaches **nobody at all**.
+
+That is now a **refusal at save time**, not a warning: `productOnly:
+"management"`, and the picker does not offer them on a GR sequence. A feature
+that silently sends nothing reads as broken rather than as a rule.
+
+The same pass found a second one. `firstNameOf` asks only for 2–40 characters
+containing a letter, which `natalyanaq@gmail.com` and `Dbncc` — both real
+`lead_name` values — satisfy. That is a fair rule where it lives, because
+`draftContext` hands the name to a **model**, which is not going to paste an
+email address into a greeting; substitution has no such judgement. §36.3's
+`isJunkName` is asked first. **Reusing it rather than writing a second name rule
+is the point** — and §36.3 carries the measurement (87 of 437 leads are a lone
+first name) that keeps it neither too strict nor too loose.
+
+`cleanAddress` and `cleanBedrooms` exist for the same reason. The column holds
+`"4+ bed"`, `"1 Bed"`, `"2 bedrooms"`, `"3/4 bedrooms"`, `"E bedrooms"` and, on
+two live rows, a whole sentence somebody typed into it — so `"your {{bedrooms}}
+property"` would read `"your 2 bedrooms property"` untouched. Every shape in the
+test file is a real value from the book.
+
+#### The reach line
+
+`POST /api/customer/messaging/sequences/preview` returns, over that customer's
+own workable leads of that product: how many the template reaches, which fields
+account for the rest, and a **sample rendered against one of their real leads**.
+
+⚠️ **This is the most valuable thing in the feature and the reason "skip the
+lead" is a safe answer.** Without it an operator types `{{income}}`, saves, and
+loses a tenth of their sends — or all of them on GR — finding out weeks later if
+at all. Shown while the wording can still be changed, it is the number that
+changes the decision: the same discipline as §28's filter forecast and §40.13's
+"state how long the backlog will take".
+
+#### Rendering, and the two refusals
+
+⚠️ **A manual step is still drafted the night before, not rendered at send
+time.** It costs nothing and needs no model, so rendering later would be
+tempting — and it would take the message out of the **review queue**, which is
+the consent the whole design rests on (§40.13). Drafting it now also means the
+operator reads the resolved text, with the real name in it, rather than their
+own template.
+
+⚠️ **`renderTemplate` NEVER RENDERS A GAP.** `"Hi , about your place at ?"` —
+sent from a real person's number to a member of the public — is what a missing
+value would otherwise produce. A lead missing a field is skipped, recorded as
+`skip_reason = 'missing_field:income'`, and the run **advances** rather than
+stopping, because the next step may not need what this one did.
+
+⚠️ **A typed URL is refused, and `{{booking_link}}` offered instead.** Links are
+the strongest single spam signal in a cold WhatsApp and the number at risk is
+the operator's, so one stored, `https`-checked link inserted by name is safe
+where forty pasted ones are not. `customers.messaging_booking_link` holds it, on
+`customers` rather than the connection row because `getCurrentCustomer()` reads
+that table with `select("*")` — no join, no RLS work, the way `presentation_brand`
+was done (§37).
+
+⚠️ **It does NOT apply `validateDraft`'s model rules.** Those exist because a
+*model* might invent a figure or stray into pricing; an operator quoting their
+own fee in their own words is their business. What survives are the two rules
+that are about the operator's own number at scale: no raw links, and 480
+characters.
+
+A manual step makes **no model call and no `message_draft_requests` row** —
+that table is the model's ledger and its rate limits are about model spend — so
+`draft_id` stays null and `sendOneMessage` records `generated_by: 'human'`.
+`template_key` / `variant_key` already carry the sequence and step, so "did
+hand-written or AI convert better" is a join rather than a migration.
+
+⚠️ **The drafting cron's missing-key check stopped being an early return.** A
+hand-written ladder needs no model, so an absent `ANTHROPIC_API_KEY` must skip
+the AI steps and let the manual ones through — otherwise one env var silently
+freezes every sequence in the business, including the ones that never needed a
+model.
+
+### Verification
+
+0122 applied twice to a scratch Postgres, with seven assertions: an AI step
+needing no template (which is what keeps the migration inert), a manual step
+with none refused, whitespace refused, an unknown mode refused, and — the one
+worth keeping — that switching a step from manual to AI **keeps** what the
+operator wrote, so the round trip does not destroy their words.
+
+**47 cases on the merge engine**, including the closed catalogue refusing nine
+column names an operator might guess at, the seven real address shapes, the real
+bedrooms junk, the email-as-a-name, and the GR refusal in both directions.
+
+A mixed-ladder rehearsal on scratch: one AI step and two manual ones, a lead
+with figures and a lead without, sequences **off** — asserting that only the
+RESOLVED message reaches the send queue (`body` containing `{{` fails the test),
+and that the skipped lead is recorded with the field that was missing.
+
+**847 vitest cases green**, lint clean, `next build` passes.
+
+**Not yet exercised:** a hand-written step against a real TimelinesAI workspace.
+Send one to yourself before enabling it for anybody.
+
+### Deployment order — migration BEFORE code
+
+0122 first. Additive, and every default preserves today's behaviour: `mode`
+defaults to `'ai'`, so a step written before it applies keeps behaving exactly
+as it does. The admin page needs no migration at all and shipped ahead of it.

@@ -58,6 +58,9 @@ export function sequenceIdempotencyKey(runId: string, stepNumber: number): strin
 
 export interface SequenceStep extends CadenceStep {
   brief: string | null;
+  /** 'ai' = the model writes it per lead; 'manual' = body_template is rendered. */
+  mode: "ai" | "manual";
+  body_template: string | null;
 }
 
 /** A step ladder, ordered, as the engine needs it. */
@@ -67,7 +70,7 @@ export async function loadSteps(
 ): Promise<SequenceStep[]> {
   const { data } = await admin
     .from("message_sequence_steps")
-    .select("step_number, delay_days, brief")
+    .select("step_number, delay_days, brief, mode, body_template")
     .eq("sequence_id", sequenceId)
     .order("step_number", { ascending: true });
   return (data ?? []) as SequenceStep[];

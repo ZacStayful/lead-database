@@ -80,6 +80,10 @@ export async function PATCH(
     const verdict = validateSequenceInput({
       name: typeof body.name === "string" ? body.name : "unchanged",
       steps: body.steps,
+      hasBookingLink: Boolean(customer.messaging_booking_link),
+      // From the STORED row, not the request: an edit that does not mention the
+      // product must still be judged against the product the sequence is on.
+      leadType: (existing as { lead_type?: string }).lead_type,
     });
     if (body.steps !== undefined) {
       if (!verdict.ok) return NextResponse.json({ error: verdict.error }, { status: 400 });
@@ -93,6 +97,8 @@ export async function PATCH(
           step_number: i + 1,
           delay_days: s.delay_days,
           brief: s.brief,
+          mode: s.mode,
+          body_template: s.body_template,
         }))
       );
       if (stepErr) {

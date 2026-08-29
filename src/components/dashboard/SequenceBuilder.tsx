@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Trash2, Zap } from "lucide-react";
 import { MAX_STEPS } from "@/lib/messaging/sequenceInput";
+import { StepTemplateEditor } from "./StepTemplateEditor";
 
 /**
  * Build a follow-up ladder (§40.13).
@@ -23,6 +24,8 @@ export interface SequenceStepView {
   step_number: number;
   delay_days: number;
   brief: string | null;
+  mode?: "ai" | "manual";
+  body_template?: string | null;
 }
 
 export interface SequenceView {
@@ -38,22 +41,42 @@ export interface SequenceView {
 interface DraftStep {
   delay_days: number;
   brief: string;
+  mode: "ai" | "manual";
+  body_template: string;
 }
 
 /** What most operators want, offered rather than left blank. */
 const STARTER: DraftStep[] = [
-  { delay_days: 0, brief: "Open the conversation and ask one easy question" },
-  { delay_days: 3, brief: "Light nudge, nothing new to say" },
-  { delay_days: 7, brief: "Last try — offer an easy way to say no" },
+  {
+    delay_days: 0,
+    brief: "Open the conversation and ask one easy question",
+    mode: "ai",
+    body_template: "",
+  },
+  {
+    delay_days: 3,
+    brief: "Light nudge, nothing new to say",
+    mode: "ai",
+    body_template: "",
+  },
+  {
+    delay_days: 7,
+    brief: "Last try — offer an easy way to say no",
+    mode: "ai",
+    body_template: "",
+  },
 ];
 
 export function SequenceBuilder({
   existing,
   hasBothProducts,
+  hasBookingLink,
   onDone,
 }: {
   existing?: SequenceView;
   hasBothProducts: boolean;
+  /** Whether {{booking_link}} is usable. Set on the Messaging settings page. */
+  hasBookingLink: boolean;
   onDone?: () => void;
 }) {
   const router = useRouter();
@@ -65,6 +88,8 @@ export function SequenceBuilder({
       ? existing.message_sequence_steps.map((s) => ({
           delay_days: s.delay_days,
           brief: s.brief ?? "",
+          mode: s.mode ?? "ai",
+          body_template: s.body_template ?? "",
         }))
       : STARTER
   );
@@ -86,6 +111,8 @@ export function SequenceBuilder({
         steps: steps.map((s) => ({
           delay_days: s.delay_days,
           brief: s.brief.trim() || null,
+          mode: s.mode,
+          body_template: s.body_template.trim() || null,
         })),
       };
       const res = await fetch(
@@ -155,10 +182,8 @@ export function SequenceBuilder({
 
       <div className="space-y-2">
         {steps.map((step, i) => (
-          <div
-            key={i}
-            className="flex flex-col gap-2 rounded-md border-[0.5px] border-border p-3 sm:flex-row sm:items-center"
-          >
+          <div key={i} className="space-y-3 rounded-md border-[0.5px] border-border p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Badge variant="outline" className="w-fit shrink-0">
               Message {i + 1}
             </Badge>
@@ -175,13 +200,41 @@ export function SequenceBuilder({
                 {i === 0 ? "days after joining" : "days after the last one"}
               </span>
             </div>
-            <Input
-              value={step.brief}
-              onChange={(e) => setStep(i, { brief: e.target.value })}
-              placeholder="What is this message for?"
-              maxLength={200}
-              className="h-9 flex-1"
-            />
+            {step.mode === "ai" ? (
+              <Input
+                value={step.brief}
+                onChange={(e) => setStep(i, { brief: e.target.value })}
+                placeholder="What is this message for?"
+                maxLength={200}
+                className="h-9 flex-1"
+              />
+            ) : (
+              <span className="flex-1 text-sm text-muted-foreground">
+                Written by you, below
+              </span>
+            )}
+
+            {/* The choice is per MESSAGE, not per sequence, so one ladder can
+                open with an AI message where it has the property's figures and
+                then chase in the operator's own words. */}
+            <div className="flex shrink-0 rounded-md border-[0.5px] border-border p-0.5">
+              {(["ai", "manual"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setStep(i, { mode: m })}
+                  className={
+                    "rounded px-2 py-1 text-xs font-medium transition-colors " +
+                    (step.mode === m
+                      ? "bg-brand text-brand-foreground"
+                      : "text-muted-foreground hover:bg-accent")
+                  }
+                >
+                  {m === "ai" ? "Written for you" : "Your own words"}
+                </button>
+              ))}
+            </div>
+
             {steps.length > 1 && (
               <button
                 type="button"
@@ -192,6 +245,16 @@ export function SequenceBuilder({
                 <Trash2 className="h-4 w-4" />
               </button>
             )}
+            </div>
+
+            {step.mode === "manual" && (
+              <StepTemplateEditor
+                value={step.body_template}
+                leadType={leadType}
+                hasBookingLink={hasBookingLink}
+                onChange={(v) => setStep(i, { body_template: v })}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -201,7 +264,20 @@ export function SequenceBuilder({
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => setSteps((prev) => [...prev, { delay_days: 5, brief: "" }])}
+          onClick={() =>
+            setSteps((prev) => [
+              ...prev,
+              {
+                delay_days: 5,
+                brief: "",
+                // New steps inherit the last step's choice: an operator who has
+                // switched to their own words almost never wants the next one
+                // written for them.
+                mode: prev[prev.length - 1]?.mode ?? "ai",
+                body_template: "",
+              },
+            ])
+          }
         >
           <Plus className="mr-1.5 h-4 w-4" />
           Add a message
@@ -211,10 +287,12 @@ export function SequenceBuilder({
       <p className="flex items-start gap-2 text-xs text-muted-foreground">
         <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          You are describing what each message is for, not writing it. Each one
-          is written for that specific landlord and property the evening before
-          it goes, and waits in your review list overnight so you can change or
-          cancel it. Nothing is ever sent outside 9am–8pm.
+          On <strong>Written for you</strong>, you describe what the message is
+          for and it is written for that specific landlord and property. On{" "}
+          <strong>Your own words</strong>, you write it and we fill in the
+          landlord&apos;s details. Either way it waits in your review list
+          overnight so you can change or cancel it, and nothing is ever sent
+          outside 9am–8pm.
         </span>
       </p>
 

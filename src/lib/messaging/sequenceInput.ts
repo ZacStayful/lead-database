@@ -11,6 +11,7 @@
  * being the behaviour that gets a number reported — and the number is the
  * operator's own.
  */
+import { validateTemplate } from "./mergeFields";
 
 /** Past this it is harassment, not follow-up. */
 export const MAX_STEPS = 6;
@@ -23,15 +24,32 @@ export const MAX_BRIEF_CHARS = 200;
 export interface SequenceStepInput {
   delay_days: number;
   brief: string | null;
+  /** 'ai' = the model writes it per lead; 'manual' = body_template is filled in. */
+  mode: "ai" | "manual";
+  /**
+   * The operator's own words, with {{fields}} unresolved. Kept even on an 'ai'
+   * step so switching a step to AI and back does not destroy what they wrote.
+   */
+  body_template: string | null;
 }
 
 export type SequenceInputVerdict =
   | { ok: true; name: string; steps: SequenceStepInput[] }
   | { ok: false; error: string };
 
+/**
+ * ⚠️ `hasBookingLink` has to be passed in, not looked up here. This module is
+ * pure so it can be tested without a client, and it is the one place both the
+ * create and the update route agree about what a valid ladder is — the
+ * `cancelOptions.ts` discipline. The caller reads the customer row; this
+ * decides.
+ */
 export function validateSequenceInput(input: {
   name?: unknown;
   steps?: unknown;
+  hasBookingLink?: boolean;
+  /** Decides which merge fields exist — the analysis figures are management-only. */
+  leadType?: string;
 }): SequenceInputVerdict {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name) return { ok: false, error: "Give the sequence a name." };
@@ -80,7 +98,35 @@ export function validateSequenceInput(input: {
       typeof raw?.brief === "string" && raw.brief.trim()
         ? raw.brief.trim().slice(0, MAX_BRIEF_CHARS)
         : null;
-    steps.push({ delay_days: delay, brief });
+
+    // Defaults to 'ai', which is also the column default — so a caller that
+    // knows nothing about modes produces exactly today's behaviour.
+    const mode = (raw as { mode?: unknown })?.mode === "manual" ? "manual" : "ai";
+    const rawTemplate = (raw as { body_template?: unknown })?.body_template;
+    const template =
+      typeof rawTemplate === "string" && rawTemplate.trim() ? rawTemplate.trim() : null;
+
+    if (mode === "manual") {
+      if (!template) {
+        return {
+          ok: false,
+          error: `Message ${i + 1} is set to your own words but has no text in it.`,
+        };
+      }
+      // One definition of a valid template, shared with the preview route and
+      // the drafting cron. Refuses an unknown field, a typed URL and an
+      // over-long message — see mergeFields.ts for why those three and not the
+      // model's own rules.
+      const verdict = validateTemplate(template, {
+        hasBookingLink: Boolean(input.hasBookingLink),
+        leadType: input.leadType,
+      });
+      if (!verdict.ok) {
+        return { ok: false, error: `Message ${i + 1}: ${verdict.error}` };
+      }
+    }
+
+    steps.push({ delay_days: delay, brief, mode, body_template: template });
   }
 
   return { ok: true, name, steps };

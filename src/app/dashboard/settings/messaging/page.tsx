@@ -19,6 +19,7 @@ import {
   emailChannelEnabled,
 } from "@/lib/messaging/service";
 import { MessagingSetupPanel } from "@/components/dashboard/MessagingSetupPanel";
+import { BookingLinkCard } from "@/components/dashboard/BookingLinkCard";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,8 @@ export default async function MessagingSettingsPage() {
           emailEnabled={emailEnabled}
         />
       </Suspense>
+
+      <BookingLinkCard initial={customer.messaging_booking_link} />
     </div>
   );
 }
