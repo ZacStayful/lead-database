@@ -104,17 +104,26 @@ export async function POST(request: NextRequest) {
   }
 
   // ---- Rate limits ---------------------------------------------------------
+  //
+  // ⚠️ BOTH COUNT origin = 'operator' ONLY (0121 §5). These caps exist to bound
+  // a person clicking Generate, and one operator's workable backlog is 37 leads
+  // against a customer cap of 50 — so counting the scheduler's drafts here would
+  // let a single enrolment lock them out of the button for a day, or, read the
+  // other way, let clicking Generate starve their own sequence. Two loads, two
+  // ceilings; the scheduler's lives in system_settings.
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const [{ count: perAssignment }, { count: perCustomer }] = await Promise.all([
     admin
       .from("message_draft_requests")
       .select("id", { count: "exact", head: true })
       .eq("assignment_id", assignmentId)
+      .eq("origin", "operator")
       .gte("created_at", dayAgo),
     admin
       .from("message_draft_requests")
       .select("id", { count: "exact", head: true })
       .eq("customer_id", customer.id)
+      .eq("origin", "operator")
       .gte("created_at", dayAgo),
   ]);
 

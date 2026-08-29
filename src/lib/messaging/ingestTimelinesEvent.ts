@@ -21,6 +21,7 @@ import { decryptSecret, timelinesTokenAad } from "@/lib/crypto/secretBox";
 import { getMessage, mapStatus } from "./timelines";
 import { normalisePhone, resolveWebhookIdentity } from "./whatsappIdentity";
 import { findOrCreateWhatsappThread } from "./threads";
+import { stopRunsForAssignment } from "./sequences";
 
 type Admin = SupabaseClient;
 
@@ -233,6 +234,28 @@ export async function ingestTimelinesEvent(
         })
         .eq("id", threadId);
     }
+  }
+
+  // ⚠️ THE LANDLORD ANSWERED. STOP TALKING (§40.13).
+  //
+  // A ladder of scheduled follow-ups that keeps going after a reply is the
+  // worst thing this feature could do — worse than never shipping it. This is
+  // the one place a reply can be seen, and it is deliberately NOT the same
+  // decision as the paragraph above: an inbound message must never count as
+  // OPERATOR engagement (it would shield an ignored lead from escalation), and
+  // it must absolutely stop us messaging them again. Different questions,
+  // opposite answers.
+  //
+  // Outside the `!alreadyHad` guard on purpose. Stopping a run twice is a
+  // no-op — stopRun filters on status = 'active' — where MISSING a reply
+  // because its event arrived under a second event type would leave the ladder
+  // running. The costly direction and the safe direction are not symmetric
+  // here.
+  //
+  // Never throws, and runs after the message is safely stored: a reply we hold
+  // but did not act on is recoverable; one we dropped is not.
+  if (direction === "inbound") {
+    await stopRunsForAssignment(admin, assignmentId, "replied");
   }
 
   return { outcome: "stored", direction };

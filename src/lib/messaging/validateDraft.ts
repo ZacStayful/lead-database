@@ -115,7 +115,18 @@ export function validateDraft(raw: unknown, ctx: DraftContext): DraftVerdict {
   }
 
   // Cheap, and it catches a generic template that ignored the lead entirely.
-  if (ctx.landlord.firstName) {
+  //
+  // ⚠️ FIRST MESSAGES ONLY. On an opener, a message that never says the
+  // landlord's name is a template that ignored the lead. On a fourth follow-up
+  // it is often the BEST message available — "Any thoughts on this one?" is a
+  // perfectly good nudge, and this rule would reject it. Worse, it would push
+  // the model towards shoehorning the name into every chase, which is the
+  // repetitive, obviously-automated pattern the follow-up prompt exists to
+  // avoid and the one that gets a number restricted.
+  //
+  // Every other rule above still applies unchanged: no links, no pricing, no
+  // unsupplied figures, 480 characters.
+  if (ctx.landlord.firstName && !ctx.step) {
     const name = ctx.landlord.firstName.toLowerCase();
     if (!text.toLowerCase().includes(name)) {
       return { ok: false, reason: "missing_landlord_name" };

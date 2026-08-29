@@ -37,6 +37,17 @@ import {
   type TimelinesWebhookPayload,
 } from "@/lib/messaging/ingestTimelinesEvent";
 import { retryDelayMs, retryExhausted } from "@/lib/messaging/webhookRetry";
+import {
+  sendOneMessage,
+  type SendableAssignment,
+} from "@/lib/messaging/sendOneMessage";
+import {
+  advanceRun,
+  sequenceIdempotencyKey,
+  sequenceSettings,
+  stopRun,
+  type StopReason,
+} from "@/lib/messaging/sequences";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +78,9 @@ const RECOVERY_SCAN_LIMIT = 40;
  * a second chance at all.
  */
 const RECOVERY_READBACK_TIMEOUT_MS = 8000;
+
+/** Due sequence drafts to consider per run. Bounds the query, not the work. */
+const SEQUENCE_SCAN_LIMIT = 120;
 
 /**
  * The ladder. Index by `poll_attempts` already made.
@@ -176,7 +190,15 @@ async function handle(request: NextRequest) {
     // and returning here would mean deferred webhook events are only ever
     // recovered on the minority of runs that also had a message to poll.
     const recovered = dryRun ? null : await recoverDeferredEvents(admin, startedAt);
-    return NextResponse.json({ ok: true, due: 0, polled: 0, updated: 0, recovery: recovered });
+    const sequences = dryRun ? null : await sendDueSequenceDrafts(admin, startedAt);
+    return NextResponse.json({
+      ok: true,
+      due: 0,
+      polled: 0,
+      updated: 0,
+      recovery: recovered,
+      sequences,
+    });
   }
 
   const ordered = roundRobin(due);
@@ -351,6 +373,12 @@ async function handle(request: NextRequest) {
 
   const recovered = await recoverDeferredEvents(admin, startedAt);
 
+  // ⚠️ AFTER RECOVERY, NOT BEFORE. A landlord's reply that this run has just
+  // rescued from the deferred queue stops the ladder before the next step goes
+  // out. Run the sender first and a recovered reply would arrive one message
+  // too late — which is the single behaviour this feature must never have.
+  const sequences = await sendDueSequenceDrafts(admin, startedAt);
+
   return NextResponse.json({
     ok: true,
     due: ordered.length,
@@ -360,6 +388,7 @@ async function handle(request: NextRequest) {
     abandoned,
     stopped_for: stoppedFor,
     recovery: recovered,
+    sequences,
     ms: Date.now() - startedAt,
   });
 }
@@ -510,6 +539,272 @@ async function recoverDeferredEvents(
   } catch (e) {
     // Its own failure must never cost the status phase its run.
     console.error("[poll-whatsapp-status] recovery failed", e instanceof Error ? e.message : e);
+    return stats;
+  }
+}
+
+/**
+ * PHASE THREE — send the follow-up steps that have come due (§40.13).
+ *
+ * ⚠️ IT LIVES HERE FOR THE REASON PHASE TWO GIVES, verbatim. This route already
+ * runs every five minutes, already goes through consume_provider_budget — the
+ * SHARED 30-req/s TimelinesAI bucket, which a second job would contend with
+ * blindly — and already holds a wall clock. A sending cron of its own would
+ * duplicate all three and compete with this one for the same ceiling.
+ *
+ * ⚠️ THIS IS NOT A RETRY QUEUE, and the difference is the whole reason the
+ * feature is defensible against the codebase's own objection (0121's header).
+ * What is stored is an INTENT — "this text is due at 09:00" — never an unsent
+ * provider payload. The send itself walks `sendOneMessage`, which claims a
+ * `lead_messages` row on (customer_id, idempotency_key) and only then calls
+ * TimelinesAI. The key is derived from (run_id, step_number), so this route
+ * running twice on one step collides on 23505 rather than messaging the landlord
+ * twice, and a crash after the provider call leaves a `queued` row the operator
+ * can see — exactly what a manual send does today. Nothing is ever re-sent.
+ *
+ * That is also why the two failure sets below are split where they are: every
+ * RESCHEDULE code is refused BEFORE the claim insert, so retrying it is
+ * genuinely free. Everything after the claim is terminal for that step.
+ */
+
+/**
+ * Refusals that happen before any row is claimed, and are therefore safe to try
+ * again later. Value is how long to wait; "quiet" means "until the window
+ * reopens", which `sendOneMessage` reports as `quietOpensAt`.
+ *
+ * ⚠️ QUIET HOURS DEFER HERE WHERE THE COMPOSER REFUSES, and that inversion is
+ * correct rather than an inconsistency. §40.12 refuses a manual send because
+ * there is nowhere to defer to; a scheduled step has a schedule. Same rule, two
+ * remedies — no landlord is messaged outside the window either way.
+ */
+const SEQUENCE_RESCHEDULE_MS: Record<string, number | "quiet" | "retry_after"> = {
+  quiet_hours: "quiet",
+  too_soon: "retry_after",
+  // An hour, not five minutes: a customer at their daily cap will still be at it
+  // on the next run, and re-deciding that twelve times an hour is pure noise.
+  daily_cap_reached: 60 * 60 * 1000,
+  lead_cooldown: 60 * 60 * 1000,
+  // Our own failures. Short, because they are usually transient.
+  thread_failed: 15 * 60 * 1000,
+  claim_failed: 15 * 60 * 1000,
+};
+
+/**
+ * Refusals that mean every later step would fail the same way. Stopping the run
+ * is kinder than sending the operator four identical failures over a fortnight.
+ */
+const SEQUENCE_STOP_CODES: Record<string, StopReason> = {
+  not_sendable: "not_sendable",
+  no_recipient: "bad_phone",
+  bad_phone: "bad_phone",
+  not_connected: "no_connection",
+  credential_unreadable: "no_connection",
+};
+
+interface DueDraft {
+  id: string;
+  run_id: string;
+  customer_id: string;
+  step_number: number;
+  body: string;
+  draft_id: string | null;
+  message_sequence_runs: {
+    id: string;
+    status: string;
+    sequence_id: string;
+    assignment_id: string;
+    lead_id: string;
+  } | null;
+}
+
+async function sendDueSequenceDrafts(
+  admin: ReturnType<typeof createAdminClient>,
+  startedAt: number
+): Promise<{
+  due: number;
+  sent: number;
+  rescheduled: number;
+  stopped: number;
+  skipped: number;
+  disabled?: true;
+} | null> {
+  const stats = { due: 0, sent: 0, rescheduled: 0, stopped: 0, skipped: 0 };
+  try {
+    // Fails CLOSED. What is gated sends unattended messages from a real
+    // person's own number to members of the public.
+    const settings = await sequenceSettings(admin);
+    if (!settings.enabled) return { ...stats, disabled: true };
+
+    const { data, error } = await admin
+      .from("message_sequence_drafts")
+      .select(
+        "id, run_id, customer_id, step_number, body, draft_id, " +
+          "message_sequence_runs!inner(id, status, sequence_id, assignment_id, lead_id)"
+      )
+      .eq("state", "pending")
+      .eq("message_sequence_runs.status", "active")
+      .lte("send_after", new Date().toISOString())
+      .order("send_after", { ascending: true })
+      .limit(SEQUENCE_SCAN_LIMIT);
+
+    if (error || !data) {
+      if (error) console.error("[poll-whatsapp-status] sequence scan failed", error);
+      return stats;
+    }
+
+    const due = data as unknown as DueDraft[];
+    stats.due = due.length;
+    if (!due.length) return stats;
+
+    // The same round-robin argument as the status phase: one operator whose
+    // whole backlog comes due at 9am must not consume the run and leave
+    // everybody else's first message until tomorrow.
+    const byCustomer = new Map<string, DueDraft[]>();
+    for (const d of due) {
+      const list = byCustomer.get(d.customer_id);
+      if (list) list.push(d);
+      else byCustomer.set(d.customer_id, [d]);
+    }
+    const queues = Array.from(byCustomer.values());
+    const ordered: DueDraft[] = [];
+    for (let i = 0, more = true; more; i += 1) {
+      more = false;
+      for (const q of queues) {
+        if (i < q.length) {
+          ordered.push(q[i]);
+          more = true;
+        }
+      }
+    }
+
+    for (const draft of ordered) {
+      if (Date.now() - startedAt > WALL_CLOCK_BUDGET_MS) break;
+      const run = draft.message_sequence_runs;
+      if (!run) continue;
+
+      // The shared bucket, same ceiling as the other two phases, same FAIL
+      // CLOSED. Every unsent draft keeps its due send_after and is first in
+      // line next time, so stopping here costs five minutes and nothing else.
+      const { data: budget, error: budgetErr } = await admin.rpc("consume_provider_budget", {
+        p_provider: "timelinesai",
+        p_window_seconds: 1,
+      });
+      const count = (budget as { count?: number } | null)?.count;
+      if (budgetErr || typeof count !== "number" || count > RATE_CEILING_PER_SEC) break;
+
+      const { data: assignmentRow } = await admin
+        .from("lead_assignments")
+        .select(
+          "id, status, closed_at, closed_reason, lead_id, leads(id, lead_name, email, phone, lead_type)"
+        )
+        .eq("id", run.assignment_id)
+        .eq("customer_id", draft.customer_id)
+        .maybeSingle();
+
+      if (!assignmentRow) {
+        // The 0121 cascade should have taken the run with the assignment, so
+        // this is a race rather than a state. Stop it either way.
+        await stopRun(admin, run.id, "not_sendable");
+        stats.stopped += 1;
+        continue;
+      }
+
+      const result = await sendOneMessage(admin, {
+        customerId: draft.customer_id,
+        assignment: assignmentRow as unknown as SendableAssignment,
+        channel: "whatsapp",
+        text: draft.body,
+        idempotencyKey: sequenceIdempotencyKey(run.id, draft.step_number),
+        // Nobody was at a keyboard. The column is nullable precisely for this.
+        sentByUserId: null,
+        draftId: draft.draft_id,
+        // Overridden to 'llm' when the ledger has the draft, which it will —
+        // this reads 'system' only for a step whose draft row has been pruned.
+        defaultGeneratedBy: "system",
+        // Free-text provenance, so "which sequence and step converted" is a
+        // join rather than a migration (0116 §5).
+        templateKey: `sequence:${run.sequence_id}`,
+        variantKey: `step:${draft.step_number}`,
+      });
+
+      if (result.ok) {
+        const sentAt = new Date();
+        await admin
+          .from("message_sequence_drafts")
+          .update({
+            state: "sent",
+            message_id: result.messageId,
+            updated_at: sentAt.toISOString(),
+          })
+          .eq("id", draft.id);
+        await advanceRun(admin, {
+          runId: run.id,
+          sequenceId: run.sequence_id,
+          completedStep: draft.step_number,
+          sentAt,
+        });
+        stats.sent += 1;
+        continue;
+      }
+
+      const wait = SEQUENCE_RESCHEDULE_MS[result.code];
+      if (wait !== undefined) {
+        const next =
+          wait === "quiet"
+            ? (result.quietOpensAt ?? new Date(Date.now() + 60 * 60 * 1000))
+            : wait === "retry_after"
+              ? new Date(Date.now() + (result.retryAfterSeconds ?? 60) * 1000)
+              : new Date(Date.now() + wait);
+        await admin
+          .from("message_sequence_drafts")
+          .update({ send_after: next.toISOString(), updated_at: new Date().toISOString() })
+          .eq("id", draft.id);
+        stats.rescheduled += 1;
+        continue;
+      }
+
+      const stopReason = SEQUENCE_STOP_CODES[result.code];
+      if (stopReason) {
+        // stopRun sweeps this draft to `skipped` itself, along with any other
+        // pending step on the run.
+        await stopRun(admin, run.id, stopReason);
+        stats.stopped += 1;
+        continue;
+      }
+
+      // ⚠️ EVERYTHING LEFT IS TERMINAL FOR THIS STEP, and that is the vendor's
+      // missing idempotency key showing through. A provider failure happens
+      // AFTER the claim, so the row already exists carrying this step's key —
+      // trying again would collide on 23505 and report a send that failed as a
+      // send that happened. The failed message is visible in the operator's own
+      // timeline, and the ladder moves on rather than dying on one bad night.
+      console.error("[poll-whatsapp-status] sequence step failed", {
+        draft: draft.id,
+        code: result.code,
+      });
+      await admin
+        .from("message_sequence_drafts")
+        .update({
+          state: "skipped",
+          skip_reason: result.code,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", draft.id);
+      await advanceRun(admin, {
+        runId: run.id,
+        sequenceId: run.sequence_id,
+        completedStep: draft.step_number,
+        sentAt: new Date(),
+      });
+      stats.skipped += 1;
+    }
+
+    return stats;
+  } catch (e) {
+    console.error(
+      "[poll-whatsapp-status] sequence phase failed",
+      e instanceof Error ? e.message : e
+    );
     return stats;
   }
 }

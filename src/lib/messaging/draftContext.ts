@@ -29,6 +29,38 @@ export interface DraftFigures {
   occupancyPct: number | null;
 }
 
+/**
+ * Where in a follow-up ladder this message sits (§40.13).
+ *
+ * ⚠️ ABSENT MEANS FIRST MESSAGE, and that is the only way to say it. The whole
+ * prompt below was written for a cold opener — "open with the landlord's first
+ * name", "name the property so it does not read as a scam" — and used unchanged
+ * for step 3 it re-introduces the operator to somebody they have already
+ * messaged twice. A null here selects the opener; anything else selects the
+ * follow-up shape.
+ */
+export interface DraftStepContext {
+  /** 2 for the first follow-up. Step 1 never carries this block. */
+  number: number;
+  /** What this step is FOR, in the operator's own words. May be null. */
+  brief: string | null;
+  /**
+   * What has already been sent on this thread, oldest first — the model's only
+   * defence against repeating itself. Trimmed hard: this is context, not a
+   * transcript.
+   */
+  previous: { text: string; daysAgo: number }[];
+}
+
+/**
+ * ⚠️ THERE IS DELIBERATELY NO "has the landlord replied" FIELD. A reply STOPS
+ * the run (`stopRunsForThread`), so by construction nothing is ever drafted for
+ * a conversation that has one — and the sending phase re-checks immediately
+ * before it sends, for the reply that lands between the draft and the send. A
+ * flag here would be a second, weaker answer to a question already settled, and
+ * the first time the two disagreed we would follow up on somebody mid-reply.
+ */
+
 export interface DraftContext {
   operator: { businessName: string | null; contactName: string | null };
   landlord: { firstName: string | null };
@@ -39,6 +71,8 @@ export interface DraftContext {
   };
   /** null means "this property has not been analysed" — not "zero". */
   figures: DraftFigures | null;
+  /** null or absent = the first message. See DraftStepContext. */
+  step?: DraftStepContext | null;
 }
 
 /** Lead columns this builder is allowed to look at. */
@@ -78,6 +112,7 @@ export function firstNameOf(fullName: string | null | undefined): string | null 
 export function buildDraftContext(p: {
   lead: DraftLead;
   customer: DraftCustomer;
+  step?: DraftStepContext | null;
 }): DraftContext {
   const gross = numOrNull(p.lead.gross_annual_income);
   const nightly = numOrNull(p.lead.avg_nightly_rate);
@@ -101,6 +136,7 @@ export function buildDraftContext(p: {
     figures: anyFigure
       ? { grossAnnual: gross, nightlyRate: nightly, occupancyPct: occupancy }
       : null,
+    step: p.step ?? null,
   };
 }
 
@@ -129,6 +165,23 @@ export function renderDraftPrompt(ctx: DraftContext): string {
     lines.push(
       `BACKGROUND (context only — never quote it, and never repeat anything commercial from it): ${ctx.property.profile}`
     );
+  }
+
+  if (ctx.step) {
+    lines.push("");
+    lines.push(
+      `THIS IS FOLLOW-UP ${ctx.step.number - 1} OF THE SAME CONVERSATION. They have already been messaged and have not replied.`
+    );
+    if (ctx.step.previous.length > 0) {
+      lines.push("ALREADY SENT (do not repeat any of this, and do not start over):");
+      for (const prior of ctx.step.previous) {
+        lines.push(`  ${prior.daysAgo} days ago: ${prior.text}`);
+      }
+    }
+    if (ctx.step.brief) {
+      lines.push(`WHAT THIS MESSAGE IS FOR: ${ctx.step.brief}`);
+    }
+    lines.push("");
   }
 
   if (!ctx.figures) {
