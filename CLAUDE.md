@@ -7401,14 +7401,32 @@ constraint, weight row, trigger and function were all confirmed absent
 afterwards. **Supabase branching needs the Pro plan and this project is on Free**,
 which is why the rehearsal was transactional rather than on a branch.
 
-**Not yet exercised:** a real handset. Open a lead with a real mobile on iOS and
-on Android, tap through, and confirm WhatsApp opens with the whole message —
-line breaks and all — and that it arrives from the operator's number and not
-Stayful's. Also unexercised: the three consequences above observed on live data
-rather than reasoned from the SQL.
+The deep link was then confirmed on a real handset: WhatsApp opens with the whole
+message intact and it arrives from the operator's own number, not Stayful's.
 
-**Record the go-live date here when 0123/0124 are applied**, so a later reader
-can date the step in the benchmark series rather than puzzle over it.
+**Not yet exercised:** the three consequences above observed on live data rather
+than reasoned from the SQL — a clicked lead losing its discard button, dropping
+out of `get_reclaim_candidates`, and resetting `quiet_days`.
+
+**Applied to production on 2026-08-29**, migrations before code, and both were
+verified against the live database rather than assumed:
+
+- **All 12 function bodies hash-match the repo file**, `get_engagement_benchmarks`
+  included — its stale comment is corrected in a separate statement, because the
+  token transform by construction inserts tokens and cannot rewrite prose.
+- **Behaviour is unchanged**, which is the check that matters: with zero
+  `whatsapp_click` rows in the table, `get_reclaim_candidates` (71),
+  `get_service_capacity`, `get_customer_risk` (18), `get_customer_scoreboard`
+  (36), `get_lead_outcome_report` (14) and `get_paused_customer_facts` (4) all
+  return output byte-identical to the baseline captured immediately beforehand.
+  A hash check proves the bodies were transcribed correctly; only this proves the
+  token went in the right PLACES.
+- Row counts untouched: 449 leads, 383 assignments, 797 events, 40 customers.
+
+**2026-08-29 is therefore the date to read the step from** in `worked_rate`,
+`contact_rate` and the benchmark series. Assignments after it can carry a signal
+earlier ones could not; that is a definition change, not a change in operator
+behaviour.
 
 ### Deployment order — migrations BEFORE code, and 0123 BEFORE 0124
 
