@@ -185,7 +185,7 @@ export interface Customer {
   presentation_brand_updated_at: string | null;
   /**
    * The operator's own booking/calendar URL, inserted into a hand-written
-   * follow-up as {{booking_link}} (§40.14, 0122).
+   * follow-up as {{booking_link}} (§40.15, 0122).
    *
    * ⚠️ It is the ONLY way a link can reach a templated message. validateTemplate
    * refuses a typed URL, because a link in a cold WhatsApp is the strongest
@@ -537,6 +537,11 @@ export type LeadEventType =
   | "detail_opened"
   | "tel_click"
   | "mailto_click"
+  // Opened a pre-written WhatsApp to the landlord from their own phone
+  // (§40.15). Client-reportable like tel_click, and like tel_click it is an
+  // action taken toward contact rather than proof of one — the message leaves
+  // the browser and nothing comes back.
+  | "whatsapp_click"
   | "note_added"
   | "file_added"
   | "stage_changed"
@@ -590,6 +595,7 @@ export const ENGAGEMENT_EVENT_TYPES = [
   "detail_opened",
   "tel_click",
   "mailto_click",
+  "whatsapp_click",
 ] as const satisfies readonly LeadEventType[];
 
 /** Events a browser client is permitted to report via POST /api/customer/events. */
@@ -597,6 +603,7 @@ export const CLIENT_LEAD_EVENT_TYPES = [
   "detail_opened",
   "tel_click",
   "mailto_click",
+  "whatsapp_click",
 ] as const satisfies readonly LeadEventType[];
 
 export type ClientLeadEventType = (typeof CLIENT_LEAD_EVENT_TYPES)[number];

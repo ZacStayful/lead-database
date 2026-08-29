@@ -508,6 +508,7 @@ export function LeadDetail({
               assignmentId={assignment.id}
               leadId={assignment.lead_id}
               leadName={lead.lead_name}
+              leadPhone={lead.phone}
               channels={messageChannels}
             />
           </div>
