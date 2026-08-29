@@ -17,6 +17,9 @@ import { channelAvailability, assignmentSendable } from "../service";
 interface FakeState {
   messagingEnabled: boolean;
   emailEnabled: boolean;
+  /** Quiet-hours window (§40.12). Defaults to the real 9-20 when unset. */
+  quietStartHour?: number;
+  quietEndHour?: number;
   whatsappStatus?: string;
   emailStatus?: string;
 }
@@ -33,6 +36,21 @@ function fakeAdmin(state: FakeState) {
       select: () => self,
       eq: (col: string, val: unknown) => {
         filters[col] = val;
+        return self;
+      },
+      /**
+       * `.in()` arrived with the quiet-hours read (§40.12), which fetches both
+       * window settings in ONE query rather than two `.maybeSingle()` calls.
+       *
+       * Recorded rather than quietly added: this fake is exactly the seam
+       * draft.test.ts warns about, where a test can pass while the real query is
+       * wrong. It resolves through `then` below, so the awaited shape is
+       * `{ data: [...] }` — a LIST of rows, not the single row `.maybeSingle()`
+       * returns. Getting that wrong here would make the settings unreadable in
+       * production while every test stayed green.
+       */
+      in: (col: string, vals: unknown[]) => {
+        filters[col] = vals;
         return self;
       },
       maybeSingle: async () => {
@@ -56,9 +74,20 @@ function fakeAdmin(state: FakeState) {
           };
         return { data: null, error: null };
       },
-      // lead_message_threads is awaited directly rather than single-ed.
-      then: (resolve: (v: { data: unknown[]; error: null }) => unknown) =>
-        Promise.resolve({ data: [], error: null }).then(resolve),
+      // lead_message_threads and the settings read are awaited directly rather
+      // than single-ed.
+      then: (resolve: (v: { data: unknown[]; error: null }) => unknown) => {
+        if (table === "system_settings") {
+          // The quiet-hours window. Returned as rows so the caller's Map build
+          // is exercised; omitting a key here would exercise its fallback.
+          const rows = [
+            { key: "messaging_quiet_start_hour", value: String(state.quietStartHour ?? 9) },
+            { key: "messaging_quiet_end_hour", value: String(state.quietEndHour ?? 20) },
+          ];
+          return Promise.resolve({ data: rows, error: null }).then(resolve);
+        }
+        return Promise.resolve({ data: [], error: null }).then(resolve);
+      },
     };
     return self;
   }
@@ -167,5 +196,42 @@ describe("assignmentSendable", () => {
 
   it("allows a won lead: an ongoing relationship, nothing left to protect", () => {
     expect(assignmentSendable({ status: "won" }).sendable).toBe(true);
+  });
+});
+
+/**
+ * Quiet hours, reported BEFORE the operator writes anything (§40.12).
+ *
+ * The window is driven from the fake's state rather than from the clock, so
+ * these cases do not go stale twice a year or fail on a CI box in another zone.
+ */
+describe("channelAvailability reports quiet hours", () => {
+  const OPEN = { messagingEnabled: true, emailEnabled: false, quietStartHour: 0, quietEndHour: 24 };
+  const SHUT = { messagingEnabled: true, emailEnabled: false, quietStartHour: 9, quietEndHour: 9 };
+
+  it("leaves quietUntil null while sending is open", async () => {
+    const [wa] = await availability({ ...OPEN, whatsappStatus: "connected" }, false);
+    expect(wa?.channel).toBe("whatsapp");
+    expect(wa?.quietUntil).toBeNull();
+  });
+
+  it("names when sending resumes while it is shut", async () => {
+    const [wa] = await availability({ ...SHUT, whatsappStatus: "connected" }, false);
+    // A window that is never open still produces a usable sentence rather than
+    // an empty string or a crash.
+    expect(typeof wa?.quietUntil).toBe("string");
+    expect((wa?.quietUntil ?? "").length).toBeGreaterThan(2);
+  });
+
+  it("does not put a quiet-hours notice on email", async () => {
+    // An inbox at 22:00 does not buzz a phone on a bedside table, and the
+    // asymmetry is a decision rather than an oversight (§40.4).
+    const rows = await availability(
+      { ...SHUT, emailEnabled: true, emailStatus: "verified", whatsappStatus: "connected" },
+      false
+    );
+    const email = rows.find((r) => r.channel === "email");
+    expect(email).toBeDefined();
+    expect(email?.quietUntil).toBeNull();
   });
 });

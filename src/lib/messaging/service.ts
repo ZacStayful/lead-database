@@ -10,6 +10,12 @@
  * Everything here runs on the service role. The connection tables are deny-all
  * to the browser and hold credentials, so nothing may reach them any other way.
  */
+import {
+  DEFAULT_QUIET_END_HOUR,
+  DEFAULT_QUIET_START_HOUR,
+  describeNextWindow,
+  withinSendingHours,
+} from "@/lib/messaging/sendWindow";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cryptoConfigured, activeKeyVersion } from "@/lib/crypto/secretBox";
 import { threadTokensConfigured } from "./threadAddress";
@@ -182,6 +188,34 @@ async function threadCounts(
  * The buttons are ALWAYS rendered (§18E: a hidden button reads as a missing
  * feature). What varies is what the modal says when it opens.
  */
+/**
+ * "9am tomorrow" while we are outside sending hours, null while inside.
+ *
+ * Its own function so the settings read and the window rule live in one place;
+ * the send route reads the same two keys and applies the same pure predicate.
+ */
+async function whatsappQuietUntil(admin: Admin, at: Date): Promise<string | null> {
+  const { data } = await admin
+    .from("system_settings")
+    .select("key, value")
+    .in("key", ["messaging_quiet_start_hour", "messaging_quiet_end_hour"]);
+  const map = new Map(
+    (data ?? []).map((r) => [
+      (r as { key: string }).key,
+      Number((r as { value: string }).value),
+    ])
+  );
+  const pick = (key: string, fallback: number) => {
+    const v = map.get(key);
+    return Number.isFinite(v) ? (v as number) : fallback;
+  };
+  const start = pick("messaging_quiet_start_hour", DEFAULT_QUIET_START_HOUR);
+  const end = pick("messaging_quiet_end_hour", DEFAULT_QUIET_END_HOUR);
+  return withinSendingHours(at, start, end)
+    ? null
+    : describeNextWindow(at, start, end);
+}
+
 export async function channelAvailability(
   admin: Admin,
   p: {
@@ -203,18 +237,28 @@ export async function channelAvailability(
   }
 ): Promise<ChannelAvailability[]> {
   const preview = Boolean(p.preview);
-  const [enabled, allowed, domain, whatsapp, counts] = await Promise.all([
+  const now = new Date();
+  // Six reads, in parallel. quietUntil joins the Promise.all rather than
+  // following it: this function runs on every lead page load, and a serial
+  // round trip for one settings row is latency nobody asked for.
+  const [enabled, allowed, domain, whatsapp, counts, quietUntil] = await Promise.all([
     messagingEnabled(admin),
     enabledChannels(admin, preview),
     getEmailDomain(admin, p.customerId),
     getWhatsappConnection(admin, p.customerId),
     threadCounts(admin, p.assignment.id),
+    whatsappQuietUntil(admin, now),
   ]);
 
   // Nothing renders at all for an ordinary customer until the switch is on.
   if (!enabled && !preview) return [];
 
   const { sendable, reason } = assignmentSendable(p.assignment);
+
+  // quietUntil (resolved above) is applied to WhatsApp only: an inbox at 22:00
+  // does not buzz a phone on a bedside table, and the email channel is switched
+  // off anyway (§40.4). Read from the same settings the send route reads, so
+  // the notice and the refusal cannot disagree about the window.
 
   // ⚠️ Connectedness is a fact about THIS CUSTOMER'S ACCOUNT, and the kill
   // switch is not part of it. The switch decides whether the surface is visible
@@ -237,6 +281,7 @@ export async function channelAvailability(
       hasRecipient: Boolean(p.lead.email && p.lead.email.trim()),
       sendable,
       reason,
+      quietUntil: null,
       messageCount: counts.email.messages,
       unreadInbound: counts.email.unread,
     },
@@ -247,6 +292,7 @@ export async function channelAvailability(
       hasRecipient: Boolean(p.lead.phone && p.lead.phone.trim()),
       sendable,
       reason,
+      quietUntil,
       messageCount: counts.whatsapp.messages,
       unreadInbound: counts.whatsapp.unread,
     },

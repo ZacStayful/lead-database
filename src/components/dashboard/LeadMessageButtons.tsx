@@ -202,7 +202,8 @@ function MessageDialog({
   onOpenChange: (v: boolean) => void;
 }) {
   const router = useRouter();
-  const { channel, connected, setupStarted, sendable, reason } = availability;
+  const { channel, connected, setupStarted, sendable, reason, quietUntil } =
+    availability;
 
   const [subject, setSubject] = useState("");
   const [bodyText, setBodyText] = useState("");
@@ -345,6 +346,24 @@ function MessageDialog({
             <div className="flex gap-2">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <p>{reason}</p>
+            </div>
+          </div>
+        )}
+
+        {/* STATE: inside the composer, but outside sending hours (§40.12).
+             Said BEFORE they write, not after — being told at the end that
+             three hundred characters cannot go anywhere is the version of this
+             that stops the feature being used. It is a notice rather than a
+             disabled button: the send route is the thing that refuses, and one
+             definition of the rule is enough. */}
+        {sendable && connected && quietUntil && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="flex gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>
+                It is outside the hours we message landlords. You can write this
+                now and send it from {quietUntil}.
+              </p>
             </div>
           </div>
         )}

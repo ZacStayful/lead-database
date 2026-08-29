@@ -41,6 +41,17 @@ import { toE164, normalisePhone } from "@/lib/messaging/whatsappIdentity";
 import { normaliseUkMobile } from "@/lib/leadQuality";
 import { findOrCreateWhatsappThread } from "@/lib/messaging/threads";
 import {
+  DEFAULT_QUIET_END_HOUR,
+  DEFAULT_QUIET_START_HOUR,
+  describeNextWindow,
+  withinSendingHours,
+} from "@/lib/messaging/sendWindow";
+import {
+  DEFAULT_LEAD_COOLDOWN_HOURS,
+  LEAD_COOLDOWN_MESSAGE,
+  otherOperatorMessagedRecently,
+} from "@/lib/messaging/contactLimits";
+import {
   renderOperatorHtml,
   sanitiseHeaderValue,
   sanitiseTagValue,
@@ -177,6 +188,22 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // The landlord's identity key, resolved ONCE. The cross-operator cooldown
+  // needs it before the caps block and the thread lookup needs it after, and
+  // two calls to normalisePhone on the same number is how the two eventually
+  // disagree — §40.8 records that exact bug costing every reply we had.
+  const whatsappPhoneKey = channel === "whatsapp" ? normalisePhone(recipient) : null;
+  if (channel === "whatsapp" && !whatsappPhoneKey) {
+    return NextResponse.json(
+      { error: "That lead has no usable phone number." },
+      { status: 409 }
+    );
+  }
+
+  // One clock for the whole request, so the quiet-hours check and the cooldown
+  // window cannot straddle a minute boundary and disagree.
+  const now = new Date();
+
   // ---- Send limits, which the setup panel PROMISES --------------------------
   //
   // ⚠️ These columns were stored, shown to the operator as "Sending is limited
@@ -194,7 +221,43 @@ export async function POST(request: NextRequest) {
     const cap = wa.daily_send_cap ?? 40;
     const interval = wa.min_send_interval_secs ?? 45;
 
-    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // Quiet hours and the cooldown are PLATFORM rules, not per-customer knobs,
+    // so they come from system_settings (the messaging_whatsapp_ceiling_per_second
+    // precedent) rather than from the connection row.
+    //
+    // ⚠️ A missing or unreadable row means the DEFAULT WINDOW — not fail-open
+    // and not fail-closed. Both precedents in this codebase point opposite ways
+    // (messagingEnabled fails closed, fetchUkBankHolidays fails open) and
+    // neither fits a restriction: failing closed would refuse every send to
+    // avoid sending at the wrong hour, and failing open would lift the rule
+    // exactly when we cannot confirm it. The default IS the rule; these rows
+    // only move it.
+    const { data: limitRows } = await admin
+      .from("system_settings")
+      .select("key, value")
+      .in("key", [
+        "messaging_quiet_start_hour",
+        "messaging_quiet_end_hour",
+        "messaging_lead_cooldown_hours",
+      ]);
+    const limits = new Map(
+      (limitRows ?? []).map((r) => [
+        (r as { key: string }).key,
+        Number((r as { value: string }).value),
+      ])
+    );
+    const setting = (key: string, fallback: number) => {
+      const v = limits.get(key);
+      return Number.isFinite(v) ? (v as number) : fallback;
+    };
+    const quietStart = setting("messaging_quiet_start_hour", DEFAULT_QUIET_START_HOUR);
+    const quietEnd = setting("messaging_quiet_end_hour", DEFAULT_QUIET_END_HOUR);
+    const cooldownHours = setting(
+      "messaging_lead_cooldown_hours",
+      DEFAULT_LEAD_COOLDOWN_HOURS
+    );
+
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const { count: sentToday } = await admin
       .from("lead_messages")
       .select("id", { count: "exact", head: true })
@@ -227,7 +290,7 @@ export async function POST(request: NextRequest) {
 
     const lastAt = (lastSent as { sent_at: string | null } | null)?.sent_at;
     if (lastAt) {
-      const waitedSecs = (Date.now() - new Date(lastAt).getTime()) / 1000;
+      const waitedSecs = (now.getTime() - new Date(lastAt).getTime()) / 1000;
       if (waitedSecs < interval) {
         return NextResponse.json(
           {
@@ -235,6 +298,56 @@ export async function POST(request: NextRequest) {
             code: "too_soon",
             retry_after_seconds: Math.ceil(interval - waitedSecs),
           },
+          { status: 429 }
+        );
+      }
+    }
+
+    // ---- Quiet hours (§40.12) ---------------------------------------------
+    //
+    // The two caps above are about VOLUME. Neither asks what time it is, and 6
+    // of the first 17 WhatsApps ever sent went out at 20:xx London.
+    //
+    // ⚠️ IT REFUSES RATHER THAN DEFERRING, because there is nowhere to defer
+    // to: every send is synchronous and operator-initiated, there is no queue,
+    // no send_after column and no sending cron. Building one would also collide
+    // with 0116's own note that TimelinesAI has no idempotency key, so a stale
+    // queued WhatsApp can never be safely auto-retried.
+    //
+    // No admin bypass. §40.3 establishes that preview means live for THIS
+    // viewer — an admin's own row sends real messages to real landlords — so a
+    // real WhatsApp at 22:00 is exactly what this prevents, whoever sends it.
+    if (!withinSendingHours(now, quietStart, quietEnd)) {
+      const opens = describeNextWindow(now, quietStart, quietEnd);
+      return NextResponse.json(
+        {
+          error: `It is outside the hours we message landlords. Your message will send if you come back at ${opens} — nothing has been sent and your text is still here.`,
+          code: "quiet_hours",
+        },
+        { status: 429 }
+      );
+    }
+
+    // ---- The cross-operator cooldown (§40.12) ------------------------------
+    //
+    // 136 of 441 leads are held by two or more operators and one by five, none
+    // of whom can see each other. Every other limit here is per customer and
+    // cannot ask this question.
+    //
+    // ⚠️ The verdict is a BOOLEAN and the copy names no time. Saying when they
+    // could retry would, minus a cooldown anyone can measure by experiment,
+    // disclose the other operator's send time — §19.7's rule reached by
+    // subtraction. See contactLimits.ts.
+    if (whatsappPhoneKey) {
+      const cooldown = await otherOperatorMessagedRecently(admin, {
+        phoneKey: whatsappPhoneKey,
+        customerId: customer.id,
+        cooldownHours,
+        now,
+      });
+      if (cooldown.blocked) {
+        return NextResponse.json(
+          { error: LEAD_COOLDOWN_MESSAGE, code: "lead_cooldown" },
           { status: 429 }
         );
       }
@@ -283,10 +396,9 @@ export async function POST(request: NextRequest) {
       newThread = true;
     }
   } else {
-    const phoneKey = normalisePhone(recipient);
-    if (!phoneKey) {
-      return NextResponse.json({ error: "That lead has no usable phone number." }, { status: 409 });
-    }
+    // phoneKey is resolved once above the caps block, because the cross-operator
+    // cooldown needs it too. Non-null there by construction on this branch.
+    const phoneKey = whatsappPhoneKey as string;
     const before = await admin
       .from("lead_message_threads")
       .select("id")

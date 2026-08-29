@@ -148,6 +148,19 @@ export interface ChannelAvailability {
   /** Is sending allowed on this assignment at all (rejected/closed)? */
   sendable: boolean;
   reason: string | null;
+  /**
+   * Set while we are outside the hours landlords are messaged (§40.12), naming
+   * when sending resumes — so the composer can say so BEFORE somebody writes
+   * three hundred characters, rather than after.
+   *
+   * ⚠️ There is deliberately no equivalent for the cross-operator cooldown.
+   * Quiet hours is knowable from the clock alone and reveals nothing; greying a
+   * button because ANOTHER operator messaged this landlord would announce their
+   * activity on page load, which is exactly what §19.7 removed from the pool row
+   * set "so no later UI change can reach for it". That block is only ever
+   * reported in the response to an attempted send.
+   */
+  quietUntil: string | null;
   messageCount: number;
   unreadInbound: number;
 }

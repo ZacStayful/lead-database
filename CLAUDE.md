@@ -6595,9 +6595,129 @@ URLs typed into JSX. Same discipline as `featureRequest.ts` (§21.8).
 every customer lands on a request-access page, which reads as the product being
 broken rather than the video being missing.
 
+### 40.12 — Two contact limits: WHEN, and HOW MANY OF US *(0120)*
+
+§40.10's caps are about volume and are both **per customer**. Neither asks what
+time it is, and neither can see the other operators holding the same landlord.
+Both gaps were measured rather than assumed:
+
+| | |
+|---|---|
+| Outbound WhatsApps sent at the time of writing | 17, across one lead |
+| Sent outside 09:00–20:00 London | **6 of 17**, all at 20:xx |
+| Leads held by 2+ operators | **145** of 441 |
+| Leads held by 3+ | **28**. One is held by **5** |
+| Landlords messaged by two operators so far | **0** — the book is one operator testing |
+
+Neither problem has bitten, and both are structurally guaranteed to the moment a
+second operator connects.
+
+#### Quiet hours refuse, they do not defer
+
+09:00–20:00 Europe/London, **seven days a week**, WhatsApp only.
+
+⚠️ **There is nowhere to defer to.** Every send is synchronous and
+operator-initiated: no queue, no `send_after`, no sending cron — the only
+messaging cron reads delivery status and re-runs unverified inbound events.
+Building a queue would also collide with 0116's own note that TimelinesAI has no
+idempotency key, so a stale queued WhatsApp is never auto-retried. A queue whose
+entries cannot be safely retried is not worth inventing for this.
+
+**Seven days, and no bank holidays.** `businessTime.ts` is the wrong calendar
+twice over: a landlord is a **consumer**, so a Saturday may land better than a
+Tuesday; and `fetchUkBankHolidays()` makes a live gov.uk request with an 8s
+timeout, which is fine in the batch crons that call it and not fine behind a
+Send button.
+
+**No admin bypass.** §40.3 establishes that preview means live *for this viewer*
+— an admin's own row sends real messages to real landlords while the switch is
+off — so a real WhatsApp at 22:00 is precisely what this prevents, whoever sends
+it.
+
+⚠️ **`sendWindow.ts` is the first time-of-day helper in the codebase.**
+`businessTime.ts` is date-granularity only, and nothing anywhere asked what hour
+it is in London. Vercel runs in UTC and Britain is an hour ahead for over half
+the year, so reading the server clock would message people an hour early from
+late March to late October — and would have looked correct in every winter test.
+That case is pinned.
+
+Everything in the module is **pure**, deliberately: `service.test.ts` tests
+`assignmentSendable` with no fake client at all, so the decision is testable in
+that style rather than through the fake — which is the seam `draft.test.ts`
+warns about.
+
+⚠️ **A missing setting means the DEFAULT WINDOW — not fail-open, not
+fail-closed.** The two precedents point opposite ways (`messagingEnabled` fails
+closed, `fetchUkBankHolidays` fails open) and neither fits a *restriction*:
+failing closed would refuse every send to avoid sending at the wrong hour, and
+failing open would lift the rule exactly when we cannot confirm it. The default
+**is** the rule; `messaging_quiet_start_hour` / `_end_hour` only move it.
+
+It is also reported **before** the operator writes, through a new `quietUntil`
+on `ChannelAvailability` — being told at the end that three hundred characters
+cannot go anywhere is the version of this that stops the feature being used.
+
+#### The cross-operator cooldown, and what it may not say
+
+No two **different** operators may message one landlord within
+`messaging_lead_cooldown_hours` (24). A cooldown rather than a lifetime cap: the
+risk worth preventing is the same-morning pile-on, and a lifetime cap would block
+the operator who legitimately arrives fifth through no fault of their own.
+
+**Keyed on the phone, not on `lead_id`.** §18's duplicate-landlord problem means
+one person can arrive as several `leads` rows — 28 exact groups when 0070 was
+written, and deliberately no unique constraint on the identity key — so `lead_id`
+under-counts in exactly the case that matters: three operators each holding a
+different row for the same landlord. `counterparty_phone_norm` is the identity
+key the rest of this feature already uses, for that same reason.
+
+⚠️ **This is the only customer-agnostic read in the feature**, and it breaches on
+purpose what 0116's header calls the containment guarantee — *"the leading
+customer_id in every unique key … one customer's conversation is structurally
+unreachable from another's"*. Every other read in `src/` is
+`.eq("customer_id", …)`. So the crossing is confined to one function, and:
+
+⚠️ **It returns a boolean and nothing else.** No id, no name, no count, no
+timestamp, not even how long is left. §19.7 removed previous-holder information
+from the pool row set entirely *"so no later UI change can reach for it"*, and
+the rule covers the count, the identity **and whether they acted at all**. A
+richer return value is a probe: operator A learns when operator B is working a
+shared landlord.
+
+⚠️ **Which is why the copy names no time.** *"You can message them again after
+4pm tomorrow"*, minus a cooldown anyone can measure by experiment, **is** the
+other operator's send time — §19.7 arrived at by subtraction. The message
+attributes the block to us, asserts nothing about anybody, and names what the
+operator can still do, because a refusal with no alternative reads as the product
+being broken. Two unit tests pin it: the verdict has exactly one key, and the
+sentence contains no digit and no time word.
+
+⚠️ **And it is deliberately absent from `channelAvailability`.** Quiet hours is
+knowable from the clock and safe to show up front; greying a button because
+*another operator* messaged this landlord would announce their activity on page
+load. The cooldown appears only in the response to an attempted send.
+
+**Fails OPEN on a query error**, the opposite way to the send route's other
+guards. Those protect the operator's own number; this one protects a landlord
+from a second message. Refusing every send because one read failed would take a
+paid feature down to prevent a duplicate.
+
+`lead_message_threads_counterparty_idx` (0120) is what keeps the lookup off a
+sequential scan — the existing unique index leads on `customer_id` and cannot
+serve a customer-agnostic query. Confirmed by `EXPLAIN` over 5,000 seeded
+threads: index scan on both sides, no seq scan.
+
+**Nothing is retroactive.** Verified read-only against production before
+shipping: over the 145 leads held by two or more operators, the predicate blocks
+**zero** today.
+
 ### Verification
 
-`npm run test` — 111 cases across the messaging suite, among them: the apex
+`npm run test` — **159** cases across the messaging suite, 34 of them added by
+0120 (the figure recorded here before that was 111, which was already short —
+count it rather than incrementing it). Among them: the quiet-hours window read
+in BST as well as GMT and across both DST boundaries, the §19.7 pins on the
+cooldown verdict and its wording, and the apex
 defence (the file that stops us breaking a customer's live Google Workspace),
 the crypto AAD binding, the LID and `"+0"` identity traps, prompt assembly
 asserted against the **rendered prompt** rather than the context object, the
@@ -6623,7 +6743,10 @@ time. That is the same trap that cost the previous round.
 
 ### Deployment order — migrations BEFORE code, and 0117 BEFORE 0118
 
-0115, 0116 and 0117 are additive and inert; nothing reads them until the code
-ships. 0118 touches allocation and is revertible on its own — deployed
+0115, 0116, 0117 and 0120 are additive and inert; nothing reads them until the
+code ships. 0120 in particular carries no column and no constraint — three
+settings rows and one index — so it can be applied well ahead of its code, and
+the index is what keeps the cooldown lookup off a sequential scan once that
+code is live. 0118 touches allocation and is revertible on its own — deployed
 0117-only, everything works and messages simply do not mark contacted, which is
 the safe direction for the window between them.
