@@ -14,6 +14,7 @@ import { describe, it, expect } from "vitest";
 import {
   sequenceIdempotencyKey,
   enrolAssignments,
+  enrolOnAssignment,
   DUE_DRAFT_COLUMNS,
   REVIEW_QUEUE_COLUMNS,
 } from "../sequences";
@@ -236,5 +237,103 @@ describe("enrolAssignments", () => {
     });
     expect(r).toEqual({ enrolled: 0, alreadyEnrolled: 0, skipped: 0 });
     expect(inserts).toHaveLength(0);
+  });
+});
+
+/**
+ * The standing rule, and the two things it must never do.
+ *
+ * It hangs off `completeAssignment`, which is downstream of the single money
+ * path and where every existing follow-through — the new-lead email, the SMS,
+ * the top-up offer — is logged and swallowed rather than thrown. A messaging
+ * feature must not become the first thing there able to break an assignment.
+ */
+function standingFake(state: {
+  sequence?: { id: string } | null;
+  throwOnRead?: boolean;
+}) {
+  const inserts: Record<string, unknown>[] = [];
+  function builder(table: string) {
+    const self: Record<string, unknown> = {};
+    Object.assign(self, {
+      select: () => self,
+      eq: () => self,
+      in: () => self,
+      is: () => self,
+      order: () => self,
+      insert: async (row: Record<string, unknown>) => {
+        inserts.push(row);
+        return { error: null };
+      },
+      maybeSingle: async () => {
+        if (state.throwOnRead) throw new Error("postgrest exploded");
+        return { data: state.sequence ?? null, error: null };
+      },
+      then: (resolve: (v: unknown) => unknown) => {
+        if (table === "message_sequence_steps") {
+          return Promise.resolve({
+            data: [{ step_number: 1, delay_days: 0, brief: null }],
+            error: null,
+          }).then(resolve);
+        }
+        if (table === "lead_assignments") {
+          return Promise.resolve({
+            data: [{ id: "a1", lead_id: "l1", status: "new", closed_at: null, closed_reason: null }],
+            error: null,
+          }).then(resolve);
+        }
+        return Promise.resolve({ data: [], error: null }).then(resolve);
+      },
+    });
+    return self;
+  }
+  return { admin: { from: (t: string) => builder(t) } as never, inserts };
+}
+
+describe("enrolOnAssignment", () => {
+  it("enrols when the customer has a standing rule for that product", async () => {
+    const { admin, inserts } = standingFake({ sequence: { id: "s1" } });
+    await enrolOnAssignment(admin, {
+      customerId: "c1",
+      assignmentId: "a1",
+      leadType: "management",
+    });
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].sequence_id).toBe("s1");
+  });
+
+  it("does nothing when they have none", async () => {
+    const { admin, inserts } = standingFake({ sequence: null });
+    await enrolOnAssignment(admin, {
+      customerId: "c1",
+      assignmentId: "a1",
+      leadType: "management",
+    });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("NEVER THROWS, whatever the database does", async () => {
+    // completeAssignment swallows every follow-through failure because the lead
+    // has already been paid for and delivered. This must not be the exception.
+    const { admin } = standingFake({ throwOnRead: true });
+    await expect(
+      enrolOnAssignment(admin, {
+        customerId: "c1",
+        assignmentId: "a1",
+        leadType: "management",
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("treats an unknown lead_type as management rather than refusing", async () => {
+    // lead_type is nullable in places, and a lead nobody enrols because of a
+    // null column is a silent failure of the whole standing rule.
+    const { admin, inserts } = standingFake({ sequence: { id: "s1" } });
+    await enrolOnAssignment(admin, {
+      customerId: "c1",
+      assignmentId: "a1",
+      leadType: "",
+    });
+    expect(inserts).toHaveLength(1);
   });
 });

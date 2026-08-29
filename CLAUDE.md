@@ -46,19 +46,37 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
 | `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
 | `/api/cron/run-lead-analysis` | `0 6 * * *` | **Backstop only** for the paid lead-analysis queue (§31). The queue is driven by the purchase, a self-chain and the progress poll; this catches the case where all three failed |
+| `/api/cron/parse-income-reports` | `0 12 * * *` | Read the property-analysis PDF off each lead's Monday item (§25) |
+| `/api/cron/monthly-insights` | `30 9 2 * *` | Monthly customer insight email |
+| `/api/cron/poll-whatsapp-status` | `*/5 * * * *` | WhatsApp delivered/read (no vendor webhook), deferred-event recovery, **and sending due follow-up steps** (§40.9, §40.13) |
+| `/api/cron/draft-sequence-messages` | `0 17 * * *` | Draft tomorrow's follow-up steps into the review queue (§40.13) |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
 ~15-minute cadence to hit its 12h/4h/1h windows and is currently driven by
 nothing. See §12.
 
-⚠️ **"The account is now on Pro" was wrong.** The Vercel API reports this team as
-`hobby`, and the owner confirmed it (2026-08-25). Hobby allows **2 crons, daily
-only**, and caps functions at **60 seconds** — against the **11** crons declared
-above and the `maxDuration = 300` on `parse-income-reports` and the 0092
-backfill. So an unknown number of the jobs in this table may never fire, and
-those two routes are being cut short at 60s. Not investigated further here;
-§31.8 records what it cost the one feature that had to design around it.
+⚠️ **THE HOBBY WARNING THAT USED TO BE HERE IS OUT OF DATE. The team is on
+Pro.** `GET /v2/teams` returns `plan: "pro"` for `zacs-projects-bcdb6016`
+(re-checked 2026-08-29). What it said — "the Vercel API reports this team as
+`hobby`… 2 crons, daily only… 60-second functions" — was true when written on
+2026-08-25 and is no longer.
+
+That correction matters in three directions, so it is worth stating rather than
+just deleting:
+
+- The **14** crons in the table above genuinely all fire. Under Hobby only two
+  would, and §31.8 records a whole feature that was designed around believing
+  they might not.
+- `maxDuration = 300` works. `parse-income-reports`, the 0092 backfill and
+  `draft-sequence-messages` all rely on it; under Hobby they were being cut
+  short at 60 seconds.
+- §31.8's "on Pro, three numbers change together" note is now actionable rather
+  than hypothetical — the lead-analysis worker is still sized for a 60-second
+  ceiling and could be raised.
+
+`/api/cron/poll-whatsapp-status` at `*/5` is itself proof: a sub-daily schedule
+is a Pro-only feature and it has been registered since §40 shipped.
 
 **Cron auth pattern** — copy this exactly for new jobs:
 
@@ -6750,3 +6768,308 @@ the index is what keeps the cooldown lookup off a sequential scan once that
 code is live. 0118 touches allocation and is revertible on its own — deployed
 0117-only, everything works and messages simply do not mark contacted, which is
 the safe direction for the window between them.
+
+---
+
+### 40.13 — Follow-up sequences *(0121)*
+
+An operator builds a ladder — "straight away, then 3 days, then 7" — and puts
+leads into it, one or two hundred at a time. Each step is written for that
+specific landlord and property the evening before it is due, waits overnight in
+a review queue, and sends itself in the morning unless they cancel it.
+
+`/dashboard/follow-ups` · `/api/cron/draft-sequence-messages` ·
+`/api/customer/messaging/sequences/**` · the third phase of
+`/api/cron/poll-whatsapp-status`.
+
+Everything §40 shipped before this was one message at a time from one lead page.
+What the book actually needs is not one message: across the top twelve operators
+there are ~247 workable leads and ~50 new assignments a week, and two distinct
+failures — **never contacted at all** (21 for one operator) and **contacted once
+then abandoned** (19 for another, every one of theirs). A sequence is the
+machine for both, and the two halves of the original ask map onto them exactly.
+
+#### ⚠️ The codebase argued against this, and the objection is respected
+
+`send/route.ts` and §40.12 both record, in terms:
+
+> There is nowhere to defer to: every send is synchronous and operator-initiated,
+> there is no queue, no `send_after` column and no sending cron. Building one
+> would also collide with 0116's own note that TimelinesAI has **no idempotency
+> key**, so a stale queued WhatsApp can never be safely auto-retried. **A queue
+> whose entries cannot be safely retried is not worth inventing for this.**
+
+That is about a queue of unsent **provider payloads** — rows handed to a sender,
+crashed mid-flight, unreplayable. This is not one.
+
+**What is scheduled is an INTENT, not a payload.** A `message_sequence_drafts`
+row says "this text is due at 09:00". When it comes due the sender walks
+`sendOneMessage`, which claims a `lead_messages` row on
+`(customer_id, idempotency_key)` and only then calls the provider — the same
+synchronous path a human Send takes. A crash after the provider call leaves a
+`queued` row the operator can see, which is exactly what a manual send does
+today. **Nothing is ever auto-retried against TimelinesAI.**
+
+`sequenceIdempotencyKey(runId, step)` is `seq:<run>:<step>` — **derived, never
+generated**. The sending phase runs every five minutes, so one step being
+considered twice is the ordinary case, not a rare one; a random uuid would
+defeat the unique index completely and message the landlord again. It is keyed
+on the run and the step rather than the draft row, so a draft cancelled and
+somehow re-created gets no second chance at the same step.
+
+The objection rules out a retry queue. It does not rule out a schedule.
+
+#### `sendOneMessage()` came first, alone
+
+The send route's body was 250 inline lines in a route handler and the only place
+that knew how to message a landlord. `service.ts`'s header already claimed "ONE
+DEFINITION OF SEND ELIGIBILITY, shared by the send route and the button" — true
+of `assignmentSendable` and never true of the send **path**, because there was
+only ever one caller.
+
+Duplicating it for a cron would duplicate seven rules that each fail silently
+when two copies drift: the daily cap, the minimum interval, quiet hours, the
+cross-operator cooldown, the idempotency claim, the thread bookkeeping and the
+`message_sent` engagement event. The extraction shipped as its own commit with
+no behaviour change.
+
+Two shapes in the new signature are load-bearing:
+
+- **Quiet hours always REFUSE there, and the verdict carries `quietOpensAt`.**
+  ⚠️ **This is the one place §40.12's rule inverts, and it is correct.** A manual
+  send has nowhere to defer to, so it is refused; a scheduled step has a
+  schedule, so its caller moves `send_after`. One rule, two remedies — possible
+  only because the function reports the reopening time rather than acting on it.
+- `generated_by` defaults per caller (`human` for the composer, `system` for the
+  scheduler) but **a draft found in our own ledger always wins and records
+  `llm`**. Provenance is still read back from the ledger, never taken from the
+  caller.
+
+What stayed in the route is what only an HTTP caller can answer: ownership (a
+foreign assignment id must be indistinguishable from a nonexistent one) and the
+two switches that take "is this viewer an admin", which is meaningless to a cron.
+
+#### ⚠️ What stops a run is the most important thing in the feature
+
+A ladder that keeps going after the landlord has answered is worse than never
+shipping it. Four things stop one, and three cost nothing to maintain:
+
+| | |
+|---|---|
+| **The landlord replies** | `stopRunsForAssignment`, from the inbound webhook |
+| **The assignment goes away** | the 0121 cascade — discard (§30.7), the filter release (§39) and a swap all stop a run with **no edit to any privileged function** |
+| **The lead becomes unsendable** | `assignmentSendable` re-read at both the draft and the send |
+| **The operator says so** | `stopRun` |
+
+⚠️ **The reply case is deliberately NOT the same decision as §40.7.** That
+section is right that an inbound message must never count as *operator*
+engagement — it would shield an ignored lead from escalation. "Does not shield
+the lead" and "does not stop us messaging them again" are different questions
+with opposite answers, and this is the only place a reply can be seen.
+
+It sits **outside** the `!alreadyHad` guard in `ingestTimelinesEvent`. Stopping a
+run twice is a no-op (`stopRun` filters on `status = 'active'`), where MISSING a
+reply because its event arrived under a second event type would leave the ladder
+running. The two directions are not symmetric.
+
+`stopRun` also sweeps every `pending` draft on the run to `skipped`. Leaving them
+would send the next step of a ladder we had just stopped.
+
+#### Schema
+
+| Table | Note |
+|---|---|
+| `message_sequences` | ⚠️ Partial unique on `(customer_id, lead_type, channel) where trigger = 'on_assignment' and is_active` — at most one standing rule per product, or a new lead is enrolled twice and messaged twice on day one |
+| `message_sequence_steps` | `delay_days` is **calendar** days; `brief` is what the step is *for*, fed to the drafter |
+| `message_sequence_runs` | ⚠️ **Unique on `assignment_id` ALONE**, not `(assignment_id, sequence_id)`. A lead is in at most one sequence: two ladders on one landlord from one number is the failure this must not ship with. `on delete cascade` from `lead_assignments`, because a run is **live state** where `lead_messages` is the record |
+| `message_sequence_drafts` | The review queue. `body` is a **copy** the operator may edit; `message_draft_requests.draft_text` keeps what the model wrote |
+
+Plus `message_draft_requests.origin` and three settings. RLS on, no policies, as
+every other messaging table.
+
+⚠️ **The interactive rate limits could not be reused for bulk.** The draft route
+caps a customer at 50 drafts a rolling day and one operator's workable backlog is
+37 leads; worse, the counter cannot tell somebody hitting "regenerate" four times
+from the engine drafting step 2 for two hundred leads, so one would silently
+starve the other. `origin` separates them — the interactive caps now count
+`origin = 'operator'` only, and the scheduler has its own ceiling in
+`system_settings`. `message_draft_requests`' own "~110k rows a year" comment is
+derived from the interactive cap and stops being true.
+
+#### Two crons, and why they are two
+
+**Drafting** is its own daily job at 17:00 UTC, `maxDuration = 300`. A model call
+is ~20 seconds against the poller's 45-second wall clock, so squeezing it in
+there would starve the status phase it shares a budget with, on every run.
+
+**Sending** is a third phase inside `poll-whatsapp-status`, and that route's own
+recovery-phase docblock makes the argument verbatim: it already runs every five
+minutes, already goes through `consume_provider_budget` — the shared 30-req/s
+TimelinesAI bucket a second job would contend with blindly — and already holds a
+wall clock.
+
+⚠️ **The sending phase runs AFTER the recovery phase.** A landlord's reply that
+this run has just rescued from the deferred queue stops the ladder before the
+next step goes out. The other order would act on it one message too late.
+
+⚠️ **`messaging_sequence_review_hours` is 18, and that number is arithmetically
+tied to the drafting cron's schedule.** 17:00 UTC to a 09:00 send is sixteen
+hours; a twelve-hour window would therefore miss every ordinary morning step,
+draft it the following evening, and turn "drafted overnight" into "sent a day
+late". Move the cron or shorten the window and check that sum again.
+
+Failure handling is split by where the refusal happens, and the split is not
+stylistic: **every rescheduled code is refused BEFORE the claim insert**, so
+retrying it is genuinely free. Everything after the claim is terminal for that
+step, because the row already carries its key — retrying would collide on 23505
+and report a failed send as a successful one.
+
+| | |
+|---|---|
+| Reschedule | `quiet_hours` (to `quietOpensAt`), `too_soon`, `daily_cap_reached`, `lead_cooldown`, `thread_failed`, `claim_failed` |
+| Stop the run | `not_sendable`, `no_recipient`, `bad_phone`, `not_connected`, `credential_unreadable` — every later step would fail the same way |
+| Skip and advance | everything else, i.e. a provider failure |
+
+**A failed DRAFT writes nothing and is retried tomorrow, never a template** —
+validateDraft.ts's own argument about its fallback. The only bound is time: a
+step still undrafted seven days after it fell due stops the run with
+`drafting_failed`, so a model outage surfaces as a stopped ladder rather than a
+silently frozen one.
+
+#### Drafting steps 2..n
+
+⚠️ **The existing prompt is shaped for a cold opener and reads wrong as a
+follow-up.** It says "open with the landlord's first name" and "name the
+property so it does not read as a scam"; used unchanged for step 3, every
+message reintroduces the operator to somebody they have already messaged twice —
+which reads as an automated blast, which is the one thing this must not look
+like.
+
+- `DraftContext` gains a `step` block: number, the earlier messages and how long
+  ago they went, and the operator's brief. **Absent means first message**, and
+  that is the only way to say it.
+- ⚠️ **There is deliberately no "has the landlord replied" field.** A reply stops
+  the run, so nothing is ever drafted for a conversation that has one, and the
+  sending phase re-checks. A flag would be a second, weaker answer to a settled
+  question — and the first time the two disagreed we would follow up mid-reply.
+- `PROMPT_VERSION` is **per shape** (`wa_first_v1` / `wa_followup_v1`). One
+  constant would collapse the only join that can answer "does chasing work".
+- ⚠️ `validateDraft`'s `missing_landlord_name` relaxes **for follow-ups only**.
+  "Any thoughts on this one?" is a good fourth chase and the rule rejects it —
+  and enforcing it would push the model to shoehorn the name into every message,
+  which is the repetitive pattern the follow-up prompt exists to avoid. Every
+  other rule holds: no links, no pricing, no unsupplied figures, 480 characters.
+- `buildDraftContext` requires a `viewerScopedLead()` lead and the drafting cron
+  scopes every one. On a resold imported lead `lead_profile` is the uploading
+  operator's private working notes (§32.8); the interactive route scopes one
+  lead because a person asked for it, this scopes two hundred unwatched.
+
+#### Cadence
+
+`src/lib/messaging/cadence.ts`, pure, on sendWindow.ts's stated reasoning.
+
+⚠️ **The time of day is held in LONDON WALL CLOCK, not in milliseconds.** Adding
+`days * 86_400_000` is right for 51 weeks and wrong across the last Sunday in
+March and October, where it moves the whole remaining ladder by an hour — a
+five-step sequence that starts as a 9am message ends as an 8am one, and 8am is
+outside sending hours, so the last step is silently deferred rather than sent
+when it was meant to be.
+
+⚠️ **The next step is measured from the previous SEND, not from its schedule.** A
+step held overnight by quiet hours or by the daily cap pushes the rest of the
+ladder with it. Otherwise a backlog enrolled at the cap fires steps 1 and 2
+within hours of each other the moment the cap clears — the burst profile that
+gets a number restricted, produced by the limit meant to prevent it.
+
+#### Enrolment, and the two screens
+
+**Bulk, from the leads list.** ⚠️ "Select all" means the **filtered** list, and
+that is the point rather than a shortcut: `filtered` already is "3+ beds in
+Bristol I have never opened", so the operator has done the segmenting with the
+filters and the bulk action inherits exactly it.
+
+⚠️ **The confirmation states how long the backlog will take.** `daily_send_cap`
+defaults to 40; three steps over two hundred leads is six hundred messages,
+fifteen days. An operator expecting it out this afternoon would first hear
+otherwise from a landlord ringing about a message sent a fortnight late.
+
+The multi-select checkbox sits **outside** the card's expanding button — nested
+it would be invalid markup and, worse, ticking it would expand the card and mark
+the lead viewed, so selecting forty leads would clear forty "new" badges the
+operator was using to find them.
+
+**The review queue is the consent.** Every message on it sends itself, from a
+real person's number, to a member of the public. Requiring approval instead
+would put the feature back to one lead at a time, which is the problem; a queue
+nobody can see would make the promise half a promise.
+
+⚠️ **"Not this one" and "Stop chasing" are separate verbs.** Cancelling one draft
+advances the ladder as though that step had sent, so the next arrives on its
+normal cadence. One button doing both would either lose somebody a whole
+sequence over a wording they disliked, or — far worse — message a landlord again
+in three days after they had decided to leave them alone.
+
+**Archiving a sequence stops its live runs**, and names the count first. Leaving
+them would keep messaging landlords from a sequence the operator believes they
+have switched off.
+
+**The standing rule** hooks `completeAssignment()` — the single shared
+follow-through for all five assignment paths, so a lead arriving by any route
+enrols identically. It **enrols only**: that function is downstream of the single
+money path and must not grow a blocking third-party call, and it **never
+throws**, like every other follow-through there. ⚠️ Deliberately **not** gated on
+`sendThresholdWarnings` — that flag is about credit warnings, and bulk assign and
+swap pass `false` for reasons that have nothing to do with messaging.
+
+It does not check `messaging_sequences_enabled`: enrolling while the switch is
+off is inert, and it is the right side to fail on — a lead that arrived during
+the rollout is then already in the ladder when it is turned on, rather than
+permanently missed.
+
+#### ⚠️ The `!inner` on the embedded run
+
+`DUE_DRAFT_COLUMNS` and `REVIEW_QUEUE_COLUMNS` live in `sequences.ts` rather than
+inline in the routes so a test can pin them. §27.8 records what the absence
+costs: in PostgREST a filter on a **non-inner** embedded resource filters the
+EMBEDDED RESOURCE, so every draft comes back with its run nulled rather than
+excluded — a 200 that paginates normally and is wrong. Here it would have the
+sending phase walk drafts belonging to **stopped** runs: messaging landlords who
+have already replied.
+
+### Verification
+
+All 121 migrations to a scratch Postgres 16, 0121 applied twice for idempotency,
+and **17 schema assertions**: the second standing rule refused and archiving
+freeing the slot, one run per assignment, one draft per step, every CHECK on its
+boundaries, `origin` defaulting to `operator`, RLS on with zero policies on all
+four — and the one that matters, that discarding a lead cascades the run away
+and leaves `lead_messages` standing.
+
+Then an **eight-assertion lifecycle rehearsal** over the exact selectors the two
+crons use: the drafting window finds both runs, the sending phase finds both
+drafts, a reply stops the run **and** its queued message so only one remains, a
+re-run collides on the derived key rather than re-sending, a different step is a
+different key and goes, archiving stops every live run, and the sent messages
+survive all of it. It also asserts that a **left** join in place of the inner one
+does over-return, rather than trusting the §27.8 note.
+
+785 vitest cases, including cadence across both DST boundaries in both
+directions, the enrolment tally under a mid-batch collision, and that
+`enrolOnAssignment` never throws whatever the database does.
+
+**Not yet exercised:** a live end-to-end run against a real TimelinesAI
+workspace, and the follow-up prompt against the live Anthropic API. Do a
+two-step sequence on one real lead before enabling it for anybody, and check the
+second message does not reintroduce the operator.
+
+### Deployment order — migration BEFORE code
+
+0121 first. It is additive and inert — four tables with no readers, one column
+with a default that preserves today's meaning, three settings — and it redefines
+no function and touches no balance, counter, pacing or capacity column.
+
+⚠️ **`messaging_sequences_enabled` ships `false`**, like `messaging_enabled` did
+and for a sharper reason: what it gates sends unattended messages from a real
+person's own number to members of the public. `ANTHROPIC_API_KEY` must be set in
+Vercel **and the project redeployed** — env vars are baked in at build time,
+which is the trap §40's own verification section already records.

@@ -348,6 +348,62 @@ export const REVIEW_QUEUE_COLUMNS =
   "message_sequences(name), " +
   "lead:leads(id, lead_name, address, owner_customer_id, lead_profile))";
 
+/**
+ * The standing rule: put a newly assigned lead into the customer's automatic
+ * sequence, if they have one for that product (§40.13).
+ *
+ * ⚠️ IT ENROLS, AND NEVER SENDS. `completeAssignment` is downstream of
+ * `assign_lead_to_customer`, the single money path, and it must not grow a
+ * blocking third-party call. What this writes is one row; the drafting cron
+ * picks it up that evening and the sending phase posts it in the morning.
+ *
+ * ⚠️ AND IT NEVER THROWS. Nothing in `completeAssignment` does — a failed email,
+ * a failed SMS and a failed top-up offer are all logged and swallowed, because
+ * the lead has already been paid for and delivered. A messaging feature must
+ * not be the first thing there able to break an assignment.
+ *
+ * ⚠️ NOT GATED ON `sendThresholdWarnings`. That flag is about CREDIT warnings,
+ * and the bulk assigner and the swap pass `false` for reasons that have nothing
+ * to do with messaging — a lead placed by an admin is still a lead the operator
+ * wants to follow up.
+ *
+ * It does not check `messaging_sequences_enabled`. Enrolling while the platform
+ * switch is off is inert (nothing drafts, nothing sends) and it is the right
+ * side to fail on: a lead that arrived during the rollout is then already in
+ * the ladder when it is turned on, rather than permanently missed.
+ */
+export async function enrolOnAssignment(
+  admin: Admin,
+  params: { customerId: string; assignmentId: string; leadType: string }
+): Promise<void> {
+  try {
+    const { data } = await admin
+      .from("message_sequences")
+      .select("id")
+      .eq("customer_id", params.customerId)
+      .eq("trigger", "on_assignment")
+      .eq("lead_type", params.leadType === "guaranteed_rent" ? "guaranteed_rent" : "management")
+      .eq("channel", "whatsapp")
+      .eq("is_active", true)
+      .is("archived_at", null)
+      .maybeSingle();
+
+    const sequenceId = (data as { id: string } | null)?.id;
+    if (!sequenceId) return;
+
+    await enrolAssignments(admin, {
+      customerId: params.customerId,
+      sequenceId,
+      assignmentIds: [params.assignmentId],
+    });
+  } catch (e) {
+    console.error(
+      "[sequences] enrolOnAssignment failed",
+      e instanceof Error ? e.message : e
+    );
+  }
+}
+
 /** Numeric system_settings, read in one query. Missing keys take the fallback. */
 export async function sequenceSettings(
   admin: Admin

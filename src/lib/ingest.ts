@@ -9,6 +9,7 @@ import { leadPriceFor } from "@/lib/plans";
 import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import { syncStoredReport } from "@/lib/incomeReportStorage";
 import { shouldRaiseContentionCap, shouldRouteLead } from "@/lib/leadResale";
+import { enrolOnAssignment } from "@/lib/messaging/sequences";
 import {
   assessLeadQuality,
   passesQualityGate,
@@ -678,6 +679,24 @@ export async function completeAssignment(
       }
     }
   }
+
+  // The standing follow-up rule (§40.13). This is the single shared
+  // follow-through for all five assignment paths — the daily sync, admin
+  // force-assign, bulk assign, escalation and a swap — so a lead arriving by
+  // any route joins the operator's automatic sequence identically.
+  //
+  // ⚠️ DELIBERATELY OUTSIDE the `sendThresholdWarnings` block above. That flag
+  // is about credit warnings, and bulk assign and swap pass `false` for reasons
+  // that have nothing to do with messaging: a lead an admin placed by hand is
+  // still a lead the operator wants to follow up.
+  //
+  // Enrols only. It writes one row and makes no third-party call, because this
+  // function is downstream of the single money path and must not grow one.
+  await enrolOnAssignment(supabase, {
+    customerId,
+    assignmentId,
+    leadType: lead.lead_type ?? "management",
+  });
 }
 
 
