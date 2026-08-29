@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { LeadCard } from "./LeadCard";
+import { SequenceEnrolBar } from "./SequenceEnrolBar";
+import { ListChecks } from "lucide-react";
 import {
   StageFilterBar,
   productOf,
@@ -27,14 +29,32 @@ type SourceFilter = "all" | "stayful" | "mine";
 
 export function LeadsList({
   assignments,
+  /**
+   * Whether to offer bulk selection at all (SS40.13). Off unless the customer
+   * can actually message — a "Follow up in bulk" button that leads nowhere is
+   * worse than no button, and SS18E already records that reasoning about invites.
+   */
+  canSequence = false,
 }: {
   assignments: AssignmentWithLead[];
+  canSequence?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // Only offer the product filter when the customer actually holds both types.
   const hasBothTypes = useMemo(() => {
@@ -204,6 +224,36 @@ export function LeadsList({
         onChange={setStageFilter}
       />
 
+      {canSequence && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => {
+              setSelecting((v) => !v);
+              setSelected(new Set());
+            }}
+            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent"
+          >
+            <ListChecks className="h-4 w-4" />
+            {selecting ? "Done selecting" : "Follow up in bulk"}
+          </button>
+        </div>
+      )}
+
+      {/*
+        ⚠️ "Select all" means the FILTERED list, not the whole book, and that is
+        the point rather than a shortcut. `filtered` already is "3+ beds in
+        Bristol that I have never opened" — the operator has done the segmenting
+        with the filters above, and the bulk action inherits exactly it.
+      */}
+      {canSequence && selecting && (
+        <SequenceEnrolBar
+          selectedIds={Array.from(selected)}
+          totalVisible={filtered.length}
+          onSelectAll={() => setSelected(new Set(filtered.map((a) => a.id)))}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       {filtered.length === 0 ? (
         <div className="rounded-lg border-[0.5px] border-dashed border-border p-12 text-center text-muted-foreground">
           No leads match your filters.
@@ -211,7 +261,13 @@ export function LeadsList({
       ) : (
         <div className="space-y-3">
           {filtered.map((a) => (
-            <LeadCard key={a.id} assignment={a} />
+            <LeadCard
+              key={a.id}
+              assignment={a}
+              selectable={canSequence && selecting}
+              selected={selected.has(a.id)}
+              onToggleSelect={toggleSelect}
+            />
           ))}
         </div>
       )}

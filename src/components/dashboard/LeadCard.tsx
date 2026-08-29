@@ -21,9 +21,16 @@ import {
 export function LeadCard({
   assignment: initial,
   from = "leads",
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   assignment: AssignmentWithLead;
   from?: string;
+  /** Multi-select for bulk enrolment into a follow-up sequence (SS40.13). */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const [assignment, setAssignment] = useState(initial);
   // Re-seed from fresh server data (router.refresh / realtime) — the stable
@@ -83,6 +90,27 @@ export function LeadCard({
             : "lead-card-viewed"
       )}
     >
+      <div className="flex items-stretch">
+        {/*
+          ⚠️ OUTSIDE the expanding button, not inside it. A checkbox nested in a
+          <button> is invalid markup and, worse, ticking it would also expand
+          the card and mark the lead viewed — so selecting forty leads would
+          silently clear forty "new" badges the operator was using to find them.
+        */}
+        {selectable && (
+          <label
+            className="flex cursor-pointer items-center pl-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => onToggleSelect?.(assignment.id)}
+              className="h-4 w-4"
+              aria-label={`Select ${lead.lead_name}`}
+            />
+          </label>
+        )}
       <button
         onClick={toggle}
         className="flex w-full items-center gap-4 p-4 text-left"
@@ -167,6 +195,7 @@ export function LeadCard({
           )}
         </div>
       </button>
+      </div>
 
       {open && (
         <div className="border-t-[0.5px] border-border px-4 py-4">

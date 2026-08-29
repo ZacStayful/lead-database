@@ -7,6 +7,7 @@ import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { MobileNav } from "@/components/dashboard/MobileNav";
 import { DesktopNav, type NavGroup } from "@/components/dashboard/DesktopNav";
+import { messagingActiveFor } from "@/lib/messaging/service";
 import { Logo } from "@/components/Logo";
 
 export default async function DashboardLayout({
@@ -18,6 +19,11 @@ export default async function DashboardLayout({
   if (!user) redirect("/login");
 
   let unread = 0;
+  // Hidden until the platform switch is flipped, and visible to an admin
+  // throughout — the same posture the messaging settings page takes, and the
+  // reason a production rehearsal is possible at all (§40.3). The page enforces
+  // this independently; hiding the link is a courtesy, not a control.
+  let messagingOn = false;
   if (customer) {
     // First authenticated render after login — send the one-time welcome email
     // if this is the customer's first-ever sign-in (idempotent, best-effort).
@@ -30,6 +36,7 @@ export default async function DashboardLayout({
       .eq("customer_id", customer.id)
       .is("read_at", null);
     unread = count ?? 0;
+    messagingOn = await messagingActiveFor(admin, isAdminUser(user));
   }
 
   // Goals is management-only: it targets signed management clients and reads a
@@ -65,6 +72,12 @@ export default async function DashboardLayout({
         // product: the page resolves which pools the customer can see and
         // renders its own explanation when the answer is none.
         { href: "/dashboard/leads/expired", label: "Expired leads" },
+        // Under Leads rather than Account: it is a way of WORKING leads, and
+        // the operator reaches it from the same place they were looking at
+        // them. Its own bulk entry point lives on the leads list itself.
+        ...(messagingOn
+          ? [{ href: "/dashboard/follow-ups", label: "Follow-ups" }]
+          : []),
         { href: "/dashboard/filtering", label: "Lead filtering" },
         { href: "/dashboard/topup", label: "Top up leads" },
       ],

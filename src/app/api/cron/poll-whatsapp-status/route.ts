@@ -43,6 +43,7 @@ import {
 } from "@/lib/messaging/sendOneMessage";
 import {
   advanceRun,
+  DUE_DRAFT_COLUMNS,
   sequenceIdempotencyKey,
   sequenceSettings,
   stopRun,
@@ -637,10 +638,7 @@ async function sendDueSequenceDrafts(
 
     const { data, error } = await admin
       .from("message_sequence_drafts")
-      .select(
-        "id, run_id, customer_id, step_number, body, draft_id, " +
-          "message_sequence_runs!inner(id, status, sequence_id, assignment_id, lead_id)"
-      )
+      .select(DUE_DRAFT_COLUMNS)
       .eq("state", "pending")
       .eq("message_sequence_runs.status", "active")
       .lte("send_after", new Date().toISOString())

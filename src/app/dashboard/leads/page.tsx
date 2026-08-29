@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import { Info } from "lucide-react";
 import { viewerScopedLead } from "@/lib/customerLeads";
-import { getCurrentCustomer } from "@/lib/auth";
+import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getWhatsappConnection, messagingActiveFor } from "@/lib/messaging/service";
 import { LeadsList } from "@/components/dashboard/LeadsList";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { AddLeadsButton } from "@/components/dashboard/AddLeadsButton";
@@ -21,6 +22,16 @@ export default async function LeadsPage() {
     .select("*, lead:leads(*)")
     .eq("customer_id", customer.id)
     .order("assigned_at", { ascending: false });
+
+  // Bulk follow-up is offered only to somebody who can actually message. An
+  // operator with no WhatsApp connection would select forty leads and be told
+  // to go and set one up, which reads as the feature being broken (§18E).
+  //
+  // messagingActiveFor, not messagingEnabled: preview means live for THIS
+  // viewer, so an admin rehearsing on production sees it with the switch off.
+  const canSequence =
+    (await messagingActiveFor(admin, isAdminUser(user))) &&
+    (await getWhatsappConnection(admin, customer.id))?.status === "connected";
 
   // See the note on /dashboard: another operator's customer id never reaches
   // the browser.
@@ -63,7 +74,7 @@ export default async function LeadsPage() {
         </div>
       </div>
 
-      <LeadsList assignments={assignments} />
+      <LeadsList assignments={assignments} canSequence={canSequence} />
     </div>
   );
 }

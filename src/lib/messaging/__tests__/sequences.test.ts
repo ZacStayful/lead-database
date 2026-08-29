@@ -11,7 +11,37 @@
  * Make it random and the second consideration messages the landlord again.
  */
 import { describe, it, expect } from "vitest";
-import { sequenceIdempotencyKey, enrolAssignments } from "../sequences";
+import {
+  sequenceIdempotencyKey,
+  enrolAssignments,
+  DUE_DRAFT_COLUMNS,
+  REVIEW_QUEUE_COLUMNS,
+} from "../sequences";
+
+/**
+ * §27.8's trap, pinned on the two queries that would suffer from it worst.
+ *
+ * In PostgREST a filter on a NON-inner embedded resource filters the EMBEDDED
+ * RESOURCE, not the parent rows — so every draft comes back with its run nulled
+ * rather than being excluded. That is a 200 that paginates normally and is
+ * wrong, and here it would have the sending phase walk drafts belonging to
+ * STOPPED runs: messaging landlords who have already replied.
+ */
+describe("the embedded run is an INNER join", () => {
+  it("on the sending phase's query", () => {
+    expect(DUE_DRAFT_COLUMNS).toContain("message_sequence_runs!inner(");
+  });
+
+  it("on the review queue's query", () => {
+    expect(REVIEW_QUEUE_COLUMNS).toContain("message_sequence_runs!inner(");
+  });
+
+  it("and the sending phase reads the run status it filters on", () => {
+    // .eq("message_sequence_runs.status", "active") is meaningless if the
+    // column is not selected.
+    expect(DUE_DRAFT_COLUMNS).toMatch(/message_sequence_runs!inner\([^)]*status/);
+  });
+});
 
 describe("sequenceIdempotencyKey", () => {
   it("is stable for the same run and step", () => {

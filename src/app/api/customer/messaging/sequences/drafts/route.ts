@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { viewerScopedLead } from "@/lib/customerLeads";
+import { REVIEW_QUEUE_COLUMNS } from "@/lib/messaging/sequences";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,12 +27,7 @@ export async function GET() {
   const admin = createAdminClient();
   const { data } = await admin
     .from("message_sequence_drafts")
-    .select(
-      "id, run_id, step_number, body, send_after, state, edited_at, created_at, " +
-        "message_sequence_runs!inner(id, status, assignment_id, sequence_id, " +
-        "message_sequences(name), " +
-        "lead:leads(id, lead_name, address, owner_customer_id, lead_profile))"
-    )
+    .select(REVIEW_QUEUE_COLUMNS)
     .eq("customer_id", customer.id)
     .eq("state", "pending")
     .order("send_after", { ascending: true })

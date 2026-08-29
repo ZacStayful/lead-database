@@ -324,6 +324,30 @@ export async function skipStep(
   });
 }
 
+/**
+ * ⚠️ THE `!inner` IS LOAD-BEARING, AND §27.8 RECORDS WHAT ITS ABSENCE COSTS.
+ *
+ * In PostgREST a filter on a NON-inner embedded resource filters the EMBEDDED
+ * RESOURCE rather than the parent rows: every draft still comes back, with
+ * `message_sequence_runs` nulled on the ones whose run is not active. That is a
+ * 200 that paginates normally and is wrong — and here it would mean the sending
+ * phase walking drafts belonging to STOPPED runs, i.e. messaging landlords who
+ * have already replied. The exact failure this feature must not have.
+ *
+ * The select strings live here, not inline in the routes, so a test can assert
+ * them. §27.8's own regression was confirmed to fail against the old select
+ * before it was kept, and the same applies to these.
+ */
+export const DUE_DRAFT_COLUMNS =
+  "id, run_id, customer_id, step_number, body, draft_id, " +
+  "message_sequence_runs!inner(id, status, sequence_id, assignment_id, lead_id)";
+
+export const REVIEW_QUEUE_COLUMNS =
+  "id, run_id, step_number, body, send_after, state, edited_at, created_at, " +
+  "message_sequence_runs!inner(id, status, assignment_id, sequence_id, " +
+  "message_sequences(name), " +
+  "lead:leads(id, lead_name, address, owner_customer_id, lead_profile))";
+
 /** Numeric system_settings, read in one query. Missing keys take the fallback. */
 export async function sequenceSettings(
   admin: Admin
