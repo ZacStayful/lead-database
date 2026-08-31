@@ -14,6 +14,7 @@
  * stored end and close the window for ever.
  */
 import { useState } from "react";
+import { SettingSwitch } from "@/components/admin/SettingSwitch";
 import { useRouter } from "next/navigation";
 
 export interface MessagingSettingsValues {
@@ -71,89 +72,6 @@ const NUMBER_FIELDS: {
   },
 ];
 
-function Switch({
-  on,
-  label,
-  description,
-  offWarning,
-  busy,
-  onChange,
-}: {
-  on: boolean;
-  label: string;
-  description: string;
-  offWarning: string;
-  busy: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  const [confirming, setConfirming] = useState(false);
-
-  return (
-    <div className="rounded-md border-[0.5px] border-border p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <span
-          className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium ${
-            on ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-800"
-          }`}
-        >
-          <span className={`h-2 w-2 rounded-full ${on ? "bg-emerald-600" : "bg-red-600"}`} />
-          {label} {on ? "is on" : "is off"}
-        </span>
-
-        {on && !confirming && (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            disabled={busy}
-            className="rounded-md border-[0.5px] border-border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
-          >
-            Switch off
-          </button>
-        )}
-
-        {!on && (
-          <button
-            type="button"
-            onClick={() => onChange(true)}
-            disabled={busy}
-            className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {busy ? "Switching on…" : "Switch on"}
-          </button>
-        )}
-      </div>
-
-      <p className="mt-2 text-sm text-muted-foreground">{description}</p>
-
-      {confirming && (
-        <div className="mt-3 rounded-md border-[0.5px] border-border bg-muted/30 p-4">
-          <p className="mb-3 text-sm">{offWarning}</p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                onChange(false);
-                setConfirming(false);
-              }}
-              disabled={busy}
-              className="rounded-md border-[0.5px] border-red-300 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
-            >
-              {busy ? "Switching off…" : "Confirm — switch off"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirming(false)}
-              className="rounded-md border-[0.5px] border-border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function MessagingSettingsPanel({
   initial,
   activeRuns,
@@ -199,7 +117,7 @@ export function MessagingSettingsPanel({
 
   return (
     <div className="space-y-4">
-      <Switch
+      <SettingSwitch
         label="Messaging"
         on={on("messaging_enabled")}
         busy={busy}
@@ -208,7 +126,7 @@ export function MessagingSettingsPanel({
         offWarning="Switch messaging off for every customer? The composer and the follow-up pages disappear, and sending returns a 503. Conversations already stored are untouched, and inbound replies are still received and recorded."
       />
 
-      <Switch
+      <SettingSwitch
         label="Follow-up sequences"
         on={on("messaging_sequences_enabled")}
         busy={busy}
@@ -221,7 +139,7 @@ export function MessagingSettingsPanel({
         }
       />
 
-      <Switch
+      <SettingSwitch
         label="Email channel"
         on={on("messaging_email_enabled")}
         busy={busy}

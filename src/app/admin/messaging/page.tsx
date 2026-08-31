@@ -16,6 +16,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { MESSAGING_SETTINGS } from "@/lib/messaging/adminSettings";
 import { MessagingSettingsPanel } from "@/components/admin/MessagingSettingsPanel";
+import { LandlordReferralPanel } from "@/components/admin/LandlordReferralPanel";
+import { getUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +33,9 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 
 export default async function AdminMessagingPage() {
   const admin = createAdminClient();
+  // Prefills the test-send box, the way the announcement panel does.
+  const user = await getUser();
+
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   const [
@@ -42,6 +47,11 @@ export default async function AdminMessagingPage() {
     sentToday,
     inboundToday,
     failedToday,
+    referralSetting,
+    referralsSentToday,
+    referralsQueued,
+    referralsFailedToday,
+    landlordsAnswered,
   ] = await Promise.all([
     admin
       .from("system_settings")
@@ -80,6 +90,33 @@ export default async function AdminMessagingPage() {
       .select("id", { count: "exact", head: true })
       .eq("status", "failed")
       .gte("created_at", dayAgo),
+    // §41. Its own key, read separately from MESSAGING_SETTINGS — it is not a
+    // messaging setting and does not belong in that allow-list.
+    admin
+      .from("system_settings")
+      .select("value")
+      .eq("key", "landlord_referral_enabled")
+      .maybeSingle(),
+    admin
+      .from("lead_assignments")
+      .select("id", { count: "exact", head: true })
+      .gte("landlord_referral_sent_at", dayAgo),
+    // Claimed, never delivered, and waiting on the retry sweep.
+    admin
+      .from("lead_assignments")
+      .select("id", { count: "exact", head: true })
+      .not("landlord_referral_claimed_at", "is", null)
+      .is("landlord_referral_sent_at", null)
+      .not("landlord_referral_next_attempt_at", "is", null),
+    admin
+      .from("lead_assignments")
+      .select("id", { count: "exact", head: true })
+      .is("landlord_referral_sent_at", null)
+      .not("landlord_referral_error", "is", null),
+    admin
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .not("landlord_prefs_submitted_at", "is", null),
   ]);
 
   const stored = new Map(
@@ -126,6 +163,42 @@ export default async function AdminMessagingPage() {
             initial={values}
             activeRuns={activeRuns.count ?? 0}
             pendingDrafts={pendingDrafts.count ?? 0}
+          />
+        </CardContent>
+      </Card>
+
+      {/*
+        §41, and its OWN card rather than a fourth switch in the block above.
+        That page is about operators messaging landlords; this is Stayful
+        emailing them, at the moment a lead is allocated. Sitting it as a peer
+        of the WhatsApp switches would read as the same feature.
+      */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Landlord referrals</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* A switch with no reading beside it is one nobody dares press. */}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="Sent in 24h" value={String(referralsSentToday.count ?? 0)} />
+            <Stat
+              label="Waiting on retry"
+              value={String(referralsQueued.count ?? 0)}
+              hint="claimed, not yet delivered"
+            />
+            <Stat label="Failed" value={String(referralsFailedToday.count ?? 0)} />
+            <Stat
+              label="Landlords answered"
+              value={String(landlordsAnswered.count ?? 0)}
+              hint="told us how to reach them"
+            />
+          </div>
+
+          <LandlordReferralPanel
+            enabled={
+              (referralSetting.data as { value?: string } | null)?.value === "true"
+            }
+            adminEmail={user?.email ?? null}
           />
         </CardContent>
       </Card>

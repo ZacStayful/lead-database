@@ -72,8 +72,11 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
-  // The lead must exist and must actually have been referred. A token for a
-  // lead nobody was ever introduced to is not a route into the table.
+  // The lead must exist. It does NOT have to have been referred — see the same
+  // reasoning in p/[token]/page.tsx: the admin test send mints a real token and
+  // deliberately stamps nothing, so requiring the referral flag here would let
+  // the deck render and then 404 on the first answer. The token is the
+  // authorisation, and only we mint one.
   const { data: lead } = await admin
     .from("leads")
     .select("id, landlord_referral_first_sent_at, landlord_prefs_step")
@@ -84,7 +87,7 @@ export async function POST(request: NextRequest) {
     | { id: string; landlord_referral_first_sent_at: string | null; landlord_prefs_step: number }
     | null;
 
-  if (!row || !row.landlord_referral_first_sent_at) {
+  if (!row) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

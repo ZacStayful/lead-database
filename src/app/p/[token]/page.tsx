@@ -59,9 +59,19 @@ export default async function LandlordPrefsPage({
       })
     | null;
 
-  // A lead nobody was ever introduced to has no business being reachable here,
-  // even with a valid token. Same 404 as a forged one.
-  if (!lead || !lead.landlord_referral_first_sent_at) notFound();
+  // ⚠️ THE TOKEN IS THE AUTHORISATION, AND IT IS THE ONLY ONE NEEDED.
+  //
+  // This used to also require `landlord_referral_first_sent_at`, on the reading
+  // that a lead nobody was introduced to has no business being reachable. Two
+  // things made that wrong. It 404s the admin TEST SEND, which deliberately
+  // stamps nothing so a rehearsal cannot burn a real lead's one-and-only
+  // introduction slot — so the deck was unreachable from the very email meant
+  // to rehearse it. And it would 404 a genuine landlord whose referral was
+  // released after a permanent failure, long after they had the link.
+  //
+  // What is left is what actually protects the row: an unguessable HMAC minted
+  // only by us, proving which lead it is for, and expiring in 30 days.
+  if (!lead) notFound();
 
   const deck = buildLandlordDeck(lead);
 
