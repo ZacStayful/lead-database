@@ -154,7 +154,14 @@ export async function POST(request: NextRequest) {
 
   const ctx = buildDraftContext({
     lead: scoped,
-    customer: { business_name: customer.business_name, contact_name: customer.contact_name },
+    customer: {
+      business_name: customer.business_name,
+      contact_name: customer.contact_name,
+      // §41. getCurrentCustomer() reads the row with select("*"), so this is
+      // already loaded; omitting it here would silently drop the operator's own
+      // introduction from every draft.
+      operator_intro: customer.operator_intro,
+    },
   });
 
   const result = await draftWhatsappMessage(ctx);

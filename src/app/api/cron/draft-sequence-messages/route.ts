@@ -280,7 +280,7 @@ async function handle(request: NextRequest) {
 
     const { data: customerRow } = await admin
       .from("customers")
-      .select("business_name, contact_name, messaging_booking_link")
+      .select("business_name, contact_name, messaging_booking_link, operator_intro")
       .eq("id", run.customer_id)
       .maybeSingle();
 

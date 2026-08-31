@@ -62,7 +62,12 @@ export interface DraftStepContext {
  */
 
 export interface DraftContext {
-  operator: { businessName: string | null; contactName: string | null };
+  operator: {
+    businessName: string | null;
+    contactName: string | null;
+    /** The operator's own introduction (§41). Background, never quoted. */
+    intro: string | null;
+  };
   landlord: { firstName: string | null };
   property: {
     address: string | null;
@@ -89,6 +94,8 @@ export interface DraftLead {
 export interface DraftCustomer {
   business_name?: string | null;
   contact_name?: string | null;
+  /** §41. Fenced in the prompt — see renderDraftPrompt. */
+  operator_intro?: string | null;
 }
 
 /** "Mark Henderson" -> "Mark". Anything unusable becomes null, not a guess. */
@@ -126,6 +133,9 @@ export function buildDraftContext(p: {
     operator: {
       businessName: p.customer.business_name?.trim() || null,
       contactName: p.customer.contact_name?.trim() || null,
+      // Capped like the property profile: a long intro would crowd out the
+      // property, which is what the message is actually about.
+      intro: p.customer.operator_intro?.trim().slice(0, MAX_PROFILE_CHARS) || null,
     },
     landlord: { firstName: firstNameOf(p.lead.lead_name) },
     property: {
@@ -155,6 +165,17 @@ export function renderDraftPrompt(ctx: DraftContext): string {
     .join(", ");
   if (who) lines.push(`OPERATOR: ${who}`);
   if (ctx.landlord.firstName) lines.push(`LANDLORD: ${ctx.landlord.firstName}`);
+
+  // ⚠️ FENCED, like the property profile below. This is the operator's own
+  // marketing copy about themselves; the model may use it to sound like them,
+  // never paste it. It is validated on save to contain no pricing (§41) —
+  // PRICE_RE would reject any draft that quoted one, so an unfenced intro
+  // carrying a fee would silently fail every message.
+  if (ctx.operator.intro) {
+    lines.push(
+      `ABOUT THE OPERATOR (background only — write in their voice, never quote this and never mention money): ${ctx.operator.intro}`
+    );
+  }
 
   const property = [ctx.property.address, ctx.property.bedrooms ? `${ctx.property.bedrooms} bed` : null]
     .filter(Boolean)

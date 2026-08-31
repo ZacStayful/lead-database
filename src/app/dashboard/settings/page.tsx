@@ -3,6 +3,7 @@ import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { SettingsPanel } from "@/components/dashboard/SettingsPanel";
 import { PresentationSettingsCard } from "@/components/dashboard/PresentationSettingsCard";
 import { PresentationBrandCard } from "@/components/dashboard/PresentationBrandCard";
+import { OperatorIntroCard } from "@/components/dashboard/OperatorIntroCard";
 import { validatePresentationSettings } from "@/lib/presentationSettings";
 import { validatePresentationBrand } from "@/lib/presentationBrand";
 import { brandLogoDataUrl } from "@/lib/presentationBrandStorage";
@@ -91,6 +92,19 @@ export default async function SettingsPage() {
         open to any customer row, so somebody who later cancels does not have
         their logo pulled out from under a presentation mid-meeting.
       */}
+      {/*
+        Gated on holdsAny, not on an active management subscription: the
+        referral email introduces a GR operator too (invariant 6), and a logo
+        is not a product. Same gate PresentationBrandCard sits behind, and for
+        the same reason.
+      */}
+      {holdsAny && (
+        <OperatorIntroCard
+          initial={customer.operator_intro ?? null}
+          businessName={customer.business_name ?? null}
+        />
+      )}
+
       {holdsAny && (
         <PresentationBrandCard initial={brand} initialLogoUrl={brandLogoUrl} />
       )}

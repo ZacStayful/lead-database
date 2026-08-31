@@ -42,8 +42,15 @@ const FIGURE_TOLERANCE = 0.05;
  * a different basis and therefore a different number. A first message settles it
  * by mentioning neither — including "no fee", which is still a price claim.
  */
-const PRICE_RE =
-  /\b(fee|fees|commission|per cent|percent|we charge|our charge|charges?|pricing|price list|rate card|cut of|% of)\b/i;
+// ⚠️ `percentages?` NOT `percent`. The original listed `percent` with a
+// trailing \b, which does not match "percentage" — so "we take a percentage of
+// what the property earns" passed this check and reached a landlord's WhatsApp
+// as an unbounded price claim. Found by the §41 operator-intro tests, which
+// reuse this pattern rather than copying it; a second copy would still have the
+// gap. Ordered longest-first so the alternation cannot match the shorter form
+// and stop.
+export const PRICE_RE =
+  /\b(fees?|commission|percentages?|per cent|percent|we charge|our charge|charges?|pricing|price list|rate card|cut of|% of)\b/i;
 
 const LINK_RE = /(https?:\/\/|www\.|\b[a-z0-9-]+\.(com|co\.uk|net|org|io|app)\b)/i;
 

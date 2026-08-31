@@ -193,6 +193,26 @@ export interface Customer {
    * one stored, checked link is offered instead of forty pasted ones.
    */
   messaging_booking_link: string | null;
+  /**
+   * How a landlord meets this operator, in their own words (0126, §41).
+   *
+   * The one piece of operator identity that reaches a landlord as prose —
+   * everything else is a company name and a phone number. Fed to the referral
+   * email AND to buildDraftContext, so the same operator introduces themselves
+   * the same way in both.
+   *
+   * ⚠️ Refused at save time if it mentions a fee. validateDraft's PRICE_RE
+   * rejects any generated message quoting one, so an intro containing a price
+   * would silently fail every draft after the fact.
+   */
+  operator_intro: string | null;
+  /**
+   * Its own timestamp, deliberately NOT presentation_settings_updated_at —
+   * that column is the "have they set their terms up yet" test (§26.5), and
+   * sharing it would mean writing an intro silently answers a question nobody
+   * asked.
+   */
+  operator_intro_updated_at: string | null;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).
