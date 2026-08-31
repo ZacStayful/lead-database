@@ -1,3 +1,8 @@
+import {
+  buildContactTimeline,
+  contactPlanSettings,
+  type ContactTimelineView,
+} from "@/lib/contact/contactPlan";
 import { notFound, redirect } from "next/navigation";
 import { viewerScopedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
@@ -81,6 +86,38 @@ export default async function LeadDetailPage({
     .order("created_at", { ascending: false })
     .limit(200);
 
+  // The contact plan (§42): where this landlord sits in the five-attempt
+  // sequence. Read on the admin client because message_sequence_* are deny-all
+  // to the browser, and gated on the platform switch — with it off the whole
+  // block renders nothing, exactly as before this feature existed.
+  const planSettings = await contactPlanSettings(admin);
+  let contactTimeline: ContactTimelineView | null = null;
+  if (planSettings.enabled || isAdminUser(user)) {
+    const { data: runRow } = await admin
+      .from("message_sequence_runs")
+      .select("id, status, message_sequences!inner(delivery)")
+      .eq("assignment_id", assignment.id)
+      .eq("message_sequences.delivery", "manual")
+      .maybeSingle();
+
+    const run = runRow as { id: string; status: string } | null;
+    if (run) {
+      const { data: attemptRows } = await admin
+        .from("message_sequence_drafts")
+        .select(
+          "step_number, channel, body, send_after, state, done_at, done_source, call_outcome"
+        )
+        .eq("run_id", run.id)
+        .order("step_number", { ascending: true });
+
+      contactTimeline = buildContactTimeline({
+        rows: (attemptRows ?? []) as never,
+        landlordContactMethod: assignment.lead.landlord_contact_method ?? null,
+        runStatus: run.status,
+      });
+    }
+  }
+
   // Messaging state for the two buttons (§40). Resolved server-side on the
   // admin client, because the connection tables are deny-all to the browser.
   const messageChannels = await channelAvailability(admin, {
@@ -105,6 +142,7 @@ export default async function LeadDetailPage({
       presentationConfigured={customer.presentation_settings_updated_at != null}
       messageChannels={messageChannels}
       messages={(messageData ?? []) as never}
+      contactTimeline={contactTimeline}
     />
   );
 }

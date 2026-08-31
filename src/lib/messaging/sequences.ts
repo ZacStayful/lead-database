@@ -27,6 +27,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { dueAtForStep, nextStepNumber, type CadenceStep } from "./cadence";
+import { ensureContactPlan } from "@/lib/contact/contactPlan";
 
 type Admin = SupabaseClient;
 
@@ -386,12 +387,22 @@ export async function enrolOnAssignment(
       .eq("customer_id", params.customerId)
       .eq("trigger", "on_assignment")
       .eq("lead_type", params.leadType === "guaranteed_rent" ? "guaranteed_rent" : "management")
-      .eq("channel", "whatsapp")
+      .in("channel", ["whatsapp", "mixed"])
       .eq("is_active", true)
       .is("archived_at", null)
       .maybeSingle();
 
-    const sequenceId = (data as { id: string } | null)?.id;
+    // The contact plan (§42). Where §40.13 required the operator to build a
+    // sequence first — and production carries zero of them, which is why none
+    // of this has ever run — the standard five-attempt plan is created for them
+    // the first time a lead lands. Only when they have no standing rule at all,
+    // so an operator who HAS built one keeps it.
+    const sequenceId =
+      (data as { id: string } | null)?.id ??
+      (await ensureContactPlan(admin, {
+        customerId: params.customerId,
+        leadType: params.leadType,
+      }));
     if (!sequenceId) return;
 
     await enrolAssignments(admin, {
