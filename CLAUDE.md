@@ -452,10 +452,19 @@ for being new with no way to earn out of it.
   0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
   the function, which discards its ACL. Re-revoked. Any future
   `create or replace` on a privileged function must re-assert its grants.
-- **Orphaned reject columns.** `rejection_reason`, `contact_validation_result`,
-  `claim_denied` exist on `lead_assignments` in production but in **no
-  migration** and no code — left by an abandoned branch. Do not reference them;
-  a schema rebuilt from `supabase/migrations/` will not have them.
+- **Orphaned reject columns, AND the function that reads them.**
+  `rejection_reason`, `contact_validation_result`, `claim_denied` exist on
+  `lead_assignments` in production but in **no migration** and no code — left
+  by an abandoned branch. Do not reference them; a schema rebuilt from
+  `supabase/migrations/` will not have them.
+  ⚠️ **`apply_lead_rejection(uuid, uuid, lead_type, text, jsonb, boolean,
+  boolean)` belongs to the same branch** and is the ONLY object still differing
+  between production and a rebuild (§36.8's audit). It selects
+  `rejection_reason` and `claim_denied` under a row lock, and nothing in `src/`
+  calls it. It is **deliberately not committed**: a migration for it would
+  enshrine dead code, and could not apply to a fresh build anyway, because the
+  columns it reads are themselves in no migration. Drop it in production, or
+  commit the columns with it — not one without the other.
 - **`supabase/schema.sql`** is stale. Migrations are the source of truth.
 - **Admin shows "3 / 2 assigned"** on a reclaimed lead. Truthful, looks odd; the
   Reclaim history block on the lead detail page explains it. A **claimed pool
@@ -5533,9 +5542,33 @@ carried two migrations that were **not in `supabase/migrations/`** —
 0110 (§34, §35), so that half of the drift is resolved and the 0111 number was
 the right one to take.
 
-⚠️ **`worked_conversion` (2026-08-23) is still missing from the directory.** A
-schema rebuilt from `supabase/migrations/` today does not have it. Closing that
-is separate work.
+~~⚠️ **`worked_conversion` (2026-08-23) is still missing from the
+directory.**~~ **Closed — committed as `0100a_worked_conversion.sql`**, its SQL
+recovered verbatim from `supabase_migrations.schema_migrations`.
+
+⚠️ **It was not merely a documentation gap: the repo could not rebuild from
+empty.** 0124 issues `CREATE OR REPLACE FUNCTION get_customer_scoreboard()`
+against the FOURTEEN-column signature `worked_conversion` introduces
+(`worked_past_cold`, `wins_per_worked_past_cold`). Built from the directory
+without it, 0068's twelve-column version is what exists and 0124 fails outright
+with 42P13 "cannot change return type of existing function". Production was
+unaffected because it has the migration; only a rebuild was broken, which is
+why nothing surfaced it.
+
+**Hence `0100a` and not the next free number** — it has to sort BEFORE 0124,
+and its real apply date sits between 0100 and 0101. Its own header calls itself
+0097; that number was taken by `backfill_postcode_areas` while it sat
+uncommitted.
+
+Nothing in `src/` calls `get_worked_conversion`, `worked_past_cold` or
+`assignment_worked_past_cold`, and the `src/lib/workedConversion.ts` mirror its
+comments reference **has never existed** — the SQL half shipped and the
+application half did not. That is why the drift went unnoticed for a week.
+
+**Verified**: all 120 migration files applied to a scratch Postgres 16 from
+empty, 0 failures; 0100a re-applied twice for idempotency; and every
+`public` function fingerprinted by `md5(prosrc)` against production —
+102 of 103 identical, the one difference being `apply_lead_rejection` (below).
 
 It is also why `admin_assign_lead` is guarded from the routes rather than
 rewritten in 0111: when this was written that function had been replaced by an
