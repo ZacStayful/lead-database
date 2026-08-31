@@ -22,6 +22,7 @@
  */
 import { esc } from "@/lib/emails";
 import { EMAIL_RE } from "@/lib/leadQuality";
+import { buildIncomeProjection } from "@/lib/incomeProjection";
 
 /** The lead columns the decision and the copy read. Narrow on purpose. */
 export interface ReferralLead {
@@ -118,6 +119,8 @@ export interface ReferralCopy {
   operatorIntro: string | null;
   /** Present only when this is the first introduction for the lead. */
   cta: { label: string; note: string } | null;
+  /** The one figure that earns the click. Management with an analysis only. */
+  headline: string | null;
 }
 
 /**
@@ -160,17 +163,45 @@ export function buildReferralCopy(params: {
     `They already have the details you shared, so you won't need to repeat yourself.`,
   ];
 
+  // ⚠️ ONE FIGURE, AND THE GROSS ONLY. buildIncomeProjection also returns the
+  // management-fee figures; those are STAYFUL'S 15% and are never a landlord's
+  // to see (§26.1). Read by name, never spread. Shown on the first
+  // introduction only — it exists to earn the click through to the deck, and
+  // an operator arriving second is not re-pitching the property.
+  const projection =
+    askQuestions && !isGr
+      ? buildIncomeProjection({
+          gross_annual_income: lead.gross_annual_income ?? null,
+        } as Parameters<typeof buildIncomeProjection>[0])
+      : null;
+
   return {
     subject: `Your enquiry — ${who} will be in touch`,
     greeting: first ? `Hi ${first},` : `Hello,`,
     intro,
     rows,
     operatorIntro: operator.operator_intro?.trim() || null,
+    headline: projection
+      ? `Our analysis models your property at £${projection.grossAnnualLow.toLocaleString(
+          "en-GB"
+        )}–£${projection.grossAnnualHigh.toLocaleString(
+          "en-GB"
+        )} a year gross as a short let. It's an estimate, not a promise.`
+      : null,
+    // The label follows the hook. With a figure above it the click is bought by
+    // the curiosity gap — HOW is that number built — and the questions are
+    // answered on the way through. Without one there is no gap to trade on, so
+    // it asks plainly for the thing we actually want.
     cta: askQuestions
-      ? {
-          label: "Tell them how to reach you",
-          note: "It takes about a minute, and it means they call at a time that suits you.",
-        }
+      ? projection
+        ? {
+            label: "See how that figure is built",
+            note: "Three quick questions on the way through, so they contact you the way you prefer.",
+          }
+        : {
+            label: "Tell them how to reach you",
+            note: "It takes about a minute, and it means they get in touch at a time that suits you.",
+          }
       : null,
   };
 }
@@ -197,6 +228,12 @@ export function renderReferralBody(copy: ReferralCopy): string {
     .map((p) => `<p style="margin:0 0 12px;font-size:14px;line-height:1.6">${esc(p)}</p>`)
     .join("");
 
+  const headlineBlock = copy.headline
+    ? `<div style="margin:0 0 16px;padding:14px;background:#eef4ec;border-radius:8px">
+         <p style="margin:0;font-size:14px;line-height:1.6">${esc(copy.headline)}</p>
+       </div>`
+    : "";
+
   const introBlock = copy.operatorIntro
     ? `<div style="margin:18px 0;padding:14px;background:#f5f6f5;border-radius:8px">
          <p style="margin:0 0 6px;color:#6b706a;font-size:12px;text-transform:uppercase;letter-spacing:.04em">In their words</p>
@@ -207,6 +244,7 @@ export function renderReferralBody(copy: ReferralCopy): string {
   return `
     <h1 style="margin:0 0 12px;font-size:18px">${esc(copy.greeting)}</h1>
     ${paras}
+    ${headlineBlock}
     <table style="width:100%;border-collapse:collapse;margin:18px 0">${rows}</table>
     ${introBlock}
   `;
