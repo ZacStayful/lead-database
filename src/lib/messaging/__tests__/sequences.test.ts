@@ -302,14 +302,30 @@ describe("enrolOnAssignment", () => {
     expect(inserts[0].sequence_id).toBe("s1");
   });
 
-  it("does nothing when they have none", async () => {
+  it("PROVISIONS the standard contact plan when they have no standing rule (§42)", async () => {
+    // This used to assert that nothing happened, and that was the whole defect:
+    // §40.13 required the operator to build a sequence before anything could
+    // follow a lead up, and production carried ZERO sequences — so no lead has
+    // ever been enrolled. The standard five-attempt plan is now created for
+    // them on the first assignment, and the enrolment goes ahead against it.
     const { admin, inserts } = standingFake({ sequence: null });
     await enrolOnAssignment(admin, {
       customerId: "c1",
       assignmentId: "a1",
       leadType: "management",
     });
-    expect(inserts).toHaveLength(0);
+    // This fake cannot return an id from an insert, so the run insert does not
+    // follow here — what it CAN show is that a standing plan is now created
+    // where the old behaviour wrote nothing at all.
+    const plan = inserts.find((r) => r.name === "Standard follow-up");
+    expect(plan).toBeDefined();
+    expect(plan).toMatchObject({
+      customer_id: "c1",
+      lead_type: "management",
+      trigger: "on_assignment",
+      delivery: "manual",
+      channel: "mixed",
+    });
   });
 
   it("NEVER THROWS, whatever the database does", async () => {

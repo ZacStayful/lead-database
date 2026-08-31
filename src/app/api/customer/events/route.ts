@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { completeAttemptForEvent } from "@/lib/contact/completeAttempt";
 import {
   CLIENT_LEAD_EVENT_TYPES,
   type ClientLeadEventType,
@@ -160,10 +161,14 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const { error } = await admin.from("lead_events").insert({
-    assignment_id: assignmentId,
-    event_type: eventType,
-  });
+  const { data: inserted, error } = await admin
+    .from("lead_events")
+    .insert({
+      assignment_id: assignmentId,
+      event_type: eventType,
+    })
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     // Swallowed on purpose: the caller is fire-and-forget and a lost event is
@@ -176,5 +181,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, recorded: false, reason: "error" });
   }
 
-  return NextResponse.json({ ok: true, recorded: true });
+  // The contact plan (§42). A click on WhatsApp, the phone number or the email
+  // IS the record that the attempt happened — there is no "mark done" button,
+  // and `done_event_id` points back at the row just inserted so any adherence
+  // figure can be traced to the click behind it.
+  //
+  // ⚠️ AFTER the insert and the dedupe, deliberately. A repeat click inside the
+  // dedupe window returns above without reaching here, so hammering the button
+  // cannot walk an operator through their whole plan.
+  //
+  // ⚠️ AND IT NEVER THROWS OR BLOCKS. completeAttemptForEvent swallows its own
+  // errors; this route is fire-and-forget telemetry called as the browser
+  // navigates away to WhatsApp or the dialler, so a failed completion must cost
+  // a to-do entry and never the phone call. `detail_opened` closes nothing and
+  // returns immediately — reading a lead is not contacting it (§6).
+  const completion = await completeAttemptForEvent(admin, {
+    assignmentId,
+    eventType,
+    eventId: (inserted as { id: string } | null)?.id ?? null,
+  });
+
+  return NextResponse.json({
+    ok: true,
+    recorded: true,
+    attempt_closed: completion.closed,
+  });
 }

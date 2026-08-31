@@ -600,6 +600,15 @@ export type LeadEventType =
   | "note_added"
   | "file_added"
   | "stage_changed"
+  // A message the operator actually sent through a connected workspace (0117).
+  // Stronger than tel_click or whatsapp_click — those are attempts, this one
+  // carries a provider message id — and weighted 0.60 accordingly (§40.7).
+  | "message_sent"
+  // The LANDLORD replied (0117). ⚠️ Never an engagement signal: it is the
+  // landlord's act, not the operator's, and counting it would shield the exact
+  // lead an operator has stopped working (§40.7). Excluded from
+  // CONTACT_EVENT_TYPES and from ENGAGEMENT_EVENT_TYPES for that reason.
+  | "message_received"
   // System-generated (0044) — recorded here because it is the only
   // per-assignment record of a nudge. NOT an engagement signal: it is something
   // we did to the operator, not something they did.

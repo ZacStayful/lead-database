@@ -7457,7 +7457,12 @@ verified against the live database rather than assumed:
 - Row counts untouched: 449 leads, 383 assignments, 797 events, 40 customers.
 
 **2026-08-29 is therefore the date to read the step from** in `worked_rate`,
-`contact_rate` and the benchmark series. Assignments after it can carry a signal
+`contact_rate` and the benchmark series.
+
+⚠️ **And there is now a THIRD step in that series.** §42 puts contact buttons
+back on the pipeline card, reversing 0079, so actions that were always happening
+in the list finally get recorded. Read both dates as definition changes, not as
+operators improving. Assignments after it can carry a signal
 earlier ones could not; that is a definition change, not a change in operator
 behaviour.
 
@@ -7467,3 +7472,217 @@ behaviour.
 the trigger arm, but nothing emits the event until the UI ships. 0124 is the half
 that changes behaviour — reclaim eligibility and engagement scoring — and is
 split out for exactly that reason. Code last.
+
+---
+
+## 42. The contact strategy, and a plan per lead *(0127)*
+
+Customers say the leads are poor. The database says the leads are barely
+touched: **342 of 356 open assignments (96%) have never had a single contact
+action**, the most any lead has ever had is **4**, and the median gap between an
+operator's first touch and their last is **0.0 days** — 97 of 121 gave up the
+same day. Against 666 `detail_opened`. Nobody has ever worked a lead properly
+here, so "they never reply" has never actually been tested.
+
+Every lead now carries a **contact plan**: five attempts over nine days, each
+with a channel and an **objective — what the attempt is FOR, never a script**.
+The lead page shows where that landlord sits in it; one click does the attempt;
+the click is the record.
+
+### 42.1 — Where the numbers come from, and the two that must never appear
+
+Stayful's own Management Leads pipeline, traced end to end over July–August
+2026: every call attempt and its outcome, every email, cross-checked against
+real calendar bookings rather than CRM status labels. One operator's data — a
+benchmark, worded that way everywhere it is shown, never a guarantee.
+
+| | |
+|---|---|
+| Booked a meeting, worked to a structured cadence | ~**77%** |
+| Of everyone who ever responds, responded by attempt 4–5 | ~**89%** |
+| Cold call answered | ~**17%** |
+| The same call, once a message or email went first | **0–4%** |
+
+⚠️ **NO ATTENDANCE OR SHOW-UP RATE, ANYWHERE.** An "83% of booked meetings are
+attended" figure was measured and discarded: Calendly sends three reminders of
+its own before any meeting, so it describes Calendly's dunning rather than this
+strategy. Quoting it would promise an outcome we do not influence.
+
+⚠️ **NO PERCENTAGE ATTACHED TO SPEED.** Attempt 1 falls on day 0 and
+`SPEED_RULE` says so, because the business judgement is that speed matters. The
+speed test in the sample showed no clear effect — the fastest-contacted leads
+included both wins and total failures, and several landlords engaged only after
+three to seven weeks — so the rule must not borrow the credibility of the three
+figures that *were* measured. It is presented as how we expect leads to be
+worked; they are presented as findings. That is the difference between a
+customer disagreeing with our advice and catching us out on a claim.
+
+`contactStrategy.test.ts` asserts both mechanically against the rendered copy
+rather than trusting review.
+
+### 42.2 — Cold call first, and why the button we shipped is attempt 2
+
+| # | Day | Channel | Objective |
+|---|---|---|---|
+| 1 | 0 | **Call** | Tenanted or empty? Nothing sent ahead of it. |
+| 2 | 0 | WhatsApp | Same day, only if the call went unanswered. |
+| 3 | 2 | Email | Something to read in their own time. |
+| 4 | 5 | **Call** | A different time of day from the first. |
+| 5 | 9 | WhatsApp | Last nudge, then de-prioritise. |
+
+The intuitive order is the wrong one. Warming a landlord up before ringing costs
+roughly three quarters of the answer rate — so §40.15's `wa.me` hand-off, the
+most prominent contact action on a lead, is deliberately **attempt 2**. Nothing
+about the button changed; where it sits in the sequence did.
+
+⚠️ **Five, not eight and not fifteen.** An earlier working figure of "ideally 15
+attempts" predates the measurement and is superseded by it: 89% of responders
+arrive by the fifth, so a longer ladder spends the operator's time on approaches
+that do not convert and the landlord's patience on approaches they have already
+ignored.
+
+⚠️ **De-prioritise, never discard.** Several landlords engaged only after three
+to seven weeks. The end of the plan is the end of active chasing and nothing
+more.
+
+⚠️ **The landlord's own stated preference outranks attempt 1.** §41's referral
+email asks how they would like to be contacted and stores it on the lead;
+having asked the question, opening with a cold call anyway is indefensible.
+Attempt 1 only — a landlord who asked for email has not asked never to be rung.
+
+### 42.3 — Nobody builds anything
+
+§40.13 shipped a sequence builder and production carried **0 sequences, 0 runs,
+0 drafts**. Two reasons, and both are closed here:
+
+1. Every path ended at `sendOneMessage`, which refuses without a connected
+   TimelinesAI workspace — and there are **zero** connected workspaces. A plan
+   would have died on attempt 1 with `stopRun("no_connection")`.
+2. The only entry point was hidden unless connected.
+
+`message_sequences.delivery` is the fix and **the safety boundary of the whole
+feature**: a `'manual'` plan never goes near `sendOneMessage`, and the sending
+phase skips it. `ensureContactPlan` creates the standard plan on the first
+assignment, so a customer who has to design a ladder before following anybody up
+— and therefore never does — no longer has to. An operator who HAS built their
+own standing rule keeps it.
+
+That changed `enrolOnAssignment`, and an existing test asserted the old
+behaviour ("does nothing when they have none"). **That assertion was the
+defect**; the test now pins the new contract.
+
+### 42.4 — ⚠️ The trust boundary: a click is not a tick
+
+`lead_events` is the engagement basis for escalation, pooling, reclaim and the
+scoreboard (§3), and `CLIENT_LEAD_EVENT_TYPES` is deliberately narrow so a
+customer cannot manufacture engagement. A "mark complete" that wrote `tel_click`
+would hand every customer a way to shield any lead from ever being escalated
+away from them.
+
+| | Writes an event | Completes the attempt | Counts toward engagement |
+|---|---|---|---|
+| **Click** (WhatsApp / Call / Email) | yes | yes, with `done_event_id` | yes |
+| **"I did this another way"** | **no** | yes, `done_source='manual'` | **no** |
+
+Enforced three times over: the application refuses the pair even when asked, the
+route hard-codes `source` rather than reading it from the body, and a DB CHECK
+refuses `done_event_id` alongside anything but `'click'`. Removing the
+application guard fails a test — checked, not assumed.
+
+**Adherence counts both**, because holding an operator to their own word is the
+point, and admin sees the split. `detail_opened` closes nothing and is absent
+from `CONTACT_EVENT_TYPES`: reading a lead is not contacting it (§6), and 666
+opens against 15 contact actions **is** the finding.
+
+⚠️ **An answered call STOPS the plan.** Attempt 2 is "same day, only if the call
+went unanswered", so a `tel_click` alone cannot decide it — the timeline asks.
+Putting the next approach in front of a landlord who has just picked up is the
+one way this feature could actively embarrass an operator. Voicemail advances.
+
+### 42.5 — The limit goes on the landlord, not the operator
+
+**126 of 182 open landlords (69%) are held by two or more operators**, 37 by
+three. Five attempts each is fifteen approaches to one person. Reducing
+`max_assignments` is a *supply* decision, not a policy one — management ingests
+92–104 leads/month against **220** of committed allocation, which is why 0055
+raised the cap to 3, and GR already averages 1.06 operators per lead.
+
+So `landlord_approach_ok` caps approaches at **one a day and three a week across
+every operator holding that landlord**, keyed on the normalised phone rather
+than `lead_id` because one landlord arrives as several `leads` rows (§18). An
+attempt over the limit has its due date pushed a day rather than being created.
+
+⚠️ **It returns a bare boolean and nothing else** — §40.12's rule, and §19.7's
+before it: a count or a timestamp is a probe telling operator A when operator B
+is working a shared landlord. The rationing is therefore **silent**; an operator
+sees a slower plan and is never told why, and cannot be.
+
+⚠️ **It fails OPEN**, unlike the operator's own send limits. Those protect the
+operator's number; this protects a landlord from a second approach, and refusing
+every attempt because one read failed would take a working feature down to
+prevent a duplicate.
+
+### 42.6 — ⚠️ 0079 is reversed, deliberately
+
+0079 removed the landlord's phone and email from the pipeline card because *"114
+of 308 assignments were expanded in the feed and never opened on the detail
+page — roughly half of all engagement leaving no usable trace"*. **The objection
+was that a click there left no trace.** Buttons that record `tel_click` /
+`whatsapp_click` / `mailto_click` *are* the trace, so the reason is gone and
+keeping the gate now costs the very signal it protected. Operators work from the
+list, and `tel_click` reading 13 against 666 opens is partly an artefact of
+there being nothing on the list to click.
+
+Nothing was ever withheld: `leads/page.tsx` selects `lead:leads(*)`, so both
+fields were already in the payload reaching the browser. It was a rendering
+choice over data the client already had.
+
+The card's long comment is **replaced, not deleted** — a reader finding contact
+links back with no explanation would reasonably think 0079 was undone by
+accident. And it is the **third** definition change to `detail_opened`
+(0079 → 0123 → here), so contact actions will step up sharply and part of that
+is measurement rather than behaviour.
+
+### 42.7 — Where it shows
+
+- **`/dashboard/guide`** — "How to contact a lead", rendered from
+  `contactStrategy.ts` so guidance and the plan cannot drift.
+- **The lead page** — the timeline: five rungs at once, done ones dated, the
+  current one with its objective and button, future ones greyed. Seeing what is
+  LEFT is the point.
+- **The pipeline card** — the three contact buttons.
+- **`/admin/outcomes`** — due / made / missed / adherence, worst first, plus the
+  share of completions that came from a real click rather than a manual tick.
+
+### Verification
+
+All 122 migrations applied to a scratch Postgres 16 from empty (0002 skipped —
+`pg_cron` unavailable locally), 0127 re-applied twice for idempotency. Every new
+CHECK exercised on its boundaries, including the trust boundary in both
+directions; both new functions confirmed `service_role`-only and invariant 7's
+four re-checked; the rate limiter confirmed to block a second operator reaching
+the same landlord through a **different** `leads` row and to ignore `nudge_sent`
+and `detail_opened`; adherence confirmed to exclude not-yet-due and
+out-of-window attempts.
+
+The lifecycle was then driven on scratch against the real schema: attempt 1
+materialised, the exact query `completeAttempt` issues returns it, a **stopped**
+run returns nothing (the §27.8 trap, asserted rather than reasoned about), a
+click closes it and stamps `done_event_id`, the 0123 trigger flips the
+assignment to `contacted` off that click, and adherence reports it attributed to
+a click.
+
+Regression: a marketplace lead still allocates and spends exactly one credit,
+and both retirement predicates are unchanged. 1027 vitest cases green, lint
+clean, `next build` passes.
+
+⚠️ **Not yet exercised against production data or a browser.** The timeline, the
+card buttons and the guide section have not been rendered in Chromium, and no
+plan has been materialised by the real cron.
+
+### Deployment order — migration BEFORE code
+
+0127 first. It is inert on its own: every column is nullable or defaults to
+today's meaning, `contact_plans_enabled` ships **false**, and no existing
+function, predicate or trigger is redefined. Nothing touches a balance, counter,
+pacing or capacity column, so a lagging migration cannot affect lead allocation.

@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDate, formatLeadAge } from "@/lib/utils";
+import { recordLeadEvent } from "@/lib/contact/leadEvents";
+import { ContactTimeline } from "@/components/dashboard/ContactTimeline";
+import type { ContactTimelineView } from "@/lib/contact/contactPlan";
 import { CLOSE_REASONS, type CloseReason } from "@/lib/closeReasons";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
@@ -59,6 +62,7 @@ export function LeadDetail({
   presentationConfigured,
   messageChannels,
   messages,
+  contactTimeline,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -77,6 +81,12 @@ export function LeadDetail({
   messageChannels?: ChannelAvailability[];
   /** Sent and received messages, shown in the timeline beside the notes. */
   messages?: TimelineMessage[];
+  /**
+   * Where this landlord sits in the five-attempt contact plan (§42). Null when
+   * the switch is off or the lead predates the plan, in which case nothing
+   * renders and the page looks exactly as it did before.
+   */
+  contactTimeline?: ContactTimelineView | null;
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -103,21 +113,11 @@ export function LeadDetail({
 
   const assignmentId = assignment.id;
 
-  // Passive engagement telemetry. Deliberately fire-and-forget: the response is
-  // never read and a rejected promise is swallowed, so a failed or slow write
-  // cannot delay a phone call or block the UI. Repeat sends are collapsed
-  // server-side, which is what makes it safe to call this on every mount.
+  // Passive engagement telemetry, through the shared recorder (§42) so the
+  // pipeline card records identically. Deliberately fire-and-forget — see
+  // `recordLeadEvent` for why the response is never read.
   const recordEvent = useCallback(
-    (eventType: ClientLeadEventType) => {
-      void fetch("/api/customer/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignment_id: assignmentId, event_type: eventType }),
-        keepalive: true,
-      }).catch(() => {
-        /* telemetry is best-effort */
-      });
-    },
+    (eventType: ClientLeadEventType) => recordLeadEvent(assignmentId, eventType),
     [assignmentId]
   );
 
@@ -564,6 +564,17 @@ export function LeadDetail({
           above is theirs, this one is ours, and putting them side by side is
           what stops either being mistaken for the other.
         */}
+        {contactTimeline && (
+          <ContactTimeline
+            view={contactTimeline}
+            leadId={lead.id}
+            assignmentId={assignment.id}
+            phone={lead.phone ?? null}
+            email={lead.email ?? null}
+            className="mt-6 border-t-[0.5px] border-border pt-4"
+          />
+        )}
+
         <IncomeProjection lead={lead} className="mt-4" />
 
         {/*
