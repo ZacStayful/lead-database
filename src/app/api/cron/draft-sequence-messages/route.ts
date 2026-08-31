@@ -49,6 +49,8 @@ import {
 } from "@/lib/messaging/sequences";
 import { nextStepNumber } from "@/lib/messaging/cadence";
 import { renderTemplate } from "@/lib/messaging/mergeFields";
+import { normalisePhone } from "@/lib/messaging/whatsappIdentity";
+import { contactPlanSettings } from "@/lib/contact/contactPlan";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -165,9 +167,16 @@ async function handle(request: NextRequest) {
     rejected: 0,
     capped: 0,
     manual: 0,
+    /** Contact-plan attempts materialised (§42). No model call. */
+    objective: 0,
+    /** Attempts pushed a day because the LANDLORD is at their approach limit. */
+    deferred: 0,
     /** Leads a hand-written step could not reach — a field they have no value for. */
     missingField: 0,
   };
+
+  // The landlord approach limits (§42), read once for the whole run.
+  const planLimits = await contactPlanSettings(admin);
 
   // ⚠️ THE DAILY CEILING IS PER CUSTOMER AND COUNTS origin = 'sequence' ONLY
   // (0121 §5). The interactive route's 50-a-day bounds a person clicking a
@@ -299,6 +308,76 @@ async function handle(request: NextRequest) {
       assignment.lead as never,
       run.customer_id
     ) as unknown as Record<string, unknown>;
+
+    // ---- An objective step: the contact plan (§42) -------------------------
+    //
+    // No model call, no template rendering, no third-party anything. The step's
+    // `brief` IS the deliverable — the operator is told what the attempt is FOR
+    // and writes their own words — so materialising it is a copy.
+    //
+    // ⚠️ THE LANDLORD RATE LIMIT IS APPLIED HERE, AND ONLY HERE. 126 of 182 open
+    // landlords are held by two or more operators, so five attempts each would
+    // be fifteen approaches to one person. An attempt over the limit has its
+    // due date pushed on a day rather than being created, which is what keeps
+    // the rationing SILENT: the operator sees a slower plan and is never told
+    // that somebody else is working the same landlord (§19.7, §40.12).
+    if (step?.mode === "objective") {
+      const phoneNorm = (assignment.lead as { phone?: string | null })?.phone ?? null;
+      let landlordOk = true;
+      if (phoneNorm) {
+        const { data: okRow, error: okErr } = await admin.rpc(
+          "landlord_approach_ok",
+          {
+            p_phone_norm: normalisePhone(phoneNorm),
+            p_max_day: planLimits.landlordMaxPerDay,
+            p_max_week: planLimits.landlordMaxPerWeek,
+          }
+        );
+        // ⚠️ FAILS OPEN, unlike the operator's own send limits. Those protect
+        // the operator's number; this protects a landlord from a second
+        // approach. Refusing every attempt because one read failed would take a
+        // working feature down to prevent a duplicate.
+        if (!okErr) landlordOk = okRow !== false;
+      }
+
+      if (!landlordOk) {
+        const deferred = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        await admin
+          .from("message_sequence_runs")
+          .update({
+            next_due_at: deferred.toISOString(),
+            updated_at: now.toISOString(),
+          })
+          .eq("id", run.id);
+        stats.deferred = (stats.deferred ?? 0) + 1;
+        continue;
+      }
+
+      const sendAfterObjective = new Date(
+        Math.max(new Date(run.next_due_at).getTime(), now.getTime())
+      );
+      const { error: objErr } = await admin.from("message_sequence_drafts").insert({
+        run_id: run.id,
+        customer_id: run.customer_id,
+        step_number: stepNumber,
+        body: step.brief ?? "",
+        channel: step.channel ?? "whatsapp",
+        draft_id: null,
+        state: "pending",
+        send_after: sendAfterObjective.toISOString(),
+      });
+      if (objErr) {
+        if ((objErr as { code?: string }).code === "23505") {
+          stats.alreadyDrafted += 1;
+        } else {
+          console.error("[draft-sequence-messages] objective queue insert failed", objErr);
+          stats.rejected += 1;
+        }
+        continue;
+      }
+      stats.objective = (stats.objective ?? 0) + 1;
+      continue;
+    }
 
     // ---- The one place the two kinds of step diverge -----------------------
     //
