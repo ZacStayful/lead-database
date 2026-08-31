@@ -15,6 +15,7 @@ import {
   stagesForLeadType,
 } from "@/components/dashboard/pipelineStage";
 import { LeadNotes, type TimelineMessage } from "@/components/dashboard/LeadNotes";
+import { LandlordHandoff } from "@/components/dashboard/LandlordHandoff";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
@@ -605,6 +606,17 @@ export function LeadDetail({
             <p>{lead.lead_profile}</p>
           </div>
         )}
+
+        {/*
+          What the landlord was told about THIS operator, and what they said
+          back (§41). Keys on the assignment's sent_at — the per-operator fact —
+          while the answers come off the lead, which is why every operator
+          holding it reads the same ones.
+        */}
+        <LandlordHandoff
+          sentAt={assignment.landlord_referral_sent_at ?? null}
+          lead={lead}
+        />
 
         {isGuaranteedRent && (
           <a

@@ -382,6 +382,27 @@ export interface Lead {
   lead_quality_override_at: string | null;
   lead_quality_override_by: string | null;
   lead_quality_override_note: string | null;
+  /**
+   * What the landlord told us at /p/[token] (0126, §41).
+   *
+   * ⚠️ ON THE LEAD, NOT THE ASSIGNMENT, AND THAT IS THE FAIRNESS PROPERTY.
+   * One copy, so two operators cannot hold different answers; 0014's
+   * leads_select_assigned is evaluated at read time, so an operator assigned
+   * next month reads the same ones with nothing to backfill. They are asked
+   * ONCE, whatever the lead's reach — claim_landlord_referral() decides who
+   * asks, under the lead row lock.
+   *
+   * ⚠️ NEVER add these to viewerScopedLead()'s strip list. Sharing them is the
+   * entire point.
+   */
+  landlord_referral_first_sent_at: string | null;
+  landlord_contact_method: "whatsapp" | "email" | "phone" | null;
+  landlord_contact_time: string | null;
+  landlord_questions: string | null;
+  landlord_wants: string[] | null;
+  landlord_note: string | null;
+  landlord_prefs_step: number;
+  landlord_prefs_submitted_at: string | null;
   lead_name: string;
   address: string | null;
   phone: string | null;
@@ -520,6 +541,20 @@ export interface LeadAssignment {
   // said no, and the reason is theirs, not the operator's.
   closed_at: string | null;
   closed_reason: CloseReason | null;
+  /**
+   * The Stayful referral that introduced THIS operator to the landlord (0126,
+   * §41).
+   *
+   * ⚠️ `sent_at` IS THE ONLY ONE ANYTHING MAY DISPLAY. `claimed_at` is stamped
+   * BEFORE the send (claim-by-write, §19.5), so telling an operator "the
+   * landlord was told about you" off the back of it would say that about an
+   * email that 429'd and never arrived.
+   */
+  landlord_referral_claimed_at: string | null;
+  landlord_referral_sent_at: string | null;
+  landlord_referral_error: string | null;
+  landlord_referral_attempts: number;
+  landlord_referral_next_attempt_at: string | null;
 }
 
 /**

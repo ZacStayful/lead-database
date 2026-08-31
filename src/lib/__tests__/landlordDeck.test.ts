@@ -179,6 +179,24 @@ describe("describeAnswers", () => {
   it("returns nothing when the landlord never answered", () => {
     expect(describeAnswers({})).toEqual([]);
   });
+
+  // Three operators can hold one lead and all read this. If it were phrased as
+  // an instruction they would all act on the same slot, which is exactly the
+  // pile-on §40.12's cross-operator cooldown exists to prevent — and that
+  // cooldown does not cover phone calls.
+  it("never phrases an answer as an instruction to act", () => {
+    const out = describeAnswers({
+      landlord_contact_method: "phone",
+      landlord_contact_time: "Weekday mornings",
+      landlord_wants: ["How quickly it could start"],
+    }).join(" ");
+    expect(out).not.toMatch(/\b(call|ring|contact|phone) (them|him|her)\b/i);
+    expect(out).toContain("Asked to be contacted");
+  });
+
+  it("handles an unknown stored method without inventing a label", () => {
+    expect(describeAnswers({ landlord_contact_method: "carrier_pigeon" })).toEqual([]);
+  });
 });
 
 describe("the email hook figure", () => {
