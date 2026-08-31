@@ -1,3 +1,5 @@
+import { fetchAdherence } from "@/lib/contact/adherence";
+import { createAdminClient } from "@/lib/supabase/admin";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { getOutcomeOverview, getPauseInsight } from "@/lib/outcomes";
@@ -39,8 +41,14 @@ function pct(v: number | null): string {
 export default async function AdminOutcomesPage() {
   // Fetched independently: an unapplied 0077 must cost this one block, not the
   // whole page. See getPauseInsight.
-  const [{ unavailable, wins, scoreboard, needsReview, duplicates }, pauses] =
-    await Promise.all([getOutcomeOverview(), getPauseInsight()]);
+  // Fetched alongside, and independently: an unapplied 0127 must cost this one
+  // block rather than the page, the posture getOutcomeOverview already takes.
+  const [{ unavailable, wins, scoreboard, needsReview, duplicates }, pauses, adherence] =
+    await Promise.all([
+      getOutcomeOverview(),
+      getPauseInsight(),
+      fetchAdherence(createAdminClient()),
+    ]);
 
   if (unavailable) {
     return (
@@ -67,6 +75,74 @@ export default async function AdminOutcomesPage() {
           What happened to the leads after they were sold.
         </p>
       </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Who is actually doing the follow-up work (§42).
+
+          This is the answer to "your leads are poor": it says exactly how many
+          attempts that customer made. Worst first, because an alphabetical list
+          buries the people the panel exists for. */}
+      {!adherence.unavailable && adherence.rows.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-medium">Follow-up work, last 14 days</h2>
+            <p className="text-sm text-muted-foreground">
+              Attempts that have fallen due, against attempts made
+            </p>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b-[0.5px] border-border text-left text-xs text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2 font-medium">Customer</th>
+                      <th className="px-4 py-2 font-medium">Due</th>
+                      <th className="px-4 py-2 font-medium">Made</th>
+                      <th className="px-4 py-2 font-medium">Missed</th>
+                      <th className="px-4 py-2 font-medium">Oldest</th>
+                      <th className="px-4 py-2 font-medium">Adherence</th>
+                      <th className="px-4 py-2 font-medium">By click</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adherence.rows.map((r) => (
+                      <tr key={r.customer_id} className="border-b-[0.5px] border-border/60">
+                        <td className="px-4 py-2">{r.business_name ?? "—"}</td>
+                        <td className="px-4 py-2">{r.due}</td>
+                        <td className="px-4 py-2">{r.done}</td>
+                        <td className="px-4 py-2">{r.overdue}</td>
+                        <td className="px-4 py-2">
+                          {r.overdue > 0 ? `${r.oldest_overdue_days}d` : "—"}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span
+                            className={
+                              (r.adherence_pct ?? 100) < 50
+                                ? "font-medium text-amber-700"
+                                : ""
+                            }
+                          >
+                            {r.adherence_pct === null ? "—" : `${r.adherence_pct}%`}
+                          </span>
+                        </td>
+                        {/* A customer whose completions are overwhelmingly
+                            manual is the flag worth having: a click is a
+                            recorded action, a manual tick is their word. */}
+                        <td className="px-4 py-2 text-muted-foreground">
+                          {r.done > 0
+                            ? `${Math.round((100 * r.done_by_click) / r.done)}%`
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
       {/* ---------------------------------------------------------------- */}
       {!pauses.unavailable && (
