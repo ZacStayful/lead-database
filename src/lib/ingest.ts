@@ -10,6 +10,7 @@ import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import { syncStoredReport } from "@/lib/incomeReportStorage";
 import { shouldRaiseContentionCap, shouldRouteLead } from "@/lib/leadResale";
 import { enrolOnAssignment } from "@/lib/messaging/sequences";
+import { sendLandlordReferral } from "@/lib/landlordReferralSend";
 import {
   assessLeadQuality,
   passesQualityGate,
@@ -697,6 +698,34 @@ export async function completeAssignment(
     assignmentId,
     leadType: lead.lead_type ?? "management",
   });
+
+  // The landlord referral (§41). Stayful writes to the LANDLORD introducing the
+  // operator who has just been given their enquiry — the email the landing page
+  // and the privacy policy have both described for months and which did not
+  // exist until now.
+  //
+  // ⚠️ LAST, AND IT NEVER THROWS. Everything above it has already happened by
+  // the time it runs, so a Resend outage costs an introduction and nothing
+  // else — not the assignment, not the credit, not the operator's own alerts.
+  // sendLandlordReferral() catches internally; this try/catch is the second
+  // stop, matching the discipline §23.6 sets for the Monday hooks.
+  //
+  // ⚠️ FORWARD-ONLY BY CONSTRUCTION. This is the only call site, and it fires
+  // on a NEW allocation. Nothing sweeps existing leads, and nothing may be
+  // added that does.
+  //
+  // Deliberately outside `sendThresholdWarnings`, for the reason given above
+  // for enrolOnAssignment: that flag is about credit warnings, and a lead an
+  // admin placed by hand still deserves a warm handoff.
+  try {
+    await sendLandlordReferral(supabase, {
+      lead,
+      customerId,
+      assignmentId,
+    });
+  } catch (error) {
+    console.error("landlord referral failed", { assignmentId, error });
+  }
 }
 
 

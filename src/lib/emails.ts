@@ -53,6 +53,31 @@ function shell(inner: string): string {
 </body></html>`;
 }
 
+/**
+ * The shell for a LANDLORD, who is not a customer and has no subscription.
+ *
+ * ⚠️ DO NOT REUSE shell() FOR THESE. Its footer reads "You are receiving this
+ * because you have an active subscription" — false for a landlord, and a plain
+ * untruth in what may be the first email we ever send them. This one states the
+ * real reason and carries the objection route, which matters because the
+ * privacy policy processes their enquiry on legitimate interests and therefore
+ * owes them a way to object.
+ */
+function landlordShell(inner: string): string {
+  return `<!doctype html><html><body style="margin:0;background:#f5f6f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a">
+  <div style="max-width:560px;margin:0 auto;padding:32px 16px">
+    <div style="font-weight:700;font-size:20px;color:${BRAND};margin-bottom:16px">Stayful</div>
+    <div style="background:#ffffff;border:0.5px solid #d9dbd8;border-radius:10px;padding:28px">
+      ${inner}
+    </div>
+    <div style="color:#8a8f88;font-size:12px;margin-top:20px;line-height:1.6">
+      You are receiving this because you submitted a property enquiry to Stayful.
+      If you would rather we did not pass your details on, reply to this email and we will stop.
+    </div>
+  </div>
+</body></html>`;
+}
+
 /** Where feature requests / bug reports are delivered. */
 function feedbackTo(): string {
   return process.env.FEEDBACK_EMAIL ?? "zac@stayful.co.uk";
@@ -1136,6 +1161,48 @@ export async function sendAnalysisReadyEmail(params: {
       to,
       subject,
       html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * The landlord referral (§41) — Stayful introducing the operator who has just
+ * been given this enquiry.
+ *
+ * Sent from OUR domain, never the operator's: Stayful is the sender and the
+ * consent basis, and dressing it as the operator would undo the one thing that
+ * makes it a referral rather than cold outreach.
+ *
+ * ⚠️ TAKES FINISHED HTML, NOT A LEAD. The words, the product split and the
+ * escaping live in src/lib/landlordReferral.ts, which imports esc() from HERE —
+ * the same one-way direction messaging/outbound.ts:10 uses. Importing that
+ * module back would make the two circular; this signature is what keeps the
+ * dependency pointing one way. `bodyHtml` is already escaped by the caller.
+ */
+export async function sendLandlordReferralEmail(params: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  cta: { url: string; label: string; note: string } | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, subject, bodyHtml, cta } = params;
+
+  // Offered only on the first introduction for a lead, and only when a token
+  // could actually be minted.
+  const ctaHtml = cta
+    ? `${button(cta.url, cta.label)}
+       <p style="margin:10px 0 0;color:#6b706a;font-size:13px">${esc(cta.note)}</p>`
+    : "";
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: landlordShell(`${bodyHtml}${ctaHtml}`),
     });
     return { id: data?.id ?? null, error };
   } catch (error) {
