@@ -23,10 +23,19 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const GUIDE = join(process.cwd(), "src/app/dashboard/guide/page.tsx");
+// ⚠️ Resolved from THIS FILE, not from process.cwd(). The suite runs inside the
+// Vercel build (`vercel.json` gates `next build` on `vitest run`), and a test
+// that reads a source file has no business assuming which directory the build
+// invoked it from — a wrong cwd would throw ENOENT and fail the deploy for a
+// reason that has nothing to do with the code under test.
+const GUIDE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../app/dashboard/guide/page.tsx"
+);
 
 /** Just the contact-strategy section, so the rest of the guide is unaffected. */
 function contactSection(): string {
