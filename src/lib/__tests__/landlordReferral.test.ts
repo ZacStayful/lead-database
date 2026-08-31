@@ -16,6 +16,11 @@ import {
 import {
   isRetryableSendError,
   nextReferralAttemptAt,
+  shouldAbandonReferral,
+  retryShouldAskQuestions,
+  REFERRAL_ABANDON_AFTER_MS,
+  REFERRAL_RETRY_PACING_MS,
+  REFERRAL_RETRY_MAX_PER_RUN,
 } from "@/lib/landlordReferralSend";
 
 const LEAD_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -289,5 +294,52 @@ describe("send failure classification", () => {
     expect(at(3)).toBe(900_000);
     expect(at(4)).toBe(3_600_000);
     expect(at(9)).toBe(3_600_000);
+  });
+});
+
+describe("the retry sweep", () => {
+  const NOW = 1_800_000_000_000;
+  const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString();
+
+  it("keeps retrying inside the 24h window and stops after it", () => {
+    expect(shouldAbandonReferral(iso(60_000), NOW)).toBe(false);
+    expect(shouldAbandonReferral(iso(REFERRAL_ABANDON_AFTER_MS - 1000), NOW)).toBe(false);
+    expect(shouldAbandonReferral(iso(REFERRAL_ABANDON_AFTER_MS + 1000), NOW)).toBe(true);
+  });
+
+  // An unknown or unparseable claim time is not evidence the claim is old, and
+  // treating it as such would silently abandon a referral on its first retry.
+  it("never abandons on a missing or unparseable claim time", () => {
+    expect(shouldAbandonReferral(null, NOW)).toBe(false);
+    expect(shouldAbandonReferral(undefined, NOW)).toBe(false);
+    expect(shouldAbandonReferral("not-a-date", NOW)).toBe(false);
+  });
+
+  it("asks the questions on retry only when nobody has actually been sent one", () => {
+    // holds the first-flag and no sibling delivered → this retry asks
+    expect(retryShouldAskQuestions("2026-08-30T09:00:00Z", true)).toBe(true);
+    // a sibling already delivered → stay quiet rather than risk a double-ask
+    expect(retryShouldAskQuestions("2026-08-30T09:00:00Z", false)).toBe(false);
+    // never held the flag → was never the one asking
+    expect(retryShouldAskQuestions(null, true)).toBe(false);
+    expect(retryShouldAskQuestions(undefined, false)).toBe(false);
+  });
+
+  // This sweep exists BECAUSE of Resend's 2/second limit, so it must not
+  // reproduce it. 600ms is the pace the announcement sender uses (§21.3).
+  it("paces slower than Resend's documented 2 per second", () => {
+    expect(REFERRAL_RETRY_PACING_MS).toBeGreaterThanOrEqual(500);
+    expect(1000 / REFERRAL_RETRY_PACING_MS).toBeLessThanOrEqual(2);
+  });
+
+  // The whole batch must fit the phase's share of a 45s wall clock with the
+  // three phases ahead of it already served.
+  it("bounds a run to something the shared wall clock can absorb", () => {
+    expect(REFERRAL_RETRY_MAX_PER_RUN).toBeLessThanOrEqual(30);
+    expect(REFERRAL_RETRY_MAX_PER_RUN * REFERRAL_RETRY_PACING_MS).toBeLessThanOrEqual(45_000);
+  });
+
+  it("gives up after a day, not after two", () => {
+    expect(REFERRAL_ABANDON_AFTER_MS).toBe(24 * 60 * 60 * 1000);
   });
 });

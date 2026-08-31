@@ -50,6 +50,14 @@ import {
   type StopReason,
 } from "@/lib/messaging/sequences";
 
+import {
+  landlordReferralEnabled,
+  retryOneReferral,
+  REFERRAL_RETRY_MAX_PER_RUN,
+  REFERRAL_RETRY_PACING_MS,
+  type RetryableReferral,
+} from "@/lib/landlordReferralSend";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -148,6 +156,146 @@ function roundRobin(rows: DueMessage[]): DueMessage[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 4 — landlord referrals that were claimed and never delivered (§41).
+//
+// A referral is claimed by write BEFORE it is sent (§19.5), so a Resend failure
+// leaves a row that has taken its slot and delivered nothing. Without this
+// sweep that landlord is never introduced at all — and the failure it exists
+// for is not hypothetical: bulk assign runs completeAssignment at
+// NOTIFY_CONCURRENCY = 8, which with a second email per assignment is sixteen
+// concurrent requests against Resend's documented 2/second limit (§21.3).
+//
+// ⚠️ IT RUNS LAST, AND THAT IS DELIBERATE. The three phases above are all
+// time-critical — a delivery status, a landlord's reply stopping a ladder, a
+// scheduled send. A referral retry is minutes-tolerant by construction, because
+// it is already on a backoff ladder. So it takes leftover budget and can never
+// starve the others.
+//
+// ⚠️ IT DOES NOT TOUCH consume_provider_budget. That is TimelinesAI's 30/second
+// bucket; this is Resend, a different vendor with a far tighter limit. Pacing
+// here is its own — REFERRAL_RETRY_PACING_MS, the 600ms the announcement sender
+// uses — because a sweep cleaning up after a rate limit must not reproduce it.
+//
+// A phase rather than a fifteenth cron, for the reason §40.9 and §40.13 both
+// give: this route already runs every five minutes and already holds a wall
+// clock.
+// ---------------------------------------------------------------------------
+async function retryLandlordReferrals(
+  admin: ReturnType<typeof createAdminClient>,
+  startedAt: number
+): Promise<{ due: number; sent: number; deferred: number; failed: number; abandoned: number; skipped: string | null }> {
+  const empty = { due: 0, sent: 0, deferred: 0, failed: 0, abandoned: 0, skipped: null as string | null };
+
+  // The kill switch governs the sweep too. Turning the feature off must stop
+  // every send, not just the ones on the assignment path.
+  if (!(await landlordReferralEnabled(admin))) {
+    return { ...empty, skipped: "disabled" };
+  }
+
+  const { data, error } = await admin
+    .from("lead_assignments")
+    .select(
+      "id, customer_id, landlord_referral_attempts, landlord_referral_claimed_at, " +
+        "lead:leads!inner(id, lead_name, email, address, bedrooms, lead_type, " +
+        "owner_customer_id, lead_quality_codes, gross_annual_income, " +
+        "landlord_referral_first_sent_at)"
+    )
+    .not("landlord_referral_claimed_at", "is", null)
+    .is("landlord_referral_sent_at", null)
+    .not("landlord_referral_next_attempt_at", "is", null)
+    .lte("landlord_referral_next_attempt_at", new Date().toISOString())
+    .order("landlord_referral_next_attempt_at", { ascending: true })
+    .limit(REFERRAL_RETRY_MAX_PER_RUN);
+
+  if (error) return { ...empty, skipped: "query_failed" };
+
+  const rows = (data ?? []) as unknown as {
+    id: string;
+    customer_id: string;
+    landlord_referral_attempts: number;
+    landlord_referral_claimed_at: string | null;
+    lead: RetryableReferral["lead"];
+  }[];
+  if (rows.length === 0) return empty;
+
+  // Which of these leads has ANY assignment already delivered? That decides
+  // whether the questions have genuinely been asked, and therefore whether a
+  // give-up should hand them back for the next operator to ask.
+  const leadIds = Array.from(new Set(rows.map((r) => r.lead?.id).filter(Boolean)));
+  const { data: sentSiblings } = await admin
+    .from("lead_assignments")
+    .select("lead_id")
+    .in("lead_id", leadIds)
+    .not("landlord_referral_sent_at", "is", null);
+  const leadsWithASend = new Set(
+    ((sentSiblings ?? []) as { lead_id: string }[]).map((r) => r.lead_id)
+  );
+
+  const tally = { ...empty, due: rows.length };
+
+  for (const row of rows) {
+    if (Date.now() - startedAt > WALL_CLOCK_BUDGET_MS) break;
+    if (!row.lead) {
+      tally.skipped = "no_lead";
+      continue;
+    }
+
+    const outcome = await retryOneReferral(admin, {
+      id: row.id,
+      customer_id: row.customer_id,
+      landlord_referral_attempts: row.landlord_referral_attempts ?? 0,
+      landlord_referral_claimed_at: row.landlord_referral_claimed_at,
+      lead: row.lead,
+      noSiblingSent: !leadsWithASend.has(row.lead.id),
+    });
+
+    if (outcome === "sent") tally.sent += 1;
+    else if (outcome === "deferred") tally.deferred += 1;
+    else if (outcome === "failed") tally.failed += 1;
+    else if (outcome === "abandoned") tally.abandoned += 1;
+
+    // Pace against Resend, not against TimelinesAI.
+    await new Promise((r) => setTimeout(r, REFERRAL_RETRY_PACING_MS));
+  }
+
+  return tally;
+}
+
+/**
+ * The phases that must run on EVERY invocation, whether or not there was a
+ * WhatsApp status to poll.
+ *
+ * ⚠️ EXTRACTED SO A FOURTH PHASE CANNOT BE ADDED TO ONE EXIT AND NOT THE OTHER.
+ * This route returns early when the status queue is empty — which its own
+ * comment calls the NORMAL case — so a phase wired only into the main path runs
+ * on the minority of runs that happened to have a message to poll. That is the
+ * trap the recovery phase's comment already warned about, and the landlord
+ * referral sweep fell straight into it when it was first added.
+ *
+ * ⚠️ ORDER IS LOAD-BEARING FOR THE FIRST TWO. Sequences run AFTER recovery so a
+ * landlord's reply rescued this run stops the ladder before the next step goes
+ * out. Referrals run LAST because they are the only minutes-tolerant phase.
+ */
+async function runTailPhases(
+  admin: ReturnType<typeof createAdminClient>,
+  startedAt: number,
+  dryRun: boolean
+) {
+  if (dryRun) return { recovery: null, sequences: null, referrals: null };
+
+  const recovery = await recoverDeferredEvents(admin, startedAt);
+  const sequences = await sendDueSequenceDrafts(admin, startedAt);
+
+  let referrals: unknown = { skipped: "not_run" };
+  try {
+    referrals = await retryLandlordReferrals(admin, startedAt);
+  } catch (error) {
+    console.error("[poll-whatsapp-status] landlord referral phase failed", error);
+  }
+  return { recovery, sequences, referrals };
+}
+
 async function handle(request: NextRequest) {
   const auth = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -190,15 +338,15 @@ async function handle(request: NextRequest) {
     // ⚠️ Still run the recovery phase. An idle status queue is the NORMAL case,
     // and returning here would mean deferred webhook events are only ever
     // recovered on the minority of runs that also had a message to poll.
-    const recovered = dryRun ? null : await recoverDeferredEvents(admin, startedAt);
-    const sequences = dryRun ? null : await sendDueSequenceDrafts(admin, startedAt);
+    const tail = await runTailPhases(admin, startedAt, dryRun);
     return NextResponse.json({
       ok: true,
       due: 0,
       polled: 0,
       updated: 0,
-      recovery: recovered,
-      sequences,
+      recovery: tail.recovery,
+      sequences: tail.sequences,
+      referrals: tail.referrals,
     });
   }
 
@@ -372,13 +520,8 @@ async function handle(request: NextRequest) {
     }
   }
 
-  const recovered = await recoverDeferredEvents(admin, startedAt);
 
-  // ⚠️ AFTER RECOVERY, NOT BEFORE. A landlord's reply that this run has just
-  // rescued from the deferred queue stops the ladder before the next step goes
-  // out. Run the sender first and a recovered reply would arrive one message
-  // too late — which is the single behaviour this feature must never have.
-  const sequences = await sendDueSequenceDrafts(admin, startedAt);
+  const tail = await runTailPhases(admin, startedAt, false);
 
   return NextResponse.json({
     ok: true,
@@ -388,8 +531,9 @@ async function handle(request: NextRequest) {
     deferred,
     abandoned,
     stopped_for: stoppedFor,
-    recovery: recovered,
-    sequences,
+    recovery: tail.recovery,
+    sequences: tail.sequences,
+    referrals: tail.referrals,
     ms: Date.now() - startedAt,
   });
 }
