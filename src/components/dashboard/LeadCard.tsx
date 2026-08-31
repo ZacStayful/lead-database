@@ -13,10 +13,14 @@ import {
   BarChart3,
   Check,
   Phone,
+  Mail,
+  MessageCircle,
   MapPin,
   Calendar,
   Presentation,
 } from "lucide-react";
+import { recordLeadEvent } from "@/lib/contact/leadEvents";
+import { whatsappHandoffLink } from "@/lib/messaging/handoff";
 
 export function LeadCard({
   assignment: initial,
@@ -43,6 +47,9 @@ export function LeadCard({
   const isUnread = !assignment.viewed_at && !rejected;
   const contacted = assignment.status === "contacted";
   const badge = statusBadge(assignment.status);
+  // No message text: the operator writes their own words (§42). The link's job
+  // is to open the right chat on the right number.
+  const waLink = lead.phone ? whatsappHandoffLink(lead.phone, "") : null;
 
   async function markViewed() {
     if (assignment.viewed_at) return;
@@ -200,38 +207,70 @@ export function LeadCard({
       {open && (
         <div className="border-t-[0.5px] border-border px-4 py-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            {/* Contact details live on the lead detail page only.
+            {/* ⚠️ THE CONTACT DETAILS ARE BACK ON THIS CARD, AND 0079 IS
+                REVERSED DELIBERATELY (§42). Do not read this as somebody
+                undoing that change by accident.
 
-                This card used to render the landlord's phone and email as
-                tel:/mailto: links, so an operator could take the number
-                straight from the feed. 114 of 308 assignments were expanded
-                here and never opened on the detail page — roughly half of all
-                engagement leaving no usable trace of whether anyone went after
-                the lead.
+                0079 removed the landlord's phone and email from here because
+                "114 of 308 assignments were expanded in the feed and never
+                opened on the detail page — roughly half of all engagement
+                leaving no usable trace of whether anyone went after the lead".
+                The objection was that a click HERE left no trace. Buttons that
+                record tel_click / whatsapp_click / mailto_click ARE that trace,
+                so the reason for the gate is gone — and keeping it now costs us
+                exactly the signal it was introduced to protect. Operators work
+                from this list; tel_click reading 13 against 666 detail_opened
+                is partly an artefact of there being nothing here to click.
 
-                Putting the details one click away makes that click mean
-                something: nobody opens a lead they have no intention of
-                ringing. The open is recorded as detail_opened, so "went for
-                the contact details, and how many times" becomes measurable
-                where before it was invisible.
+                Nothing was ever withheld either: this page selects
+                `lead:leads(*)`, so the phone and email were already in the
+                payload reaching the browser. 0079 was a rendering choice over
+                data the client already had.
 
-                Everything else about the lead stays here. The gate is on the
-                two fields that represent intent to make contact, not on the
-                information an operator needs to decide whether the lead is
-                worth their time. */}
-            <div className="sm:col-span-2 flex items-start gap-2">
-              <Phone className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">
-                  Phone and email
-                </p>
-                <Link
-                  href={`/dashboard/leads/${lead.id}?from=${from}`}
-                  className="text-sm text-brand hover:underline"
+                ⚠️ It changes what `detail_opened` MEANS for the third time
+                (0079, then 0123, now this), so the date is recorded in
+                CLAUDE.md beside the other two. Contact actions will step up
+                sharply and part of that is measurement, not behaviour. */}
+            <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
+              {lead.phone && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  onClick={() => recordLeadEvent(assignment.id, "tel_click")}
                 >
-                  Open the lead to see contact details
-                </Link>
-              </div>
+                  <a href={`tel:${lead.phone}`}>
+                    <Phone className="h-4 w-4" />
+                    {lead.phone}
+                  </a>
+                </Button>
+              )}
+              {waLink && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  onClick={() => recordLeadEvent(assignment.id, "whatsapp_click")}
+                >
+                  <a href={waLink} target="_blank" rel="noopener noreferrer">
+                    <MessageCircle className="h-4 w-4" />
+                    WhatsApp
+                  </a>
+                </Button>
+              )}
+              {lead.email && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  onClick={() => recordLeadEvent(assignment.id, "mailto_click")}
+                >
+                  <a href={`mailto:${lead.email}`}>
+                    <Mail className="h-4 w-4" />
+                    Email
+                  </a>
+                </Button>
+              )}
             </div>
             <Detail icon={MapPin} label="Full address" value={lead.address} />
             <Detail

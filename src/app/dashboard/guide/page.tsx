@@ -1,3 +1,12 @@
+import {
+  BOOKED_MEETING_RATE_PCT,
+  COLD_CALL_ANSWER_PCT,
+  CONTACT_ATTEMPTS,
+  RESPONDER_SHARE_BY_FIFTH_PCT,
+  SPEED_RULE,
+  WARMED_CALL_ANSWER_PCT_MAX,
+  channelLabel,
+} from "@/lib/contact/contactStrategy";
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
@@ -50,6 +59,7 @@ export default async function GuidePage() {
     { id: "leads", label: "Your leads feed" },
     { id: "credits", label: "Leads, credits & pacing" },
     { id: "lead", label: "Working a lead" },
+    { id: "contact", label: "How to contact a lead" },
     { id: "crm", label: "Status vs pipeline" },
     { id: "notes", label: "Notes & files" },
     { id: "reject", label: "Reject vs discard" },
@@ -208,6 +218,78 @@ export default async function GuidePage() {
                 through them quickly.
               </li>
             </List>
+          </Section>
+
+          <Section id="contact" title="How to contact a lead">
+            <p>
+              This is not generic sales advice. It comes from our own lead
+              pipeline, traced end to end over two months — every call attempt
+              and its outcome, every email, checked against real diary bookings
+              rather than what a CRM said. It is what disciplined follow-up has
+              produced for one operator, so treat it as a benchmark rather than
+              a promise: your own results depend on your leads and on how
+              consistently you work them.
+            </p>
+
+            <SubHeading>Stop at five</SubHeading>
+            <p>
+              About <strong>{RESPONDER_SHARE_BY_FIFTH_PCT}%</strong> of the
+              landlords who ever respond do so inside the first four or five
+              attempts. Past that, fresh effort produced close to nothing. So
+              five is the number — after that, de-prioritise and put the time
+              into a lead that has not had its five yet. Nothing is deleted, and
+              landlords do sometimes come back weeks later.
+            </p>
+
+            <SubHeading>Ring first, and do not warm them up</SubHeading>
+            <p>
+              This is the part almost everyone gets the wrong way round. A{" "}
+              <strong>cold call</strong> — nothing sent ahead of it — is answered
+              about <strong>{COLD_CALL_ANSWER_PCT}%</strong> of the time. Once a
+              message or an email has gone first, the answer rate on the call
+              that follows drops to{" "}
+              <strong>{WARMED_CALL_ANSWER_PCT_MAX}% or less</strong>. Sending a
+              friendly introduction before you dial feels polite and costs you
+              roughly three quarters of your answer rate.
+            </p>
+            <Callout>{SPEED_RULE}</Callout>
+
+            <SubHeading>The sequence</SubHeading>
+            <ol className="ml-4 list-decimal space-y-2">
+              {CONTACT_ATTEMPTS.map((a) => (
+                <li key={a.number}>
+                  <strong>
+                    {channelLabel(a.channel)}
+                    {a.number === 1 ? " — the day it arrives" : ""}
+                  </strong>
+                  {" — "}
+                  {a.objective}
+                  {a.why ? (
+                    <span className="block text-muted-foreground">{a.why}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+            <p>
+              You do not have to remember any of it. Each lead carries its own{" "}
+              <strong>contact timeline</strong> showing which attempts are done
+              and what is due next, and one button does the attempt — it opens
+              your own WhatsApp, your own dialler or your own email, so the
+              landlord hears from you rather than from us.
+            </p>
+            <Callout>
+              If a landlord told us how they would rather be contacted when we
+              introduced you, the first attempt follows that instead of the call.
+            </Callout>
+
+            <SubHeading>What to expect</SubHeading>
+            <p>
+              Leads worked through a structured sequence like this booked a
+              meeting about <strong>{BOOKED_MEETING_RATE_PCT}%</strong> of the
+              time, against ad hoc follow-up. Again — that is what the data
+              showed for one operator over two months, not a guarantee, and it
+              assumes the attempts actually get made.
+            </p>
           </Section>
 
           <Section id="crm" title="Status vs pipeline — the mini-CRM">
