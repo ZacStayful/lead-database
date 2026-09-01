@@ -350,9 +350,31 @@ export async function skipStep(
  * them. §27.8's own regression was confirmed to fail against the old select
  * before it was kept, and the same applies to these.
  */
+/**
+ * ⚠️ THE `delivery` EMBED AND ITS FILTER ARE THE SAFETY BOUNDARY OF §42.
+ *
+ * A contact plan is `delivery = 'manual'`: the operator does the attempt
+ * themselves from the timeline, and it must NEVER reach `sendOneMessage`. If it
+ * does, sendOneMessage returns `not_connected` (there are zero connected
+ * TimelinesAI workspaces), SEQUENCE_STOP_CODES maps that to
+ * stopRun("no_connection"), and the run dies with every remaining attempt swept
+ * to `skipped` — the whole plan destroyed, silently, five minutes after it was
+ * created.
+ *
+ * That is not hypothetical. It happened on production on 2026-09-01: 91 runs
+ * were stopped this way within six minutes of the backfill, because this filter
+ * was described in the design, asserted in the pull request, and never written.
+ *
+ * `!inner` on BOTH embeds is load-bearing for the same reason §27.8 records: a
+ * filter on a NON-inner embedded resource filters the embedded resource rather
+ * than the parent rows, so a left join here would return every manual draft
+ * with its sequence nulled instead of excluding it — which is exactly the bug
+ * this filter exists to prevent, wearing a different hat.
+ */
 export const DUE_DRAFT_COLUMNS =
   "id, run_id, customer_id, step_number, body, draft_id, " +
-  "message_sequence_runs!inner(id, status, sequence_id, assignment_id, lead_id)";
+  "message_sequence_runs!inner(id, status, sequence_id, assignment_id, lead_id, " +
+  "message_sequences!inner(delivery))";
 
 export const REVIEW_QUEUE_COLUMNS =
   "id, run_id, step_number, body, send_after, state, edited_at, created_at, " +

@@ -785,6 +785,11 @@ async function sendDueSequenceDrafts(
       .select(DUE_DRAFT_COLUMNS)
       .eq("state", "pending")
       .eq("message_sequence_runs.status", "active")
+      // ⚠️ AUTO PLANS ONLY. A §42 contact plan is delivery='manual' — the
+      // operator does the attempt from their own phone — and handing one to
+      // sendOneMessage kills the whole run with no_connection. See
+      // DUE_DRAFT_COLUMNS for what happened when this line was missing.
+      .eq("message_sequence_runs.message_sequences.delivery", "auto")
       .lte("send_after", new Date().toISOString())
       .order("send_after", { ascending: true })
       .limit(SEQUENCE_SCAN_LIMIT);
