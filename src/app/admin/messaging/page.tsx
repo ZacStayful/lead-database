@@ -52,6 +52,9 @@ export default async function AdminMessagingPage() {
     referralsQueued,
     referralsFailedToday,
     landlordsAnswered,
+    nudgesSentToday,
+    nudgesAwaiting,
+    landlordsPartial,
   ] = await Promise.all([
     admin
       .from("system_settings")
@@ -117,6 +120,29 @@ export default async function AdminMessagingPage() {
       .from("leads")
       .select("id", { count: "exact", head: true })
       .not("landlord_prefs_submitted_at", "is", null),
+    // §41.1. Reminders sent in the last day.
+    admin
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .gte("landlord_prefs_nudge_sent_at", dayAgo),
+    // Introduced, still under the cap, and the spine is unfinished. A ceiling
+    // on what the sweep could reach rather than what is due right now — the
+    // due test spans sibling assignments and lives in get_due_landlord_nudges.
+    admin
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .not("landlord_referral_first_sent_at", "is", null)
+      .lt("landlord_prefs_nudge_count", 2)
+      .is("landlord_contact_method", null),
+    // ⚠️ Started and stopped. Read off the SPINE, never off
+    // `landlord_prefs_submitted_at`, which any single answer stamps — so the
+    // "answered" figure above and this one would otherwise double-count the
+    // same person and neither would mean what its label says.
+    admin
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .not("landlord_contact_method", "is", null)
+      .is("landlord_wants", null),
   ]);
 
   const stored = new Map(
@@ -191,6 +217,20 @@ export default async function AdminMessagingPage() {
               label="Landlords answered"
               value={String(landlordsAnswered.count ?? 0)}
               hint="told us how to reach them"
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Stat label="Reminders in 24h" value={String(nudgesSentToday.count ?? 0)} />
+            <Stat
+              label="Still to chase"
+              value={String(nudgesAwaiting.count ?? 0)}
+              hint="introduced, never answered, under the cap"
+            />
+            <Stat
+              label="Started and stopped"
+              value={String(landlordsPartial.count ?? 0)}
+              hint="answered some, not all"
             />
           </div>
 

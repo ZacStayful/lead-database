@@ -147,6 +147,46 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     min: 1,
     max: 500,
   },
+  // Landlord referral reminders (§41.1). Here rather than in a list of their
+  // own for the reason §42 gives just above — one closed allow-list, one panel.
+  //
+  // ⚠️ `landlord_nudge_from` is deliberately NOT here. It is a DATE, set once at
+  // go-live, and would need a third field kind for a value nobody touches again
+  // — the position 0128 takes for `contact_notify_from` and the one
+  // `reclaim_enabled_from` has always been in. Moving it is a SQL edit.
+  {
+    key: "landlord_referral_nudge_enabled",
+    label: "Landlord reminders",
+    kind: "boolean",
+    fallback: "false",
+  },
+  {
+    key: "landlord_prefs_nudge_first_hours",
+    label: "First reminder after (hours)",
+    kind: "number",
+    fallback: "48",
+    min: 1,
+    max: 336,
+  },
+  {
+    key: "landlord_prefs_nudge_second_hours",
+    label: "Second reminder after (hours)",
+    kind: "number",
+    fallback: "72",
+    min: 1,
+    max: 336,
+  },
+  {
+    key: "landlord_prefs_reask_days",
+    label: "Re-ask floor (days)",
+    kind: "number",
+    fallback: "7",
+    // ⚠️ MINIMUM 1, NOT 0. Zero removes the floor, and the floor is what stops
+    // one autoAssignLead fan-out — up to three operators in a single
+    // sequential pass — sending three emails all carrying the same questions.
+    min: 1,
+    max: 90,
+  },
 ];
 
 const BY_KEY = new Map(MESSAGING_SETTINGS.map((s) => [s.key, s]));

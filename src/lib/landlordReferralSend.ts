@@ -262,8 +262,33 @@ export function shouldAbandonReferral(
  */
 export function retryShouldAskQuestions(
   leadFirstSentAt: string | null | undefined,
-  noSiblingSent: boolean
+  noSiblingSent: boolean,
+  answered?: {
+    landlord_contact_method?: string | null;
+    landlord_contact_time?: string | null;
+    landlord_wants?: string[] | null;
+  }
 ): boolean {
+  // ⚠️ Since 0129 a landlord can answer between the claim and the retry — the
+  // reminder sweep, or a second operator's introduction, may have got through
+  // while this one was failing. Asking again then is the one thing the
+  // once-only design exists to prevent, so the spine is re-read at send time.
+  //
+  // The spine, never `landlord_prefs_submitted_at`: that is stamped by ANY
+  // single answer, so it would silence the questions for somebody who has
+  // answered one of three.
+  //
+  // The ask CAP is deliberately NOT re-checked here. `claim_landlord_referral`
+  // already counted this ask when it claimed; a retry is the same ask being
+  // delivered, not a new one, so testing `ask_count < 3` would refuse the third
+  // ask precisely because it is the third.
+  if (answered) {
+    const complete =
+      Boolean(answered.landlord_contact_method) &&
+      Boolean(answered.landlord_contact_time) &&
+      Boolean(answered.landlord_wants?.length);
+    if (complete) return false;
+  }
   return Boolean(leadFirstSentAt) && noSiblingSent;
 }
 
@@ -274,6 +299,9 @@ export interface RetryableReferral {
   landlord_referral_claimed_at: string | null;
   lead: ReferralLead & {
     landlord_referral_first_sent_at?: string | null;
+    landlord_contact_method?: string | null;
+    landlord_contact_time?: string | null;
+    landlord_wants?: string[] | null;
   };
   /** True when NO assignment for this lead has actually been sent yet. */
   noSiblingSent: boolean;
@@ -335,7 +363,8 @@ export async function retryOneReferral(
 
     const askQuestions = retryShouldAskQuestions(
       row.lead.landlord_referral_first_sent_at,
-      row.noSiblingSent
+      row.noSiblingSent,
+      row.lead
     );
 
     const copy = buildReferralCopy({

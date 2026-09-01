@@ -26,6 +26,10 @@ describe("the allow-list is closed", () => {
       "contact_plans_enabled",
       "followup_adherence_notice_min_overdue",
       "followup_adherence_notice_pct",
+      "landlord_prefs_nudge_first_hours",
+      "landlord_prefs_nudge_second_hours",
+      "landlord_prefs_reask_days",
+      "landlord_referral_nudge_enabled",
       "messaging_email_enabled",
       "messaging_enabled",
       "messaging_lead_cooldown_hours",
@@ -158,6 +162,14 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     contact_landlord_max_per_week: "3",
     followup_adherence_notice_pct: "50",
     followup_adherence_notice_min_overdue: "5",
+    // ⚠️ These four must equal the defaults the READERS use (§41.1), which for
+    // three of them live in SQL: get_due_landlord_nudges coalesces the two hour
+    // settings to 48 and 72, and claim_landlord_referral coalesces the re-ask
+    // floor to 7. landlordNudgeEnabled fails closed, so its fallback is false.
+    landlord_referral_nudge_enabled: "false",
+    landlord_prefs_nudge_first_hours: "48",
+    landlord_prefs_nudge_second_hours: "72",
+    landlord_prefs_reask_days: "7",
   };
 
   it("matches DEFAULT_QUIET_*, DEFAULT_LEAD_COOLDOWN_HOURS and sequenceSettings", () => {

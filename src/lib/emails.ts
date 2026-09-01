@@ -1324,3 +1324,39 @@ export async function sendLandlordReferralEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * The §41.1 reminder to a landlord who never finished answering.
+ *
+ * Same signature discipline as sendLandlordReferralEmail above, and for the
+ * same reason: the words and the escaping live in src/lib/landlordNudge.ts,
+ * which imports esc() from HERE. Taking finished HTML is what keeps that
+ * dependency pointing one way. `bodyHtml` is already escaped by the caller.
+ *
+ * The CTA is not optional here as it is on the introduction: a reminder whose
+ * only purpose is to get the questions answered, sent without the link to
+ * answer them, is an email that wastes somebody's attention for nothing.
+ */
+export async function sendLandlordNudgeEmail(params: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  cta: { url: string; label: string; note: string };
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, subject, bodyHtml, cta } = params;
+
+  const ctaHtml = `${button(cta.url, cta.label)}
+       <p style="margin:10px 0 0;color:#6b706a;font-size:13px">${esc(cta.note)}</p>`;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: landlordShell(`${bodyHtml}${ctaHtml}`),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}

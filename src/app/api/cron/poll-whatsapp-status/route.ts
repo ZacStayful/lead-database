@@ -58,6 +58,15 @@ import {
   type RetryableReferral,
 } from "@/lib/landlordReferralSend";
 
+import {
+  landlordNudgeEnabled,
+  sendOneNudge,
+  withinNudgeHours,
+  NUDGE_MAX_PER_RUN,
+  NUDGE_PACING_MS,
+  type DueNudge,
+} from "@/lib/landlordNudgeSend";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -199,7 +208,8 @@ async function retryLandlordReferrals(
       "id, customer_id, landlord_referral_attempts, landlord_referral_claimed_at, " +
         "lead:leads!inner(id, lead_name, email, address, bedrooms, lead_type, " +
         "owner_customer_id, lead_quality_codes, gross_annual_income, " +
-        "landlord_referral_first_sent_at)"
+        "landlord_referral_first_sent_at, landlord_contact_method, " +
+        "landlord_contact_time, landlord_wants)"
     )
     .not("landlord_referral_claimed_at", "is", null)
     .is("landlord_referral_sent_at", null)
@@ -262,6 +272,71 @@ async function retryLandlordReferrals(
   return tally;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5 — reminding a landlord who never finished answering (§41.1).
+//
+// §41 asks the three questions once, inside the first operator's introduction.
+// A landlord who never opens it, or who answers one card and closes the tab, is
+// never chased — and Phase 4 above cannot see them, because it selects
+// introductions Resend NEVER ACCEPTED. This is the other half: two reminders,
+// at 48h and 72h after a DELIVERED introduction, and then it stops.
+//
+// ⚠️ THE DUE LIST IS AN RPC, NOT A POSTGREST QUERY, AND IT HAS TO BE. The
+// conditions span SIBLING assignments — some assignment delivered, NONE
+// contacted — and a PostgREST filter on a to-many embedded resource matches ANY
+// row, never "none of them". §27.8 records what the near-miss costs: a 200 that
+// paginates normally and is wrong. Here it would chase landlords whose operator
+// had already rung them.
+//
+// ⚠️ IT RUNS LAST, after the referral retry. Both are minutes-tolerant, but a
+// reminder is the more skippable of the two: a landlord who has not answered in
+// 48 hours is not harmed by answering in 53, where an introduction that has not
+// been delivered at all is a lead going cold.
+//
+// ⚠️ IT DOES NOT TOUCH consume_provider_budget — that is TimelinesAI's bucket.
+// Pacing is Resend's own 2/second, the 600ms the announcement sender uses.
+async function sendLandlordNudges(
+  admin: ReturnType<typeof createAdminClient>,
+  startedAt: number
+): Promise<{ due: number; sent: number; released: number; failed: number; skipped: string | null }> {
+  const empty = { due: 0, sent: 0, released: 0, failed: 0, skipped: null as string | null };
+
+  if (!(await landlordNudgeEnabled(admin))) {
+    return { ...empty, skipped: "disabled" };
+  }
+
+  // Quiet hours are checked ONCE for the run rather than per lead: the whole
+  // batch sends within seconds of each other, and asking per row would only
+  // differ across a window boundary mid-run — where holding the remainder to
+  // the next run is the behaviour we want anyway.
+  if (!(await withinNudgeHours(admin, new Date()))) {
+    return { ...empty, skipped: "quiet_hours" };
+  }
+
+  const { data, error } = await admin.rpc("get_due_landlord_nudges", {
+    p_limit: NUDGE_MAX_PER_RUN,
+  });
+  if (error) return { ...empty, skipped: "query_failed" };
+
+  const rows = (data ?? []) as DueNudge[];
+  if (rows.length === 0) return empty;
+
+  const tally = { ...empty, due: rows.length };
+
+  for (const row of rows) {
+    if (Date.now() - startedAt > WALL_CLOCK_BUDGET_MS) break;
+
+    const outcome = await sendOneNudge(admin, row);
+    if (outcome === "sent") tally.sent += 1;
+    else if (outcome === "released") tally.released += 1;
+    else if (outcome === "failed") tally.failed += 1;
+
+    await new Promise((r) => setTimeout(r, NUDGE_PACING_MS));
+  }
+
+  return tally;
+}
+
 /**
  * The phases that must run on EVERY invocation, whether or not there was a
  * WhatsApp status to poll.
@@ -282,7 +357,7 @@ async function runTailPhases(
   startedAt: number,
   dryRun: boolean
 ) {
-  if (dryRun) return { recovery: null, sequences: null, referrals: null };
+  if (dryRun) return { recovery: null, sequences: null, referrals: null, nudges: null };
 
   const recovery = await recoverDeferredEvents(admin, startedAt);
   const sequences = await sendDueSequenceDrafts(admin, startedAt);
@@ -293,7 +368,17 @@ async function runTailPhases(
   } catch (error) {
     console.error("[poll-whatsapp-status] landlord referral phase failed", error);
   }
-  return { recovery, sequences, referrals };
+
+  // Its own try/catch, like the phase above: a reminder sweep that throws must
+  // never take the delivery-status poll or a landlord's reply down with it.
+  let nudges: unknown = { skipped: "not_run" };
+  try {
+    nudges = await sendLandlordNudges(admin, startedAt);
+  } catch (error) {
+    console.error("[poll-whatsapp-status] landlord nudge phase failed", error);
+  }
+
+  return { recovery, sequences, referrals, nudges };
 }
 
 async function handle(request: NextRequest) {

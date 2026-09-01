@@ -117,6 +117,36 @@ const CONTACT_NUMBER_FIELDS: {
   },
 ];
 
+const NUDGE_NUMBER_FIELDS: {
+  key: string;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+}[] = [
+  {
+    key: "landlord_prefs_nudge_first_hours",
+    label: "First reminder after (hours)",
+    hint: "Measured from the introduction Resend actually DELIVERED, not from when it was claimed — so a landlord is never chased about an email that never reached them.",
+    min: 1,
+    max: 336,
+  },
+  {
+    key: "landlord_prefs_nudge_second_hours",
+    label: "Second reminder after (hours)",
+    hint: "Also measured from delivery, and it is the last one. A minimum 12-hour gap since the first is enforced regardless, so a reminder held back by quiet hours cannot land an hour before this one.",
+    min: 1,
+    max: 336,
+  },
+  {
+    key: "landlord_prefs_reask_days",
+    label: "Re-ask floor (days)",
+    hint: "How long before ANOTHER operator's introduction may carry the questions again. Never 0: allocation can place one lead with three operators in a single pass, and the floor is the only thing stopping all three emails asking the same landlord the same questions at once.",
+    min: 1,
+    max: 90,
+  },
+];
+
 export function MessagingSettingsPanel({
   initial,
   activeRuns,
@@ -132,7 +162,7 @@ export function MessagingSettingsPanel({
   const [saved, setSaved] = useState<string | null>(null);
   const [numbers, setNumbers] = useState<Record<string, string>>(() =>
     Object.fromEntries(
-      [...NUMBER_FIELDS, ...CONTACT_NUMBER_FIELDS].map((f) => [
+      [...NUMBER_FIELDS, ...CONTACT_NUMBER_FIELDS, ...NUDGE_NUMBER_FIELDS].map((f) => [
         f.key,
         initial[f.key] ?? "",
       ])
@@ -284,6 +314,55 @@ export function MessagingSettingsPanel({
           className="mt-4 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {busy ? "Saving…" : "Save contact limits"}
+        </button>
+      </div>
+
+      <SettingSwitch
+        label="Landlord reminders"
+        on={on("landlord_referral_nudge_enabled")}
+        busy={busy}
+        onChange={(next) => save({ landlord_referral_nudge_enabled: next })}
+        description="Chases a landlord who was introduced to an operator and never finished answering how they want to be contacted (§41.1). Two emails, then it stops — and never once the operator has actually rung them. Separate from the referral switch on purpose, so introductions can run while this stays off."
+        offWarning="Switch landlord reminders off? Landlords who never answered are simply left, and their operator opens with a cold call rather than the channel they might have chosen. Introductions themselves are unaffected."
+      />
+
+      <div className="rounded-md border-[0.5px] border-border p-4">
+        <h3 className="text-sm font-medium">Landlord reminder timing</h3>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          {NUDGE_NUMBER_FIELDS.map((f) => (
+            <div key={f.key}>
+              <label className="text-xs font-medium" htmlFor={f.key}>
+                {f.label}
+              </label>
+              <input
+                id={f.key}
+                type="number"
+                min={f.min}
+                max={f.max}
+                value={numbers[f.key] ?? ""}
+                onChange={(e) =>
+                  setNumbers((prev) => ({ ...prev, [f.key]: e.target.value }))
+                }
+                className="mt-1 h-9 w-28 rounded-md border-[0.5px] border-border bg-background px-2 text-sm"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{f.hint}</p>
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            save(
+              Object.fromEntries(
+                NUDGE_NUMBER_FIELDS.map((f) => [f.key, Number(numbers[f.key])])
+              )
+            )
+          }
+          className="mt-4 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save reminder timing"}
         </button>
       </div>
 

@@ -46,9 +46,17 @@
 -- objection to a global cutoff (that it is "one bad read from enrolling the
 -- entire back catalogue") by making an unreadable value mean nobody.
 --
--- The population it can reach on the day it applies is EMPTY:
--- `landlord_referral_enabled` is still 'false' and no referral has ever been
--- sent.
+-- ⚠️ THE POPULATION IS NOT EMPTY AT APPLY TIME, and an earlier draft of this
+-- header said it was. §41 went live on 2026-09-01 and delivered 20
+-- introductions to 20 landlords between 11:01 and 11:02 UTC, with no failures
+-- and — an hour later — no answers yet. Seeding the cutoff to the apply instant
+-- therefore excludes that first cohort permanently, which is the SAFE reading
+-- and not obviously the right one: they were introduced by this very feature,
+-- today, and their 48-hour window has not opened.
+--
+-- The cutoff is left at the apply instant deliberately, because it is one
+-- UPDATE to widen and nothing to undo if it goes out too far. Moving it back to
+-- just before 2026-09-01T11:00:00Z is what enrols those 20.
 --
 -- ⚠️ THE REMINDER IS NOT AN OPERATOR APPROACH. 0127's landlord_approach_ok caps
 -- approaches to one landlord at 1/day and 3/week, and its own header states the
