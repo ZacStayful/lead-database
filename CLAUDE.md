@@ -7784,6 +7784,25 @@ pacing or capacity column, so a lagging migration cannot affect lead allocation.
 its additions returns `contact_plans_disabled` before touching anything while the
 switch is off. The `contact_notify_from` row is seeded to the apply instant, so a
 fresh build prompts about nothing until leads start arriving — the safe direction,
-and the same one the switch picks. ⚠️ On production, set it to the moment you
-intend to go live rather than leaving the apply instant, or a day of leads
-assigned between the two is silently never prompted about.
+and the same one the switch picks.
+
+**Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-01, before the code**, and
+re-applied to prove idempotency. Pre-apply: no `contact_notify_from` row, 40
+customers, none carrying the key, and **zero explicit `false` on any stream** —
+so the merge had nothing to preserve, but it was checked rather than assumed,
+because a `set` in place of the `||` would have wiped the lot. Post-apply: 40 of
+40 opted in, the cutoff at `2026-09-01T07:23:18Z`, and **an md5 of every
+customer's preferences with the new key removed that is byte-identical to the
+one taken beforehand** — the merge added one key and touched nothing else. The
+re-apply left both the cutoff and that fingerprint unchanged. 357 runs still
+active throughout.
+
+⚠️ **Before flipping `contact_plans_enabled`, move `contact_notify_from` to that
+moment**, or every lead assigned between the apply and go-live is silently never
+prompted about:
+
+```sql
+update system_settings
+   set value = to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+ where key = 'contact_notify_from';
+```
