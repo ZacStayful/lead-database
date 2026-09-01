@@ -7476,6 +7476,219 @@ split out for exactly that reason. Code last.
 
 ---
 
+## 41. Introducing the operator to the landlord *(0126)*
+
+When a lead is allocated, Stayful emails the **landlord** introducing the
+operator who has just been given their enquiry — name, company, phone, email,
+and the operator's own words about themselves. The first introduction for a lead
+also asks three questions behind a link, and the answers land on the lead where
+every operator holding it reads the same copy.
+
+**It was already sold before it existed.** `src/app/page.tsx` carries a mock of
+this email under the badge *"Your key differentiator"* and asserts "Before any
+assignment fires, the landlord gets a Stayful email introducing you. They've
+consented. They're expecting your call." `/policies/lead-quality-and-data` tells
+customers the same, and the privacy policy makes it the **lawful basis** for the
+whole referral (§5.1), states details are shared "only after the referral email
+described in section 5.1 has been sent" (§6), and names Resend as its processor.
+None of it existed. This is the implementation of a promise already published.
+
+`completeAssignment()` → `sendLandlordReferral()` · `/p/[token]` ·
+`POST /api/public/lead-preferences` · Phase 4 of `poll-whatsapp-status`.
+
+**Live since 2026-09-01 11:01 UTC**: 20 introductions to 20 landlords in about
+48 seconds, zero failures.
+
+### 41.1 — ⚠️ FORWARD-ONLY, and structurally so
+
+The only call site is `completeAssignment()`, which runs when a lead is
+allocated. **Nothing walks existing leads and nothing may ever be added that
+does** — a landlord who enquired in July must not be written to because a
+feature shipped in August. Both `0126`'s header and `landlordReferral.ts`'s say
+this in terms.
+
+The one thing that later came close is §41.4's reminder sweep, and what makes it
+admissible is a cutoff row rather than an exception.
+
+### 41.2 — The answers live on the LEAD, and that is the fairness property
+
+`landlord_contact_method` ∈ `whatsapp | email | phone`, `landlord_contact_time`,
+`landlord_wants text[]`, `landlord_note`, `landlord_prefs_step`.
+
+On **`leads`**, never on `lead_assignments`. There is exactly one copy, so two
+operators cannot hold different answers and one cannot have them while another
+does not. 0014's `leads_select_assigned` grants a holder the whole `leads` row
+and is evaluated **at read time**, so an operator assigned next month sees them
+the moment they are assigned — no backfill, no copying forward, nothing to keep
+in step.
+
+**They must never be added to `viewerScopedLead()`'s strip list.** Sharing them
+is the point.
+
+⚠️ **One consequence worth knowing.** A landlord answers "WhatsApp, Tuesday
+morning" with **one** named operator in mind. Shared with three, it routes all
+three onto the same channel in the same window. §40.12's cross-operator cooldown
+absorbs that for §40 messaging and **nothing covers phone calls**, which is why
+`describeAnswers()` renders it as *"Asked to be contacted by WhatsApp"* rather
+than as an instruction.
+
+### 41.3 — Asked once, and the race that makes it true
+
+`claim_landlord_referral()` takes the **lead row lock**, claims the assignment,
+and only then decides whether this introduction carries the questions. Exactly
+one operator per lead is told to ask, however many are assigned at the same
+instant — and they can be: `autoAssignLead` places to up to three operators in
+one sequential pass, and bulk assign runs `completeAssignment` at
+`NOTIFY_CONCURRENCY = 8`.
+
+Claim by write, then act — the `credit_invoice()` discipline (§19.5).
+
+**`claimed_at` and `sent_at` are separate columns on purpose.** The claim is
+written BEFORE the send, so a single stamp would later tell an operator "the
+landlord was told about you" about an email that 429'd. The lead page keys on
+`sent_at`.
+
+**The failure rule differs by failure type, and getting it backwards is a real
+bug.** Retryable (429, timeout, 5xx) **keeps** both stamps and schedules a
+retry — releasing would let the *next* operator's referral ask the same
+questions again. Permanent (a rejected address) releases, so the next
+introduction carries them instead.
+
+### 41.4 — Chasing a landlord who never answered *(0129)*
+
+`landlord_referral_first_sent_at` is stamped at **claim** time, so the questions
+counted as asked whether or not anyone read them — and every later operator's
+introduction came through with `ask_questions = false`. A landlord who received
+the email and ignored it, or who answered card 1 and closed the tab, was never
+chased by anything. Phase 4 only ever sees introductions **Resend never
+accepted**, so it cannot see them either.
+
+⚠️ **Since §42 that gap has a price.** `firstAttemptChannel()` uses
+`landlord_contact_method` to pick attempt 1 of the five-attempt contact plan,
+and says so: absence "leaves the default cold call in place".
+
+Two mechanisms, complementary:
+
+| | |
+|---|---|
+| **A — re-ask on the next allocation** | `claim_landlord_referral`'s rule widens from "nobody has been asked" to "nobody has **answered**, under the cap (3), and last asked over `landlord_prefs_reask_days` ago". Rides an allocation that was happening anyway |
+| **B — the reminder sweep** | Phase 5 of `poll-whatsapp-status`. Two emails, 48h and 72h after a **delivered** introduction, then it stops |
+
+⚠️ **UNANSWERED IS TESTED ON THE SPINE, NEVER ON `landlord_prefs_submitted_at`.**
+That column is stamped by *any* single answer, so gating on it would abandon
+exactly the partial-answer case both mechanisms exist for.
+
+⚠️ **THE RE-ASK FLOOR IS LOAD-BEARING.** Without a time floor, one
+`autoAssignLead` fan-out sends three emails all carrying the same questions —
+the exact failure the once-only design prevents. 7 days blocks a same-day
+fan-out and admits the day-10 escalation.
+
+⚠️ **`release_landlord_referral` gives the ASK back too**, not just the
+first-flag. Otherwise a bounced address burns one of three asks and silences the
+lead for a week over an email that never went.
+
+#### Stop conditions, and the one that is a product decision
+
+Spine complete · **any assignment has `first_contacted_at`** · any assignment
+`won`/`rejected` · lead closed · not referable · over the cap · **no assignment
+with `landlord_referral_sent_at`**.
+
+The `first_contacted_at` stop is Zac's call: once the operator has rung, the
+warm-up happened live and asking how they would like to be contacted reads as
+noise. Its cost is that with contact plans on, attempt 1 lands fast, so the
+reminder's real population becomes **leads whose operator did nothing for two
+days** — a different set from "everyone who did not answer", and one to watch in
+the admin figures rather than assume.
+
+The delivery anchor is the sharp one: `first_sent_at` is stamped at claim and
+does not prove delivery, so anchoring there would chase somebody about an email
+they never got — and it is also what keeps a lead in Phase 4's retry queue out
+of Phase 5 with no coordination between them.
+
+#### ⚠️ The due list is a FUNCTION because PostgREST cannot ask the question
+
+The conditions span **sibling assignments** — some assignment delivered, **none**
+contacted — and a PostgREST filter on a to-many embedded resource matches ANY
+row, never "none of them". §27.8 records what the near-miss costs: a 200 that
+paginates normally and is wrong. Here it would chase landlords whose operator had
+already rung them. `get_due_landlord_nudges()` answers it set-wise.
+
+#### ⚠️ The reminder is NOT an operator approach
+
+0127's `landlord_approach_ok` caps approaches to one landlord at 1/day and
+3/week, counting `tel_click`, `whatsapp_click`, `mailto_click` and
+`message_sent`. Its own header states the rule: *"our own reminders and the
+landlord's own reply are not approaches by anybody."* So nothing in §41.4 calls
+that function or writes an event in its counted set. A Stayful email about who is
+going to ring must not eat an operator's ration of actual contact.
+
+#### The forward-only guard, and why a global cutoff is safe here
+
+`landlord_nudge_from`, seeded to the apply instant and compared against
+`landlord_referral_first_sent_at`. §32.4 rejected a global cutoff as "one bad
+read from enrolling the entire back catalogue" — answered here the way 0128
+answers it: the read **fails closed**, and the shape check happens before the
+cast so a malformed value yields NULL rather than raising.
+
+⚠️ **It excluded the first real cohort.** 0129 applied at **12:14:51Z on
+2026-09-01**, and the 20 landlords introduced at 11:01 that morning fall before
+it — so they are never chased. That is the safe reading and not obviously the
+right one; moving the row back to just before `2026-09-01T11:00:00Z` enrols
+them, and it is one UPDATE.
+
+#### The two release rules point opposite ways, deliberately
+
+`release_landlord_referral` **keeps** a claim on a retryable failure because
+another sender exists and releasing would ask the landlord twice.
+`release_landlord_nudge` **releases** one, because there is no other sender and
+releasing just means "try again next run" — bounded by the 48h/72h windows
+themselves.
+
+⚠️ **The second reminder needs a minimum 12-hour gap since the first**, on top of
+the 72h test. Both windows measure from delivery, so a first reminder held back
+by quiet hours can land at 71h — and the 72h test alone would then send the
+second an hour later.
+
+### 41.5 — Where the switches are
+
+Four settings on `/admin/messaging`'s existing allow-list, following §42's
+precedent of one closed list rather than a second:
+`landlord_referral_nudge_enabled` (ships **false**, separate from
+`landlord_referral_enabled` so introductions can run while reminders do not),
+the two hour settings, and the re-ask floor — whose **minimum is 1, never 0**,
+because zero removes the fan-out guarantee.
+
+`landlord_nudge_from` deliberately stays out of that list: it is a date set once
+at go-live, 0128's position for `contact_notify_from`. Moving it is a SQL edit.
+
+The referral's own switch and its test send keep their bespoke route
+(`/api/admin/settings/landlord-referral`), which predates §42's consolidation.
+
+### Verification
+
+All 123 migrations to a scratch Postgres 16 from empty, 0129 re-applied twice;
+every CHECK on its boundaries; all three new functions `service_role`-only and
+invariant 7's four still `authenticated`-executable. **Eight concurrent claimers
+on one lead returned exactly one `ask_questions = true`.** The due list returned
+exactly the two intended leads out of eleven seeded cases, and dropped a lead the
+moment a **sibling** assignment was contacted — the case the RPC exists for.
+
+36 unit cases, mutation-checked: letting the figure through on a GR lead,
+repeating it on the second reminder, dropping `esc()` from the operator line, and
+asking a landlord who has already answered each fail exactly one test and no
+others.
+
+Applied to production before the code. Post-apply: 456 leads, 407 assignments and
+40 customers untouched, `ask_count` zero on every row, **nothing due**, and no new
+Supabase advisory.
+
+### Deployment order — migration BEFORE code
+
+0126, then 0129. Both are additive and inert: every default reproduces the
+behaviour before it, and both switches ship false. Nothing here touches a
+balance, counter, pacing or capacity column.
+
+---
 ## 42. The contact strategy, and a plan per lead *(0127)*
 
 Customers say the leads are poor. The database says the leads are barely
