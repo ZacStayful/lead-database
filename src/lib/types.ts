@@ -30,6 +30,12 @@ export interface NotificationPreferences {
   // Governs the EMAIL only. The dashboard banner is decided by audience, so
   // turning this off stops the inbox copy and leaves the in-app one.
   announcements: boolean;
+  // The daily contact-plan prompt and the weekly falling-behind notice (§42).
+  // One key for both: they are two halves of the same conversation about work
+  // that is due, and a customer who wants one and not the other does not
+  // exist. Governs the EMAIL and the text; the timeline on the lead page is
+  // unaffected, because it is a page they chose to open.
+  contact_followups: boolean;
 }
 
 export interface Customer {

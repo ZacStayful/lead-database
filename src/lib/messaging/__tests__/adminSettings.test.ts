@@ -21,6 +21,11 @@ import {
 describe("the allow-list is closed", () => {
   it("names exactly these keys and no others", () => {
     expect(MESSAGING_SETTINGS.map((s) => s.key).sort()).toEqual([
+      "contact_landlord_max_per_day",
+      "contact_landlord_max_per_week",
+      "contact_plans_enabled",
+      "followup_adherence_notice_min_overdue",
+      "followup_adherence_notice_pct",
       "messaging_email_enabled",
       "messaging_enabled",
       "messaging_lead_cooldown_hours",
@@ -146,6 +151,13 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     messaging_whatsapp_ceiling_per_second: "12",
     messaging_sequence_review_hours: "18",
     messaging_sequence_daily_draft_cap: "250",
+    // ⚠️ These four must equal contactPlanSettings()'s own fallbacks (§42), or
+    // the admin page shows a limit the rationing is not actually using.
+    contact_plans_enabled: "false",
+    contact_landlord_max_per_day: "1",
+    contact_landlord_max_per_week: "3",
+    followup_adherence_notice_pct: "50",
+    followup_adherence_notice_min_overdue: "5",
   };
 
   it("matches DEFAULT_QUIET_*, DEFAULT_LEAD_COOLDOWN_HOURS and sequenceSettings", () => {

@@ -462,6 +462,121 @@ export async function sendFilterLiftCompletedEmail(params: {
  * awaiting a first follow-up. Grouped: one email covering all N waiting leads,
  * listing up to a handful by name/address and summarising the rest.
  */
+/**
+ * Today's follow-up list (§42).
+ *
+ * ⚠️ THE SUBJECT CARRIES THE COUNT AND THE TIME, and the body's first line
+ * repeats them. This competes with every other unread email an operator has;
+ * "you have follow-ups waiting" is the shape of the ones they archive. The
+ * decision we want them to be able to make in the inbox is "that is five
+ * minutes, I will do it now", and they cannot make it from a vague subject.
+ *
+ * ⚠️ NEVER SENT ON A DAY WITH NOTHING DUE — the caller checks `worthSending`
+ * first. A daily email that arrives regardless trains the reader to ignore it,
+ * and then the day there IS work it goes the same way.
+ */
+export async function sendDailyFollowUpsEmail(params: {
+  to: string;
+  contactName: string;
+  subject: string;
+  total: number;
+  channels: string;
+  minutes: number;
+  overdue: number;
+  leads: { name: string; what: string }[];
+  url: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const {
+    to, contactName, subject, total, channels, minutes, overdue, leads, url,
+  } = params;
+
+  const list = leads
+    .map(
+      (l) =>
+        `<li style="margin-bottom:6px"><strong>${esc(l.name)}</strong> — ${esc(l.what)}</li>`
+    )
+    .join("");
+
+  const arrears =
+    overdue > 0
+      ? `<p style="margin:0 0 16px;color:#8a5a00">${overdue} of these ${
+          overdue === 1 ? "is" : "are"
+        } already past ${overdue === 1 ? "its" : "their"} date.</p>`
+      : "";
+
+  const more =
+    total > leads.length
+      ? `<p style="margin:0 0 16px;color:#55564f;font-size:13px">…and ${
+          total - leads.length
+        } more on your list.</p>`
+      : "";
+
+  const inner = `
+      <h1 style="margin:0 0 12px;font-size:20px">Today's follow-ups</h1>
+      <p style="margin:0 0 8px">Morning ${esc(contactName)},</p>
+      <p style="margin:0 0 16px"><strong>${total} follow-up${
+        total === 1 ? "" : "s"
+      }</strong> due today — ${esc(channels)}. About ${minutes} minute${
+        minutes === 1 ? "" : "s"
+      }.</p>
+      ${arrears}
+      <ul style="margin:0 0 16px;padding-left:18px;color:#1a1a1a;font-size:14px">${list}</ul>
+      ${more}
+      ${button(url, "Open today's list")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * The falling-behind notice (§42).
+ *
+ * ⚠️ FACTS, THEN THE COMPARISON, THEN ONE BUTTON. No scolding and no ranking —
+ * §20 refuses to rank for a reason that applies doubly here, in that the
+ * operators most likely to drift are exactly the ones a league table punishes.
+ * It says what is outstanding, what the difference has been worth, and where to
+ * go. The lines themselves come from `noticeLines` so the wording is pinned by
+ * a test rather than written twice.
+ */
+export async function sendFollowUpAdherenceEmail(params: {
+  to: string;
+  contactName: string;
+  lines: string[];
+  url: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, lines, url } = params;
+  const body = lines
+    .map((l) => `<p style="margin:0 0 12px">${esc(l)}</p>`)
+    .join("");
+
+  const inner = `
+      <h1 style="margin:0 0 12px;font-size:20px">Your follow-ups</h1>
+      <p style="margin:0 0 16px">Hi ${esc(contactName)},</p>
+      ${body}
+      ${button(url, "See what is due")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject: "Your leads are waiting on a follow-up",
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 export async function sendInactivityNudgeEmail(params: {
   to: string;
   contactName: string;

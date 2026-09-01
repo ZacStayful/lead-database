@@ -106,6 +106,47 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     min: 1,
     max: 5000,
   },
+  // Contact plans (§42). Same table, same allow-list, for the reason at the
+  // top of this file — and because a switch nobody can reach is not a switch,
+  // which is what `contact_plans_enabled` was between 0127 and here.
+  {
+    key: "contact_plans_enabled",
+    label: "Contact plans",
+    kind: "boolean",
+    fallback: "false",
+  },
+  {
+    key: "contact_landlord_max_per_day",
+    label: "Approaches to one landlord a day",
+    kind: "number",
+    fallback: "1",
+    min: 1,
+    max: 10,
+  },
+  {
+    key: "contact_landlord_max_per_week",
+    label: "Approaches to one landlord a week",
+    kind: "number",
+    fallback: "3",
+    min: 1,
+    max: 50,
+  },
+  {
+    key: "followup_adherence_notice_pct",
+    label: "Falling-behind threshold (%)",
+    kind: "number",
+    fallback: "50",
+    min: 0,
+    max: 100,
+  },
+  {
+    key: "followup_adherence_notice_min_overdue",
+    label: "Falling-behind minimum overdue",
+    kind: "number",
+    fallback: "5",
+    min: 1,
+    max: 500,
+  },
 ];
 
 const BY_KEY = new Map(MESSAGING_SETTINGS.map((s) => [s.key, s]));
