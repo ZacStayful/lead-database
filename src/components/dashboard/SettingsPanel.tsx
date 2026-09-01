@@ -70,6 +70,12 @@ const PREFERENCE_ROWS: {
     description:
       "Occasional news and service notices from Stayful. Turning this off stops the email only — announcements still appear on your dashboard.",
   },
+  {
+    key: "contact_followups",
+    label: "Daily follow-ups due",
+    description:
+      "Each morning: which landlords are due a call, message or email today, and roughly how long it will take. Nothing is sent on a day with nothing due.",
+  },
 ];
 
 /** Format an ISO timestamp as e.g. "23 October 2026". */
@@ -108,6 +114,10 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     progress_report: prefOn(customer.notification_preferences, "progress_report"),
     monthly_insights: prefOn(customer.notification_preferences, "monthly_insights"),
     announcements: prefOn(customer.notification_preferences, "announcements"),
+    contact_followups: prefOn(
+      customer.notification_preferences,
+      "contact_followups"
+    ),
   });
   const [prefSaving, setPrefSaving] = useState<keyof NotificationPreferences | null>(
     null

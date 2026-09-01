@@ -72,6 +72,51 @@ const NUMBER_FIELDS: {
   },
 ];
 
+/**
+ * The contact-plan limits (§42), kept in their own form.
+ *
+ * Two of them ration approaches to a LANDLORD across every operator holding
+ * them; two decide who is told they are falling behind. Grouped separately
+ * from the messaging limits above because they govern a different thing —
+ * these bind calls and hand-off clicks, which never touch TimelinesAI at all.
+ */
+const CONTACT_NUMBER_FIELDS: {
+  key: string;
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+}[] = [
+  {
+    key: "contact_landlord_max_per_day",
+    label: "Approaches to one landlord a day",
+    hint: "Across EVERY operator holding them, whoever acts first. 69% of open landlords are held by two or more, so without this a three-holder landlord hears from somebody fifteen times in nine days.",
+    min: 1,
+    max: 10,
+  },
+  {
+    key: "contact_landlord_max_per_week",
+    label: "…and a week",
+    hint: "The weekly ceiling on the same count. An attempt over either limit has its due date pushed a day; nothing is cancelled, and the operator is never told why (they must not learn another operator is working the same landlord).",
+    min: 1,
+    max: 50,
+  },
+  {
+    key: "followup_adherence_notice_pct",
+    label: "Falling-behind threshold (%)",
+    hint: "Adherence below this, AND at least the minimum overdue below, sends the weekly notice. Both conditions — a customer with two overdue attempts is not neglecting anything.",
+    min: 0,
+    max: 100,
+  },
+  {
+    key: "followup_adherence_notice_min_overdue",
+    label: "…with at least this many overdue",
+    hint: "The floor that stops a brand-new customer being chased about a single missed call.",
+    min: 1,
+    max: 500,
+  },
+];
+
 export function MessagingSettingsPanel({
   initial,
   activeRuns,
@@ -86,7 +131,12 @@ export function MessagingSettingsPanel({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [numbers, setNumbers] = useState<Record<string, string>>(() =>
-    Object.fromEntries(NUMBER_FIELDS.map((f) => [f.key, initial[f.key] ?? ""]))
+    Object.fromEntries(
+      [...NUMBER_FIELDS, ...CONTACT_NUMBER_FIELDS].map((f) => [
+        f.key,
+        initial[f.key] ?? "",
+      ])
+    )
   );
 
   async function save(settings: Record<string, boolean | number>) {
@@ -185,6 +235,55 @@ export function MessagingSettingsPanel({
           className="mt-4 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {busy ? "Saving…" : "Save limits"}
+        </button>
+      </div>
+
+      <SettingSwitch
+        label="Contact plans"
+        on={on("contact_plans_enabled")}
+        busy={busy}
+        onChange={(next) => save({ contact_plans_enabled: next })}
+        description="The five-attempt contact plan (§42): the timeline on each lead, and the daily prompt telling an operator who is due a call, message or email. Every open lead already carries a plan; this decides whether anybody is asked to work one."
+        offWarning="Switch contact plans off? The daily follow-up email and text stop, and the falling-behind notice with them. Timelines already on leads are not deleted and completed attempts are kept — nobody is prompted about them."
+      />
+
+      <div className="rounded-md border-[0.5px] border-border p-4">
+        <h3 className="text-sm font-medium">Contact plan limits</h3>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          {CONTACT_NUMBER_FIELDS.map((f) => (
+            <div key={f.key}>
+              <label className="text-xs font-medium" htmlFor={f.key}>
+                {f.label}
+              </label>
+              <input
+                id={f.key}
+                type="number"
+                min={f.min}
+                max={f.max}
+                value={numbers[f.key] ?? ""}
+                onChange={(e) =>
+                  setNumbers((prev) => ({ ...prev, [f.key]: e.target.value }))
+                }
+                className="mt-1 h-9 w-28 rounded-md border-[0.5px] border-border bg-background px-2 text-sm"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{f.hint}</p>
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            save(
+              Object.fromEntries(
+                CONTACT_NUMBER_FIELDS.map((f) => [f.key, Number(numbers[f.key])])
+              )
+            )
+          }
+          className="mt-4 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save contact limits"}
         </button>
       </div>
 

@@ -50,6 +50,7 @@ The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 | `/api/cron/monthly-insights` | `30 9 2 * *` | Monthly customer insight email |
 | `/api/cron/poll-whatsapp-status` | `*/5 * * * *` | WhatsApp delivered/read (no vendor webhook), deferred-event recovery, **and sending due follow-up steps** (§40.9, §40.13) |
 | `/api/cron/draft-sequence-messages` | `0 17 * * *` | Draft tomorrow's follow-up steps into the review queue (§40.13) |
+| `/api/cron/contact-followups` | `15 8 * * *` | Today's follow-up prompt, and the weekly falling-behind notice (§42.8) |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
@@ -7653,6 +7654,87 @@ is measurement rather than behaviour.
 - **The pipeline card** — the three contact buttons.
 - **`/admin/outcomes`** — due / made / missed / adherence, worst first, plus the
   share of completions that came from a real click rather than a manual tick.
+- **`/admin/messaging`** — the switch, and the four limits. Added in 0128's
+  commit: 0127 shipped `contact_plans_enabled = false` with no UI at all, which
+  is precisely the fault §40.14 fixed for messaging — **a kill switch nobody can
+  reach is not a kill switch.** They go in the existing closed allow-list, never
+  written from the body, for the reason at the top of `adminSettings.ts`.
+  `contact_notify_from` (below) deliberately stays out: that list is booleans
+  and bounded integers, and a date would need a third field kind for a value set
+  once at go-live, which is where `reclaim_enabled_from` has always sat.
+
+### 42.8 — ⚠️ THE 91 RUNS, and why the boundary was asserted but never written
+
+0127's own migration comment calls `message_sequences.delivery` "the safety
+boundary of the whole feature", and the pull request said in terms that a manual
+plan never reaches `sendOneMessage`. **The filter did not exist.**
+
+Within six minutes of the backfill the five-minute `poll-whatsapp-status` cron
+picked up 91 of 357 runs, handed each to `sendOneMessage`, got `not_connected`
+back — there are zero connected TimelinesAI workspaces — and `SEQUENCE_STOP_CODES`
+mapped that to `stopRun("no_connection")`, sweeping 91 attempts to `skipped`. The
+plans were destroyed faster than anyone could have noticed them being created.
+
+**Why the testing missed it is the part worth keeping**, because it is a shape
+this file has now recorded five times (§23.10, §25's `items(ids:)`, §27.8's
+`!inner`, §40.8's two seams):
+
+- the scratch seam test checked the query **shape** by hand-writing equivalent
+  SQL, so it asserted a query that was never the one running;
+- the unit test asserted the filter on `completeAttempt` — the **completion**
+  path, not the **sending** path.
+
+Both passed thoroughly, against nothing. `src/lib/contact/__tests__/sendingPhaseGuard.test.ts`
+therefore asserts the **exported constant the route selects with** and the
+**route file's own text**, and both halves were mutation-tested before being
+kept. Recovery: switch off, add the embed and the `.eq(…, "auto")`, deploy,
+revive the 91 runs and their attempts, switch back on.
+
+⚠️ Two rules follow. `DUE_DRAFT_COLUMNS` needs `!inner` on **both** embeds — a
+left join returns a manual draft with the sequence nulled, which is a scan that
+looks correct and is wrong (§27.8). And a test that writes its own copy of a
+query is not testing the query; anchor on the real constant or the real file.
+
+### 42.9 — Being told, and the cutoff that makes it survivable
+
+The timeline is a page nobody is asked to open. Between shipping §42 and this,
+production carried 357 plans and nothing anywhere prompted a single operator to
+work one — the same failure §40.13 had, one level up.
+
+`/api/cron/contact-followups`, 08:15 UTC daily, does two things because they read
+the same adherence figures and two crons would disagree about who is behind:
+
+1. **The daily prompt** — what is due today, by channel, with a time estimate
+   (`followUpSummary.ts`: 2 minutes a call, 1 a message). Email plus a text.
+   **Nothing at all on a day with nothing due**, which is what stops it becoming
+   the thing people filter.
+2. **The falling-behind notice** — weekly at most, and only when adherence is
+   below `followup_adherence_notice_pct` **and** at least
+   `followup_adherence_notice_min_overdue` attempts are actually overdue. Both
+   conditions: a customer with two missed calls is not neglecting anything.
+   Factual, no ranking (§20 refuses to rank, and the operators most likely to
+   drift are the ones a ranking punishes).
+
+⚠️ **`contact_notify_from` is what stops switch-on being a wall.** The backfill
+gave every open lead a plan so the timeline reads the same everywhere; it does
+**not** follow that 342 landlords who enquired months ago are now chased. Those
+attempts are all `pending` with a `send_after` in the past, so the obvious "what
+is due today" query returns **326 across 23 customers** — one email that is
+filtered to trash on day one, and there is no recovering from that. The scan is
+bounded by the cutoff on `lead_assignments.assigned_at`, and **fails CLOSED**: an
+unreadable cutoff prompts nobody rather than prompting about everything. The
+backfilled plans stay workable from the lead page; they are simply not chased.
+
+`contact_followups` is one opt-out key for both, not two: they are two halves of
+one conversation about work that is due, and a customer wanting the notice but
+not the prompt does not exist. §21.7's four-place rule applies, and
+`followUpPreference.test.ts` pins all four plus the migration's `||` backfill —
+the panel half being the one that matters, because for a DAILY email a missing
+toggle is the worst of the four.
+
+The text rides `sms_alerts_enabled` separately, as `completeAssignment` treats
+the new-lead SMS. Bank holidays are skipped, fail-open like `inactivity-nudge` —
+an unreachable gov.uk must not stop the day's work.
 
 ### Verification
 
@@ -7673,12 +7755,23 @@ assignment to `contacted` off that click, and adherence reports it attributed to
 a click.
 
 Regression: a marketplace lead still allocates and spends exactly one credit,
-and both retirement predicates are unchanged. 1027 vitest cases green, lint
+and both retirement predicates are unchanged. **1063 vitest cases green**, lint
 clean, `next build` passes.
 
-⚠️ **Not yet exercised against production data or a browser.** The timeline, the
-card buttons and the guide section have not been rendered in Chromium, and no
-plan has been materialised by the real cron.
+Since the incident, the three guards that were missing are pinned rather than
+reviewed, each mutation-tested by breaking it and watching the test fail:
+`sendingPhaseGuard.test.ts` (§42.8), `followUpCronGuard.test.ts` (the cutoff and
+both `!inner`s), and `followUpPreference.test.ts` (§21.7's four places).
+
+**Production, after the fix:** 24 plans, 357 runs all active, 356 open attempts,
+17 of them reconstructed from real prior contact history carrying that event's
+own date and `done_event_id`, **0 skipped**. Verified 14 minutes after the
+sequences switch went back on — roughly three firings of the five-minute cron
+against the 91 losses the first six minutes cost.
+
+⚠️ **Still not exercised in a browser, and no plan has yet been materialised by
+the real cron** — every plan in production came from the backfill. The daily
+prompt has not sent to anybody, because `contact_plans_enabled` is still false.
 
 ### Deployment order — migration BEFORE code
 
@@ -7686,3 +7779,30 @@ plan has been materialised by the real cron.
 today's meaning, `contact_plans_enabled` ships **false**, and no existing
 function, predicate or trigger is redefined. Nothing touches a balance, counter,
 pacing or capacity column, so a lagging migration cannot affect lead allocation.
+
+**0128 the same**, and inert for a sharper reason: the cron that reads both of
+its additions returns `contact_plans_disabled` before touching anything while the
+switch is off. The `contact_notify_from` row is seeded to the apply instant, so a
+fresh build prompts about nothing until leads start arriving — the safe direction,
+and the same one the switch picks.
+
+**Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-01, before the code**, and
+re-applied to prove idempotency. Pre-apply: no `contact_notify_from` row, 40
+customers, none carrying the key, and **zero explicit `false` on any stream** —
+so the merge had nothing to preserve, but it was checked rather than assumed,
+because a `set` in place of the `||` would have wiped the lot. Post-apply: 40 of
+40 opted in, the cutoff at `2026-09-01T07:23:18Z`, and **an md5 of every
+customer's preferences with the new key removed that is byte-identical to the
+one taken beforehand** — the merge added one key and touched nothing else. The
+re-apply left both the cutoff and that fingerprint unchanged. 357 runs still
+active throughout.
+
+⚠️ **Before flipping `contact_plans_enabled`, move `contact_notify_from` to that
+moment**, or every lead assigned between the apply and go-live is silently never
+prompted about:
+
+```sql
+update system_settings
+   set value = to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+ where key = 'contact_notify_from';
+```
