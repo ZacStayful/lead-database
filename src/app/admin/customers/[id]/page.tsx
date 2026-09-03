@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { AdminAccessPanel } from "@/components/admin/AdminAccessPanel";
+import { AdminEmailPanel } from "@/components/admin/AdminEmailPanel";
 import { SwapLeadControl } from "@/components/admin/SwapLeadControl";
 import { formatDate } from "@/lib/utils";
 import {
@@ -147,6 +148,12 @@ export default async function AdminCustomerDetailPage({
           </Card>
 
           <AdminAccessPanel
+            customerId={customer.id}
+            email={customer.email}
+            hasLogin={customer.user_id != null}
+          />
+
+          <AdminEmailPanel
             customerId={customer.id}
             email={customer.email}
             hasLogin={customer.user_id != null}

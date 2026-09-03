@@ -8203,3 +8203,192 @@ update system_settings
    set value = to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
  where key = 'contact_notify_from';
 ```
+---
+
+## 43. Getting locked out, and getting back in *(0130)*
+
+Two auth defects, found the same afternoon by the same customer. Emanuela Sharra
+paid £150 for Guaranteed Rent on 2 Sep, had 10 GR leads assigned at 06:43 the
+next morning, and could not open her account for a day.
+
+Her row was healthy throughout: paid, credited, `user_id` linked, leads waiting.
+What was wrong was everything around it.
+
+### 43.1 — The reset route answered every failure with "check your inbox"
+
+She signed up as `emanuelasharra@yahoo.co.uk` and works from
+`contact@vellaukproperties.co.uk`. Resetting with the business address hit
+
+```ts
+if (linkError || !link) return generic;   // the old route, line 76
+```
+
+which swallowed `generateLink`'s "no such user" and returned `{ok:true}`. The
+page said an email was on its way; none was sent; nothing anywhere could tell
+her the address was wrong. `/api/signup` would have told her — it says plainly
+when an address IS a paying account — so the silence was not even a
+platform-wide posture, just this one route's.
+
+Three outcomes now, all **200** because the request itself was fine:
+
+| Outcome | Condition |
+|---|---|
+| `sent` | token minted, Resend accepted it |
+| `unknown_email` | no auth user **and** no `customers` row |
+| `no_login` | no auth user, but a `customers` row exists |
+
+**`no_login` is not a nicety.** 17 of 41 customers have no auth user — 14 of
+them active waitlisted prospects — so folding them into `unknown_email` would be
+a lie to fourteen people who genuinely are on our records, and it is the one
+group most likely to try a reset and give up.
+
+⚠️ **`classifyGenerateLinkError` IS THE SAFETY PROPERTY OF THIS FEATURE, and it
+is an allowlist.** `no_user` is only returned for a positively identified
+missing user — `code: "user_not_found"`, a 404, or a 400 whose message names it.
+Every other shape, including one we have never seen, returns `transport` and the
+route answers 500. Get this backwards and a Supabase outage or a stale
+service-role key tells **every customer on the platform** that their account
+does not exist, at the moment they can least check. Unit tests pin a 500, a 429,
+a 401, an unrelated 400, a bare string and a plain `Error` as `transport`.
+
+⚠️ **The lookup that separates `no_login` from `unknown_email` uses `.eq`, not
+`.ilike`.** An address may legitimately contain `_`, which ilike treats as a
+single-character wildcard, so ilike can match a different customer's row.
+Measured first: no customer row carries a mixed-case or untrimmed address, so
+the exact match is right for all live data and the wildcard hazard is not worth
+trading for. `normaliseEmail` (`src/lib/emailAddress.ts`) is the one definition
+of the canonical form, shared with §43.2 so the two cannot disagree.
+
+### 43.2 — Disclosure and the rate limit are ONE change
+
+The old throttle was `new Map<string, number>()` at module scope, and its own
+comment justified the leak *"because the endpoint only ever emails an address
+that already has an account."* **That sentence stops being true the moment the
+route discloses**, and a per-instance Map then leaves an account oracle bounded
+only by one serverless instance's memory.
+
+So 0130 adds `reset_rate_windows` + `consume_reset_budget`. Do not ship the
+disclosure without it, and do not "simplify" the limiter back into memory.
+
+- **The subject is a SHA-256 hash, never the address.** A plaintext table here
+  would quietly become a list of every email anyone has typed into a public
+  form — a list we have no reason to hold.
+- **`returns jsonb`, never `returns table`** (§27.4), and all three windows are
+  consumed in one round trip because this is a user-facing request path.
+- **Increment then compare**, the `credit_invoice` discipline.
+- **Fails closed.** An unreachable limiter refuses, because the moment it breaks
+  is the moment it is under load.
+- Limits live in TypeScript (`src/lib/authReset.ts`) so they tune without a
+  migration: 1 per minute and 5 per hour per address, 20 per hour per IP. The
+  minute is the old Map's job — not flooding an inbox; the hours are what make
+  disclosure safe. IP comes from the existing `clientIp()` in `src/lib/api/log.ts`.
+
+### 43.3 — Changing a customer's email *(no migration)*
+
+`POST /api/admin/customers/[id]/email`, and `AdminEmailPanel` beside the
+password panel. There was previously **no way to do this at all** — it meant
+hand-written SQL across two stores.
+
+⚠️ **STRIPE IS NOT OPTIONAL.** `provisionPaidSubscriber` falls back to
+`.eq("email", …)` when the by-Stripe-id lookup misses, using the address off
+`stripe.customers.retrieve`. Move `customers.email` and leave Stripe behind and
+the next invoice that misses the id lookup **provisions a duplicate customers
+row and a second auth user**, and can repoint `stripe_customer_id` on the way
+through. The primary webhook path is safe either way — `customerMatchFilter()`
+matches on the id — which is exactly what makes the fallback easy to forget.
+
+`planEmailChange` (`src/lib/customerEmail.ts`) is the pure decision: normalise,
+refuse `invalid` / `unchanged` / `no_login`, and return the **deduped** union of
+`stripe_customer_id` and `gr_stripe_customer_id`. The two are frequently the
+SAME id (§17), and deduping is what stops a second pointless API call.
+
+**Ordering, which matches neither existing precedent.** §24's plan route rolls
+Stripe back on a DB failure; §29's cancel route deliberately does not roll back.
+Here:
+
+1. **auth.users** — the only cheaply reversible step and the likeliest to fail.
+   ⚠️ `email_confirm: true` is mandatory: without it GoTrue mails a confirmation
+   through **Supabase's built-in relay**, the ~2/hour shared test sender §15
+   forbids outright. This route sends no email at all.
+2. **customers** — on `23505` the address is taken, so the auth email is **put
+   back** before returning. Two stores disagreeing is worse than either failure,
+   and the both-failed case gets its own message naming both addresses.
+3. **Stripe** — best effort, and **never unwinds 1 and 2**. The login is what
+   the customer is waiting on; a stale billing address is hand-fixable. Reported
+   in the response so the admin knows, not swallowed.
+
+⚠️ **`auth.identities` carries its own copy of the address** (verified on
+production: `email`, `email_verified`, `phone_verified`, `sub`). Whether
+`updateUserById` syncs it is GoTrue-version-dependent and nothing here had ever
+changed an auth email, so the route **reads it back and reports** `updated` /
+`stale` / `unknown` rather than assuming. It does not patch that table — it is
+GoTrue's.
+
+Session-auth only, deliberately not the `x-admin-key` fallback: that exists so
+crons can call in, and repointing a login should need a real admin session.
+
+**Unchanged:** the Monday link survives (`mondayStatus.ts` short-circuits on a
+stored `monday_item_id`, so `monday_link_matched_by` keeps a stale `"email"` —
+inert); post-call offers follow the new address automatically; no balance,
+counter, pacing or capacity column is touched.
+
+### 43.4 — Deliberately not built
+
+A "has leads but has never signed in" detector was designed and dropped. It is
+the thing that would have caught this without the customer having to write in —
+`auth.users.last_sign_in_at` via `listUsers()` is the honest signal, ⚠️ **not
+`customers.first_login_at`, which 0030 backfilled to `now()` for every row that
+existed then and which therefore cannot identify anyone who predates it.**
+
+### ⚠️ Auth OTP expiry is over an hour
+
+Supabase's linter reports `auth_otp_long_expiry` on this project. It means a
+recovery link stays valid far longer than the hour Supabase recommends — which
+is why Emanuela's set-password token was still unconsumed and possibly still
+live 15 hours after it was minted. Not changed here, and worth a decision:
+shortening it makes an unclicked invite fail *faster*, which argues for §43.4
+existing before it is tightened.
+
+### Verification
+
+Scratch Postgres 16.13, migration applied twice for idempotency: RLS on with
+zero policies, both CHECKs exercised (a non-hash subject and an unknown
+`subject_kind` both refused), ACLs `service_role`-only. The limiter was then
+driven: six calls incrementing both windows together, a second address getting
+its own counters while **sharing** the IP counter, a null IP tolerated and
+returned as null, and — the one that matters for the semantics — a short window
+rolling over to 1 while the long window went to 2. The opportunistic cleanup
+removed a 5-day-old row and kept the live ones.
+
+Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-03, before the code. Post-apply:
+41 customers and 471 leads untouched, RLS on with 0 policies, both CHECKs and
+the index present, ACLs `anon`/`authenticated` false and `service_role` true.
+The only new linter notice is the deliberate deny-all posture shared with some
+thirty other tables.
+
+1,178 vitest cases green after rebasing onto the parallel branch (37 of them
+new here), `npm run lint` clean, `npm run build` passes.
+
+**Not yet exercised end to end**: the three reset outcomes against a deployed
+preview, and an actual email change against a real Stripe customer. Rehearse the
+latter on a throwaway customer first — the identity read-back (§43.3) is a
+genuine unknown until it has run once.
+
+### Deployment order — migration BEFORE code
+
+0130 first — **done**. The route FAILS CLOSED on an unreachable limiter, so code
+arriving first would throttle every password reset on the platform.
+
+⚠️ **It was applied as `0127_reset_rate_limit` and the file is `0130_`.** When it
+went on, `supabase/migrations/` ended at 0124 and production carried four
+migrations that were in no file at all, so 0127 was the first number that looked
+free. It was not: a parallel branch landed 0126–0129 — including a *different*
+`0127_contact_plans` — while this was being written, and committed the four
+missing files at the same time. The file was renumbered to 0130 before merging;
+`supabase_migrations.schema_migrations` still records the apply under its
+original name, which is a cosmetic mismatch and not worth a second apply.
+
+The lesson is worth more than the incident: **a free migration number is only
+free at the moment you look**, and this repo's numbering has drifted before
+(§36.8, `worked_conversion` — now committed as `0100a`). Re-check the highest
+number on `origin/main`, not just on disk, immediately before pushing.

@@ -2,6 +2,16 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
 import { sendPasswordResetEmail } from "@/lib/emails/passwordReset";
+import { clientIp } from "@/lib/api/log";
+import {
+  classifyGenerateLinkError,
+  hashResetSubject,
+  resetBudgetRefusal,
+  RESET_SHORT_WINDOW_SECONDS,
+  RESET_LONG_WINDOW_SECONDS,
+  type ResetBudgetCounts,
+} from "@/lib/authReset";
+import { normaliseEmail } from "@/lib/emailAddress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,53 +26,99 @@ export const dynamic = "force-dynamic";
  * the "email rate limit exceeded" 429s. `generateLink` mints the same recovery
  * token without sending anything, leaving delivery to Resend, which is what the
  * invite and provisioning paths already do.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS ROUTE NOW TELLS YOU WHEN IT DOES NOT KNOW YOUR ADDRESS (§43)
+ * ---------------------------------------------------------------------------
+ * It used to answer every failure with `{ok:true}`. A missing account, a
+ * throttled repeat and a Supabase outage were indistinguishable, and all three
+ * rendered as "check your inbox" over an email that was never sent. A paying
+ * customer lost a day to exactly that: she had signed up with a personal
+ * address, was resetting with her business one, and nothing anywhere could tell
+ * her so.
+ *
+ * The silence was justified as anti-enumeration, but that argument was already
+ * lost elsewhere — /api/signup tells any anonymous caller that an address is an
+ * active paying account, and the `?email=` prefill on the reset form depends on
+ * it. This route was the outlier, and its own comment about the Resend failure
+ * below already made the case: showing "check your inbox" when nothing was sent
+ * is the exact failure this route exists to end.
+ *
+ * Three outcomes now, all HTTP 200 because the request itself was fine:
+ *
+ *   sent          — token minted, Resend accepted it
+ *   unknown_email — no auth user and no customers row
+ *   no_login      — no auth user but a customers row exists. Seventeen of
+ *                   forty-one customers are in this state (waitlisted
+ *                   prospects), so folding them into unknown_email would be a
+ *                   lie to people who genuinely are on our records.
+ *
+ * ⚠️ Transport and configuration failures keep their 500s and must NEVER be
+ * reported as unknown_email — see classifyGenerateLinkError, which is an
+ * allowlist for precisely this reason.
  */
 
 /**
- * Per-address cooldown so the endpoint can't be used to flood someone's inbox.
+ * Abuse control, now durable (0130) rather than a per-instance Map.
  *
- * Best-effort only: this lives in the memory of a single serverless instance, so
- * a request routed elsewhere can slip through. That is an accepted limit — the
- * endpoint only ever emails an address that already has an account, and Resend
- * enforces its own account-level limits underneath. Worth replacing with a
- * durable store if this is ever actually abused.
+ * The Map this replaces justified itself on the grounds that "the endpoint only
+ * ever emails an address that already has an account", which stops being true
+ * the moment the route discloses. Disclosure and this limiter are one change:
+ * without it the endpoint is an account oracle bounded only by one serverless
+ * instance's memory.
+ *
+ * FAILS CLOSED, like every other caller of a limiter RPC in this codebase. If
+ * the limiter is unreachable we refuse rather than wave requests through, since
+ * the moment it breaks is exactly when it is under load.
  */
-const COOLDOWN_MS = 60_000;
-const lastRequestByEmail = new Map<string, number>();
-
-function withinCooldown(email: string): boolean {
-  const now = Date.now();
-  // Drop expired entries so the map can't grow without bound. forEach rather
-  // than for..of: the project's TS target predates Map iteration.
-  const expired: string[] = [];
-  lastRequestByEmail.forEach((at, key) => {
-    if (now - at > COOLDOWN_MS) expired.push(key);
+async function refuseForBudget(
+  admin: ReturnType<typeof createAdminClient>,
+  email: string,
+  ip: string | null
+): Promise<string | null> {
+  const { data, error } = await admin.rpc("consume_reset_budget", {
+    p_email_hash: hashResetSubject(email),
+    p_ip_hash: ip ? hashResetSubject(ip) : null,
+    p_short_seconds: RESET_SHORT_WINDOW_SECONDS,
+    p_long_seconds: RESET_LONG_WINDOW_SECONDS,
   });
-  expired.forEach((key) => lastRequestByEmail.delete(key));
 
-  const last = lastRequestByEmail.get(email);
-  if (last !== undefined && now - last < COOLDOWN_MS) return true;
-  lastRequestByEmail.set(email, now);
-  return false;
+  if (error || !data) {
+    console.error("forgot-password: rate limiter unavailable", error);
+    return "We couldn't process that request. Please try again shortly.";
+  }
+
+  return resetBudgetRefusal(data as ResetBudgetCounts);
 }
 
 export async function POST(req: NextRequest) {
-  // Never reveal whether an account exists: a missing address, an unknown
-  // address and a throttled repeat all return this same body.
-  const generic = NextResponse.json({ ok: true });
-
-  let email = "";
+  let rawEmail: unknown = null;
   try {
     const body = (await req.json()) as { email?: unknown };
-    if (typeof body.email === "string") email = body.email.trim().toLowerCase();
+    rawEmail = body.email;
   } catch {
-    return generic;
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  if (!email || !email.includes("@")) return generic;
-  if (withinCooldown(email)) return generic;
+  const email = normaliseEmail(rawEmail);
+  if (!email) {
+    // The form marks the field `type="email" required`, so this is a malformed
+    // client rather than a customer typo. Say so rather than claiming we sent
+    // something, which is the behaviour this route exists to stop.
+    return NextResponse.json(
+      { error: "Enter a valid email address." },
+      { status: 400 }
+    );
+  }
 
   const admin = createAdminClient();
+
+  // Rate limit BEFORE any account lookup, so a probe is refused before it can
+  // learn anything about whether the address exists.
+  const refusal = await refuseForBudget(admin, email, clientIp(req));
+  if (refusal) {
+    return NextResponse.json({ error: refusal }, { status: 429 });
+  }
 
   // Mint a recovery token. This sends no email — it only returns the link.
   const { data: link, error: linkError } = await admin.auth.admin.generateLink({
@@ -71,9 +127,38 @@ export async function POST(req: NextRequest) {
     options: { redirectTo: `${APP_URL}/reset-password` },
   });
 
-  // No auth user for this address is the ordinary case, not a fault worth
-  // surfacing — stay silent so the response can't be used to probe for accounts.
-  if (linkError || !link) return generic;
+  if (linkError || !link) {
+    if (linkError && classifyGenerateLinkError(linkError) === "no_user") {
+      // Distinguish "we've never heard of you" from "you're on our books but
+      // have no login yet" — different problems with different fixes, and the
+      // second is the more common one on today's data.
+      //
+      // `.eq` rather than `.ilike`: an address may legitimately contain `_`,
+      // which ilike treats as a single-character wildcard, so ilike would match
+      // the wrong row. Measured before this shipped: no customer row carries a
+      // mixed-case or untrimmed address, so the exact match is correct for all
+      // live data and the wildcard hazard is not worth trading for.
+      const { data: customer } = await admin
+        .from("customers")
+        .select("id")
+        .eq("email", email)
+        .maybeSingle();
+
+      return NextResponse.json({
+        ok: false,
+        status: customer ? "no_login" : "unknown_email",
+      });
+    }
+
+    // Anything we cannot positively identify as a missing user is an outage, a
+    // bad key, or a shape we have not seen — never something to tell a customer
+    // about their own account.
+    console.error("forgot-password: generateLink failed", linkError);
+    return NextResponse.json(
+      { error: "We couldn't generate a reset link. Please contact support." },
+      { status: 500 }
+    );
+  }
 
   // Route through /auth/confirm with the token hash (verifyOtp) rather than the
   // raw action_link. The PKCE `?code` exchange needs a code-verifier cookie from
@@ -108,8 +193,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     // A transport failure is surfaced rather than swallowed. Showing "check your
-    // inbox" when nothing was sent is the exact failure this route exists to end,
-    // and it is worth more than the sliver of account-existence this leaks.
+    // inbox" when nothing was sent is the exact failure this route exists to end.
     console.error("forgot-password: Resend send failed", err);
     return NextResponse.json(
       { error: "We couldn't send the reset email. Please contact support." },
@@ -117,5 +201,5 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return generic;
+  return NextResponse.json({ ok: true, status: "sent" });
 }

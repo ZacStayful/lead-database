@@ -8,10 +8,21 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 
+/**
+ * The three outcomes the route can now distinguish (§43). It used to answer
+ * every failure with "check your inbox" over an email that was never sent,
+ * which cost a paying customer a day: she had signed up with a personal address
+ * and was resetting with her business one.
+ */
+type Outcome = "sent" | "unknown_email" | "no_login";
+
+const SUPPORT_EMAIL = "zac@stayful.co.uk";
+
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [submitted, setSubmitted] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [recognised, setRecognised] = useState(false);
 
@@ -34,6 +45,8 @@ export default function ForgotPasswordPage() {
     setLoading(true);
     setError(null);
 
+    const attempted = email.trim();
+
     // Goes through our own route, which mints the recovery link server-side and
     // delivers it via Resend. The browser must NOT call
     // supabase.auth.resetPasswordForEmail() here: that uses Supabase's built-in
@@ -41,34 +54,44 @@ export default function ForgotPasswordPage() {
     // across the entire project, so a few retries by one customer locked
     // everybody out with "email rate limit exceeded".
     let message: string | null = null;
+    let result: Outcome | null = null;
     try {
       const res = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: attempted }),
       });
+      const body = (await res.json().catch(() => null)) as
+        | { error?: string; status?: Outcome }
+        | null;
+
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as
-          | { error?: string }
-          | null;
+        // Covers the 429 from the rate limiter and the 500s from a transport or
+        // configuration failure. Both name the actual condition.
         message =
           body?.error ??
           "Something went wrong sending your reset email. Please contact support.";
+      } else {
+        result = body?.status ?? "sent";
       }
     } catch {
       message =
         "We couldn't reach the server. Check your connection and try again.";
     }
 
-    // Don't reveal whether an account exists — an unknown address still shows
-    // the same confirmation. Surface only genuine transport failures.
     if (message) {
       setError(message);
       setLoading(false);
       return;
     }
-    setSent(true);
+    setSubmitted(attempted);
+    setOutcome(result);
     setLoading(false);
+  }
+
+  function reset() {
+    setOutcome(null);
+    setError(null);
   }
 
   return (
@@ -81,12 +104,11 @@ export default function ForgotPasswordPage() {
           <CardTitle className="pt-2">Reset your password</CardTitle>
         </CardHeader>
         <CardContent>
-          {sent ? (
+          {outcome === "sent" ? (
             <div className="space-y-4 text-center">
               <p className="text-sm text-muted-foreground">
-                If an account exists for <strong>{email.trim()}</strong>,
-                we&apos;ve sent a link to reset your password. Check your inbox
-                (and spam folder).
+                We&apos;ve sent a link to <strong>{submitted}</strong> to reset
+                your password. Check your inbox (and spam folder).
               </p>
               <Link
                 href="/login"
@@ -94,6 +116,62 @@ export default function ForgotPasswordPage() {
               >
                 Back to log in
               </Link>
+            </div>
+          ) : outcome === "unknown_email" ? (
+            <div className="space-y-4">
+              <div className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                <p className="font-semibold">
+                  We don&apos;t recognise {submitted}.
+                </p>
+                <p className="mt-1">
+                  You may have signed up with a different address — a personal
+                  one rather than your business one is the usual reason. Try any
+                  other address you might have used, or email us at{" "}
+                  <a
+                    href={`mailto:${SUPPORT_EMAIL}`}
+                    className="underline underline-offset-2"
+                  >
+                    {SUPPORT_EMAIL}
+                  </a>{" "}
+                  and we&apos;ll find your account.
+                </p>
+              </div>
+              <Button variant="outline" className="w-full" onClick={reset}>
+                Try another email
+              </Button>
+              <p className="text-center text-sm text-muted-foreground">
+                <Link href="/login" className="text-brand hover:underline">
+                  Back to log in
+                </Link>
+              </p>
+            </div>
+          ) : outcome === "no_login" ? (
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <p className="font-semibold text-foreground">
+                  {submitted} is on our records, but it doesn&apos;t have a
+                  login yet.
+                </p>
+                <p className="mt-1">
+                  If you&apos;ve already paid, email us at{" "}
+                  <a
+                    href={`mailto:${SUPPORT_EMAIL}`}
+                    className="underline underline-offset-2"
+                  >
+                    {SUPPORT_EMAIL}
+                  </a>{" "}
+                  and we&apos;ll set one up for you.
+                </p>
+              </div>
+              <Button variant="outline" className="w-full" onClick={reset}>
+                Try another email
+              </Button>
+              <p className="text-center text-sm text-muted-foreground">
+                Haven&apos;t signed up yet?{" "}
+                <Link href="/signup" className="text-brand hover:underline">
+                  Apply for access
+                </Link>
+              </p>
             </div>
           ) : (
             <>
