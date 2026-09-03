@@ -7474,6 +7474,190 @@ the trigger arm, but nothing emits the event until the UI ships. 0124 is the hal
 that changes behaviour — reclaim eligibility and engagement scoring — and is
 split out for exactly that reason. Code last.
 
+### 40.16 — The Resend receiver that was never written *(no migration)*
+
+Resend disabled our webhook on 29 Aug 2026, having failed to deliver to it since
+07:09 UTC that morning. **The endpoint had never existed.**
+
+`POST /api/customer/messaging/email-domain` has registered one since phase 1 —
+nine event types, pointed at `${APP_URL}/api/webhook/resend/<token>` — and
+`src/app/api/webhook/` contained only `n8n/`, `stripe/` and `timelines/[token]/`.
+Every delivery got a 404, Resend retried, and then it stopped trying and emailed
+us.
+
+⚠️ **THIS IS THE SAME BUG AS §40.8, ONE VENDOR OVER.** That section already
+records it in terms: *"this route was registered in phase 1 and did not exist…
+the live workspace was POSTing to a 404 for a day."* The TimelinesAI half was
+found and fixed in phase 2. The Resend half was not — because §40.4 hides the
+email channel behind `messaging_email_enabled = false`, so the only account that
+could reach the connect flow was an admin using the §40.3 bypass, and nothing
+ever exercised it. **A feature switched off is a feature nothing tests.**
+
+The trigger was one real connection: `leads.stayful.co.uk`, connected
+2026-08-28 13:17 UTC on the Stayful admin row, `status = 'verifying'` — the DNS
+was never completed, so nothing was ever going to flow through it anyway. Live
+sending was unaffected throughout: Stayful's own transactional mail (§15) goes
+through `RESEND_API_KEY` and never touches a webhook, and a disabled webhook
+stops event delivery, not sending.
+
+#### The four layers, and why two of them differ from TimelinesAI
+
+| | |
+|---|---|
+| 1 | An unguessable token in the PATH identifies the customer. One 404 for every refusal, so it cannot enumerate customers or tokens |
+| 2 | ⚠️ **The Svix signature**, against that customer's own signing secret |
+| 3 | Claim by INSERT on the svix id — the `stripe_events` discipline |
+| 4 | Match-or-discard, scoped to the customer, in `ingestResendEvent` |
+
+⚠️ **LAYER 2 IS A REAL AUTHENTICATION BOUNDARY, AND THE TWO RECEIVERS MUST NOT
+BE HARMONISED.** TimelinesAI cannot sign anything — its own spec says so — so
+that route treats every payload as an unverified assertion and reads the message
+back from the API before believing a word of it. Resend signs, so a verified
+payload **is** evidence and there is no read-back here. Do not add one to make
+the pair look alike, and do not remove the one over there.
+
+That difference propagates to failure handling. A deferred outcome here
+**deletes the claim and returns 500**, so the vendor's own retry actually runs.
+0119 had to build a recovery pass because TimelinesAI retries twice within
+seconds, which is no use to a read-back that just timed out; Svix retries out to
+ten hours, and our claim is the only thing in the way — leave it and every retry
+short-circuits on 23505 and does nothing.
+
+#### ⚠️ The 5-minute tolerance every Svix library ships with would re-break this
+
+Svix re-sends the **original** signed payload with its **original**
+`svix-timestamp` on every retry. A five-minute window therefore rejects every
+retry past the first few — and rejects them as forgeries — which is precisely
+the 4xx loop that got the endpoint disabled. `svixSignature.ts` uses 48 hours and
+says why: the HMAC is what makes a request trustworthy, the window only bounds
+replay, and the claim-by-INSERT already makes a replay a no-op.
+
+No `svix` dependency: the algorithm is thirty lines of `node:crypto`, and the
+repo already hand-rolls HMAC in `threadAddress.ts`.
+
+#### It does not gate on `messaging_email_enabled`
+
+That switch governs **sending**. Refusing events while it is off would discard
+delivery state for mail already sent, and would put the endpoint straight back
+into the loop that got it disabled. A receiver that only works while the feature
+is on is a receiver that gets disabled every time it is turned off.
+
+It **fails closed** on the signature, though: no stored secret, an unreadable
+one, or a bad signature is a 401 and nothing is written. A forged delivery event
+can mark a message the landlord never received as delivered.
+
+#### Status events
+
+`email.sent/delivered/delivery_delayed/opened/clicked/bounced/complained/failed`
+match `data.email_id` against `lead_messages`, and the lookup is **scoped by
+`customer_id`** — that id is the one identifier arriving from outside, and 0116
+calls the leading `customer_id` in every key "the containment guarantee".
+
+- ⚠️ **`opened` and `clicked` do NOT move the status.** 0116 already says an open
+  is never a fact: Apple Mail Privacy Protection loads the pixel
+  unconditionally, so a prefetch and a human are indistinguishable. They stamp
+  `first_opened_at` / `first_clicked_at` and write an event row. `delivery_delayed`
+  moves nothing either — the message is still in flight.
+- Statuses are **ranked**, never last-wins, the §40.9 rule. ⚠️ **The failure
+  states rank ABOVE `delivered`**: an asynchronous bounce after a delivery notice
+  is real, and it is the fact the operator needs.
+- An **unranked** current status is left alone, so a stray event cannot rewrite
+  an inbound `received` row into the outbound vocabulary.
+- Stamps are first-observation-wins (§6). Event rows are not — an open is a
+  repeatable act and each one is its own row (0116).
+
+#### `email.received`
+
+⚠️ **Resend publishes no payload for this event.** Every accessor in
+`resendEvents.ts` therefore reads several plausible locations, and the route
+stores the payload on **every** event — the first real landlord reply is the only
+specification of it we will ever get. §40.8 is why: `chat.jid` was read from the
+TimelinesAI docs, is not actually sent, and silently discarded twenty events.
+
+Correlation is two routes, in order:
+
+1. **The reply-address token** (`threadAddress.ts`) — our own HMAC, and the
+   primary route because it survives the landlord replying from a different
+   address, forwarding, or a client that strips threading headers. The thread
+   lookup is scoped to the customer who owns the receiving domain, and the MAC
+   is re-checked on top.
+2. **An EXISTING thread with that sender.** ⚠️ **It may find, never create.** A
+   `From` header is trivially forged, so this must not be able to bring a thread
+   or a lead binding into existence — it only files a reply into a conversation
+   this customer demonstrably already has, which is the case it exists for: a
+   landlord replying to the plain `hello@` address.
+
+Anything else is dropped and logged. Mail arriving at a public address that
+correlates to nothing is somebody else's — a bounce notice, a newsletter, a
+stranger — and storing it would put it in front of an operator inside a landlord
+CRM.
+
+- `to_address` holds the **counterparty**, not the envelope recipient. 0116 is
+  explicit, and the WhatsApp path already stores the landlord's number in
+  `to_phone` on an inbound row.
+- ⚠️ **The landlord answered, so the sequence stops** (§40.13) — outside the
+  `alreadyHad` guard, exactly as on the WhatsApp side: stopping a run twice is a
+  no-op, where missing a reply leaves a ladder running at somebody who has
+  already answered. Still **not** an engagement event (§40.7): a reply is the
+  landlord's act and must never shield an ignored lead from escalation.
+- ⚠️ **`body_fetch_pending` is set when no body arrived and NOTHING DRAINS IT.**
+  The message, its thread and the sequence stop are all correct regardless, so
+  the operator still sees that the landlord replied. Draining it needs an
+  inbound-body endpoint confirmed against the real wire, which is work for when
+  real inbound mail exists.
+
+### Verification
+
+`npm run test` — **1141 cases**, 42 of them added here, all pure units so they
+stay inside the suite that gates `next build` (§36.8: `vercel.json`'s
+`buildCommand` runs it). Counted on the merged tree rather than incremented from
+a figure taken before §41 and §42 landed — §40.13 records what incrementing that
+number instead of counting it cost last time.
+`npm run lint` clean, `npx tsc --noEmit` clean, `npm run build` passes and
+registers `ƒ /api/webhook/resend/[token]`.
+
+The signature cases sign with an **independent** implementation written from the
+Svix spec rather than by calling the module under test — signing with the
+function we verify with would pass however wrong both halves were, the reason
+§27.2 duplicates its expected field list instead of deriving it. Among them: a
+body altered by one byte, another customer's secret, a signature bound to a
+different svix id, a non-v1 version not being accepted under v1 rules, and **the
+six-hour retry that a stock five-minute tolerance would reject**.
+
+The ingest cases are driven through a fake that matches on **every** filter it is
+given — a fake that ignored `customer_id` would pass the containment cases while
+the real thing leaked one customer's events into another's messages. Both
+containment cases are pinned: a status event for another customer's `email_id`,
+and a reply-token belonging to another customer's thread.
+
+⚠️ **One case was written wrong and the failure was the useful part.** "Refuses a
+forged token" PASSED at first, because the sender fallback found that landlord's
+existing thread and stored the reply anyway — correctly, but with the MAC check
+contributing nothing to the outcome. It now uses an unknown sender, so the token
+is the only route in, and a second case asserts the other half: a **valid** token
+from an unexpected sender IS accepted, which is the whole reason
+`threadAddress.ts` makes the token primary over the headers.
+
+**Not yet exercised against real traffic.** No event has ever reached this route
+— the domain is `verifying` and the channel is off — so the signature has not
+been checked against a genuine Resend delivery, and `email.received` has been
+built against a payload nobody has published. Send one test event from the Resend
+dashboard after re-enabling, and read `message_webhook_events.payload` before
+trusting the inbound half.
+
+### Deployment order — code, THEN re-enable
+
+No migration: 0115–0117 already carry every column this uses, including
+`body_fetch_pending`, which was added for exactly this and had no writer.
+
+Deploy first, then **re-enable the endpoint in the Resend dashboard** — it stays
+disabled until somebody does, and re-enabling it before the code is live simply
+starts the 404 loop again. Then send a test event and confirm a `message_webhook_events`
+row appears. If the stored signing secret has drifted from the webhook's, every
+delivery 401s and Resend disables it again: that is the intended failure, and the
+repair is to delete the webhook and reconnect the domain so a fresh secret is
+stored.
+
 ---
 
 ## 41. Introducing the operator to the landlord *(0126)*
