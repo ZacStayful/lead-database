@@ -305,6 +305,35 @@ export interface Customer {
  * those columns. `ended_at` is a best-effort stamp — nothing reads it to decide
  * whether a customer is paused right now.
  */
+/**
+ * The latest card decline for one customer and product (0125), as the admin
+ * customers page reads it.
+ *
+ * Lives here rather than in declineReason.ts so that module stays free of
+ * database shapes and therefore pure — the page and the table both import this
+ * the way they already share PauseEpisode.
+ *
+ * ⚠️ Every raw field on this type is MERCHANT-FACING. decline_code and
+ * failure_code are the codes declineReason.ts exists to translate, and they are
+ * shown here only because /admin sits behind the admin session check. Never
+ * render any of them in an email.
+ */
+export interface CardDeclineSummary {
+  customer_id: string;
+  lead_type: LeadType;
+  /** DeclineReasonKey — what the customer was actually told. */
+  reason_key: string;
+  decline_code: string | null;
+  failure_code: string | null;
+  card_brand: string | null;
+  card_last4: string | null;
+  attempt_count: number;
+  next_payment_attempt_at: string | null;
+  failed_at: string;
+  /** Null means Resend never accepted it — the operational tell. */
+  email_id: string | null;
+}
+
 export interface PauseEpisode {
   id: string;
   customer_id: string;

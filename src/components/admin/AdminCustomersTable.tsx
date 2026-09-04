@@ -21,7 +21,16 @@ import {
   filterTooltip,
   hasLeadFilter,
 } from "@/lib/leadFilter";
-import type { Customer, LeadType, PauseEpisode } from "@/lib/types";
+import type {
+  CardDeclineSummary,
+  Customer,
+  LeadType,
+  PauseEpisode,
+} from "@/lib/types";
+import {
+  DECLINE_COPY,
+  type DeclineReasonKey,
+} from "@/lib/declineReason";
 import {
   PAUSE_BANDS,
   PAUSE_BAND_LABEL,
@@ -37,6 +46,7 @@ type Tab =
   | "all"
   | "active"
   | "paused"
+  | "declined"
   | "cancelling"
   | "waitlisted"
   | "invited"
@@ -48,6 +58,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "active", label: "Active" },
   { key: "paused", label: "Paused" },
   { key: "cancelling", label: "Cancelling" },
+  { key: "declined", label: "Declined" },
   { key: "waitlisted", label: "Waitlisted" },
   { key: "invited", label: "Invited" },
   { key: "cancelled", label: "Cancelled" },
@@ -67,6 +78,21 @@ const TABS: { key: Tab; label: string }[] = [
 const isCancelling = (c: Customer) =>
   pendingCancellation(c, "management").pending ||
   pendingCancellation(c, "guaranteed_rent").pending;
+
+/**
+ * Is either product sitting on a failed payment?
+ *
+ * The in-app view of Monday group_mm5p94x0 ("Wants to pay but declined
+ * payment"), which is where these customers end up on the sales board — the
+ * label is written off exactly these two columns. Having it here means an admin
+ * chasing a declined card does not have to leave the product to find the list.
+ *
+ * Keyed on the status columns rather than on card_decline_events so a decline
+ * that predates 0125 still appears.
+ */
+const isDeclined = (c: Customer) =>
+  c.subscription_status === "past_due" ||
+  c.gr_subscription_status === "past_due";
 
 /** "leaves 13 Sep" — the last day of service, not the day they asked. */
 function leavingOn(effectiveAt: string | null): string {
@@ -97,6 +123,70 @@ function CancellingBadge({
   return (
     <Badge variant="warning">
       {label ? `${label} cancelling` : "Cancelling"} — {leavingOn(effectiveAt)}
+    </Badge>
+  );
+}
+
+/**
+ * "Mgmt card declined — insufficient funds · visa ••4242 · retry 12 Sep".
+ *
+ * Sits beside the subscription badge for CancellingBadge's reason: the status
+ * badge states the fact, this one says WHY, which is otherwise a trip to the
+ * Stripe dashboard in the middle of a support call.
+ *
+ * ⚠️ GATED ON THE LIVE STATUS COLUMN, not on the audit row's resolved_at. A
+ * customer who pays clears it the moment invoice.paid writes 'active'; one who
+ * churns clears it when the status becomes 'canceled'. Neither depends on the
+ * best-effort resolved_at stamp having landed. It also means a decline that
+ * predates 0125 — there is one in production right now — still shows as
+ * "Card declined" with no reason, rather than showing nothing at all.
+ *
+ * ⚠️ ADMIN-ONLY, and that is what makes the raw code in the tooltip legal.
+ * declineReason.ts suppresses lost_card / stolen_card and the rest for the
+ * CUSTOMER, because telling somebody their card is reported stolen tips off a
+ * fraudster and is the issuer's to say, not ours. An admin working a support
+ * case needs the real code, and this page is behind the admin session check.
+ * Never reuse adminLabel or the raw code in an email.
+ */
+function DeclinedBadge({
+  customer,
+  leadType,
+  label,
+  decline,
+}: {
+  customer: Customer;
+  leadType: LeadType;
+  label: string | null;
+  decline?: CardDeclineSummary;
+}) {
+  const status =
+    leadType === "guaranteed_rent"
+      ? customer.gr_subscription_status
+      : customer.subscription_status;
+  if (status !== "past_due") return null;
+
+  const prefix = label ? `${label} card declined` : "Card declined";
+  if (!decline) return <Badge variant="warning">{prefix}</Badge>;
+
+  const bits = [
+    DECLINE_COPY[decline.reason_key as DeclineReasonKey]?.adminLabel ??
+      decline.reason_key,
+  ];
+  if (decline.card_brand && decline.card_last4) {
+    bits.push(`${decline.card_brand} ••${decline.card_last4}`);
+  }
+  if (decline.next_payment_attempt_at) {
+    bits.push(`retry ${leavingOn(decline.next_payment_attempt_at).replace("leaves ", "")}`);
+  }
+
+  return (
+    <Badge
+      variant="warning"
+      title={`attempt ${decline.attempt_count} · ${
+        decline.decline_code ?? decline.failure_code ?? "no code"
+      } · ${decline.email_id ? "emailed" : "NOT emailed"}`}
+    >
+      {prefix} — {bits.join(" · ")}
     </Badge>
   );
 }
@@ -221,6 +311,7 @@ export function AdminCustomersTable({
   pauseFacts = {},
   billingHealth = {},
   predictedVolumes = {},
+  declines = {},
 }: {
   customers: Customer[];
   /** customer.id → last sign-in timestamp (null = has login, never signed in). */
@@ -233,6 +324,8 @@ export function AdminCustomersTable({
   billingHealth?: Record<string, BillingHealth>;
   /** customer.id → predicted monthly volume per active filter. */
   predictedVolumes?: Record<string, FilterVolumeInfo[]>;
+  /** `${customer.id}:${lead_type}` → their latest card decline (0125). */
+  declines?: Record<string, CardDeclineSummary>;
 }) {
   const [tab, setTab] = useState<Tab>("all");
   const [product, setProduct] = useState<ProductTab>("all");
@@ -294,7 +387,9 @@ export function AdminCustomersTable({
           ? isPaused(c)
           : tab === "cancelling"
             ? isCancelling(c)
-            : accountStatus(c) === tab
+            : tab === "declined"
+              ? isDeclined(c)
+              : accountStatus(c) === tab
     );
     if (tab === "paused" && band !== "all") {
       list = list.filter(
@@ -630,6 +725,18 @@ export function AdminCustomersTable({
                         customer={c}
                         leadType="guaranteed_rent"
                         label={showsManagement(c) ? "GR" : null}
+                      />
+                      <DeclinedBadge
+                        customer={c}
+                        leadType="management"
+                        label={showsGr(c) ? "Mgmt" : null}
+                        decline={declines[`${c.id}:management`]}
+                      />
+                      <DeclinedBadge
+                        customer={c}
+                        leadType="guaranteed_rent"
+                        label={showsManagement(c) ? "GR" : null}
+                        decline={declines[`${c.id}:guaranteed_rent`]}
                       />
                     </div>
                   </TableCell>
