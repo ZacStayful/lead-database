@@ -9028,6 +9028,19 @@ all three discovery paths 404.
 
 **972 unit tests pass**, 96 of them new, `next build` clean.
 
+⚠️ **THE END-TO-END TEST CANNOT BE DONE ON A PREVIEW DEPLOYMENT.** Vercel
+Deployment Protection is on for previews, so every request — including
+`/.well-known/*` and `/api/mcp` — is intercepted before it reaches Next: the
+discovery paths answer **302 to `vercel.com/sso-api`** and the MCP endpoint
+answers Vercel's own 401, which carries no `WWW-Authenticate` at all. No OAuth
+client can get past that, and the 401 it does see is indistinguishable from ours
+at a glance. §1.1 is right that a preview runs against production Supabase; it is
+the HTTP layer in front that makes a preview useless here.
+
+That is precisely what `oauth_enabled` shipping **false** is for. Merge with the
+switch off — the discovery documents 404 and every client behaves exactly as it
+does today — then flip it on the real domain and test there.
+
 **Not yet exercised:** the flow end to end against a real client. Add the
 connector in Claude, then **disconnect and reconnect** — that second connect is
 what exercises the grant upsert and is the failure a single happy-path run never
