@@ -11,7 +11,12 @@ import {
   fetchLeadVolumeAggregate,
   predictMonthlyVolume,
 } from "@/lib/filterPrediction";
-import type { Customer, LeadType, PauseEpisode } from "@/lib/types";
+import type {
+  Customer,
+  LeadType,
+  PauseEpisode,
+  CardDeclineSummary,
+} from "@/lib/types";
 import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
 
@@ -200,6 +205,49 @@ export default async function AdminCustomersPage() {
     });
   }
 
+  // Latest card decline per (customer, product), for the past_due badge (0125).
+  //
+  // Scoped to customers who are past_due RIGHT NOW, and skipped entirely when
+  // nobody is: one indexed query, and — unlike billingHealth above — NO Stripe
+  // call, because the reason was already resolved and stored when the decline
+  // happened.
+  //
+  // ⚠️ Keyed `customerId:leadType`, never on the customer alone. Invariant 6: a
+  // customer can be past_due on GR while management is perfectly healthy, and a
+  // customer-keyed map would print the GR reason beside the management badge.
+  const pastDueIds = customers
+    .filter(
+      (c) =>
+        c.subscription_status === "past_due" ||
+        c.gr_subscription_status === "past_due"
+    )
+    .map((c) => c.id);
+
+  const declines: Record<string, CardDeclineSummary> = {};
+  if (pastDueIds.length > 0) {
+    const { data: declineRows, error: declineError } = await admin
+      .from("card_decline_events")
+      .select(
+        "customer_id, lead_type, reason_key, decline_code, failure_code, " +
+          "card_brand, card_last4, attempt_count, next_payment_attempt_at, " +
+          "failed_at, email_id"
+      )
+      .in("customer_id", pastDueIds)
+      .order("failed_at", { ascending: false });
+
+    if (declineError) {
+      // The badge degrades to "Card declined" with no reason, which is still
+      // true — so this must not take the page down.
+      console.error("[admin/customers] decline lookup failed", declineError);
+    }
+    // Newest row per (customer, product) wins — the same "first wins on a desc
+    // order" shape as pauseDetail above.
+    for (const row of (declineRows ?? []) as unknown as CardDeclineSummary[]) {
+      const key = `${row.customer_id}:${row.lead_type}`;
+      if (!declines[key]) declines[key] = row;
+    }
+  }
+
   // Supply-problem alerts: behind by 5+, fewer than 10 days left, on a product
   // the customer is actually LIVE on.
   //
@@ -294,6 +342,7 @@ export default async function AdminCustomersPage() {
         pauseFacts={pauseFacts}
         billingHealth={billingHealth}
         predictedVolumes={predictedVolumes}
+        declines={declines}
       />
     </div>
   );

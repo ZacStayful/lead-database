@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
+import {
+  notifyCardDeclined,
+  resolveCardDeclines,
+} from "@/lib/cardDeclines";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import {
@@ -987,6 +991,18 @@ export async function POST(request: NextRequest) {
             // gr_subscription_status = 'active'. A no-op on renewals: the cached
             // label already matches, so this costs one SELECT and no Monday call.
             await pushMondayStatus(admin, customer.id, "invoice.paid/gr");
+
+            // Close any open card-decline rows for THIS product. Two
+            // parallel calls rather than one shared (invariant 6): a
+            // customer can be past_due on GR while management is healthy.
+            // Audit tidiness only — the admin badge gates on the live
+            // status column, so recovery already clears it either way.
+            await resolveCardDeclines(
+              admin,
+              customer.id,
+              "guaranteed_rent",
+              "invoice.paid/gr"
+            );
             break;
           }
 
@@ -1266,6 +1282,14 @@ export async function POST(request: NextRequest) {
           // successful payment clears past_due, so the label rule returns
           // Management Customer again with no special handling.
           await pushMondayStatus(admin, customer.id, "invoice.paid/management");
+
+          // See the GR branch: per product, audit-only, best-effort.
+          await resolveCardDeclines(
+            admin,
+            customer.id,
+            "management",
+            "invoice.paid/management"
+          );
         }
         break;
       }
@@ -1290,11 +1314,35 @@ export async function POST(request: NextRequest) {
         const priceIds = priceIdsFromInvoice(invoice);
         const isGuaranteedRent = isGuaranteedRentPriceId(priceIds);
 
-        const { data: customer } = await admin
+        // Widened for the decline notice: same query, no extra round-trip.
+        // The error is LOGGED rather than swallowed — customerMatchFilter is an
+        // .or() across two columns on the GR side, so two matching rows make
+        // maybeSingle() error and `customer` null. That silence used to mean
+        // "we did not mark them past_due"; it now also means "we never told
+        // them their card failed", which is worth seeing.
+        const { data: customer, error: customerLookupError } = await admin
           .from("customers")
-          .select("id")
+          .select("id, email, contact_name")
           .or(customerMatchFilter(customerId, isGuaranteedRent))
           .maybeSingle();
+
+        if (customerLookupError) {
+          console.error("invoice.payment_failed customer lookup failed", {
+            stripeCustomer: customerId,
+            guaranteedRent: isGuaranteedRent,
+            error: customerLookupError.message,
+          });
+        }
+        if (!customer) {
+          // A Payment Link buyer we never provisioned, or the ambiguity above.
+          // invoice.paid provisions in this situation; this branch deliberately
+          // does not — but it should not be invisible either.
+          console.error("invoice.payment_failed matched no customer", {
+            stripeCustomer: customerId,
+            invoice: invoice.id,
+            guaranteedRent: isGuaranteedRent,
+          });
+        }
 
         if (customer) {
           await admin.from("payments").insert({
@@ -1326,6 +1374,36 @@ export async function POST(request: NextRequest) {
           // again. Note past_due is tested BEFORE the held-product rules in the
           // label rule, because holdsProduct() counts past_due as still held.
           await pushMondayStatus(admin, customer.id, "invoice.payment_failed");
+
+          // Tell the customer, last, so a slow Stripe lookup can never delay
+          // the board push above. notifyCardDeclined swallows everything by
+          // contract: nothing here may reach the outer catch, which deletes the
+          // stripe_events claim and would have Stripe redeliver an event that
+          // has already written past_due, a payments row and a Monday label.
+          //
+          // Gated on this being a SUBSCRIPTION invoice. Unlike invoice.paid,
+          // this branch has never checked, so a one-off invoice an admin raised
+          // also writes past_due — pre-existing and left alone, but it must not
+          // now also tell somebody their leads are paused when they are not.
+          const declineSubscriptionId = subscriptionIdFromInvoice(invoice);
+          if (declineSubscriptionId) {
+            const declined = await notifyCardDeclined(admin, stripe, {
+              invoice,
+              customer,
+              leadType: isGuaranteedRent ? "guaranteed_rent" : "management",
+              subscriptionId: declineSubscriptionId,
+            });
+            // Ordinary skips (already_sent, no_email) stay silent; a genuine
+            // failure is loud. Same split as logMondayPush.
+            if (declined.error || declined.skipped === "claim_failed") {
+              console.error("[card-declined] notice did not land", {
+                customer: customer.id,
+                invoice: invoice.id,
+                skipped: declined.skipped,
+                error: declined.error,
+              });
+            }
+          }
         }
         break;
       }

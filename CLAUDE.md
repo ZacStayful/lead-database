@@ -8537,3 +8537,203 @@ The lesson is worth more than the incident: **a free migration number is only
 free at the moment you look**, and this repo's numbering has drifted before
 (§36.8, `worked_conversion` — now committed as `0100a`). Re-check the highest
 number on `origin/main`, not just on disk, immediately before pushing.
+
+---
+
+## 44. Telling a customer their card was declined *(0125)*
+
+Monday group **`group_mm5p94x0`** — "Wants to pay but declined payment" — is where a
+customer's item lands when their payment fails. Nothing drags them there by hand: board
+automation `7921219522` moves an item into it when the Status column changes to
+`Wants to pay card declined`, and that label is written **only** by
+`mondayStatusLabelFor()` rules 3 and 6, i.e. when `(gr_)subscription_status` becomes
+`past_due`. That write comes from our own `invoice.payment_failed` handler.
+
+**So the group is downstream of this codebase, and this feature needs no Monday polling and
+no Monday webhook receiver** — the app already causes the transition it would be observing.
+The direct signal is the webhook, which fires seconds earlier, already knows the customer and
+the product, and is the only place the Stripe decline detail is reachable at all.
+
+Until this shipped that handler wrote a failed `payments` row, set `past_due`, pushed the
+label — **and told the customer nothing**. Five payments failed across three customers in the
+fortnight before it was built; one of them was still `past_due` weeks later, sitting in that
+Monday group, never having been emailed.
+
+`src/lib/declineDetail.ts` · `src/lib/declineReason.ts` · `src/lib/cardDeclines.ts` ·
+`sendCardDeclinedEmail` · `/admin/customers` **Declined** tab.
+
+### 44.1 — ⚠️ `invoice.payment_intent` IS GONE ON THIS ACCOUNT
+
+`getStripe()` pins no `apiVersion`, so the account default decides the payload shape — the
+hazard `subscriptionIdFromInvoice`, `priceIdsFromInvoice` and `subscriptionPeriodEnd` each
+already work around. `subscriptionIdFromInvoice`'s own comment says this account is on basil.
+`invoice.payment_intent` went the same way as `invoice.subscription`, and nothing had noticed:
+both `credit_invoice` call sites pass `(invoice.payment_intent as string | null) ?? null`, and
+production says what that is worth —
+
+```
+select count(*), count(stripe_payment_intent_id) from payments
+ where status='paid' and payment_type in ('subscription','gr_subscription');
+→ 30 rows, 0 with an intent id
+```
+
+**Zero of thirty.** Read naively, this whole feature would have reported "no reason given" for
+every decline — silently, plausibly, and indistinguishably from Stripe declining to tell us.
+`paymentIntentIdFromInvoice()` reads both shapes and is the two-line fix for those two
+`credit_invoice` call sites too; that has **not** been done here.
+
+⚠️ **The basil branch walks `payments.data` IN REVERSE.** That array holds one entry per
+attempt, newest last, so reading it forwards attributes attempt 1's decline reason to attempt
+4's email. There is a test named for it.
+
+### 44.2 — Store the truth, say less
+
+`declineReason.ts` is pure and is the only thing that decides what a customer is told.
+`lost_card`, `stolen_card`, `pickup_card`, `fraudulent`, `merchant_blacklist`,
+`restricted_card`, `revocation_of_authorization` and `security_violation` **all collapse to
+one neutral message**: *your bank declined it, call the number on your card.* Three reasons,
+each sufficient — it tells somebody testing a stolen card how much we can see; issuers use
+these as catch-alls, so a perfectly legitimate customer gets `stolen_card` surprisingly often
+and accusing a paying customer of card theft is not a recoverable email; and it is the
+issuer's to say, not ours.
+
+Suppression is checked on **every** code field **before any table lookup**, so no later branch
+can leak one. `card_declined` is deliberately **absent** from the table — it is the outer code
+that accompanies a specific `decline_code`, and in the table it would shadow every specific
+reason and collapse the feature into one generic message.
+
+The raw codes are still stored, and still shown to admins. That split is the whole point.
+
+⚠️ **`charge.outcome.seller_message` must never reach a customer.** Stripe's own name for it
+says who it is for, and it spells the suppressed code out in plain English. Enforced
+structurally rather than by comment: `customerSafeDecline()` is an allow-list with a test
+pinning its exact key set, and `sendCardDeclinedEmail` **has no parameter** for it.
+
+### 44.3 — ⚠️ `past_due` DOES stop lead delivery
+
+An earlier draft of this work claimed it did not, on the strength of a check that tested which
+column *names* appeared in the candidate functions rather than what they were compared to.
+All three candidate functions and `customer_can_see_pool_lead` carry
+`and c.subscription_status = 'active'` in their AND chain — verified against the live
+`pg_get_functiondef`, not inferred from the migration files.
+
+`holdsProduct()` counting `past_due` as held is about whether to **sell** them the other
+product (§17), not about routing. So the email says **new leads are paused until it clears**,
+and says in the same breath that nothing has been taken away — leads, notes, files and
+remaining credits are all untouched, and delivery restarts the moment the payment goes
+through. Both halves are load-bearing: the first is the reason to pay, the second is what
+stops it reading as a threat.
+
+### 44.4 — Every attempt, claimed by INSERT
+
+Stripe Smart Retries makes ~4 attempts over 2-3 weeks and **each one emails**. That is not a
+guess: invoice `in_1U9po1…` failed on 29 Aug, 30 Aug and 1 Sep before recovering.
+
+`card_decline_events` is unique on **`(stripe_invoice_id, attempt_count)`** and the row is
+claimed by INSERT *before* the send — the `credit_invoice` / `announcement_deliveries`
+discipline. Checking "have we sent?" and then sending leaves a window; claiming by write does
+not.
+
+- **The key excludes `customer_id` deliberately.** A Stripe invoice belongs to exactly one
+  Stripe customer, so adding it buys no uniqueness and actively weakens the guard:
+  `customerMatchFilter()` resolves GR through an `.or()` across two columns, so if that lookup
+  ever landed on a different row between a delivery and its retry, a customer-scoped key would
+  not collide and a second email would go out.
+- **Both key columns are NOT NULL.** A unique index treats NULLs as distinct, so a nullable
+  half would silently disable the whole guard.
+- **A second layer behind `stripe_events` is not redundant.** The webhook's outer catch
+  DELETES its event claim on any throw so Stripe retries — and `credit_invoice` throws by
+  design on the sibling `invoice.paid` path. Without this index one webhook wobble is a
+  duplicate decline email.
+- **A missing `attempt_count` is logged, never silently defaulted.** Quietly using 0 would
+  collapse every attempt on an invoice onto one row and email only the first.
+- A claim that succeeds and a send that then fails means that attempt is never emailed.
+  Accepted openly: **missing beats duplicate**, and three more attempts are coming.
+
+⚠️ **`reason_key` has no CHECK, on purpose.** At the call site a `23514` is indistinguishable
+from the `23505` that means "already handled", and the claim-then-send rule would read it as
+*skip* — so one key forgotten in a SQL list would mean no email ever sent for that decline
+code. The TS union is the contract; the test over `DECLINE_COPY` is the enforcement.
+
+### 44.5 — Nothing may throw
+
+`notifyCardDeclined` returns a result object and swallows everything, the same contract
+`setEnquiryStatus` and `syncCustomerMondayStatus` hold. An exception escaping it would delete
+the `stripe_events` claim and have Stripe redeliver an event that has already written
+`past_due`, a `payments` row and a Monday label. It is called **last** in the branch, after
+`pushMondayStatus`, so a slow Stripe lookup cannot delay the board push.
+
+A Stripe lookup failure **still emails**, with the generic copy: the customer needs to fix the
+card whether or not Stripe would tell us why. Only `pi_resolved` records that we could not say.
+
+Two things the branch did not do before and now does: **log the customer lookup error**, and
+**log when no customer matched**. `customerMatchFilter` is an `.or()` with `.maybeSingle()`,
+so two matching rows error into `customer = null` — silence there used to mean "we did not
+mark them past_due" and now also means "we never told them their card failed".
+
+⚠️ **The email is gated on `subscriptionIdFromInvoice(invoice)`.** Unlike `invoice.paid`, this
+branch has never checked, so a one-off invoice an admin raises also writes `past_due` — a
+pre-existing oddity, left alone, but it must not now tell somebody their leads are paused when
+they are not.
+
+### 44.6 — Recovery needs no clearing
+
+The admin badge is keyed on the **live** `(gr_)subscription_status`, never on
+`resolved_at`. Paying clears it when `invoice.paid` writes `'active'`; churning clears it when
+the status becomes `'canceled'`. Neither depends on the best-effort stamp having landed — and
+it means the one customer whose decline predates 0125 still reads `Card declined` rather than
+showing nothing.
+
+`resolveCardDeclines` is called per product in each half of `invoice.paid` (invariant 6 — a
+customer can be past_due on GR while management is healthy). ⚠️ Its **blanket update is
+deliberate**, and is a departure from `stampEpisodeEnded` / `closeOpenCancellation`, which
+forbid one: their worry is that an older un-stamped row would be given today's date and invent
+a boundary that never happened, where here every open row for the product genuinely *is*
+resolved by this payment.
+
+### 44.7 — Admin sees the code; the customer never does
+
+`/admin/customers` gains a **Declined** tab (the in-app view of `group_mm5p94x0`) and a
+per-product badge beside the subscription badge — `Mgmt card declined — insufficient funds ·
+visa ••4242 · retry 12 Sep`, with the raw code, the attempt number and whether Resend actually
+took it in the tooltip. **Admin-only is what makes the raw code legal there**, and the account
+badge still reads `active` where it is: the new badge carries the extra fact rather than
+replacing a true one, as §21 and §23.7A both do.
+
+Keyed `customerId:leadType`, never on the customer alone — a customer-keyed map would print
+the GR reason beside the management badge. No Stripe call per row: the reason was resolved and
+stored when the decline happened.
+
+### Verification
+
+All migrations applied to a scratch **Postgres 16** from empty (with `auth`/`storage`/`cron`
+shims; `pg_cron` is not installable locally), 0125 re-applied twice for idempotency. Then
+against seeded rows: the first claim inserts, **the same attempt collides with 23505**, the
+**next** attempt on the same invoice inserts, a *different customer* cannot re-claim the same
+attempt, both CHECKs refuse their bad values, an unrecognised `reason_key` is accepted, RLS is
+on with **zero** policies, and the FK cascades on customer delete.
+
+**953 vitest cases** (82 new), `npm run lint` clean, `npm run build` passes. Among them: every
+suppressed code neutralised on all three fields with the copy asserted to contain none of the
+raw vocabulary; both API-version shapes resolving the same intent id, and the reverse-iteration
+case; an unexpanded `latest_charge` treated as absent; `customerSafeDecline`'s exact key set;
+the claim proven to happen **before** the send; a 23505 sending nothing; a Stripe outage still
+emailing; and `notifyCardDeclined` never throwing whatever the database does.
+
+The email itself was **rendered** and read: the reason, the product, the card, the paused-leads
+copy, and — with no `hosted_invoice_url` — the Pay button dropped, the settings link promoted,
+and the prose changed with it so it never points at a button that is not there.
+
+**Not yet exercised against live Stripe.** The standing §12 item, and sharper here because this
+is the first code in the repo to read any of these fields. Before relying on it, run test-mode
+declines through `4000000000009995` (insufficient funds), `4000000000000069` (expired),
+`4000000000003220` (3-D Secure) and `4000000000009979` (**stolen — assert the email says only
+that the bank declined it, while the row records `stolen_card`**), then replay one
+`invoice.payment_failed` from the Stripe CLI and confirm no second email.
+
+### Deployment order — migration BEFORE code
+
+0125 first. It is purely additive and inert on its own — nothing reads the table until the code
+ships — while code arriving first would fail the claim insert on every decline and, under the
+claim-then-send rule, send **no email at all**. Nothing here touches a balance, counter, pacing
+or capacity column, so a lagging migration cannot affect lead allocation.

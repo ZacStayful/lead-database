@@ -8,6 +8,7 @@ import {
 import { extractCity } from "@/lib/utils";
 import { pauseMonthsWords } from "@/lib/pauseOptions";
 import { keepCrmBulletsHtml } from "@/lib/retentionCopy";
+import { declineCopyFor, type DeclineReasonKey } from "@/lib/declineReason";
 import type { Lead } from "@/lib/types";
 
 const BRAND = "#5D8156";
@@ -1354,6 +1355,139 @@ export async function sendLandlordNudgeEmail(params: {
       to,
       subject,
       html: landlordShell(`${bodyHtml}${ctaHtml}`),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * "Your card was declined — here is what we know, and how to fix it."
+ *
+ * Sent on EVERY failed attempt. Stripe Smart Retries makes roughly four over
+ * two to three weeks, and each is a genuinely new event: production has already
+ * seen one invoice fail on three separate days. Deduped per attempt by
+ * card_decline_events (0125), so a redelivered webhook cannot double-send.
+ *
+ * ⚠️ WHAT IT MAY SAY. `reasonKey` has already been through declineReasonKey(),
+ * which suppresses the fraud-flavoured decline codes. This function has NO
+ * PARAMETER for outcome.seller_message, outcome.risk_level, network_status, the
+ * raw decline code, or Stripe's own failure_message — that absence is the leak
+ * guard, and it is a compile-time one rather than a comment. seller_message is
+ * merchant-facing by Stripe's own naming and spells the suppressed code out in
+ * plain English.
+ *
+ * ⚠️ WHAT IT MAY CLAIM. past_due DOES stop delivery. All three candidate
+ * functions and customer_can_see_pool_lead carry `and c.subscription_status =
+ * 'active'` in their AND chain (verified against the live pg_get_functiondef,
+ * not inferred from the migration files). holdsProduct() counting past_due as
+ * held is about whether to SELL them the other product, not about routing. So
+ * "new leads are paused" is true and must be said. What is NOT true is that
+ * anything has been taken away: their leads, notes, files and remaining credits
+ * are all untouched, and that reassurance is the reason the email can be direct
+ * about the rest.
+ *
+ * Deliberately ungated by notification_preferences, per emails/apiKeyCreated.ts:
+ * every key in that jsonb is a preference about lead activity. This is a billing
+ * notice about money owed and service already stopped.
+ */
+export async function sendCardDeclinedEmail(params: {
+  to: string;
+  contactName: string;
+  /** PRODUCT_COPY[leadType].name — "Management leads" / "Guaranteed Rent leads". */
+  productName: string;
+  reasonKey: DeclineReasonKey;
+  amountDuePence: number | null;
+  currency: string | null;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  hostedInvoiceUrl: string | null;
+  nextAttemptIso: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const {
+    to,
+    contactName,
+    productName,
+    reasonKey,
+    amountDuePence,
+    currency,
+    cardBrand,
+    cardLast4,
+    hostedInvoiceUrl,
+    nextAttemptIso,
+  } = params;
+
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const copy = declineCopyFor(reasonKey);
+
+  // formatGbp hard-codes the pound sign, so an invoice in any other currency
+  // says nothing about the amount rather than quoting a wrong one.
+  const amountPhrase =
+    amountDuePence !== null && (currency ?? "gbp").toLowerCase() === "gbp"
+      ? ` of <strong style="color:#1a1a1a">${esc(formatGbp(amountDuePence))}</strong>`
+      : "";
+
+  // Omitted entirely when either half is missing — never "ending null".
+  const cardPhrase =
+    cardBrand && cardLast4
+      ? ` on your ${esc(cardBrand)} ending <strong style="color:#1a1a1a">${esc(cardLast4)}</strong>`
+      : "";
+
+  // The last automatic attempt is a materially different message from the
+  // others: nothing further will be taken, so this is the one that has to land.
+  const isFinalAttempt = !nextAttemptIso;
+  const subject = isFinalAttempt
+    ? "Action needed: your Stayful payment has failed"
+    : "Your Stayful payment didn't go through";
+
+  // Both halves have to agree with the buttons actually rendered below. With no
+  // hosted invoice there is nothing to "pay now" ON, so the nudge points at the
+  // card instead — otherwise the copy sends them looking for a button that is
+  // not there.
+  const retryLine = nextAttemptIso
+    ? `<p style="margin:0 0 14px;color:#6b706a;font-size:14px">If you would rather leave it, we will try the card again automatically on <strong style="color:#1a1a1a">${esc(ukLongDate(nextAttemptIso))}</strong>. ${
+        hostedInvoiceUrl
+          ? "Paying now is faster, and your leads restart straight away."
+          : "Updating the card now is faster, and your leads restart as soon as it goes through."
+      }</p>`
+    : hostedInvoiceUrl
+      ? `<p style="margin:0 0 14px;color:#6b706a;font-size:14px">This was our last automatic attempt, so nothing further will be taken from the card. The payment needs settling here for your leads to restart.</p>`
+      : `<p style="margin:0 0 14px;color:#6b706a;font-size:14px">This was our last automatic attempt, so nothing further will be taken from the card. Add a working card and we will pick the payment straight back up.</p>`;
+
+  // A null hosted_invoice_url is a real case (a draft or voided invoice, or a
+  // collection method that is not charge_automatically). Promote Settings to
+  // the primary action rather than rendering a dead button.
+  const actions = hostedInvoiceUrl
+    ? `${button(hostedInvoiceUrl, "Pay this invoice")}
+       <div style="margin-top:10px">${secondaryButton(`${APP_URL}/dashboard/settings`, "Update your card")}</div>`
+    : button(`${APP_URL}/dashboard/settings`, "Update your card");
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">We couldn't take your payment, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your <strong style="color:#1a1a1a">${esc(productName)}</strong> payment${amountPhrase} was declined${cardPhrase}.</p>
+    <p style="margin:0 0 6px;font-size:15px;font-weight:600;color:#1a1a1a">${esc(copy.headline)}</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">${esc(copy.explain)}</p>
+    <p style="margin:0 0 8px;font-size:14px;font-weight:600;color:#1a1a1a">What this means for your leads</p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      <li><strong style="color:#1a1a1a">Nothing has been taken away.</strong> Your leads, notes, files and history are all exactly where they were, and you can keep working them.</li>
+      <li><strong style="color:#1a1a1a">New leads are paused</strong> until the payment clears. We don't send leads for a month that hasn't been paid for.</li>
+      <li><strong style="color:#1a1a1a">Any credits you have left are kept.</strong> Nothing expires and nothing is lost.</li>
+      <li>This month's leads are added and delivery restarts as soon as the payment goes through.</li>
+    </ul>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">${esc(copy.fix)}</p>
+    ${actions}
+    <div style="margin-top:18px"></div>
+    ${retryLine}
+    <p style="margin:0;color:#8a8f88;font-size:13px">If you think this is a mistake, replying to this email comes straight to us.</p>
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
     });
     return { id: data?.id ?? null, error };
   } catch (error) {
