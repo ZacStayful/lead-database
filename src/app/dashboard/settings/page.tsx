@@ -8,6 +8,10 @@ import { validatePresentationSettings } from "@/lib/presentationSettings";
 import { validatePresentationBrand } from "@/lib/presentationBrand";
 import { brandLogoDataUrl } from "@/lib/presentationBrandStorage";
 import { ApiAccessPanel, type ApiKeyRow } from "@/components/dashboard/ApiAccessPanel";
+import {
+  ConnectedAppsPanel,
+  type ConnectedApp,
+} from "@/components/dashboard/ConnectedAppsPanel";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +38,11 @@ export default async function SettingsPage() {
   let apiKeys: ApiKeyRow[] = [];
   let apiUsage: Awaited<ReturnType<typeof usageForKeys>> = {};
   let apiRecent: Awaited<ReturnType<typeof recentRequestsForCustomer>> = [];
+  // OAuth connections. Loaded for any customer who holds a product, and the
+  // panel renders nothing when the list is empty — a permanently blank card is
+  // furniture that teaches people to scroll past the one place a rogue
+  // connection would show up.
+  let connectedApps: ConnectedApp[] = [];
   // §40 messaging connection state, for the status pills on the card below.
   let emailDomain: Awaited<ReturnType<typeof getEmailDomain>> = null;
   let whatsappConnection: Awaited<ReturnType<typeof getWhatsappConnection>> = null;
@@ -50,6 +59,17 @@ export default async function SettingsPage() {
       .order("created_at", { ascending: false });
 
     apiKeys = (data ?? []) as ApiKeyRow[];
+
+    const { data: grants } = await admin
+      .from("oauth_grants")
+      .select(
+        "id, scopes, created_at, last_used_at, oauth_clients!inner(client_name, client_uri)"
+      )
+      .eq("customer_id", customer.id)
+      .is("revoked_at", null)
+      .order("created_at", { ascending: false });
+    connectedApps = (grants ?? []) as unknown as ConnectedApp[];
+
     [apiUsage, apiRecent] = await Promise.all([
       usageForKeys(apiKeys.filter((k) => !k.revoked_at).map((k) => k.id), admin),
       recentRequestsForCustomer(customer.id, 20, admin),
@@ -161,6 +181,8 @@ export default async function SettingsPage() {
           </CardContent>
         </Card>
       )}
+
+      {holdsAny && <ConnectedAppsPanel grants={connectedApps} />}
 
       {holdsAny && (
         <ApiAccessPanel

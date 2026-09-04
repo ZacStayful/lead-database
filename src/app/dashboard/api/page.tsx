@@ -42,12 +42,52 @@ const ERRORS = [
   ["service_unavailable", "503", "The API is temporarily switched off."],
 ];
 
-const CLIENTS = [
-  ["n8n", "Works today", "Set an Authorization header on the HTTP Request node, or point the MCP Client node at the MCP URL."],
-  ["Cursor, VS Code", "Works today", "Add the MCP URL and an Authorization header to your MCP config."],
-  ["Claude Desktop / Code", "Works via a bridge", "Use mcp-remote with --header, as shown in Settings."],
-  ["claude.ai connectors", "Limited", "Custom connectors expect OAuth; API-key headers are still in beta there."],
-  ["ChatGPT", "Not yet", "ChatGPT connectors cannot present an API key. Support needs OAuth, which is planned."],
+/**
+ * How to connect each assistant.
+ *
+ * ⚠️ THE OLD VERSION OF THIS TABLE IS WHY OAUTH EXISTS. It said claude.ai
+ * connectors were "Limited" and ChatGPT "Not yet", because both need OAuth and
+ * an API key is all we had. Both now work by pasting one URL.
+ *
+ * The steps are the product here. A URL on its own is a support ticket.
+ */
+const CONNECT_STEPS: { client: string; steps: string[] }[] = [
+  {
+    client: "Claude — web, desktop or mobile",
+    steps: [
+      "Settings, then Connectors, then Add custom connector.",
+      "Paste the MCP URL below and press Connect.",
+      "Sign in with this Stayful account and press Allow.",
+    ],
+  },
+  {
+    client: "Claude Code",
+    steps: [
+      "Run: claude mcp add --transport http stayful <MCP URL>",
+      "Then type /mcp and follow the sign-in prompt.",
+    ],
+  },
+  {
+    client: "ChatGPT",
+    steps: [
+      "Settings, then Connectors, then create a new connector.",
+      "Paste the MCP URL below. Sign in and press Allow.",
+    ],
+  },
+  {
+    client: "Cursor, VS Code and other MCP clients",
+    steps: [
+      "Add the MCP URL to your mcp.json as an http server.",
+      "Sign in when prompted, or set an Authorization header with an API key instead.",
+    ],
+  },
+  {
+    client: "n8n",
+    steps: [
+      "Point the MCP Client node at the MCP URL.",
+      "Or use an HTTP Request node against the REST base URL with an API key.",
+    ],
+  },
 ];
 
 export default async function ApiDocsPage() {
@@ -68,11 +108,12 @@ export default async function ApiDocsPage() {
       <div>
         <h1 className="text-2xl font-bold">API reference</h1>
         <p className="text-sm text-muted-foreground">
-          Read your leads from your own tools.{" "}
+          Read your leads from your own tools. Connect an AI assistant by
+          signing in — see below — or{" "}
           <Link href="/dashboard/settings" className="text-brand hover:underline">
-            Create a key in Settings
-          </Link>
-          .
+            create an API key in Settings
+          </Link>{" "}
+          for anything that runs unattended.
         </p>
       </div>
 
@@ -230,24 +271,52 @@ export default async function ApiDocsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Using the MCP server</CardTitle>
+          <CardTitle>Connect an AI assistant</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm">
+        <CardContent className="space-y-4 text-sm">
           <p className="text-muted-foreground">
-            The MCP server exposes the same data as five tools, so an AI
-            assistant can read your leads directly. Support differs by client:
+            Give an assistant the address below and sign in. It can then read
+            your leads, your notes and your property analyses — and nothing else.
+            <strong className="text-foreground"> No API key is needed</strong>,
+            and everything stays read-only: it cannot change a lead, spend a
+            credit or touch your billing.
           </p>
-          <table className="w-full text-sm">
-            <tbody>
-              {CLIENTS.map(([client, state, note]) => (
-                <tr key={client} className="border-b-[0.5px] border-border align-top">
-                  <td className="py-2 pr-3 font-medium whitespace-nowrap">{client}</td>
-                  <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">{state}</td>
-                  <td className="py-2 text-muted-foreground">{note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+          <pre className="overflow-x-auto rounded-md border-[0.5px] border-border bg-muted/40 p-3 text-xs">
+{`${APP_URL}/api/mcp`}
+          </pre>
+
+          <div className="space-y-4">
+            {CONNECT_STEPS.map((c) => (
+              <div key={c.client}>
+                <p className="font-medium">{c.client}</p>
+                <ol className="mt-1 list-inside list-decimal space-y-0.5 text-muted-foreground">
+                  {c.steps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ol>
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-md border-[0.5px] border-border bg-muted/30 p-3">
+            <p className="font-medium">Which should you use, a sign-in or a key?</p>
+            <p className="mt-1 text-muted-foreground">
+              <strong className="text-foreground">Sign in</strong> for an
+              assistant you use yourself — it is two clicks and there is no
+              secret to look after.{" "}
+              <strong className="text-foreground">Use an API key</strong> for
+              anything that runs unattended, such as a scheduled n8n workflow: a
+              key needs no browser and does not expire.
+            </p>
+            <p className="mt-2 text-muted-foreground">
+              Whatever you connect appears in{" "}
+              <Link href="/dashboard/settings" className="text-brand hover:underline">
+                Settings
+              </Link>
+              , where you can disconnect it at any time.
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

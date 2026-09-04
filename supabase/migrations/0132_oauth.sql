@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 0125 — OAuth 2.1, so an AI assistant can connect without an API key.
+-- 0132 — OAuth 2.1, so an AI assistant can connect without an API key.
 --
 -- WHY THIS EXISTS. /api/mcp authenticates with a per-customer API key (0095).
 -- That serves n8n, Cursor and VS Code, and Claude Desktop through an

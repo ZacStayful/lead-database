@@ -8737,3 +8737,309 @@ that the bank declined it, while the row records `stolen_card`**), then replay o
 ships — while code arriving first would fail the claim insert on every decline and, under the
 claim-then-send rule, send **no email at all**. Nothing here touches a balance, counter, pacing
 or capacity column, so a lagging migration cannot affect lead allocation.
+---
+
+## 45. Connecting an AI assistant: OAuth 2.1 *(0132)*
+
+§27 gave a customer an API key. That serves n8n, Cursor and VS Code, and Claude
+Desktop through an `mcp-remote --header` bridge. It does **not** serve the two
+front doors customers actually reach for — **claude.ai custom connectors** and
+**ChatGPT connectors** — neither of which can present a static key.
+
+Measured against production before this was written:
+
+```
+POST /api/mcp                                → 401, www-authenticate: Bearer  (no parameters)
+GET  /.well-known/oauth-protected-resource   → 404
+GET  /.well-known/oauth-authorization-server → 404
+```
+
+Claude detected that authentication was required, went looking for the discovery
+documents, found nothing, and stopped. §27.7 had already named the fix — *"Phase
+1.5 is OAuth 2.1 … the 401 is shaped so `resource_metadata` is a one-line
+addition"* — and this is it. A customer now pastes the MCP URL into Claude or
+ChatGPT, signs in, presses Allow, and their leads are readable.
+
+**API keys are untouched** and remain the documented choice for anything
+headless: no browser, no expiry.
+
+### 45.1 — ⚠️ `/.well-known` is served by REWRITE, not an `app/.well-known/` directory
+
+Next's App Router does not reliably route a dot-prefixed path segment, and the
+failure is a 404 — **indistinguishable from the 404 being fixed**. Three rewrites
+in `next.config.js` map onto ordinary handlers under
+`src/app/api/oauth/metadata/`. This was proved with a real production build
+before anything was built on top of it; if the directory form is ever tried
+again, prove it the same way first.
+
+The **authorization-server document is served at the bare path only.** Our issuer
+has no path component, so RFC 8414's path-insertion form does not apply, and
+answering at `…/api/mcp` too would hand a strict client an issuer that does not
+match the URL it derived — failing *after* the client has committed to us, which
+is worse than the 404 it would otherwise have moved on from. The
+**protected-resource document answers any suffix**, because Claude probes both
+forms and the `resource` field inside is what identifies us.
+
+`/.well-known/openid-configuration` is **deliberately not served**: we issue no
+ID token and have no `jwks_uri`, so an OIDC document would fail OIDC validation
+anyway and only move the failure later.
+
+### 45.2 — The trailing slash, which breaks three things at once
+
+`src/lib/oauth/metadata.ts` strips a trailing slash from `APP_URL` **once**, and
+every other URL derives from that. Left alone, an `APP_URL` ending in `/` makes
+`${APP_URL}/api/mcp` into `…co.uk//api/mcp`, and then the `resource` we publish
+stops matching the `resource` a client sends, the issuer stops matching the
+discovery URL, and the callback is wrong — three simultaneous failures, none of
+which names a trailing slash. `sameResource()` is the only comparison anybody
+should need.
+
+### 45.3 — The challenge, and the parameter that must NOT be there
+
+One builder (`src/lib/oauth/challenge.ts`), so the strings cannot drift.
+
+| Case | `WWW-Authenticate` |
+|---|---|
+| No credential | `Bearer resource_metadata="…"` |
+| Invalid / expired / revoked | `Bearer error="invalid_token", error_description="…", resource_metadata="…"` |
+| Insufficient scope (403) | `Bearer error="insufficient_scope", scope="…", resource_metadata="…"` |
+
+⚠️ **The no-credential case carries no `error`.** RFC 6750 reserves it for a
+request that presented something wrong, and a client probing with nothing —
+which is how discovery starts — that reads `invalid_token` may conclude its
+stored token is bad and throw a good one away. A **rate limit** also gets the
+bare challenge: a 429 is not an authentication problem, and an `error` there
+would make a client tear down a working token over something a retry fixes.
+
+The **API-key failure path shares this builder** and gets the same
+`resource_metadata`. That advertises where to learn about OAuth without
+asserting anything about the key that just failed.
+
+### 45.4 — ⚠️ The refresh-race grace window
+
+**The single most consequential decision here, and the one most likely to be
+"tightened" back by somebody reading a textbook.**
+
+A rotated refresh token presented again is normally a stolen credential, and the
+correct response is to revoke the whole grant. That rule breaks a working MCP
+client: an assistant issues tool calls **in parallel**, so two in-flight requests
+routinely find the access token expired at the same instant and both refresh. One
+wins; the other presents a token rotated microseconds ago and is convicted of
+theft. The connection then dies **at random, under exactly the load the feature
+exists to serve** — and reconnecting fixes it often enough to read as a flaky
+network rather than a bug.
+
+So `oauth_tokens.rotated_to` and `rotated_at` are load-bearing, not bookkeeping:
+a token rotated within **60 seconds** is the loser of a race and is handed a
+fresh pair against the same grant. Outside the window the strict rule stands and
+the whole chain goes. `classifyRotatedToken()` is pure and both sides of the
+boundary are unit-tested, including a rotation timestamped in the **future**,
+which is refused — clock skew is not evidence of a race.
+
+⚠️ It hands back a **new** pair rather than the winner's, because only hashes are
+stored. Functionally identical from the client's side, and it costs one row
+rather than a plaintext token in the database.
+
+### 45.5 — ⚠️ Loopback redirect URIs match ignoring the PORT
+
+`mcp-remote`, Cursor and VS Code bind a **random local port** each run, so a
+client that registered `http://localhost:53422/callback` returns on
+`http://localhost:61199/callback`. Exact string matching refuses it and all three
+can never connect — which would have read as "OAuth just doesn't work in Cursor".
+
+RFC 8252 §7.3 requires the relaxation and confines it to loopback. For every
+other host the comparison is **exact**: that is the open-redirector defence, and
+loosening it here would loosen it for `https://claude.ai` too. The scheme, host
+and path must still match even on loopback — `localhost` and `127.0.0.1` are
+different registrations. `clients.test.ts` pins
+`https://example.com:443` ≠ `https://example.com:8443` specifically to prove the
+relaxation is loopback-only.
+
+### 45.6 — An absent `scope` means everything, never nothing
+
+`scope` is optional in OAuth 2.1 and several clients omit it. Granting the empty
+set produces a connection that **authorises perfectly and then fails every single
+tool call** — which reads as a permissions bug in our tools rather than as a
+scope default, and is the worst shape of failure available. `state` is likewise
+optional (PKCE replaces its CSRF role) and must never be required.
+
+RFC 8707 `resource` is **accepted when absent** and defaulted, refused only when
+it names something else. The spec tells *clients* to send it; a server that
+hard-fails without it turns a client's omission into a dead end nobody can
+diagnose, and we have exactly one resource for it to have meant.
+
+### 45.7 — The authorize flow, and the order that is the security
+
+`validateAuthorizeRequest()` is pure and shared by the page and the POST, so
+they cannot reach different verdicts. **Until the client AND its `redirect_uri`
+are both verified, nothing may be redirected anywhere** — an error sent to an
+unvalidated `redirect_uri` is an open redirector on an authorization endpoint,
+which is how codes get stolen. Those two failures render a page; everything
+after them redirects to a destination we have just proved was registered.
+
+The consent POST **re-validates every field against the database**, so a tampered
+form can only produce a request that would have been valid anyway. What that
+leaves is silent authorisation by CSRF, closed with an `Origin` check and a
+double-submit nonce — **no new env var**.
+
+⚠️ **The grant is UPSERTED, not inserted.** `oauth_grants` carries a partial
+unique index on `(customer_id, client_id) where revoked_at is null`, and
+re-consenting to an app you already connected is the **ordinary** case — every
+reconnect does it. A plain insert fails there with a constraint error, after the
+consent screen, at the very last step of a flow the customer has already
+completed. Scopes are **widened** rather than replaced; narrowing is what
+disconnecting is for.
+
+### 45.8 — Registration is open, and that is safe
+
+RFC 7591 dynamic registration is unauthenticated because MCP clients require it —
+nobody pastes a client id into a connector dialog. **A client is not a
+credential**: registering one grants nothing, and every request it can make still
+needs a customer to have pressed Allow. §27.1's standing rule is satisfied by a
+fixed allow-list of named fields; **unknown metadata is ignored, not rejected**,
+per RFC 7591, because refusing would fail a client for being more thorough than
+us. Rate limited per IP (`subject_kind = 'ip'`, `md5(ip)::uuid`), failing closed.
+
+### 45.9 — The kill switch fails CLOSED, unlike `api_enabled`
+
+`oauth_enabled` is a **second** switch so OAuth can be turned off without taking
+API keys down with it. It ships **`false`**, which is what made staged delivery
+safe: with it off the discovery documents **404** — exactly what a client saw
+before any of this existed — so the resource-server and authorization-server
+halves landed in separate deploys without ever advertising an endpoint that was
+not there yet.
+
+It fails **closed** on a read error where `apiEnabled()` fails open, and an
+unseeded key reads as disabled rather than enabled. An unreachable settings table
+must not take a working API down, but nor must it switch **on** a feature
+somebody deliberately left off. The documents carry `max-age=300`, deliberately
+short: a longer cache would let a 404 outlive the switch being flipped.
+
+Neither switch gates `/api/customer/oauth-grants` — a customer must be able to
+disconnect an app while OAuth is off, exactly as key management ignores
+`api_enabled`.
+
+### 45.10 — What 0132 does to the existing API housekeeping
+
+| Change | Why |
+|---|---|
+| `api_request_log.token_id`, `surface` CHECK gains `'oauth'` | `key_id` FKs `customer_api_keys` and cannot hold a token id. An OAuth request leaves `key_id` null. |
+| `api_rate_limits.subject_kind` gains `'oauth_token'` and `'ip'` | `subject_id` deliberately carries no FK (0095), so a token id was already safe — only the CHECK was in the way. |
+| A **5-argument** `consume_api_rate_limit`, with the 4-argument form kept as a shim | ⚠️ A defaulted fifth argument would create an **overload**, not a replacement — every existing 4-argument call would then fail `function is not unique`. The §34/§35 trap. Both signatures need their own `revoke`/`grant` pair (§11). |
+
+⚠️ **Accepted gap: OAuth rate-limit windows are discarded, not rolled up.**
+`sweep_api_tables` folds only `subject_kind = 'key'` into `api_usage_daily`,
+whose `key_id` is FK'd and cannot hold a token id. Per-token history is readable
+from `api_request_log`, which `/admin/api` and the customer panel already use. A
+per-grant rollup is a later, separate want — not an oversight.
+
+### 45.11 — The CORS reversal, and the rule that replaced it
+
+`/api/mcp` used to 403 any `Origin` that was not `APP_URL`, and both it and
+`handler.ts` stated that no CORS header was sent anywhere, deliberately. The
+stated reason — *"a page on another origin can POST with the visitor's cookies
+attached"* — no longer bites: the endpoint is credential-only with no cookie
+fallback, and `Access-Control-Allow-Origin: *` **forbids credentialed requests by
+specification**. A cross-origin page can therefore only make an unauthenticated
+request and read the same 401 anybody gets by curling the URL.
+
+⚠️ **THE STANDING RULE THAT REPLACES IT: never add
+`Access-Control-Allow-Credentials`.** It is the single header that would make the
+original objection true again. `src/lib/api/cors.ts` carries the argument.
+
+Browser-based OAuth clients are why this was needed at all: a connector running
+in a page must read `WWW-Authenticate` to discover our metadata, which is
+impossible unless the header is exposed.
+
+### 45.12 — Two pre-existing defects fixed alongside
+
+Neither needed OAuth to be worth fixing, and both were on the path a connection
+takes:
+
+- ⚠️ **The `MCP-Protocol-Version` header was hard-400d** if it fell outside a
+  hardcoded three-element list, **before authentication** — while `dispatch.ts`'s
+  own `negotiate()` has always fallen back rather than refused. The two
+  disagreed and the strict one ran first, so the day a client shipped a newer
+  spec revision every connection would have 400d and **the symptom would have
+  read as an auth failure**. The header is now negotiated exactly as
+  `initialize`'s parameter is. The transport spec's "SHOULD return 400" is worth
+  trading for a server that survives the next revision.
+- `GET /api/mcp` returned a bare 405. Some clients probe with a GET first, so it
+  now carries the challenge and CORS.
+
+### 45.13 — ⚠️ ChatGPT connects; whether it is USEFUL is unproven
+
+ChatGPT's connectors privilege tools named `search` and `fetch`. Ours are
+`get_account`, `list_leads`, `get_lead`, `list_lead_notes` and
+`get_lead_report_summary`. OAuth unblocks the **connection** and may not be
+sufficient for ChatGPT to surface the tools well. **Do not claim ChatGPT works
+until it has been driven end to end.** If it does not, the fix is thin
+`search` / `fetch` aliases over `list_leads` / `get_lead` — a separate decision,
+and one that must still respect §27.1: `search` would take a fixed set of named
+filters, never a free-form query.
+
+### 45.14 — ⚠️ A schema rebuilt from `supabase/migrations/` FAILS at 0124
+
+Found while verifying this work, and unrelated to it. `get_customer_scoreboard`
+gained two columns — `worked_past_cold` and `wins_per_worked_past_cold` — and a
+function `assignment_worked_past_cold()` in production, **by a migration that was
+never committed**. 0124's body was taken from production's live `prosrc`, so it
+carries them; a rebuild from the directory still has 0068's older signature and
+dies on `cannot change return type of existing function`.
+
+This is the same drift §36.8 records as still outstanding for
+`worked_conversion`. Production is fine and nothing here depends on it — but
+**the "all N migrations applied to a scratch Postgres from empty" convention this
+file quotes everywhere is currently broken**, and the next person to lean on it
+will find out the hard way. Closing it means committing the missing migration.
+
+### Verification
+
+Scratch **Postgres 16** built from empty with a Supabase-shaped bootstrap
+(`anon`/`authenticated`/`service_role`, `auth.uid()`, `storage.*`), 119 of 120
+migrations applying cleanly — the exception being 0124 above, worked around to
+continue. 0132 then applied **twice** for idempotency.
+
+Schema: all four tables RLS on with **zero policies**; ACLs
+`service_role`-only on `consume_api_rate_limit` (both signatures),
+`consume_oauth_authorization_code` and `sweep_api_tables`; invariant 7's four
+`authenticated`-executable functions re-checked; both CHECK widenings present;
+`oauth_enabled` seeded `false`.
+
+Behaviour, against seeded rows: **the four-argument rate-limit shim still
+increments identically** (the regression that matters, since it is what let this
+land ahead of the code); the five-argument form works for a token and for an IP,
+and refuses an unsupported subject kind; **eight concurrent redemptions of one
+authorization code produced exactly one winner** and seven nulls, which is
+claim-by-write holding under real contention; an expired code, a used code and an
+unknown one all return the same null; **a second open grant for the same
+(customer, client) is refused by the partial unique index** — the failure the
+upsert exists to avoid — and is allowed again after revoking; deleting a grant
+cascades every token under it; every CHECK boundary refuses; and the sweep clears
+expired codes and never-used clients while **never touching a client that has a
+grant**.
+
+Live, against a real production build served locally: all three rewritten
+`.well-known` paths resolve; the 401 now carries
+`resource_metadata`; the GET 405 carries it too; `OPTIONS` answers 204 with CORS;
+a request with `MCP-Protocol-Version: 2099-01-01` gets a 401 rather than a 400;
+an `Origin: https://claude.ai` is no longer 403d; and with `oauth_enabled` off
+all three discovery paths 404.
+
+**972 unit tests pass**, 96 of them new, `next build` clean.
+
+**Not yet exercised:** the flow end to end against a real client. Add the
+connector in Claude, then **disconnect and reconnect** — that second connect is
+what exercises the grant upsert and is the failure a single happy-path run never
+sees. Then Cursor, which is what exercises the loopback-port rule against a real
+randomly-chosen port. Then leave a connector idle past the access-token TTL and
+confirm it refreshes rather than dying.
+
+### Deployment order — migration BEFORE code
+
+0132 first. It is additive and inert: nothing reads the four tables until the
+code ships, both CHECK changes only admit values nothing writes yet, and the
+four-argument `consume_api_rate_limit` shim keeps every existing caller working
+byte-for-byte. `oauth_enabled` ships **false**, so even with the code deployed
+the discovery documents 404 and every client behaves exactly as it does today.
+Flip it only after the end-to-end tests above.
