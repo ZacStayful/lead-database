@@ -41,6 +41,14 @@ function EnquiryForm() {
     setLoading(true);
     setError(null);
 
+    // One id, shared by the browser event below and the server-side one the
+    // API route sends, so Meta counts ONE Lead however many copies arrive.
+    // Generated BEFORE the fetch because it has to travel in the body.
+    const eventId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `lead-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
     try {
       const res = await fetch("/api/enquiry", {
         method: "POST",
@@ -49,6 +57,7 @@ function EnquiryForm() {
           ...form,
           plan,
           product: isGuaranteedRent ? "guaranteed-rent" : undefined,
+          event_id: eventId,
         }),
       });
       const data = await res.json();
@@ -57,8 +66,34 @@ function EnquiryForm() {
         setLoading(false);
         return;
       }
+
+      // The browser half of the Lead conversion. The SERVER event (sent from
+      // /api/enquiry) is the reliable one — roughly a third of visitors block
+      // fbevents.js entirely — so this twin is mostly here so that Events
+      // Manager shows browser/server deduplication working and Pixel Helper
+      // shows something during setup.
+      //
+      // ⚠️ `eventID`, with a capital D. `eventId` is silently ignored by fbq,
+      // with no console warning, and the result is TWO counted Leads per
+      // submission that look perfectly legitimate.
+      try {
+        window.fbq?.("track", "Lead", { content_name: plan }, { eventID: eventId });
+      } catch {
+        // Pixel blocked or absent. The server event already covers this.
+      }
+
       // Enquiry saved — send them straight to book a call on Calendly.
-      window.location.href = CALENDLY_URL;
+      //
+      // ⚠️ The delay is deliberate. fbq sends a beacon and offers no completion
+      // callback, and this is a same-tick hard navigation to another origin —
+      // without a pause the unload cancels the request. 250ms is invisible
+      // after a POST the user has already waited on. Scheduled OUTSIDE the
+      // try/catch above so a pixel error can never strand them on the form,
+      // and `loading` is deliberately NOT reset, so the button stays disabled
+      // and a double-click cannot produce two Leads with two ids.
+      setTimeout(() => {
+        window.location.href = CALENDLY_URL;
+      }, 250);
     } catch {
       setError("Something went wrong. Please try again.");
       setLoading(false);

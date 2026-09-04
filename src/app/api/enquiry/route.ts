@@ -7,6 +7,12 @@ import {
   grEnquiryBoardId,
 } from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
+import { APP_URL } from "@/lib/env";
+import { clientIp } from "@/lib/api/log";
+import { metaTrackingAllowed } from "@/lib/meta/consent";
+import { buildMetaUserData } from "@/lib/meta/userData";
+import { buildLeadEvent, coerceEventId } from "@/lib/meta/events";
+import { logMetaResult, sendMetaConversion } from "@/lib/meta/capi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +39,7 @@ export async function POST(request: NextRequest) {
     current_lead_source?: string;
     plan?: string;
     product?: string;
+    event_id?: string;
   };
   try {
     body = await request.json();
@@ -199,7 +206,46 @@ export async function POST(request: NextRequest) {
     console.error("Enquiry account creation error", err);
   }
 
-  // 3. Capacity no longer gates the public form — every prospect books a call.
+  // 3. Meta Lead conversion, server-side.
+  //
+  //    THE RELIABLE HALF of the conversion, not a backup. Two things make the
+  //    browser pixel alone insufficient here: roughly a third of visitors
+  //    block fbevents.js outright, and the form's success path is a hard
+  //    navigation off-site to Calendly, which races the beacon.
+  //
+  //    `_fbp` / `_fbc` are first-party cookies written by the pixel on the
+  //    landing page (and `_fbc` is minted from `?fbclid=` by our own bundle
+  //    even when the pixel is blocked — see MetaPixel.tsx). They arrive on
+  //    this request because the form's fetch is same-origin, which is why the
+  //    COOKIE is the right carrier and the URL is not: the visitor lands on
+  //    `/?fbclid=…` and navigates to `/enquiry`, where the param is long gone.
+  //
+  //    ⚠️ AWAITED, not fire-and-forget. Vercel can freeze the function the
+  //    instant the response is returned, and an un-awaited promise is simply
+  //    lost. Worst case is the 4s timeout inside sendMetaConversion.
+  //
+  //    ⚠️ AFTER everything above, and it can never fail the request — the same
+  //    shape the Monday push and the customer upsert already use. A
+  //    measurement outage must not cost us a real lead.
+  if (metaTrackingAllowed()) {
+    const event = buildLeadEvent({
+      eventId: coerceEventId(body.event_id),
+      sourceUrl: `${APP_URL}/enquiry`,
+      contentName: isGuaranteedRent ? "guaranteed_rent" : planKey,
+      userData: buildMetaUserData({
+        email,
+        phone: mobile,
+        fullName: name,
+        fbp: request.cookies.get("_fbp")?.value ?? null,
+        fbc: request.cookies.get("_fbc")?.value ?? null,
+        ipAddress: clientIp(request),
+        userAgent: request.headers.get("user-agent"),
+      }),
+    });
+    logMetaResult("enquiry", event, await sendMetaConversion(event));
+  }
+
+  // 4. Capacity no longer gates the public form — every prospect books a call.
   //    The field is kept `true` for a stable response shape.
   return NextResponse.json({ ok: true, hasCapacity: true });
 }

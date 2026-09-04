@@ -13,7 +13,6 @@ import type { CSSProperties } from "react";
 
 export const metadata = {
   title: "Privacy Policy — Stayful",
-  robots: { index: false, follow: false },
 };
 
 const display = (extra?: CSSProperties): CSSProperties => ({
@@ -236,7 +235,8 @@ export default function PrivacyPolicyPage() {
             We use a number of third-party service providers to run the platform
             (&quot;processors&quot; in data protection terms). They only receive
             the data needed to perform their specific function, and are not
-            permitted to use it for their own purposes.
+            permitted to use it for their own purposes &mdash; with one
+            exception, Meta, which is not a processor. See section 9.
           </P>
           <ProvidersTable />
           <P>
@@ -263,6 +263,13 @@ export default function PrivacyPolicyPage() {
                 <strong>Stripe, Twilio, Vercel</strong> — certified under the UK
                 Extension to the EU-U.S. Data Privacy Framework, backed by the
                 UK International Data Transfer Addendum as a fallback.
+              </>,
+              <>
+                <strong>Meta Platforms</strong> — our counterparty is Meta
+                Platforms Ireland Limited; data is transferred onward to Meta
+                Platforms, Inc. in the United States under the UK Extension to
+                the EU-U.S. Data Privacy Framework, with the UK International
+                Data Transfer Addendum as a fallback. See section 9.
               </>,
               <>
                 <strong>ZeroBounce</strong> — certified under the EU-U.S. Data
@@ -341,14 +348,150 @@ export default function PrivacyPolicyPage() {
           </P>
 
           {/* 9 */}
-          <Heading n="9">Cookies and similar technologies</Heading>
+          <Heading n="9">Cookies, advertising, and similar technologies</Heading>
           <P>
-            This service does not use cookies or similar technologies for
-            analytics, advertising, or tracking. Any strictly necessary
-            technical mechanism used to keep you signed in is exempt from cookie
-            consent requirements under UK PECR and does not require a cookie
-            banner.
+            We advertise on Facebook and Instagram. To measure whether those
+            adverts work, this website uses the <strong>Meta Pixel</strong> — a
+            small piece of code provided by Meta — together with Meta&apos;s{" "}
+            <strong>Conversions API</strong>, which sends the same measurement
+            information to Meta from our server rather than from your browser.
           </P>
+          <P>
+            The pixel is loaded on our public pages only. It is{" "}
+            <strong>not</strong> loaded inside the subscriber dashboard or the
+            admin area, so nothing you do while signed in to your account is
+            measured for advertising purposes.
+          </P>
+
+          <SubHeading>9.1 What is stored on your device</SubHeading>
+          <List
+            items={[
+              <>
+                <strong>_fbp</strong> — a randomly generated browser identifier
+                set by the Meta Pixel. It contains no name, email address or
+                phone number. Expires after 90 days.
+              </>,
+              <>
+                <strong>_fbc</strong> — set only if you arrived by clicking one
+                of our Facebook or Instagram adverts. It stores the click
+                identifier that Meta added to the link, so that an enquiry made
+                later in the same browser can be connected back to that advert.
+                Expires after 90 days.
+              </>,
+              <>
+                A cookie used to keep you signed in to your account. This one is
+                strictly necessary to operate the service and is exempt from
+                consent requirements under UK PECR.
+              </>,
+            ]}
+          />
+
+          <SubHeading>9.2 What is sent to Meta</SubHeading>
+          <P>
+            When you submit an enquiry form we send Meta a
+            &quot;Lead&quot; event, and when a subscription is paid for we send
+            a &quot;Purchase&quot; event including the amount paid. Alongside
+            each event we send matching information, so that Meta can work out
+            whether the person who converted is the person who saw the advert:
+          </P>
+          <List
+            items={[
+              <>
+                Your email address, phone number, first name and last name —
+                each one{" "}
+                <strong>
+                  irreversibly hashed using SHA-256 before it leaves our server
+                </strong>
+                . Meta receives only the hashes, never the plain values, and can
+                use them solely to look for a match against the equivalent hash
+                of an existing Meta account.
+              </>,
+              <>
+                The <strong>_fbp</strong> and <strong>_fbc</strong> values
+                described above, your IP address, and your browser&apos;s
+                user-agent string. These are not hashed.
+              </>,
+              <>
+                The page you were on, the time of the event, and — for a
+                purchase — the amount and the currency.
+              </>,
+            ]}
+          />
+          <P>
+            We do not send Meta the contents of your enquiry, your website
+            address, the number of properties you manage, or any landlord data.
+          </P>
+
+          <SubHeading>9.3 Meta&apos;s role, and where the data goes</SubHeading>
+          <P>
+            Meta is <strong>not</strong> a processor for this purpose. For the
+            collection and transmission of this information we and Meta act as{" "}
+            <strong>joint controllers</strong>, and Meta then acts as an{" "}
+            <strong>independent controller</strong> in respect of its own
+            subsequent use of that data, including improving how it targets
+            adverts generally. Meta&apos;s handling of it is governed by the{" "}
+            <a
+              href="https://www.facebook.com/privacy/policy/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ textDecoration: "underline" }}
+            >
+              Meta Privacy Policy
+            </a>
+            , not by this one. Our arrangement with Meta is the Meta Business
+            Tools Terms and the associated Controller Addendum. Details of the
+            international transfer are in section 7.
+          </P>
+
+          <SubHeading>9.4 Our lawful basis, and how to stop it</SubHeading>
+          <P>
+            We rely on <strong>legitimate interests</strong> — measuring the
+            effectiveness of our own advertising — as the lawful basis for this
+            processing. We do not currently ask for your consent before the
+            pixel loads, and we would rather tell you that plainly than imply
+            otherwise. You can stop it at any time:
+          </P>
+          <List
+            items={[
+              <>
+                Block third-party tracking in your browser, or use any standard
+                content blocker — the Meta Pixel is blocked by all of the
+                common ones.
+              </>,
+              <>
+                Clear the <strong>_fbp</strong> and <strong>_fbc</strong>{" "}
+                cookies for this site in your browser settings.
+              </>,
+              <>
+                Change what Meta does with off-Facebook activity in your{" "}
+                <a
+                  href="https://accountscenter.facebook.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ textDecoration: "underline" }}
+                >
+                  Meta Accounts Centre
+                </a>{" "}
+                under &quot;Your information and permissions&quot;.
+              </>,
+              <>
+                Email us at the address in section 14 and object to this
+                processing. We will stop sending your data to Meta.
+              </>,
+            ]}
+          />
+          <InternalNote>
+            This section is accurate disclosure, not a consent mechanism, and
+            the distinction is deliberate rather than accidental. UK PECR
+            regulation 6 requires prior consent before storing or accessing
+            information on a user&apos;s device for non-essential purposes, and
+            _fbp/_fbc are non-essential. Telling people clearly is a necessary
+            condition, not a sufficient one — a fully compliant setup needs an
+            opt-in banner that gates the pixel before it loads. The code is
+            written so that gate is a one-line change: see
+            src/lib/meta/consent.ts, which every entry point already calls.
+            Raise this at solicitor review.
+          </InternalNote>
 
           {/* 10 */}
           <Heading n="10">Your rights</Heading>
@@ -496,6 +639,11 @@ function InternalNote({ children }: { children: React.ReactNode }) {
 // ── Section 6 providers table ───────────────────────────────────────────────
 const PROVIDERS: { provider: string; purpose: string }[] = [
   { provider: "Stripe", purpose: "Payment processing and subscription billing" },
+  {
+    provider: "Meta Platforms Ireland",
+    purpose:
+      "Measuring the effectiveness of our Facebook and Instagram advertising. NOT a processor \u2014 Meta acts as a joint controller with us for the collection of this data and as an independent controller for its own subsequent use of it, including improving how it targets adverts generally. See section 9.",
+  },
   {
     provider: "Resend",
     purpose:

@@ -32,6 +32,10 @@ import {
   resolveCreditAllocation,
 } from "@/lib/allocationCredit";
 import type { LeadType } from "@/lib/types";
+import { APP_URL } from "@/lib/env";
+import { buildMetaUserData } from "@/lib/meta/userData";
+import { buildPurchaseEvent } from "@/lib/meta/events";
+import { logMetaResult, sendMetaConversion } from "@/lib/meta/capi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,6 +69,86 @@ async function pushMondayStatus(
     logMondayPush(customerId, reason, push);
   } catch (err) {
     console.error("[monday-status] push threw", { reason, err });
+  }
+}
+
+/**
+ * Should a RENEWAL invoice be reported to Meta as a Purchase?
+ *
+ * No. A renewal is not a conversion an advert can be credited with: reporting
+ * every one would file roughly twelve Purchases per customer per year, almost
+ * all of them far outside any attribution window, inflating the Events Manager
+ * count against the real new-customer count and handing the optimiser a target
+ * it cannot influence. `billing_reason === "subscription_create"` is the exact
+ * test for a first paid invoice, needs no row state, and correctly fires again
+ * if a churned customer re-subscribes (a new Stripe subscription).
+ *
+ * Flip to true only if you deliberately want full-LTV reporting and accept
+ * that the ROAS column then mixes acquisition with recurring revenue.
+ */
+const PURCHASE_ON_RENEWALS = false;
+
+/**
+ * Send the Meta Purchase conversion. Swallows everything.
+ *
+ * ⚠️ THE TRY/CATCH IS LOAD-BEARING, for the reason pushMondayStatus gives just
+ * above: this handler DELETES its `stripe_events` idempotency claim on any
+ * throw so Stripe retries — so an exception escaping a Meta failure would make
+ * Stripe redeliver an invoice that has ALREADY been credited (CLAUDE.md §23.6).
+ * sendMetaConversion() already promises never to reject; this is the second
+ * stop, and neither should be removed on the grounds that the other exists.
+ *
+ * Deliberately does its own SELECT for the contact details: both invoice.paid
+ * branches read only the allocation columns, and widening those selects would
+ * put this feature's failure modes inside code whose failures are not
+ * contained the same way.
+ */
+async function pushMetaPurchase(
+  admin: ReturnType<typeof createAdminClient>,
+  customerId: string,
+  invoice: Stripe.Invoice,
+  leadType: LeadType
+): Promise<void> {
+  try {
+    if (!PURCHASE_ON_RENEWALS && invoice.billing_reason !== "subscription_create") {
+      return;
+    }
+    // A £0 invoice is a 100%-off coupon or a trial. Reporting it would teach
+    // the optimiser that a zero-value conversion is a win. (The existing
+    // post-call 10% coupon yields 13500 -> £135, which is the real revenue and
+    // is correct by construction.)
+    if (!invoice.amount_paid || invoice.amount_paid <= 0) return;
+
+    const { data: customer } = await admin
+      .from("customers")
+      .select("email, phone, contact_name, business_name")
+      .eq("id", customerId)
+      .maybeSingle();
+    if (!customer) return;
+
+    const event = buildPurchaseEvent({
+      invoiceId: invoice.id,
+      amountPaidPence: invoice.amount_paid,
+      currency: invoice.currency,
+      contentName: leadType,
+      sourceUrl: `${APP_URL}/dashboard`,
+      eventTime: invoice.status_transitions?.paid_at ?? invoice.created ?? undefined,
+      userData: buildMetaUserData({
+        email: customer.email,
+        phone: customer.phone,
+        // ⚠️ contact_name FIRST. The enquiry route writes the person's name
+        // into BOTH contact_name and business_name (api/enquiry/route.ts), so
+        // business_name is frequently a person and only sometimes a company.
+        fullName: customer.contact_name ?? customer.business_name,
+        // No fbp/fbc/IP/UA — this is a server event with no browser session
+        // behind it. Meta still matches on the hashed email and phone, but
+        // attribution to a specific ad click depends on the person being
+        // inside the click window. See the note on the call sites.
+      }),
+    });
+    logMetaResult(`invoice.paid/${leadType}`, event, await sendMetaConversion(event));
+  } catch (err) {
+    console.error("[meta-capi] purchase push threw", { customerId, err });
   }
 }
 
@@ -1003,6 +1087,11 @@ export async function POST(request: NextRequest) {
               "guaranteed_rent",
               "invoice.paid/gr"
             );
+
+            // Meta Purchase, last of all — after every state write, so an
+            // outbound HTTP call can never sit between the credit and the
+            // status write. First paid invoice only; see pushMetaPurchase.
+            await pushMetaPurchase(admin, customer.id, invoice, "guaranteed_rent");
             break;
           }
 
@@ -1290,6 +1379,19 @@ export async function POST(request: NextRequest) {
             "management",
             "invoice.paid/management"
           );
+
+          // Meta Purchase, last of all — see the note on the GR branch.
+          //
+          // ⚠️ Worth knowing before anyone reads the ROAS column: this carries
+          // hashed email/phone/name but no fbp/fbc/IP/UA, because the real
+          // funnel is ad -> enquiry -> Calendly call -> admin invite -> a
+          // Stripe link opened from an EMAIL, often days later on another
+          // device. A customer who enquires today and pays after a sales call
+          // three weeks from now will show as a Purchase with no ad
+          // attribution. That is a property of the funnel, not a fault here.
+          // The fix, if it ever matters, is storing _fbp/_fbc on the customer
+          // row at enquiry time and replaying them here.
+          await pushMetaPurchase(admin, customer.id, invoice, "management");
         }
         break;
       }

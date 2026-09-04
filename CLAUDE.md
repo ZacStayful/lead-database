@@ -8737,3 +8737,250 @@ that the bank declined it, while the row records `stolen_card`**), then replay o
 ships — while code arriving first would fail the claim insert on every decline and, under the
 claim-then-send rule, send **no email at all**. Nothing here touches a balance, counter, pacing
 or capacity column, so a lagging migration cannot affect lead allocation.
+
+---
+
+## 45. Measuring the adverts *(no migration)*
+
+Facebook ads drive traffic to `leads.stayful.co.uk` and **nothing measured what
+converted**. There was no tracking of any kind in the repo — no pixel, no GA, no
+`next/script`, no analytics dependency — and in the ad account the pixel
+(`StayfulFBPixel`) had not fired since April 2026 and had **never** received a
+server-side event. All six custom conversions were 2024 URL rules pointing at
+the retired Airbnb Mastery Academy funnel on `www.stayful.co.uk`; nothing
+anywhere referenced this product.
+
+Two transports, one dataset. The browser reports `PageView` and `Lead`; the
+server reports `Lead` (deduplicated against the browser's) and `Purchase`.
+
+`src/lib/meta/` · `src/components/MetaPixel.tsx` · hooks in
+`api/enquiry/route.ts` and the `invoice.paid` branches of the Stripe webhook.
+
+### 45.1 — The server half is the RELIABLE one, not a backup
+
+Two things specific to this funnel make a browser-only pixel under-report badly,
+and neither is a general "ad blockers exist" argument:
+
+- **There is no thank-you page.** `enquiry/page.tsx` fires
+  `window.location.href = CALENDLY_URL` in the same tick as the successful POST.
+  A same-tick hard navigation to another origin cancels the beacon, and `fbq`
+  offers no completion callback — so the browser event is lost a good part of
+  the time. It is also why a **URL-rule custom conversion can never fire here**
+  and why the six stale ones in the account would report zero forever.
+- Roughly a third of visitors block `fbevents.js` outright.
+
+So the browser `Lead` is close to pure redundancy: everything it would add to
+match quality — `_fbp`, `_fbc`, IP, user-agent — the server reads off the very
+same request. It is kept because during setup you want Pixel Helper to show
+something and Events Manager to show browser/server dedup collapsing into one
+row, and a half-lost browser event makes that verification confusing. The
+redirect is delayed **250 ms** so the beacon survives; `loading` is deliberately
+not reset, so the button stays disabled and a double-click cannot produce two
+Leads with two ids.
+
+### 45.2 — Inert until configured, and that is asserted
+
+With `NEXT_PUBLIC_META_PIXEL_ID` or `META_CAPI_ACCESS_TOKEN` unset: no script is
+injected, no cookie is written and `fetch` is never called. The `sms.ts` "no
+credentials, no-op" pattern. `meta.test.ts` asserts the fetch stub is **never
+called** when unconfigured — that test is what proves merging changed nothing in
+production until Vercel was configured.
+
+⚠️ **`NEXT_PUBLIC_*` is baked in at BUILD time.** Setting it in Vercel without a
+redeploy does nothing. The same trap §40 records for `ANTHROPIC_API_KEY`.
+
+### 45.3 — Four things that fail SILENTLY
+
+Every one of these produces no error, no warning and no rejected request — just
+a number that is quietly wrong. They are the whole reason this section exists.
+
+| Trap | What happens |
+|---|---|
+| `eventId` instead of **`eventID`** (capital D) in `fbq`'s 4th argument | Silently ignored. **Two counted Leads per submission**, both looking legitimate. |
+| Hashing `fbp` / `fbc` / `client_ip_address` / `client_user_agent` | These four go to Meta **in the clear**. Hashing one is a permanent non-match. `meta.test.ts` asserts the exact input strings survive. |
+| `event_time` in milliseconds | `Date.now()` is ms; CAPI wants **seconds**. Reads as roughly the year 57,000 and is rejected in the response **body**, not the status code — which is why `capi.ts` logs `messages` rather than just `res.status`. |
+| Hashing an unvalidated email or a junk name | A hash of `asdf` or `natalyanaq@gmail.com` matches nobody, for ever, and drags the dataset's Event Match Quality down. Omitting the field is strictly better, so `EMAIL_RE` and `isJunkName` (§36.3) gate them. |
+
+### 45.4 — Phone normalisation is `normaliseUkMobile`, not a third rule
+
+`normalisePhoneForMeta` is built on `normaliseUkMobile` (§36.2) deliberately: it
+carries the finding that 89 of 193 live management leads store the number as
+`+44` followed by a **full national** number, which a naive implementation turns
+into `007304208011` and loses. That is 46% of the book's phone matches, silently.
+
+Its failure branches need different treatment here, because it is a strict
+UK-**mobile** gate and Meta has no such requirement — the number only has to be
+the one on the person's Facebook account. `foreign` is a fact, not an error;
+`not_mobile` (a UK landline) is perfectly matchable and falls back permissively;
+only `missing` and `placeholder` are dropped.
+
+`ln` is the **last token**, never everything after the first — Meta compares it
+to the profile's `last_name`, so "jane smith" would never match "smith".
+
+### 45.5 — `usePathname`, never `useSearchParams`
+
+In Next 14.2 a client component calling `useSearchParams()` outside `<Suspense>`
+is a hard `next build` failure, and wrapping this component — which lives in the
+**root layout** — in Suspense de-opts *every* page under it to client-side
+rendering, including the 2,500-line static marketing page. The build output is
+the check: `/`, `/enquiry`, `/guaranteed-rent` and `/privacy-policy` must stay
+`○ (Static)`.
+
+The only thing lost is a `PageView` when just the query string changes, which is
+not a pageview worth counting — and `fbq` reads `document.location` itself, so
+the full URL still reaches Meta.
+
+The first `PageView` is fired by the inline snippet, so the route-change effect
+skips its own first run via a ref. Verified in Chromium across all four paths
+(initial load, client-side nav, leaving to `/dashboard` and returning, and
+browser Back): **exactly one PageView per navigation, no double-count on
+remount.**
+
+### 45.6 — `_fbc` is minted from `?fbclid=` by OUR bundle
+
+⚠️ **This is the point of the block, and it looks redundant until you see why.**
+An ad blocker blocks the request to `connect.facebook.net` — it does not block
+our own code. So when the pixel is dead, `MetaPixel.tsx` still writes
+`_fbc=fb.1.<ms>.<fbclid>` itself, and the enquiry route reads it off the request
+cookies. Without it, exactly the conversions the Conversions API exists to
+recover would land with **no click attribution at all**.
+
+Only when `_fbc` is absent — when the real pixel is alive it owns that cookie,
+and racing it gives one visitor two different values. The timestamp is
+milliseconds. `_fbp` is deliberately **not** minted (`MINT_FBP = false`): it is a
+random browser id no Meta system saw being set, so it adds almost nothing while
+being an advertising cookie we write ourselves.
+
+**Why the cookie and not the URL:** the real journey is `/?fbclid=…` → read the
+landing page → click through to `/enquiry`, where the param is long gone. The
+cookie persists 90 days. Do not try to read `fbclid` on the enquiry page.
+
+### 45.7 — Purchase, and what it cannot tell you
+
+Server-only, at the end of **both** `invoice.paid` branches, after every state
+write. First paid invoice only (`billing_reason === "subscription_create"`);
+renewals would file ~12 Purchases per customer per year, almost all outside any
+attribution window, giving the optimiser a target it cannot influence.
+`PURCHASE_ON_RENEWALS` is the one-word switch. Zero-value invoices are skipped
+so a 100%-off coupon never teaches the optimiser that £0 is a win.
+
+⚠️ **`pushMetaPurchase` must never throw, and the try/catch is the second stop
+rather than decoration.** This handler deletes its `stripe_events` claim on any
+throw so Stripe retries — so an exception escaping a Meta failure would
+redeliver an invoice that has **already been credited** (§23.6).
+`sendMetaConversion`'s type signature promises it never rejects; both layers stay.
+
+Double-counting is stopped twice and **neither layer is redundant**: the
+`stripe_events` claim covers a redelivery arriving more than 48 hours later,
+which is outside Meta's dedup window; `event_id = stripe_invoice_<id>` covers
+everything inside it.
+
+It reads its **own** contact details rather than widening the branches' selects,
+which read only allocation columns. ⚠️ `contact_name` first, `business_name`
+only as a fallback — `api/enquiry/route.ts` writes the person's name into both,
+so `business_name` is frequently a person and only sometimes a company.
+
+**No browser counterpart, so nothing to deduplicate against.** The success URL
+is `/dashboard?checkout=success`, behind middleware and inside the pixel's
+exclusion. That is the right shape anyway: the real funnel is ad → enquiry →
+Calendly call → admin invite → a Stripe link opened from an **email**, often days
+later on another device.
+
+⚠️ **Say this before anyone reads the ROAS column.** Purchase carries hashed
+email/phone/name but no `fbp`/`fbc`/IP/UA, so attribution to a specific click
+depends on the person still being inside the 7-day window. A customer who
+enquires today and pays after a sales call three weeks later shows as an
+**unattributed** Purchase. That is a property of the funnel, not a fault in the
+code. The fix, if it ever matters, is two `text` columns on `customers` written
+from the cookies the enquiry route already reads, replayed here — one migration,
+about six lines, and not worth it until the sales cycle is known to be short.
+
+### 45.8 — The pixel does not load on `/dashboard` or `/admin`
+
+Those are paying customers and staff, not ad traffic. Counting them would
+pollute the behaviour the optimiser learns from, and would track people's use of
+a product they have already bought — which is not what the policy says the pixel
+is for. `isTrackedPath` uses exact-or-followed-by-slash matching, never a bare
+`startsWith`, which would also exclude a hypothetical `/dashboards`.
+
+Confirmed in Chromium: loading `/dashboard` makes **zero** requests to Facebook
+and leaves `window.fbq` undefined.
+
+### 45.9 — No barrel in `src/lib/meta/`
+
+`consent.ts` and `paths.ts` are imported by a client component; `hash.ts` and
+`capi.ts` are server-only. An `index.ts` re-exporting all four would drag
+`node:crypto` into the client bundle through the one import. Import by exact
+path. `consent.ts` carries the warning.
+
+### 45.10 — The privacy policy, and what a rewrite does NOT buy
+
+Section 9 previously stated in writing that the service used no cookies for
+analytics, advertising or tracking. Shipping the pixel made that false, so it is
+rewritten: the pixel and the Conversions API, `_fbp`/`_fbc` named with
+lifetimes, what is sent (hashed email/phone/name; unhashed fbp/fbc/IP/UA) and
+what is not (enquiry contents, website, property count, landlord data), Meta as
+**joint then independent controller — not a processor**, the US transfer, and
+four opt-outs.
+
+⚠️ **The `robots: { index: false }` was removed and a footer link added, and
+that is part of the change rather than tidying.** The policy was noindexed and
+linked from nowhere — its own header called it "deliberately undiscoverable". A
+disclosure nobody can reach discloses nothing, so the rewrite alone would have
+been a no-op.
+
+⚠️ **Section 6's preamble says providers "are not permitted to use it for their
+own purposes", which is FALSE of Meta.** The table row is qualified and the
+preamble now names the exception. Dropping Meta in unqualified is the obvious
+move and it turns that sentence into a misrepresentation.
+
+**Accurate disclosure is not consent, and the code says so.** UK PECR
+regulation 6 wants opt-in *before* non-essential cookies are written.
+`src/lib/meta/consent.ts` returns `true` today and is called by every entry
+point — the browser pixel, the `_fbc` mint and the server Lead — so adding a
+banner is a one-line change there rather than a hunt. An `InternalNote` in the
+policy records it for solicitor review. This was the owner's explicit decision
+after the trade-off was put to them.
+
+### Verification
+
+901 vitest cases (30 new), lint clean, `next build` passes. The hash is pinned
+against a **hardcoded** SHA-256 vector rather than a round-trip against our own
+function — getting it wrong is invisible in production, so it has to be checked
+against an outside answer. Also asserted: the no-op-when-unconfigured path never
+touching `fetch`; `sendMetaConversion` **resolving** rather than throwing on a
+network failure (the invariant the webhook's idempotency rests on); the token
+appearing in the request body and never in the URL or an error string; and
+`/dashboards` not being mistaken for `/dashboard`.
+
+Then driven in real Chromium against a production build: `_fbc` minted correctly
+from `?fbclid=` with the pixel script stubbed out, one `PageView` per navigation
+across four path shapes, and zero Facebook requests on `/dashboard`.
+
+**Not yet exercised against the live Meta API** — the standing §12 item. Before
+relying on it, set `META_TEST_EVENT_CODE` on a Preview deployment and confirm in
+Events Manager → Test Events that one enquiry produces **one** `Lead` row
+carrying both Browser and Server. Two rows means the `eventID` casing or the
+`event_id` in the POST body. Then repeat **with an ad blocker on**: Pixel Helper
+should show nothing while Test Events still shows the Lead, with `fbc` present.
+That single test is the entire justification for the server half.
+
+### Deployment order — code only, but the account work is not optional
+
+No migration. The code is inert until the env vars are set, so it can land at
+any time. What it needs on the Meta side, before spend is read as meaningful:
+domain verification for `stayful.co.uk` (DNS TXT; the root covers the
+subdomain), Aggregated Event Measurement with `Purchase` ranked #1 and `Lead` #2
+(⚠️ a **72-hour cool-down** on affected ad sets — do it before scaling, not
+mid-flight), and the conversion domain set on each ad set.
+
+⚠️ **Optimise on the standard `Lead` and `Purchase` events. Do not use the six
+existing custom conversions** — they are 2024 URL rules for the retired funnel,
+they cannot fire against a form that redirects off-site, and they will report
+zero for ever while sitting in the dropdown looking selectable. To split `Lead`
+by plan later, build it on the `content_name` parameter this already sends.
+
+⚠️ `META_TEST_EVENT_CODE` **must be unset in production.** Events carrying a
+test code are routed to the Test Events tool and are **not** used for delivery,
+optimisation or attribution — so leaving it set means the campaign optimises on
+nothing while Events Manager looks perfectly healthy.
