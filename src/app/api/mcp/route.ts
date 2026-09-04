@@ -10,42 +10,32 @@
  * AUTHENTICATION IS REQUIRED ON EVERY REQUEST, `initialize` and `tools/list`
  * included. Those are the calls that enumerate the tool surface, so leaving
  * them open would publish the whole interface to anybody who found the URL.
+ *
+ * ⚠️ THE ORIGIN GUARD AND THE NO-CORS POSTURE ARE GONE, deliberately. The
+ * paragraph above is why they were safe to remove: the objection they answered
+ * was that a cross-origin page could POST with the visitor's cookies attached,
+ * and this endpoint cannot read a cookie session at all. `src/lib/api/cors.ts`
+ * carries the full argument and the one rule that replaces them — never send
+ * `Access-Control-Allow-Credentials`. Browser-based OAuth clients need to read
+ * `WWW-Authenticate` to find our metadata, which a same-origin-only endpoint
+ * makes impossible.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { resolveCaller } from "@/lib/api/caller";
 import { STATUS_BY_CODE } from "@/lib/api/errors";
 import {
-  ASSUMED_PROTOCOL_VERSION,
   JSONRPC_INVALID_REQUEST,
   JSONRPC_PARSE_ERROR,
-  SUPPORTED_PROTOCOL_VERSIONS,
   dispatch,
+  protocolVersionForHeader,
   rpcError,
   type JsonRpcMessage,
 } from "@/lib/mcp/dispatch";
 import { clientIp, logApiRequest, resolveRequestId } from "@/lib/api/log";
-import { APP_URL } from "@/lib/env";
+import { withCors } from "@/lib/api/cors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/**
- * DNS-rebinding guard required by the transport spec: if an Origin header is
- * present and is not one we recognise, refuse with 403.
- *
- * Real MCP clients — n8n, Claude Desktop, Cursor, a script — are not browsers
- * and send no Origin at all, so this only ever fires on something that is
- * pretending to be one of them from a web page.
- */
-function originAllowed(request: NextRequest): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return true;
-  try {
-    return new URL(origin).origin === new URL(APP_URL).origin;
-  } catch {
-    return false;
-  }
-}
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
@@ -75,32 +65,12 @@ export async function POST(request: NextRequest) {
       userAgent,
     });
 
-  if (!originAllowed(request)) {
-    await log("origin_rejected", 403, "forbidden_origin", null, null);
-    return NextResponse.json(
-      rpcError(null, JSONRPC_INVALID_REQUEST, "Origin not allowed."),
-      { status: 403, headers: { "X-Request-Id": requestId } }
-    );
-  }
-
-  // An explicitly unsupported protocol version must be a 400 rather than a
-  // best-effort guess; a client that asked for something we cannot speak needs
-  // to know, not to receive plausible-looking nonsense.
-  const declared = request.headers.get("mcp-protocol-version");
-  if (
-    declared &&
-    !(SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(declared)
-  ) {
-    await log("bad_protocol_version", 400, "invalid_request", null, null);
-    return NextResponse.json(
-      rpcError(
-        null,
-        JSONRPC_INVALID_REQUEST,
-        `Unsupported MCP-Protocol-Version: ${declared}. Supported: ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")}.`
-      ),
-      { status: 400, headers: { "X-Request-Id": requestId } }
-    );
-  }
+  // An unknown protocol version is negotiated down rather than refused — see
+  // protocolVersionForHeader() for why the old 400 was a hazard, and why it
+  // being raised BEFORE authentication made it a worse one.
+  const protocolVersion = protocolVersionForHeader(
+    request.headers.get("mcp-protocol-version")
+  );
 
   const resolved = await resolveCaller(request, { allow: ["api_key"] });
   if (!resolved.ok) {
@@ -109,13 +79,13 @@ export async function POST(request: NextRequest) {
       rpcError(null, JSONRPC_INVALID_REQUEST, resolved.message),
       {
         status: STATUS_BY_CODE[resolved.code],
-        headers: {
+        headers: withCors({
           "X-Request-Id": requestId,
           "Cache-Control": "no-store, private",
           // Shaped so the OAuth phase can add a `resource_metadata` parameter
           // here without restructuring the response.
           "WWW-Authenticate": "Bearer",
-        },
+        }),
       }
     );
   }
@@ -128,7 +98,10 @@ export async function POST(request: NextRequest) {
     await log("parse_error", 400, "invalid_request", caller.keyId, caller.customerId);
     return NextResponse.json(rpcError(null, JSONRPC_PARSE_ERROR, "Invalid JSON."), {
       status: 400,
-      headers: { "X-Request-Id": requestId, "Cache-Control": "no-store, private" },
+      headers: withCors({
+        "X-Request-Id": requestId,
+        "Cache-Control": "no-store, private",
+      }),
     });
   }
 
@@ -137,7 +110,7 @@ export async function POST(request: NextRequest) {
     await log("invalid_request", 400, "invalid_request", caller.keyId, caller.customerId);
     return NextResponse.json(
       rpcError(null, JSONRPC_INVALID_REQUEST, "Expected a single JSON-RPC message."),
-      { status: 400, headers: { "X-Request-Id": requestId } }
+      { status: 400, headers: withCors({ "X-Request-Id": requestId }) }
     );
   }
 
@@ -147,17 +120,20 @@ export async function POST(request: NextRequest) {
     await log(outcome.operation, 202, null, caller.keyId, caller.customerId);
     return new NextResponse(null, {
       status: 202,
-      headers: { "X-Request-Id": requestId, "Cache-Control": "no-store, private" },
+      headers: withCors({
+        "X-Request-Id": requestId,
+        "Cache-Control": "no-store, private",
+      }),
     });
   }
 
   log(outcome.operation, 200, null, caller.keyId, caller.customerId);
   return NextResponse.json(outcome.body, {
-    headers: {
+    headers: withCors({
       "X-Request-Id": requestId,
       "Cache-Control": "no-store, private",
-      "MCP-Protocol-Version": declared ?? ASSUMED_PROTOCOL_VERSION,
-    },
+      "MCP-Protocol-Version": protocolVersion,
+    }),
   });
 }
 
@@ -165,10 +141,31 @@ export async function POST(request: NextRequest) {
  * 405 is the correct answer here, not an error: the spec says a server that
  * does not offer a server-initiated SSE stream at this endpoint should say so
  * this way, and a stateless read-only server has nothing to push.
+ *
+ * It carries the CORS headers and the same `WWW-Authenticate` challenge as the
+ * POST because SOME CLIENTS PROBE WITH A GET FIRST — the deprecated HTTP+SSE
+ * transport starts that way. A client that never gets as far as a POST would
+ * otherwise see nothing telling it that authentication exists or where the
+ * metadata lives.
  */
 export async function GET() {
   return NextResponse.json(
     rpcError(null, JSONRPC_INVALID_REQUEST, "This MCP server does not offer an SSE stream. Use POST."),
-    { status: 405, headers: { Allow: "POST" } }
+    {
+      status: 405,
+      headers: withCors({
+        Allow: "POST, OPTIONS",
+        "Cache-Control": "no-store, private",
+        "WWW-Authenticate": "Bearer",
+      }),
+    }
   );
+}
+
+/** CORS preflight. Browser-based OAuth clients send one before the first POST. */
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: withCors({ Allow: "POST, OPTIONS" }),
+  });
 }

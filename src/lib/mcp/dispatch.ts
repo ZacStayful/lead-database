@@ -65,7 +65,7 @@ export function rpcError(
  * latest and let the client decide whether it can continue — which is what the
  * lifecycle spec asks for, rather than refusing outright.
  */
-function negotiate(requested: unknown): string {
+export function negotiate(requested: unknown): string {
   if (
     typeof requested === "string" &&
     (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(requested)
@@ -73,6 +73,30 @@ function negotiate(requested: unknown): string {
     return requested;
   }
   return LATEST_PROTOCOL_VERSION;
+}
+
+/**
+ * Which protocol version to answer with, given the `MCP-Protocol-Version` header.
+ *
+ * ⚠️ THE ROUTE USED TO HARD-400 ANY HEADER OUTSIDE `SUPPORTED_PROTOCOL_VERSIONS`,
+ * and it did so BEFORE authenticating. That disagreed with `negotiate()` directly
+ * above, which has always fallen back rather than refused — and the strict one
+ * ran first, so the day a client starts sending a version newer than the newest
+ * we list, every request 400s before it is even authenticated and the symptom
+ * reads as an auth failure. That is the worst place for this to fail, because it
+ * is the last place anybody would look.
+ *
+ * So the header is now treated exactly as `initialize`'s parameter is: a version
+ * we know is echoed, anything else is answered with our latest and the client
+ * decides whether it can continue. The transport spec's "SHOULD return 400" is
+ * worth trading for a server that survives the next revision of the spec.
+ *
+ * A missing header still means the pre-negotiation default, which is what a
+ * client speaking the oldest version we support sends.
+ */
+export function protocolVersionForHeader(declared: string | null): string {
+  if (!declared) return ASSUMED_PROTOCOL_VERSION;
+  return negotiate(declared);
 }
 
 export async function dispatch(
@@ -151,7 +175,10 @@ export async function dispatch(
             content: [
               {
                 type: "text",
-                text: `This API key does not carry the ${tool.scope} scope, which ${tool.name} requires.`,
+                // Credential-neutral: an OAuth caller short a scope has never
+                // had an API key, and telling them to check one sends them
+                // looking in a place that does not exist for them.
+                text: `This connection does not carry the ${tool.scope} scope, which ${tool.name} requires.`,
               },
             ],
           }),
