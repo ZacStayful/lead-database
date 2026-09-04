@@ -15,6 +15,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { viewerScopedLead } from "@/lib/customerLeads";
+import { resolveOperatorNames } from "@/lib/referralIdentity";
 import {
   assignmentSendable,
   messagingActiveFor,
@@ -155,8 +156,9 @@ export async function POST(request: NextRequest) {
   const ctx = buildDraftContext({
     lead: scoped,
     customer: {
-      business_name: customer.business_name,
-      contact_name: customer.contact_name,
+      // §41/0131. Resolved so a draft introduces the operator under the same
+      // name the referral email did — see resolveOperatorNames.
+      ...resolveOperatorNames(customer),
       // §41. getCurrentCustomer() reads the row with select("*"), so this is
       // already loaded; omitting it here would silently drop the operator's own
       // introduction from every draft.

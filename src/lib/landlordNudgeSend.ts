@@ -23,6 +23,11 @@ import { buildNudgeCopy, renderNudgeBody, type NudgeLead } from "@/lib/landlordN
 import { mintReferralToken } from "@/lib/landlordReferralToken";
 import { isRetryableSendError } from "@/lib/landlordReferralSend";
 import {
+  REFERRAL_OPERATOR_COLUMNS,
+  resolveReferralOperator,
+  type ReferralIdentityRow,
+} from "@/lib/referralIdentity";
+import {
   DEFAULT_QUIET_END_HOUR,
   DEFAULT_QUIET_START_HOUR,
   withinSendingHours,
@@ -141,7 +146,7 @@ export async function sendOneNudge(
 
     const { data: customer } = await admin
       .from("customers")
-      .select("business_name, contact_name, email, phone, operator_intro")
+      .select(REFERRAL_OPERATOR_COLUMNS)
       .eq("id", row.customer_id)
       .maybeSingle();
     if (!customer) return "skipped";
@@ -158,7 +163,7 @@ export async function sendOneNudge(
 
     const copy = buildNudgeCopy({
       lead,
-      operator: customer as ReferralOperator,
+      operator: resolveReferralOperator(customer as ReferralIdentityRow),
       attempt,
     });
 

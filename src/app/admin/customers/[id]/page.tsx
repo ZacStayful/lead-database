@@ -112,6 +112,29 @@ export default async function AdminCustomerDetailPage({
           {customer.contact_name} · {customer.email}
           {customer.phone ? ` · ${customer.phone}` : ""}
         </p>
+        {/*
+          §41/0131. Shown only where the customer has actually overridden
+          something, and labelled as the landlord's view rather than the
+          account's — otherwise "the wrong number is on my introduction" is a
+          support call this page cannot answer. Silent when nothing is
+          overridden, which is every row until somebody sets one.
+        */}
+        {(customer.referral_contact_name ||
+          customer.referral_business_name ||
+          customer.referral_phone ||
+          customer.referral_email) && (
+          <p className="mt-1 text-sm text-amber-700">
+            Landlords see:{" "}
+            {[
+              customer.referral_contact_name,
+              customer.referral_business_name,
+              customer.referral_phone,
+              customer.referral_email,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        )}
         <p className="mt-1 text-sm text-muted-foreground">
           Plan: <span className="font-medium text-foreground">{customer.monthly_allocation} leads / month</span>
           {customer.website_url ? (

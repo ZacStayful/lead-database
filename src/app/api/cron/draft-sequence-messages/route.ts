@@ -49,6 +49,10 @@ import {
 } from "@/lib/messaging/sequences";
 import { nextStepNumber } from "@/lib/messaging/cadence";
 import { renderTemplate } from "@/lib/messaging/mergeFields";
+import {
+  resolveOperatorNames,
+  type ReferralIdentityRow,
+} from "@/lib/referralIdentity";
 import { normalisePhone } from "@/lib/messaging/whatsappIdentity";
 import { contactPlanSettings } from "@/lib/contact/contactPlan";
 
@@ -289,14 +293,20 @@ async function handle(request: NextRequest) {
 
     const { data: customerRow } = await admin
       .from("customers")
-      .select("business_name, contact_name, messaging_booking_link, operator_intro")
+      .select(
+        "business_name, contact_name, messaging_booking_link, operator_intro, " +
+          "referral_business_name, referral_contact_name"
+      )
       .eq("id", run.customer_id)
       .maybeSingle();
 
-    const operator = (customerRow ?? {}) as {
-      business_name?: string | null;
-      contact_name?: string | null;
-      messaging_booking_link?: string | null;
+    // §41/0131. Resolved, so an overnight draft names the operator the same way
+    // the referral email did — see resolveOperatorNames.
+    const operator = {
+      ...resolveOperatorNames((customerRow ?? {}) as ReferralIdentityRow),
+      messaging_booking_link:
+        (customerRow as { messaging_booking_link?: string | null } | null)
+          ?.messaging_booking_link ?? null,
     };
 
     // ⚠️ viewerScopedLead FIRST, and it matters more here than anywhere. On a

@@ -102,6 +102,18 @@ export default async function SettingsPage() {
         <OperatorIntroCard
           initial={customer.operator_intro ?? null}
           businessName={customer.business_name ?? null}
+          details={{
+            referral_contact_name: customer.referral_contact_name ?? "",
+            referral_business_name: customer.referral_business_name ?? "",
+            referral_phone: customer.referral_phone ?? "",
+            referral_email: customer.referral_email ?? "",
+          }}
+          account={{
+            contact_name: customer.contact_name ?? null,
+            business_name: customer.business_name ?? null,
+            phone: customer.phone ?? null,
+            email: customer.email ?? null,
+          }}
         />
       )}
 

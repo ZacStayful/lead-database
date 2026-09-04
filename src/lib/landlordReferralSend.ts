@@ -17,6 +17,11 @@ import {
   type ReferralOperator,
 } from "@/lib/landlordReferral";
 import { mintReferralToken } from "@/lib/landlordReferralToken";
+import {
+  REFERRAL_OPERATOR_COLUMNS,
+  resolveReferralOperator,
+  type ReferralIdentityRow,
+} from "@/lib/referralIdentity";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -105,7 +110,7 @@ export async function sendLandlordReferral(
 
     const { data: customer } = await admin
       .from("customers")
-      .select("business_name, contact_name, email, phone, operator_intro")
+      .select(REFERRAL_OPERATOR_COLUMNS)
       .eq("id", customerId)
       .maybeSingle();
     if (!customer) return { sent: false, skipped: "no_customer" };
@@ -123,7 +128,7 @@ export async function sendLandlordReferral(
 
     const copy = buildReferralCopy({
       lead,
-      operator: customer as ReferralOperator,
+      operator: resolveReferralOperator(customer as ReferralIdentityRow),
       askQuestions,
     });
 
@@ -356,7 +361,7 @@ export async function retryOneReferral(
 
     const { data: customer } = await admin
       .from("customers")
-      .select("business_name, contact_name, email, phone, operator_intro")
+      .select(REFERRAL_OPERATOR_COLUMNS)
       .eq("id", row.customer_id)
       .maybeSingle();
     if (!customer) return "skipped";
@@ -369,7 +374,7 @@ export async function retryOneReferral(
 
     const copy = buildReferralCopy({
       lead: row.lead,
-      operator: customer as ReferralOperator,
+      operator: resolveReferralOperator(customer as ReferralIdentityRow),
       askQuestions,
     });
     const token = askQuestions ? mintReferralToken(row.lead.id) : null;

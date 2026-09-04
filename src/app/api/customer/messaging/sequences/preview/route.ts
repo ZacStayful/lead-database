@@ -21,6 +21,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { viewerScopedLead } from "@/lib/customerLeads";
+import { resolveOperatorNames } from "@/lib/referralIdentity";
 import {
   fieldCoverage,
   renderTemplate,
@@ -87,8 +88,9 @@ export async function POST(request: NextRequest) {
   }[]).filter((r) => r.lead && assignmentSendable(r));
 
   const operator = {
-    business_name: customer.business_name,
-    contact_name: customer.contact_name,
+    // §41/0131 — same names the referral email uses, so the reach line previews
+    // what would really send.
+    ...resolveOperatorNames(customer),
     messaging_booking_link: customer.messaging_booking_link,
   };
 

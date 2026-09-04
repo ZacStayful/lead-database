@@ -7872,6 +7872,121 @@ Supabase advisory.
 behaviour before it, and both switches ship false. Nothing here touches a
 balance, counter, pacing or capacity column.
 
+### 41.6 — The details in that email, editable by the customer *(0131)*
+
+The referral renders a details table — Who, Company, Phone, Email — straight off
+the account row (`landlordReferral.ts:148-152`), and `operatorLabel()` puts the
+company in the subject line and both intro sentences. §41.5's card let a customer
+edit exactly one thing in that email, the blurb. A customer whose company had been
+renamed, or who wanted enquiries arriving somewhere other than their login inbox,
+could change none of the rest.
+
+Four columns now sit beside `operator_intro`: `referral_contact_name`,
+`referral_business_name`, `referral_phone`, `referral_email`.
+
+#### ⚠️ OVERRIDES, NOT COPIES — which is the whole design
+
+Each is **nullable, and NULL means "use my account details"**. The obvious way to
+build this is to copy the four fields and let the customer edit the copies, which
+gives two sources of truth that drift the moment one is edited and the other is
+not. Nullable-with-fallback means a customer who has set nothing still has exactly
+ONE value; a difference exists only where somebody chose one on purpose, and
+`/admin/customers/[id]` prints a "Landlords see:" line whenever they have.
+
+It is also what makes the migration inert: all 44 live rows arrive null, so the
+email renders byte-identically the day it applies. That is asserted directly —
+`buildReferralCopy` through the resolver against `buildReferralCopy` on the raw
+row, compared as **rendered HTML**, not as a field-by-field guess.
+
+#### ⚠️ NONE OF IT REACHES THE ACCOUNT, and that is why it is safe
+
+The four account columns underneath are among the most load-bearing in the
+schema, which is what ruled out simply making them editable:
+
+- `email` is the **login** and the Stripe billing address. §43.3: move it without
+  Stripe and the next unmatched invoice sends `provisionPaidSubscriber` down its
+  `.eq("email", …)` fallback, which **creates a duplicate customer row and a
+  second auth user**. Changing a login stays an admin action, deliberately.
+- `business_name` / `contact_name` are Monday matcher **tier 3** — the only tier
+  that resolves two of eighteen live customers (`mondayStatus.ts:450-454`).
+- `phone` is where the operator's own SMS alerts go.
+
+`referral_email` is correspondingly **not unique and never normalised into a
+lookup**: two operators in one office may publish the same `enquiries@` inbox.
+
+#### One resolver, and the four selects that would otherwise drift
+
+`resolveReferralOperator()` returns the existing `ReferralOperator` shape, so
+`buildReferralCopy`, `operatorLabel` and the nudge's `operatorLine` are unchanged
+— they receive resolved values instead of raw ones. A second, override-aware path
+through the copy builder is how the subject line and the details table would
+eventually disagree about who the operator is.
+
+⚠️ **`REFERRAL_OPERATOR_COLUMNS` exists because the operator is selected FOUR
+times**: `landlordReferralSend` reads it on the send path **and again forty lines
+later on the retry path**, and `landlordNudgeSend` and the admin test route read
+it once each. Changing one and missing another means a *retried* referral silently
+reverts to the account details — invisible until a landlord is looking at the
+wrong phone number.
+
+#### It also moves the drafted WhatsApps
+
+`{{my_name}}` / `{{my_company}}` and the `OPERATOR:` line in the draft prompt are
+landlord-facing too, so they resolve through `resolveOperatorNames`. Left on the
+account columns, an operator who set a public company name would introduce
+themselves to the **same landlord** under one name by email and a different one by
+WhatsApp, which is worse than either name alone. Only the names: the drafter is
+never given a phone or an email.
+
+**Deliberately unchanged:** Stripe, the Monday matcher, admin tables, MRR, exports,
+the public API `/account`, and every transactional email to the customer.
+
+#### The preview is what makes the fallback legible
+
+An empty box meaning "fall back" is invisible in a form full of empty boxes, so
+each field is placeheld with the account value and
+`POST /api/customer/settings/referral-details/preview` renders the resolved rows
+live. It builds them through `buildReferralCopy` rather than reassembling them —
+a preview with its own idea of which rows appear would eventually disagree with
+the email. A route rather than a client render because `landlordReferral.ts` pulls
+`esc` from `emails.ts`, which constructs a Resend client.
+
+The card also says, in words, that changing these does **not** change the address
+they log in with or where invoices go — the one thing a customer cannot work out
+from the form and would otherwise assume.
+
+#### Verification
+
+All 123 migrations to a scratch Postgres 16 from empty (0002/0014/0065 skipped —
+`pg_cron` is unavailable locally), 0131 applied twice for idempotency. Eight CHECK
+assertions including **the floor of 1**: an empty string and a whitespace-only
+value are both refused, because `buildReferralCopy` pushes a row for any truthy
+value and `"Phone:"` with nothing beside it would go to a member of the public.
+Two customers sharing one `referral_email` confirmed allowed.
+
+23 unit cases, **mutation-checked**: swapping the `??` order so the account wins
+fails 2 tests, and treating whitespace as a real value fails 1. 1201 vitest cases
+green overall, lint clean, `next build` passes.
+
+Applied to production before the code. Post-apply: 4 columns, 4 CHECKs, **0
+customers with any override** — so the email is unchanged for all 44 — and 44
+customers, 471 leads, 449 assignments, 63 sent referrals and 1 operator_intro all
+untouched.
+
+⚠️ **0131 also drops four `lead_intro_*` columns and a `lead_intro_sends` table.**
+A parallel session shipped §41 while another was part-way through building the
+same feature under that name; the loser's migration reached production before the
+collision was noticed and its code never did. Re-verified empty immediately before
+the drop: 0 rows, 0 customers with any value, no `system_settings` row, nothing in
+`src/`. Left in place they were exactly the drift §11 warns about. **The lesson is
+§43's, one turn later: a free migration number is only free at the moment you
+look, and so is an unbuilt feature.**
+
+#### Deployment order — migration BEFORE code
+
+0131 first. The additive half is inert (all-null columns, no reader until the code
+ships); the drop half removes only objects nothing references.
+
 ---
 ## 42. The contact strategy, and a plan per lead *(0127)*
 

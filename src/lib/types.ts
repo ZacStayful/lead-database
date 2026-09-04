@@ -219,6 +219,25 @@ export interface Customer {
    * asked.
    */
   operator_intro_updated_at: string | null;
+  /**
+   * The rest of what a landlord sees in the §41 referral — the Who / Company /
+   * Phone / Email rows (0131).
+   *
+   * ⚠️ OVERRIDES, NOT COPIES. NULL means "use the account column", so a
+   * customer who has set nothing still has exactly one value and there is
+   * nothing to drift. Resolve them through `resolveReferralOperator`, never by
+   * reading either side directly.
+   *
+   * ⚠️ NONE OF THESE IS AN ACCOUNT FIELD. `referral_email` is not a login and
+   * not a billing address — it never reaches auth.users or Stripe, and it is
+   * deliberately not unique. `referral_phone` may be a landline; the operator's
+   * own SMS alerts still go to `phone`. Neither name is read by Monday
+   * matching, admin tables or MRR.
+   */
+  referral_contact_name: string | null;
+  referral_business_name: string | null;
+  referral_phone: string | null;
+  referral_email: string | null;
   // Last inactivity-nudge send, for same-day dedup (null = never nudged).
   last_nudge_sent_at: string | null;
   // Last Friday progress-report send, for same-week dedup (null = never sent).

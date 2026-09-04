@@ -33,6 +33,11 @@ import {
   type ReferralOperator,
 } from "@/lib/landlordReferral";
 import { mintReferralToken } from "@/lib/landlordReferralToken";
+import {
+  REFERRAL_OPERATOR_COLUMNS,
+  resolveReferralOperator,
+  type ReferralIdentityRow,
+} from "@/lib/referralIdentity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -106,19 +111,24 @@ export async function POST(request: NextRequest) {
 
   const { data: customer } = await admin
     .from("customers")
-    .select("business_name, contact_name, email, phone, operator_intro")
+    .select(REFERRAL_OPERATOR_COLUMNS)
     .eq("email", user?.email ?? "")
     .maybeSingle();
 
+  // Resolved, so the rehearsal shows the overrides the landlord would actually
+  // get rather than the admin's own account details (§41, 0131).
+  //
   // Falls back to a plainly-labelled stand-in when the admin has no customer
   // row of their own, so the rehearsal still runs.
-  const operator: ReferralOperator = (customer as ReferralOperator | null) ?? {
-    business_name: "Example Lettings (test)",
-    contact_name: "Test Operator",
-    email: to,
-    phone: "07700900000",
-    operator_intro: null,
-  };
+  const operator: ReferralOperator = customer
+    ? resolveReferralOperator(customer as ReferralIdentityRow)
+    : {
+        business_name: "Example Lettings (test)",
+        contact_name: "Test Operator",
+        email: to,
+        phone: "07700900000",
+        operator_intro: null,
+      };
 
   // askQuestions: true so the deck link is present — the half that most needs
   // rehearsing. The token is real; nothing is stamped to make it so.
