@@ -223,6 +223,19 @@ export function ApiAccessPanel({
           touch your subscription.
         </p>
 
+        {/* Somebody arriving here to mint a key should find out they may not
+            need one: Claude and ChatGPT connect by signing in. */}
+        <p className="rounded-md border-[0.5px] border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+          <strong className="text-foreground">Connecting Claude or ChatGPT?</strong>{" "}
+          You do not need a key — paste the MCP address into the assistant and
+          sign in.{" "}
+          <Link href="/dashboard/api" className="text-brand hover:underline">
+            How to connect an assistant
+          </Link>
+          . A key is for things that run unattended, with no browser to sign in
+          with.
+        </p>
+
         {/* Connections — the two front doors, side by side. */}
         <div className="space-y-2">
           <h3 className="text-sm font-medium">Connections</h3>

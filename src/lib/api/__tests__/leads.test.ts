@@ -16,6 +16,8 @@ const caller: Caller = {
   via: "api_key",
   scopes: ["profile:read", "leads:read"],
   keyId: "key-1",
+  tokenId: null,
+  grantId: null,
   minuteCount: 1,
 };
 

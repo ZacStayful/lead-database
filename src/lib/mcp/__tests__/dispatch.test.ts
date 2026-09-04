@@ -24,6 +24,8 @@ function callerWith(scopes: string[]): Caller {
     via: "api_key",
     scopes: scopes as never,
     keyId: "key-1",
+    tokenId: null,
+    grantId: null,
     minuteCount: 1,
   };
 }

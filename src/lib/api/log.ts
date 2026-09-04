@@ -18,7 +18,7 @@ import type { NextRequest } from "next/server";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-export type ApiSurface = "rest" | "mcp";
+export type ApiSurface = "rest" | "mcp" | "oauth";
 
 export interface LogEntry {
   requestId: string;
@@ -27,6 +27,12 @@ export interface LogEntry {
   statusCode: number;
   errorCode?: string | null;
   keyId?: string | null;
+  /**
+   * Set for an OAuth-authenticated request, where keyId is null.
+   * api_request_log.key_id carries an FK to customer_api_keys, so a token id
+   * cannot go in it — two columns rather than one field meaning either.
+   */
+  tokenId?: string | null;
   customerId?: string | null;
   durationMs?: number | null;
   ip?: string | null;
@@ -64,6 +70,7 @@ export async function logApiRequest(
     const { error } = await admin.from("api_request_log").insert({
       request_id: entry.requestId,
       key_id: entry.keyId ?? null,
+      token_id: entry.tokenId ?? null,
       customer_id: entry.customerId ?? null,
       surface: entry.surface,
       operation: entry.operation.slice(0, 200),
