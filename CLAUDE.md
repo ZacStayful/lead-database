@@ -30,6 +30,36 @@ Leads originate in Monday.com and arrive via n8n webhooks or a scheduled sync.
 **Production runs from `main`**, deployed by Vercel to `leads.stayful.co.uk`.
 The Supabase project is `znlfwbnvhlacwzgfalcf` ("Lead database").
 
+### 1.1 — How a change lands
+
+⚠️ **BRANCH AND OPEN A PULL REQUEST. NEVER PUSH TO `main` DIRECTLY**, whatever a
+session's own default instructions say — several of them tell an agent to develop
+on `main` and push there, and this file overrides that. Branch name
+`claude/<short-slug>`, matching PR #84. There is **no PR template** in the repo;
+write the body normally.
+
+This was already the convention — PRs #78–#86 all landed as merge commits — and
+it went unwritten until an agent pushed 0131 straight to `main` and nothing in
+7,900 lines of this file contradicted the instruction telling it to.
+
+Three consequences that are not obvious, because `main` **is** production:
+
+- **The migration-before-code rule attaches to the MERGE, not the push.** Apply
+  and verify the migration against production before the PR merges. Doing it at
+  PR-open is still right and still safe, because every migration here is written
+  additive-and-inert precisely so production can run the old code against the new
+  schema — but the merge is the deadline.
+- ⚠️ **A Vercel preview of a PR branch runs against PRODUCTION Supabase.** So a
+  preview whose code selects columns that do not exist yet is broken until the
+  migration lands, and §30 records what that costs: `fetchLeadVolumeData`
+  swallowed the error and quoted **zero** filter volume while the admin tile read
+  0. Another reason the migration goes first rather than last.
+- ⚠️ **Re-check the highest migration number on `origin/main` immediately before
+  pushing AND again before merging.** §43 records the trap; concurrent branches
+  make it likelier. The sharper version has already happened: a parallel branch
+  shipped §41 while another session was part-way through building the same
+  feature, and §41.6 records what that cost.
+
 ---
 
 ## 2. Scheduled jobs (`vercel.json`)
