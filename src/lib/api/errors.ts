@@ -12,6 +12,14 @@ export type ApiErrorCode =
   | "invalid_api_key"
   | "revoked_api_key"
   | "expired_api_key"
+  // The OAuth trio. NOT a reuse of the api_key codes above, deliberately: their
+  // messages say "API key", and an OAuth caller has never had one. Telling
+  // somebody to check a credential that does not exist for them sends them
+  // looking in the wrong place — and these are also what let the WWW-Authenticate
+  // builder pick `error="invalid_token"`, which is the parameter a client acts on.
+  | "invalid_token"
+  | "revoked_token"
+  | "expired_token"
   | "insufficient_scope"
   | "not_found"
   | "invalid_request"
@@ -24,6 +32,9 @@ export const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   invalid_api_key: 401,
   revoked_api_key: 401,
   expired_api_key: 401,
+  invalid_token: 401,
+  revoked_token: 401,
+  expired_token: 401,
   insufficient_scope: 403,
   not_found: 404,
   invalid_request: 400,

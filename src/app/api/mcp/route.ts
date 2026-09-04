@@ -33,6 +33,7 @@ import {
 } from "@/lib/mcp/dispatch";
 import { clientIp, logApiRequest, resolveRequestId } from "@/lib/api/log";
 import { withCors } from "@/lib/api/cors";
+import { bearerChallenge } from "@/lib/oauth/challenge";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +51,8 @@ export async function POST(request: NextRequest) {
     statusCode: number,
     errorCode: string | null,
     keyId: string | null,
-    customerId: string | null
+    customerId: string | null,
+    tokenId: string | null = null
   ) =>
     logApiRequest({
       requestId,
@@ -59,6 +61,7 @@ export async function POST(request: NextRequest) {
       statusCode,
       errorCode,
       keyId,
+      tokenId,
       customerId,
       durationMs: Date.now() - startedAt,
       ip,
@@ -72,7 +75,7 @@ export async function POST(request: NextRequest) {
     request.headers.get("mcp-protocol-version")
   );
 
-  const resolved = await resolveCaller(request, { allow: ["api_key"] });
+  const resolved = await resolveCaller(request, { allow: ["api_key", "oauth"] });
   if (!resolved.ok) {
     await log("unauthenticated", STATUS_BY_CODE[resolved.code], resolved.code, null, null);
     return NextResponse.json(
@@ -82,9 +85,11 @@ export async function POST(request: NextRequest) {
         headers: withCors({
           "X-Request-Id": requestId,
           "Cache-Control": "no-store, private",
-          // Shaped so the OAuth phase can add a `resource_metadata` parameter
-          // here without restructuring the response.
-          "WWW-Authenticate": "Bearer",
+          // Points the client at the protected-resource metadata, which is how
+          // it discovers that OAuth exists and where to register. A bare
+          // "Bearer" — which is what this said until OAuth shipped — tells a
+          // client authentication is needed and nothing about how to get it.
+          "WWW-Authenticate": bearerChallenge(resolved.code),
         }),
       }
     );
@@ -95,7 +100,7 @@ export async function POST(request: NextRequest) {
   try {
     message = (await request.json()) as JsonRpcMessage;
   } catch {
-    await log("parse_error", 400, "invalid_request", caller.keyId, caller.customerId);
+    await log("parse_error", 400, "invalid_request", caller.keyId, caller.customerId, caller.tokenId);
     return NextResponse.json(rpcError(null, JSONRPC_PARSE_ERROR, "Invalid JSON."), {
       status: 400,
       headers: withCors({
@@ -107,7 +112,7 @@ export async function POST(request: NextRequest) {
 
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     // Batching was removed from the protocol, so an array is not a valid body.
-    await log("invalid_request", 400, "invalid_request", caller.keyId, caller.customerId);
+    await log("invalid_request", 400, "invalid_request", caller.keyId, caller.customerId, caller.tokenId);
     return NextResponse.json(
       rpcError(null, JSONRPC_INVALID_REQUEST, "Expected a single JSON-RPC message."),
       { status: 400, headers: withCors({ "X-Request-Id": requestId }) }
@@ -117,7 +122,7 @@ export async function POST(request: NextRequest) {
   const outcome = await dispatch(message, caller);
 
   if (outcome.kind === "accepted") {
-    await log(outcome.operation, 202, null, caller.keyId, caller.customerId);
+    await log(outcome.operation, 202, null, caller.keyId, caller.customerId, caller.tokenId);
     return new NextResponse(null, {
       status: 202,
       headers: withCors({
@@ -127,7 +132,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  log(outcome.operation, 200, null, caller.keyId, caller.customerId);
+  log(outcome.operation, 200, null, caller.keyId, caller.customerId, caller.tokenId);
   return NextResponse.json(outcome.body, {
     headers: withCors({
       "X-Request-Id": requestId,
@@ -156,7 +161,7 @@ export async function GET() {
       headers: withCors({
         Allow: "POST, OPTIONS",
         "Cache-Control": "no-store, private",
-        "WWW-Authenticate": "Bearer",
+        "WWW-Authenticate": bearerChallenge(null),
       }),
     }
   );

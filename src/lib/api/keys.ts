@@ -43,8 +43,12 @@ const ALPHABET =
  * the bias is worth nothing to an attacker, but discarding the 8 values at the
  * top of the range (248 = 62 x 4) costs one extra draw in thirty and removes
  * the question entirely.
+ *
+ * Exported so `src/lib/oauth/tokens.ts` mints OAuth credentials from the SAME
+ * generator rather than a second one. Two generators is two places for the
+ * alphabet or the sampling to drift, and the drift would be invisible.
  */
-function base62(length: number): string {
+export function base62(length: number): string {
   let out = "";
   while (out.length < length) {
     const bytes = randomBytes(length - out.length + 8);
@@ -59,6 +63,21 @@ function base62(length: number): string {
 /** sha256 hex of a raw key. The only thing ever stored alongside the prefix. */
 export function hashApiKey(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
+}
+
+/**
+ * Constant-time comparison of a raw credential against a stored sha256 hex.
+ *
+ * The body of `keysMatch`, lifted out so OAuth tokens are compared by the same
+ * code rather than a copy of it. `timingSafeEqual` throws on a length mismatch,
+ * so lengths are compared first — that comparison is not constant time, but the
+ * length of a sha256 digest is public.
+ */
+export function hashMatches(raw: string, storedHash: string): boolean {
+  const candidate = Buffer.from(hashApiKey(raw), "utf8");
+  const stored = Buffer.from(storedHash ?? "", "utf8");
+  if (candidate.length !== stored.length) return false;
+  return timingSafeEqual(candidate, stored);
 }
 
 /** Mint a key: the raw string to show once, its stored prefix and its hash. */
@@ -89,16 +108,7 @@ export function parseKeyPrefix(raw: string): string | null {
   return prefix;
 }
 
-/**
- * Constant-time comparison of two hex digests.
- *
- * `timingSafeEqual` throws on a length mismatch, so the lengths are compared
- * first — that comparison is not itself constant time, but the length of a
- * sha256 digest is public.
- */
+/** Constant-time comparison of a raw key against its stored digest. */
 export function keysMatch(rawKey: string, storedHash: string): boolean {
-  const candidate = Buffer.from(hashApiKey(rawKey), "utf8");
-  const stored = Buffer.from(storedHash ?? "", "utf8");
-  if (candidate.length !== stored.length) return false;
-  return timingSafeEqual(candidate, stored);
+  return hashMatches(rawKey, storedHash);
 }

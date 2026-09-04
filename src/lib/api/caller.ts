@@ -14,6 +14,11 @@ import { NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCurrentCustomer } from "@/lib/auth";
 import { keysMatch, parseKeyPrefix } from "@/lib/api/keys";
+import {
+  OAUTH_ACCESS_PREFIX,
+  tokenMatches,
+  tokenPrefixOf,
+} from "@/lib/oauth/tokens";
 import { ALL_SCOPES, type ApiScope } from "@/lib/api/scopes";
 import { fail, type ApiFailure } from "@/lib/api/errors";
 import {
@@ -28,7 +33,7 @@ import type { Customer } from "@/lib/types";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-export type CallerVia = "session" | "api_key";
+export type CallerVia = "session" | "api_key" | "oauth";
 
 export interface Caller {
   customerId: string;
@@ -37,12 +42,20 @@ export interface Caller {
   scopes: readonly ApiScope[];
   /** Null for a session caller — there is no key to attribute usage to. */
   keyId: string | null;
+  /**
+   * Set for an OAuth caller. A SEPARATE FIELD rather than a reuse of keyId,
+   * because api_request_log.key_id carries an FK to customer_api_keys and an
+   * OAuth token id would violate it.
+   */
+  tokenId: string | null;
+  /** The grant an OAuth token hangs off, for attributing and revoking usage. */
+  grantId: string | null;
   /** Requests used in the current minute window, for the rate-limit headers. */
   minuteCount: number;
 }
 
 export interface ResolveOptions {
-  /** Which credentials this surface accepts. MCP passes ["api_key"] only. */
+  /** Which credentials this surface accepts. MCP passes ["api_key","oauth"]. */
   allow?: readonly CallerVia[];
   /** Injected for tests; defaults to the service-role client. */
   admin?: Admin;
@@ -108,7 +121,7 @@ export async function resolveCaller(
   options: ResolveOptions = {}
 ): Promise<ResolveResult> {
   const admin = options.admin ?? createAdminClient();
-  const allow = options.allow ?? (["session", "api_key"] as const);
+  const allow = options.allow ?? (["session", "api_key", "oauth"] as const);
 
   if (!(await apiEnabled(admin))) {
     return fail(
@@ -128,10 +141,26 @@ export async function resolveCaller(
   // their own SESSION'S data, and make a revoked key look like it still works —
   // which is the most dangerous possible false negative here.
   if (authHeader) {
+    const bearer = parseBearer(authHeader);
+    if (!bearer) {
+      return fail("invalid_api_key", "Expected an `Authorization: Bearer` header.");
+    }
+
+    // Discriminated on the PREFIX, before either verifier runs. The two
+    // credential kinds have distinct, non-overlapping prefixes precisely so
+    // this decision needs no lookup and cannot be ambiguous — and so a caller
+    // is told about the kind of credential they actually presented.
+    if (bearer.startsWith(OAUTH_ACCESS_PREFIX)) {
+      if (!allow.includes("oauth")) {
+        return fail("unauthorized", "This endpoint does not accept OAuth tokens.");
+      }
+      return resolveOauthToken(admin, bearer);
+    }
+
     if (!allow.includes("api_key")) {
       return fail("unauthorized", "This endpoint does not accept API keys.");
     }
-    return resolveApiKey(admin, authHeader);
+    return resolveApiKey(admin, bearer);
   }
 
   if (!allow.includes("session")) {
@@ -160,21 +189,23 @@ async function resolveSession(): Promise<ResolveResult> {
       via: "session",
       scopes: ALL_SCOPES,
       keyId: null,
+      tokenId: null,
+      grantId: null,
       minuteCount: 0,
     },
   };
 }
 
+/** The bearer value from an Authorization header, or null if it is not one. */
+function parseBearer(authHeader: string): string | null {
+  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  return match ? match[1].trim() : null;
+}
+
 async function resolveApiKey(
   admin: Admin,
-  authHeader: string
+  raw: string
 ): Promise<ResolveResult> {
-  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
-  if (!match) {
-    return fail("invalid_api_key", "Expected an `Authorization: Bearer` header.");
-  }
-  const raw = match[1].trim();
-
   const prefix = parseKeyPrefix(raw);
   if (!prefix) {
     return fail("invalid_api_key", "That does not look like a Stayful API key.");
@@ -252,9 +283,171 @@ async function resolveApiKey(
       via: "api_key",
       scopes,
       keyId: row.id,
+      tokenId: null,
+      grantId: null,
       minuteCount: limit.minuteCount,
     },
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * OAuth access tokens
+ * ------------------------------------------------------------------ */
+
+interface OauthTokenRow {
+  id: string;
+  grant_id: string;
+  token_hash: string;
+  scopes: string[];
+  expires_at: string;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  oauth_grants: {
+    id: string;
+    customer_id: string;
+    revoked_at: string | null;
+    customers: Customer | null;
+  } | null;
+}
+
+/**
+ * The third credential, producing the same `Caller` as the other two.
+ *
+ * The order of the checks mirrors resolveApiKey deliberately — cheap rejections
+ * first, the digest comparison after them, and nothing loaded on the customer's
+ * behalf until every one has passed.
+ *
+ * WHAT IS DIFFERENT is the grant. A token is only as live as the grant it hangs
+ * off, so revoking a connected app in Settings stamps ONE row and every token
+ * under it stops working on the next request. Checking only the token would
+ * leave a revoked app working until its access token expired.
+ */
+async function resolveOauthToken(
+  admin: Admin,
+  raw: string
+): Promise<ResolveResult> {
+  const prefix = tokenPrefixOf(raw, OAUTH_ACCESS_PREFIX);
+  if (!prefix) {
+    return fail("invalid_token", "That access token is not valid.");
+  }
+
+  const { data, error } = await admin
+    .from("oauth_tokens")
+    .select(
+      "id, grant_id, token_hash, scopes, expires_at, revoked_at, last_used_at, oauth_grants!inner(id, customer_id, revoked_at, customers(*))"
+    )
+    .eq("token_prefix", prefix)
+    .eq("kind", "access")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[api] oauth token lookup failed", error);
+    return fail("internal_error", "Could not verify that access token.");
+  }
+
+  const row = data as unknown as OauthTokenRow | null;
+  if (!row) {
+    return fail("invalid_token", "That access token is not valid.");
+  }
+
+  if (row.revoked_at) {
+    return fail("revoked_token", "That access token has been revoked.");
+  }
+
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    // Its own code, not invalid_token: a client that cannot tell expiry from a
+    // bad token will re-run the whole authorization flow when a refresh was all
+    // it needed — and will show the customer a consent screen to fix it.
+    return fail("expired_token", "That access token has expired.");
+  }
+
+  if (!tokenMatches(raw, row.token_hash)) {
+    return fail("invalid_token", "That access token is not valid.");
+  }
+
+  const grant = row.oauth_grants;
+  if (!grant || grant.revoked_at) {
+    // Revoking the app in Settings lands here. Reported as revoked rather than
+    // invalid, because that is what happened and the client should stop
+    // retrying and ask for consent again.
+    return fail("revoked_token", "That connection has been disconnected.");
+  }
+
+  const customer = grant.customers;
+  if (!customer) {
+    return fail("invalid_token", "That access token is not valid.");
+  }
+
+  // 0095's rule, unchanged: ARCHIVED IS NOT CANCELLED. is_active = false means
+  // the row was superseded by a duplicate signup and should be out of
+  // circulation entirely. A CANCELLED customer keeps working credentials —
+  // nothing else in this system withdraws what a customer has paid for.
+  if (!customer.is_active) {
+    return fail("invalid_token", "That access token is not valid.");
+  }
+
+  // Intersected with the vocabulary we know, exactly as a key's scopes are. A
+  // scope granted before it was retired must not keep working by accident.
+  const scopes = (row.scopes ?? []).filter((s): s is ApiScope =>
+    (ALL_SCOPES as readonly string[]).includes(s)
+  );
+
+  const limit = await consumeRateLimit(admin, row.id, grant.customer_id, "oauth_token");
+  if (!limit.ok) return limit;
+
+  await touchOauthLastUsed(admin, row.id, grant.id, row.last_used_at);
+
+  return {
+    ok: true,
+    caller: {
+      customerId: grant.customer_id,
+      customer,
+      via: "oauth",
+      scopes,
+      keyId: null,
+      tokenId: row.id,
+      grantId: grant.id,
+      minuteCount: limit.minuteCount,
+    },
+  };
+}
+
+/**
+ * Stamp the token and its grant, at most once every five minutes.
+ *
+ * The grant's stamp is what the Connected apps panel shows as "last used", and
+ * it is the only reason this writes two rows rather than one — a customer
+ * deciding whether to revoke an app wants to know when it last did anything.
+ */
+async function touchOauthLastUsed(
+  admin: Admin,
+  tokenId: string,
+  grantId: string,
+  lastUsedAt: string | null
+): Promise<void> {
+  const staleAfter = Date.now() - LAST_USED_COALESCE_MINUTES * 60_000;
+  if (lastUsedAt && new Date(lastUsedAt).getTime() > staleAfter) return;
+
+  const now = new Date().toISOString();
+  const cutoff = new Date(staleAfter).toISOString();
+
+  const [tokenResult, grantResult] = await Promise.all([
+    admin
+      .from("oauth_tokens")
+      .update({ last_used_at: now })
+      .eq("id", tokenId)
+      .or(`last_used_at.is.null,last_used_at.lt.${cutoff}`),
+    admin
+      .from("oauth_grants")
+      .update({ last_used_at: now })
+      .eq("id", grantId)
+      .or(`last_used_at.is.null,last_used_at.lt.${cutoff}`),
+  ]);
+
+  // Swallowed, as the API key path swallows its own: losing a usage timestamp
+  // must never cost a customer their data.
+  if (tokenResult.error) console.error("[api] oauth token last_used_at failed", tokenResult.error);
+  if (grantResult.error) console.error("[api] oauth grant last_used_at failed", grantResult.error);
 }
 
 /* ------------------------------------------------------------------ *
@@ -263,12 +456,19 @@ async function resolveApiKey(
 
 async function consumeRateLimit(
   admin: Admin,
-  keyId: string,
-  customerId: string
+  subjectId: string,
+  customerId: string,
+  subjectKind: "key" | "oauth_token" = "key"
 ): Promise<{ ok: true; minuteCount: number } | ApiFailure> {
+  // The five-argument signature. 0125 keeps the four-argument form as a shim so
+  // this could be deployed either side of the migration, but naming the subject
+  // kind explicitly is what keeps an OAuth token's window separate from a key's
+  // — sharing one would let a customer's key and their connected app eat each
+  // other's allowance.
   const { data, error } = await admin.rpc("consume_api_rate_limit", {
-    p_key_id: keyId,
+    p_subject_id: subjectId,
     p_customer_id: customerId,
+    p_subject_kind: subjectKind,
     p_minute_seconds: RATE_LIMIT_WINDOW_SECONDS,
     p_day_seconds: RATE_LIMIT_DAY_SECONDS,
   });
@@ -288,7 +488,7 @@ async function consumeRateLimit(
   if (minuteCount > RATE_LIMIT_PER_MINUTE) {
     return fail(
       "rate_limited",
-      `Rate limit exceeded: at most ${RATE_LIMIT_PER_MINUTE} requests per minute per key.`
+      `Rate limit exceeded: at most ${RATE_LIMIT_PER_MINUTE} requests per minute per credential.`
     );
   }
   if (dayCount > RATE_LIMIT_PER_DAY) {
