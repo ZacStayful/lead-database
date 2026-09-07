@@ -7,9 +7,11 @@ import {
   enquiryBoardId,
   fetchEnquiryBoardIndex,
   type EnquiryStatusLabel,
+  type LeadInterestLabel,
 } from "@/lib/monday";
 import {
   matchItemForCustomer,
+  mondayLeadInterestFor,
   mondayStatusLabelFor,
   type MondayStatusCandidate,
   type MondayMatchTier,
@@ -64,13 +66,14 @@ type CheckRow = MondayStatusCandidate &
     | "monday_item_id"
     | "monday_board_id"
     | "monday_status_label"
+    | "monday_lead_interest"
   >;
 
 const SELECT =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
   "cancel_at_period_end, gr_cancel_at_period_end, " +
-  "monday_item_id, monday_board_id, monday_status_label";
+  "monday_item_id, monday_board_id, monday_status_label, monday_lead_interest";
 
 /** The labels this system owns — anything else on an item is the sales team's. */
 const OWNED_LABELS: string[] = Object.values(ENQUIRY_STATUS);
@@ -125,6 +128,7 @@ async function handle(req: NextRequest) {
     item: string;
     matchedBy: MondayMatchTier;
     label: EnquiryStatusLabel | null;
+    leadInterest: LeadInterestLabel | null;
   }[] = [];
   const wouldChange: {
     email: string;
@@ -132,12 +136,19 @@ async function handle(req: NextRequest) {
     boardLabel: string;
     wouldWrite: EnquiryStatusLabel;
   }[] = [];
+  const interestWouldChange: {
+    email: string;
+    item: string;
+    boardValue: string;
+    wouldWrite: LeadInterestLabel;
+  }[] = [];
   const unresolved: { email: string; name: string | null; counts: unknown }[] = [];
   const ambiguous: { email: string; name: string | null; counts: unknown }[] = [];
   const noLabel: string[] = [];
   const claimedBy = new Map<string, string[]>();
 
   let cacheFilled = 0;
+  let interestCacheFilled = 0;
   let linksStored = 0;
 
   for (const row of rows) {
@@ -169,11 +180,14 @@ async function handle(req: NextRequest) {
     if (!claimedBy.has(item.id)) claimedBy.set(item.id, []);
     claimedBy.get(item.id)!.push(row.email);
 
+    const interest = mondayLeadInterestFor(row);
+
     linked.push({
       email: row.email,
       item: `${item.id} (${item.name})`,
       matchedBy: match.matchedBy,
       label,
+      leadInterest: interest,
     });
 
     if (label && label !== item.statusLabel) {
@@ -182,6 +196,17 @@ async function handle(req: NextRequest) {
         item: `${item.id} (${item.name})`,
         boardLabel: item.statusLabel,
         wouldWrite: label,
+      });
+    }
+
+    // A null verdict is not drift: it means "we have nothing to say about this
+    // customer", and the sync leaves the cell alone rather than blanking it.
+    if (interest && interest !== item.leadInterest) {
+      interestWouldChange.push({
+        email: row.email,
+        item: `${item.id} (${item.name})`,
+        boardValue: item.leadInterest,
+        wouldWrite: interest,
       });
     }
 
@@ -220,6 +245,19 @@ async function handle(req: NextRequest) {
       cacheFilled += 1;
     }
 
+    // The same rule for "What kind of leads", and the "only when they agree"
+    // half matters more here: this cell is written by the enquiry form as well,
+    // so caching a value the board does not carry would suppress the write that
+    // corrects it.
+    if (
+      interest &&
+      interest === item.leadInterest &&
+      row.monday_lead_interest !== interest
+    ) {
+      update.monday_lead_interest = interest;
+      interestCacheFilled += 1;
+    }
+
     await admin.from("customers").update(update).eq("id", row.id);
   }
 
@@ -255,9 +293,13 @@ async function handle(req: NextRequest) {
     },
     links_stored: linksStored,
     label_cache_filled: cacheFilled,
+    lead_interest_cache_filled: interestCacheFilled,
     // Non-empty means the board and the rule disagree. Expected to be empty on a
     // board that is already maintained by hand.
     would_change: wouldChange,
+    // The same, for "What kind of leads". Expected to be non-empty until the
+    // backfill has run.
+    lead_interest_would_change: interestWouldChange,
     // Two customers resolving to one item — nothing enforces uniqueness in the
     // schema, on purpose, so this is where a collision shows up.
     contested_items: contested,

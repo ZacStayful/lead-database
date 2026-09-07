@@ -9400,3 +9400,205 @@ code ships, and nothing here touches a balance, counter, pacing or capacity
 column. Code arriving first would fail every ticket insert — and because the
 insert is deliberately non-fatal, it would fail **silently**, which is the worst
 of both worlds: the emails would keep arriving and the log would stay empty.
+
+---
+
+## 47. Which service the enquiry is for *(0134)*
+
+The Monday enquiries board (**18420649520**) carries a text column
+`text_mm6c5qba`, **"What kind of leads"**. It was empty on all 44 items and
+referenced nowhere in `src/`. Nothing had ever written it, because nothing in
+the product ever asked.
+
+The only product signal an enquiry carried was a hidden
+`?product=guaranteed-rent` in the URL, set solely by the links on the GR landing
+page and `GuaranteedRentNav`. So:
+
+- anyone reaching `/enquiry` directly, from an ad or from a shared link was
+  filed as **Management, silently**, with no way to say otherwise;
+- the form never displayed the choice, so it could not be corrected;
+- **"both" could not be expressed at all**, which is a real population — the
+  operators who run both models are exactly the ones worth the most;
+- and the flag was used only to pick a **board**. Nothing was recorded on the
+  item either way.
+
+The live tell was already on the board: item *Moyo Sankofa* carries a hand-typed
+`Preffered plan` of `"£150/mo — 10 leads (Guaranteed Rent)"` — the product
+annotated by hand into the wrong column because the system had nowhere to put it.
+
+`/enquiry` · `POST /api/enquiry` · `POST /api/admin/monday-lead-interest`
+
+### 47.1 — One board now, and the GR enquiries board is retired
+
+GR enquiries used to create their item on **18420913271**. That board has **no
+Status column**, so `setEnquiryStatus` refused it outright
+(`skipped: "not_status_board"`), the item could never carry a label or sit in a
+pipeline group, and §23.7 records that the one real GR customer had to be
+re-created on the management board by hand. Three items ever reached it.
+
+**Every enquiry now lands on 18420649520**, whichever service it is for, with
+`text_mm6c5qba` saying which. `createGuaranteedRentEnquiryContact`,
+`grEnquiryBoardId` and `GR_ENQUIRY_COLUMN_MAP` are **deleted** rather than left
+as callable dead code. The three existing items stay where they are.
+
+Two things fall out of that, both wanted:
+
+- A GR enquirer's `customers.monday_board_id` is now the status board, so
+  `resolveItem`'s stored-link short-circuit works for them and they stop
+  appearing as orphans in the admin check tool. **§23.7 is closed.**
+- `currentLeadSource` now always lands in `text_mm51bgh6`, titled *"How do you
+  currently get management leads"*. The new column beside it disambiguates.
+  ⚠️ Renaming that column on Monday to "How do you currently get leads" is a
+  one-click manual improvement — the id is unchanged, so it needs no code.
+
+**Allocation was deliberately not touched.** `monthly_allocation` /
+`preferredPlan` are computed exactly as before. That column gates nothing on a
+waitlisted row until the customer holds management, and the invite/subscribe
+routes set the right per-product column at checkout (§17's "one trap", §33).
+Widening a public form into that is its own change.
+
+### 47.2 — The vocabulary is a constant, and it matters MORE than the Status one
+
+`LEAD_INTEREST` in `monday.ts`: `Management` / `Guaranteed rent` / `Both`.
+Casing follows the board's own — `ENQUIRY_STATUS` already spells it
+"Guaranteed rent customer" with a lower-case r.
+
+⚠️ **It is a TEXT column, so Monday validates nothing.** The Status column
+rejects an unknown label outright (`create_labels_if_missing: false`, verified —
+"Guaranteed Rent Customer" is refused); this one accepts anything, and the only
+symptom of a drift is a board that quietly stops grouping. Four writers reach it
+— the form, the enquiry route, the status sync and the admin backfill — so the
+single constant is the whole enforcement, and 0134's CHECK is asserted against it
+**mechanically** (the `cancelOptions.ts` precedent, §29).
+
+A drift there does not fail the write to Monday. It fails the **cache** update,
+so the cell is rewritten on every subsequent event, for ever, in silence.
+
+`toLeadInterest()` accepts the hyphenated marketing spelling for the same reason
+`toLeadType()` does, and round-trips its own labels so a value read off the board
+survives.
+
+### 47.3 — The form asks, and the conditionals had to move off the URL
+
+A required three-option picker, first in the form so everything reacts to it,
+seeded from `?product=` and always changeable. **Never seeded to "Both"** — the
+link is evidence, "Both" is a claim only the prospect can make.
+
+⚠️ **The three conditional fields keyed on `isGuaranteedRent` from the URL, and
+every one had to be rekeyed to the CHOICE.** Left alone, somebody arriving from
+the management page and picking Guaranteed rent is still asked for a management
+plan and *"how do you currently get management leads"* — the same silent
+mismatch one layer up.
+
+The plan picker and the Website URL field are now shown for **every** choice.
+`PLANS` and `GR_PLANS` are price-identical (£150/10, £300/20), the same reason §1
+gives for `LEAD_PRICE_GBP` needing no per-product branch, so those prices are
+right whichever service was picked; and the website column exists on the one
+board every enquiry now reaches.
+
+`product` is still posted alongside `lead_interest`, and the route still falls
+back to it — a cached copy of the old form, or anything else posting the previous
+shape, keeps working. It could only ever say "guaranteed rent" or nothing, which
+is the whole reason `lead_interest` exists.
+
+### 47.4 — It tracks what they HOLD, and that needed its own cache
+
+`mondayLeadInterestFor()` in `mondayStatus.ts`, a **pure function of the row**
+beside `mondayStatusLabelFor()` and following its rules: archived → null,
+otherwise both/one/neither from `holdsProduct()`. `past_due` counts as held for
+the reason label rule 3 gives — a billing problem is not a departure.
+
+⚠️ **NEITHER HELD → NULL, MEANING LEAVE THE CELL ALONE. NEVER BLANK IT.** This
+is the load-bearing rule. A customer holding neither product is either a prospect
+whose cell records the service they asked for on the form, or somebody who has
+left and whose cell records what they held. Both are the only copy of that fact,
+and neither is improved by being erased on the next unrelated Stripe event. Same
+"only write when it changes something" discipline as `startDate`'s
+first-write-wins and `endDateNeedsWrite`. There is deliberately **no way to clear
+this cell** from `setEnquiryStatus`.
+
+⚠️ **THE LABEL CACHE CANNOT DRIVE THIS WRITE, WHICH IS WHY 0134 EXISTS.** A
+customer holding management who then also buys GR keeps the label
+`Management Customer` (label rule 4 — management wins). So `labelUnchanged` is
+true and `syncCustomerMondayStatus`'s fast path returns before Monday is touched
+at all: the cell would never flip to **Both**, the board would look right, and
+nothing would ever say otherwise. `monday_lead_interest` is a second cache with
+exactly the §23.4 semantics — *the value WE last wrote*, never a fact — and
+`interestUnchanged` joins **both** fast-path guards.
+
+The cache update uses `interest ?? row.monday_lead_interest`, not a bare
+assignment: a null verdict wrote nothing to the cell, so it must not erase our
+record of what is in it either. And it is cleared alongside `monday_status_label`
+in `monday-link/route.ts`, for the reason that route already gives — a stale
+value against a *new* item suppresses the first push to it.
+
+`label === null ⟹ interest === null` holds by construction (rule 7 is reached
+only when nothing is held), so the sync's existing `if (!label)` early return
+costs nothing. It is **asserted over a 13-case matrix** rather than reasoned
+about.
+
+### 47.5 — The backfill is the sync
+
+`POST /api/admin/monday-lead-interest`, **dry run by default**, `?apply=1` to
+write, with a *Fill in lead interest* button on `/admin/customers` that shows the
+list and asks before writing. `GET` is the dry run and nothing else.
+
+Every row goes through `syncCustomerMondayStatus`, so the value written is
+decided by exactly the rule that maintains it from here on. A bespoke loop would
+be a second reading of "which products does this customer hold" — the failure
+§23.2 spent a section on. It only ever ADDS: a null verdict is skipped, so
+"backfill what is certain" is a property of the rule rather than a filter
+somebody has to remember.
+
+Nothing else moves: `endDate: undefined` leaves both date cells alone, the start
+date is still first-write-wins, and the label cache makes the Status write a
+no-op for everybody already correct.
+
+Measured read-only on production before the code shipped: **24 to write** (22
+Management, 2 Guaranteed rent), **22 skipped** — 18 holding no product and 4
+archived. Nobody reads as Both today.
+
+### Verification
+
+All 130 migration files applied to a scratch **Postgres 16.13** from empty
+(0002/0014/0065 skipped — `pg_cron` is unavailable locally), **0 failures**,
+0134 re-applied twice for idempotency. ⚠️ That also retires §45.14's warning
+that a rebuild from the directory dies at 0124: `0100a` is committed, and the
+chain now builds.
+
+The CHECK was exercised on all three valid values and null, and on **nine**
+invalid ones including every casing near-miss (`management`, `Guaranteed Rent`,
+`guaranteed_rent`, a trailing space, and `Guaranteed rent customer` — the Status
+label it sits beside).
+
+**1417 vitest cases** green (23 new), lint clean, `next build` passes and
+registers `ƒ /api/admin/monday-lead-interest`.
+
+Three guards are **mutation-checked** rather than reviewed, each broken and
+watched to fail:
+
+- returning `""` instead of `null` for "holds nothing" → fails 3 named tests;
+- dropping `interestUnchanged` from the no-date fast path → fails 1;
+- dropping it from the date-instruction fast path → fails 1.
+
+⚠️ **The fast-path guards are asserted against the SOURCE FILE**, not a
+hand-written equivalent. §42.8 records what the alternative cost: a safety
+boundary the PR asserted in words, that a scratch test checked by writing its own
+copy of the query, and that did not exist — 91 follow-up runs destroyed within
+six minutes of deploy. Deleting `interestUnchanged &&` is a one-token change no
+behavioural test here could catch, because observing it needs a real Monday item.
+
+**Not yet exercised:** a real submission through the form against the live board,
+and the backfill applied. Do the dry run and read the list before pressing Write.
+
+### Deployment order — migration BEFORE code
+
+0134 first — **applied to `znlfwbnvhlacwzgfalcf` ahead of the code**. Pre-apply:
+no collision on the column or the constraint. Post-apply: **47 customers, 474
+leads and 468 assignments untouched, all 47 rows null**, and the existing
+`monday_status_label` cache unchanged on all 24 rows that carry one — so the
+migration is inert exactly as designed.
+
+It is additive and redefines nothing, so code arriving first would merely fail
+the cache update while still writing the cell correctly. Nothing here touches a
+balance, counter, pacing or capacity column.

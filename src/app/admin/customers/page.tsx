@@ -19,6 +19,7 @@ import type {
 } from "@/lib/types";
 import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
+import { LeadInterestBackfillButton } from "@/components/admin/LeadInterestBackfillButton";
 
 export const dynamic = "force-dynamic";
 
@@ -303,11 +304,14 @@ export default async function AdminCustomersPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Customers</h1>
-        <p className="text-sm text-muted-foreground">
-          {customers.length} customer{customers.length === 1 ? "" : "s"}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Customers</h1>
+          <p className="text-sm text-muted-foreground">
+            {customers.length} customer{customers.length === 1 ? "" : "s"}
+          </p>
+        </div>
+        <LeadInterestBackfillButton />
       </div>
 
       {alerts.length > 0 && (

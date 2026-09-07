@@ -137,10 +137,18 @@ export function enquiryBoardId(): string {
   return process.env.MONDAY_ENQUIRY_BOARD_ID ?? "18420649520";
 }
 
-/** Board 18420913271 "Stayful Guaranteed rent database enquiries". */
-export function grEnquiryBoardId(): string {
-  return process.env.MONDAY_GR_ENQUIRY_BOARD_ID ?? "18420913271";
-}
+/*
+ * Board 18420913271 "Stayful Guaranteed rent database enquiries" is RETIRED
+ * (§46). Every enquiry now creates its item on the board above, whichever
+ * service it is for, with "What kind of leads" saying which.
+ *
+ * It was always a dead end: it has no Status column, so an item there could
+ * never carry a label, setEnquiryStatus refused the board outright, and §23.7
+ * records that the one real GR customer had to be added to the management
+ * board by hand. Its three existing items stay where they are; nothing new is
+ * written there, so grEnquiryBoardId() and createGuaranteedRentEnquiryContact()
+ * are gone rather than left as callable dead code.
+ */
 
 /**
  * Column-id → enquiry-field mapping for the enquiries board. If the board
@@ -157,19 +165,6 @@ const ENQUIRY_COLUMN_MAP = {
 } as const;
 
 /**
- * Column-id → field mapping for the Guaranteed Rent enquiries board
- * (18420913271). That board only has name/email/mobile/properties/date — no
- * website or plan columns.
- */
-const GR_ENQUIRY_COLUMN_MAP = {
-  email: "text_mm50e3d7", // "Email"
-  mobile: "text_mm50hfvg", // "Mobile"
-  properties_managed: "text_mm50mt3h", // "Number of properties"
-  current_lead_source: "text_mm515b3c", // "How do you currently get guaranteed rent leads"
-  date_added: "date_mm50brxt", // "Date added"
-} as const;
-
-/**
  * Status column on the management enquiries board (18420649520).
  *
  * The board is organised BY this column: every item sits in the group matching
@@ -179,6 +174,16 @@ const GR_ENQUIRY_COLUMN_MAP = {
  * does fire those automations.
  */
 const ENQUIRY_STATUS_COLUMN = "color_mm5eda07";
+
+/**
+ * "What kind of leads" — which service this person came to us for.
+ *
+ * A TEXT column, so Monday validates nothing: unlike the Status column, a typo
+ * here is accepted silently and simply produces a value that groups on its own.
+ * LEAD_INTEREST below is the only thing keeping the form, the enquiry route,
+ * the status sync and the admin backfill writing one set of strings.
+ */
+export const ENQUIRY_LEAD_INTEREST_COLUMN = "text_mm6c5qba";
 
 /** "Customer start date" — stamped once, on first becoming a customer. */
 const ENQUIRY_START_DATE_COLUMN = "date_mm5ft19y";
@@ -219,6 +224,57 @@ export const ENQUIRY_STATUS = {
 
 export type EnquiryStatusLabel =
   (typeof ENQUIRY_STATUS)[keyof typeof ENQUIRY_STATUS];
+
+/**
+ * The three values the "What kind of leads" cell may hold.
+ *
+ * ONE DEFINITION, FOUR WRITERS — the enquiry form, the enquiry route, the
+ * status sync and the admin backfill. The same discipline as ENQUIRY_STATUS
+ * above and cancelOptions.ts (§29), and it matters MORE here rather than less:
+ * the Status column rejects an unknown label outright, where this one accepts
+ * anything and the only symptom of a drift is a board that no longer groups.
+ *
+ * Casing follows the board's own vocabulary — ENQUIRY_STATUS already spells it
+ * "Guaranteed rent customer" with a lower-case r.
+ *
+ * ⚠️ The CHECK constraint in 0134 lists these three strings and a unit test
+ * asserts the two agree. A disagreement does not fail a write to Monday; it
+ * fails the CACHE update, so the cell is rewritten on every subsequent event
+ * for ever, in silence.
+ */
+export const LEAD_INTEREST = {
+  management: "Management",
+  guaranteed_rent: "Guaranteed rent",
+  both: "Both",
+} as const;
+
+export type LeadInterestLabel =
+  (typeof LEAD_INTEREST)[keyof typeof LEAD_INTEREST];
+
+/**
+ * Narrow whatever arrived on the wire to one of the three values, or null.
+ *
+ * Accepts the hyphenated marketing spelling for the same reason toLeadType()
+ * does (products.ts): every link into the enquiry form writes
+ * `?product=guaranteed-rent`, and the form posts the choice back in the same
+ * vocabulary. Also accepts the labels themselves so a value read back off the
+ * board round-trips.
+ */
+export function toLeadInterest(value: unknown): LeadInterestLabel | null {
+  if (typeof value !== "string") return null;
+  switch (value.trim().toLowerCase()) {
+    case "management":
+      return LEAD_INTEREST.management;
+    case "guaranteed-rent":
+    case "guaranteed_rent":
+    case "guaranteed rent":
+      return LEAD_INTEREST.guaranteed_rent;
+    case "both":
+      return LEAD_INTEREST.both;
+    default:
+      return null;
+  }
+}
 
 /**
  * Timeout for the status write. The two board-sync fetchers below deliberately
@@ -313,6 +369,13 @@ export async function setEnquiryStatus(params: {
   startDate?: string | null;
   /** Date to set, null to clear, undefined to leave alone. */
   endDate?: string | null;
+  /**
+   * "What kind of leads". Undefined leaves the cell alone, which is what the
+   * caller passes for anybody holding neither product — there is deliberately
+   * no way to CLEAR this cell from here, because the value it would erase is
+   * the only record of what a prospect asked for.
+   */
+  leadInterest?: LeadInterestLabel;
 }): Promise<MondayStatusWriteResult> {
   const token = process.env.MONDAY_API_TOKEN;
   if (!token) return { written: false, skipped: "not_configured" };
@@ -335,6 +398,11 @@ export async function setEnquiryStatus(params: {
     values[ENQUIRY_END_DATE_COLUMN] = params.endDate
       ? { date: params.endDate }
       : {};
+  }
+  // A text column takes a plain string. It rides the same mutation as the label
+  // and the dates, so the four can never be half applied.
+  if (params.leadInterest !== undefined) {
+    values[ENQUIRY_LEAD_INTEREST_COLUMN] = params.leadInterest;
   }
 
   // One request for the label and both dates, so they can never be half applied.
@@ -396,6 +464,12 @@ export interface EnquiryBoardItem {
    * customer.subscription.updated event would issue a pointless write.
    */
   endDate: string;
+  /**
+   * "What kind of leads" cell as the board currently has it, or "". Read for
+   * reporting and for the check tool's cache fill only — the value to WRITE is
+   * decided by mondayLeadInterestFor() from the customer row, never from here.
+   */
+  leadInterest: string;
 }
 
 /**
@@ -446,6 +520,7 @@ export async function fetchEnquiryBoardIndex(): Promise<
     ENQUIRY_STATUS_COLUMN,
     ENQUIRY_START_DATE_COLUMN,
     ENQUIRY_END_DATE_COLUMN,
+    ENQUIRY_LEAD_INTEREST_COLUMN,
   ];
 
   const items: EnquiryBoardItem[] = [];
@@ -500,6 +575,7 @@ export async function fetchEnquiryBoardIndex(): Promise<
           statusLabel: textFor(item, ENQUIRY_STATUS_COLUMN),
           startDate: textFor(item, ENQUIRY_START_DATE_COLUMN),
           endDate: textFor(item, ENQUIRY_END_DATE_COLUMN),
+          leadInterest: textFor(item, ENQUIRY_LEAD_INTEREST_COLUMN),
         });
       }
     } while (cursor);
@@ -538,6 +614,7 @@ export async function fetchEnquiryItem(
     ENQUIRY_STATUS_COLUMN,
     ENQUIRY_START_DATE_COLUMN,
     ENQUIRY_END_DATE_COLUMN,
+    ENQUIRY_LEAD_INTEREST_COLUMN,
   ];
 
   try {
@@ -563,6 +640,7 @@ export async function fetchEnquiryItem(
         statusLabel: textFor(item, ENQUIRY_STATUS_COLUMN),
         startDate: textFor(item, ENQUIRY_START_DATE_COLUMN),
         endDate: textFor(item, ENQUIRY_END_DATE_COLUMN),
+        leadInterest: textFor(item, ENQUIRY_LEAD_INTEREST_COLUMN),
       },
     };
   } catch (err) {
@@ -634,8 +712,18 @@ async function createBoardContact(
 }
 
 /**
- * Create a contact item on the management enquiries board from a landing-page
- * form submission. Returns the new Monday item id.
+ * Create a contact item on the enquiries board from a landing-page form
+ * submission. Returns the new Monday item id.
+ *
+ * EVERY enquiry lands here now, whichever service it is for, with leadInterest
+ * saying which (§46). That is what makes the board one pipeline: the Status
+ * column, its ten group-moving automations and the whole customer sync only
+ * exist on this board, so a GR enquirer sent anywhere else could never carry a
+ * label and had to be re-created by hand.
+ *
+ * leadInterest is REQUIRED rather than optional. It is the one fact this
+ * function exists to record and there is no sensible default: guessing
+ * Management is exactly the bug being fixed.
  */
 export async function createEnquiryContact(input: {
   name: string;
@@ -643,6 +731,7 @@ export async function createEnquiryContact(input: {
   mobile: string;
   websiteUrl: string;
   propertiesManaged: string;
+  leadInterest: LeadInterestLabel;
   preferredPlan?: string;
   currentLeadSource?: string;
 }): Promise<string> {
@@ -654,29 +743,8 @@ export async function createEnquiryContact(input: {
     [ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
     [ENQUIRY_COLUMN_MAP.preferred_plan]: input.preferredPlan ?? "",
     [ENQUIRY_COLUMN_MAP.current_lead_source]: input.currentLeadSource ?? "",
+    [ENQUIRY_LEAD_INTEREST_COLUMN]: input.leadInterest,
     [ENQUIRY_COLUMN_MAP.date_added]: { date: today },
-  });
-}
-
-/**
- * Create a contact item on the Guaranteed Rent enquiries board (18420913271).
- * That board has no website/plan columns, so only name/email/mobile/properties
- * are sent.
- */
-export async function createGuaranteedRentEnquiryContact(input: {
-  name: string;
-  email: string;
-  mobile: string;
-  propertiesManaged: string;
-  currentLeadSource?: string;
-}): Promise<string> {
-  const today = new Date().toISOString().slice(0, 10);
-  return createBoardContact(grEnquiryBoardId(), input.name, {
-    [GR_ENQUIRY_COLUMN_MAP.email]: input.email,
-    [GR_ENQUIRY_COLUMN_MAP.mobile]: input.mobile,
-    [GR_ENQUIRY_COLUMN_MAP.properties_managed]: input.propertiesManaged,
-    [GR_ENQUIRY_COLUMN_MAP.current_lead_source]: input.currentLeadSource ?? "",
-    [GR_ENQUIRY_COLUMN_MAP.date_added]: { date: today },
   });
 }
 

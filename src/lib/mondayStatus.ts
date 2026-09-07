@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   ENQUIRY_STATUS,
+  LEAD_INTEREST,
   enquiryBoardId,
   fetchEnquiryBoardIndex,
   fetchEnquiryItem,
@@ -8,6 +9,7 @@ import {
   setEnquiryStatus,
   type EnquiryBoardItem,
   type EnquiryStatusLabel,
+  type LeadInterestLabel,
 } from "@/lib/monday";
 import { holdsProduct, type ProductCustomerFields } from "@/lib/products";
 import type { Customer } from "@/lib/types";
@@ -58,13 +60,15 @@ type MondayStatusRow = MondayStatusCandidate &
     | "monday_board_id"
     | "monday_link_state"
     | "monday_status_label"
+    | "monday_lead_interest"
   >;
 
 const ROW_COLUMNS =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
   "cancel_at_period_end, gr_cancel_at_period_end, " +
-  "monday_item_id, monday_board_id, monday_link_state, monday_status_label";
+  "monday_item_id, monday_board_id, monday_link_state, monday_status_label, " +
+  "monday_lead_interest";
 
 /**
  * The label for this customer, or null for "leave the cell alone".
@@ -197,9 +201,49 @@ export function mondayStatusLabelFor(
   return null;
 }
 
+/**
+ * Which service this customer's "What kind of leads" cell should say, or null
+ * for "leave the cell alone".
+ *
+ * A PURE FUNCTION OF THE ROW, for the reason mondayStatusLabelFor() gives at
+ * length: several callers reach this, and a value that varied by caller would
+ * be written back and forth between events with nobody able to see why.
+ *
+ * ⚠️ NULL MEANS LEAVE IT, NEVER BLANK IT, and that is the load-bearing rule
+ * here rather than a nicety. A customer holding neither product is either a
+ * prospect whose cell holds the service they ASKED for on the enquiry form, or
+ * somebody who has left and whose cell records what they used to hold. Both are
+ * the only copy of that fact, and neither is improved by being erased on the
+ * next unrelated Stripe event. Same "only write when it changes something"
+ * discipline as startDate's first-write-wins and endDateNeedsWrite below.
+ *
+ * holdsProduct() counts `past_due` as held, which is right here for the reason
+ * label rule 3 gives: a billing problem is not a departure. A customer on their
+ * way out still holds the product until the period ends, so they keep reading as
+ * a customer of it — which is true, and they are still owed leads.
+ */
+export function mondayLeadInterestFor(
+  c: MondayStatusCandidate
+): LeadInterestLabel | null {
+  // Rule 0, as the label: an archived duplicate signup (§18D) never drives the
+  // board. It is precisely the row carrying a stale email, and letting it write
+  // would have it compete with the live row for one cell.
+  if (!c.is_active) return null;
+
+  const managementHeld = holdsProduct(c, "management");
+  const grHeld = holdsProduct(c, "guaranteed_rent");
+
+  if (managementHeld && grHeld) return LEAD_INTEREST.both;
+  if (managementHeld) return LEAD_INTEREST.management;
+  if (grHeld) return LEAD_INTEREST.guaranteed_rent;
+  return null;
+}
+
 export interface MondayStatusSyncOutcome {
   written: boolean;
   label?: EnquiryStatusLabel;
+  /** What was written to "What kind of leads", when anything was. */
+  leadInterest?: LeadInterestLabel;
   skipped?:
     | "archived"
     | "no_label"
@@ -269,10 +313,26 @@ export async function syncCustomerMondayStatus(
     // reading the board would make our write conditional on somebody else's edit.
     const labelUnchanged = row.monday_status_label === label;
 
+    // "What kind of leads", against its OWN cache — and it needs one rather than
+    // riding the label's.
+    //
+    // ⚠️ THE TWO DO NOT MOVE TOGETHER. A customer holding management who then
+    // also buys GR keeps the label `Management Customer` (rule 4, management
+    // wins), so labelUnchanged is true and the fast path below would return
+    // before Monday was touched at all — silently missing the one transition
+    // this cell exists to show. The reverse is just as real: a customer who
+    // pauses changes label and holds exactly what they held before.
+    //
+    // A null verdict counts as unchanged, because null means "leave the cell
+    // alone" and there is nothing to compare it against.
+    const interest = mondayLeadInterestFor(row);
+    const interestUnchanged =
+      interest === null || row.monday_lead_interest === interest;
+
     // With no date instruction there is nothing else that could need writing, so
     // this returns without touching Monday at all. That is the monthly
     // invoice.paid path, which is the one that matters for volume.
-    if (labelUnchanged && opts?.endDate === undefined) {
+    if (labelUnchanged && interestUnchanged && opts?.endDate === undefined) {
       return {
         written: false,
         skipped: "unchanged",
@@ -309,7 +369,11 @@ export async function syncCustomerMondayStatus(
     // all sorts of unrelated changes and arrives here asking to clear an end date
     // that is almost always already empty; without this the board would take a
     // pointless mutation every time.
-    if (labelUnchanged && !endDateNeedsWrite(resolved.item.endDate, opts?.endDate)) {
+    if (
+      labelUnchanged &&
+      interestUnchanged &&
+      !endDateNeedsWrite(resolved.item.endDate, opts?.endDate)
+    ) {
       return {
         written: false,
         skipped: "unchanged",
@@ -341,6 +405,9 @@ export async function syncCustomerMondayStatus(
       boardId: row.monday_board_id,
       startDate,
       endDate: opts?.endDate,
+      // undefined when there is nothing to say, which setEnquiryStatus reads as
+      // "leave that cell alone". There is deliberately no way to clear it.
+      leadInterest: interest ?? undefined,
     });
 
     if (!write.written) {
@@ -366,13 +433,21 @@ export async function syncCustomerMondayStatus(
       .from("customers")
       .update({
         monday_status_label: label,
+        // ?? rather than a bare assignment: a null verdict wrote nothing to that
+        // cell, so it must not clear our record of what is in it either.
+        monday_lead_interest: interest ?? row.monday_lead_interest,
         monday_status_synced_at: new Date().toISOString(),
         monday_status_error: null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", row.id);
 
-    return { written: true, label, itemId: resolved.item.id };
+    return {
+      written: true,
+      label,
+      leadInterest: interest ?? undefined,
+      itemId: resolved.item.id,
+    };
   } catch (err) {
     // Belt and braces over a call chain that already returns result objects.
     return {
