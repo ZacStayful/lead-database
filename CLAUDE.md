@@ -208,7 +208,8 @@ file_added, stage_changed, nudge_sent`.
 Other tables: `notifications`, `payments`, `lead_notes`, `lead_files`,
 `stripe_events`, `system_settings`, `post_call_offers`, `lead_topup_tokens`,
 `testimonials`, `public_activity_stats`, `lead_imports` (§30),
-`lead_analysis_jobs` / `lead_analysis_rows` / `lead_analysis_tokens` (§31).
+`lead_analysis_jobs` / `lead_analysis_rows` / `lead_analysis_tokens` (§31),
+`support_tickets` / `support_ticket_notes` (§46).
 
 ---
 
@@ -366,13 +367,22 @@ all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
 here authenticates on the session client and then writes on the service role.
 
 **Unauthenticated:** `/api/auth/forgot-password` (POST) — password reset. No
-session by definition; see §15 for why it exists at all.
+session by definition; see §15 for why it exists at all. ⚠️ **And
+`/api/feedback` (POST)**, which this list wrongly implied was the only one:
+`middleware.ts` matches `/dashboard` and `/admin` only, so the bug/feature form
+has always worked signed out. Since §46 it is also the first unauthenticated
+write of free text into a table, which is why its length caps are load-bearing.
+
+**Support and feature requests:** `/api/feedback` (POST, public) and
+`/api/support` (POST, session optional) — both log a ticket and then email it
+(§46). The Support form was undocumented here entirely until then.
 
 **Admin:** `/api/admin/assign`, `/api/admin/assign/bulk`,
 `/api/admin/leads/[id]`, `/api/admin/leads/assign-pending`,
 `/api/admin/customers/[id]/*`, `/api/admin/settings/capacity`,
 `/api/admin/settings/escalation`, `/api/admin/pool` (§19),
 `/api/admin/post-call-offer`, `/api/admin/monday-status-check` (§23.8),
+`/api/admin/support-tickets` (+ `/[id]`, `/[id]/status`, `/[id]/notes` — §46),
 `/api/admin/customers/[id]/monday-link` (§23.8).
 
 **Webhooks / cron:** `/api/webhook/stripe`, `/api/webhook/n8n`,
@@ -1957,10 +1967,15 @@ say what they want built next.
 
 **It reuses the flow that already existed.** `/feedback?type=feature`
 (`src/app/feedback/page.tsx` → `/api/feedback` → `sendFeedbackEmail`) prefills
-from the signed-in customer and emails `FEEDBACK_EMAIL`. Nothing is persisted,
-there is no table and no admin screen, and the dashboard footer has linked the
+from the signed-in customer and emails `FEEDBACK_EMAIL`. ~~Nothing is persisted,
+there is no table and no admin screen~~, and the dashboard footer has linked the
 same page since long before this. A second feature-request flow beside it would
 be two inboxes and two definitions of the same ask.
+
+⚠️ **Corrected by §46: all three of those clauses are now false.** The route
+writes a `support_tickets` row **before** it sends, and `/admin/support` is the
+screen. The argument the sentence was making still holds and is what §46 acted
+on — one flow, and now one table and one screen rather than one inbox.
 
 **Unconditional, with no column and no toggle.** It renders whether or not the
 admin set a CTA link, on every audience, in the `[TEST]` copy, and on the banner.
@@ -9056,3 +9071,321 @@ four-argument `consume_api_rate_limit` shim keeps every existing caller working
 byte-for-byte. `oauth_enabled` ships **false**, so even with the code deployed
 the discovery documents 404 and every client behaves exactly as it does today.
 Flip it only after the end-to-end tests above.
+
+---
+
+## 46. Logging what customers ask for *(0133)*
+
+Two in-app forms have been collecting customer requests since launch and
+**neither has ever persisted anything**. `/api/feedback` (bug or feature,
+public) and `/api/support` (signed-in) both validate, attach the customer, send
+one email through Resend, and forget. There was no table, no admin screen, and
+no way to answer how many requests there had been, who was asking, or which of
+them we actually shipped.
+
+Worse, a Resend failure returned **502 and lost the submission outright** — the
+customer was told to try again and nothing anywhere recorded that they had
+asked.
+
+`support_tickets` · `support_ticket_notes` · `/admin/support` · the customer's
+own list on `/dashboard/support`.
+
+### 46.1 — Why this is an engagement feature, not admin housekeeping
+
+A customer who writes in is a customer using the product, and the nine
+backfilled tickets say so more clearly than any counter on the dashboard:
+
+| | |
+|---|---|
+| Tickets, 2026-08-04 → 2026-09-08 | **9** |
+| Customers who wrote in | **5** of 50 |
+| Feature requests that became shipped features | **2** (§30, §37) |
+| Bug reports, in the entire history | **0** |
+
+⚠️ **Zero bug reports is itself a finding**, and it is only knowable before the
+table starts accumulating. Either the product is solid or nobody can find the
+bug form.
+
+Two of those customers tell the story in opposite directions. **Marcus Chong**
+sent three feature requests; two of them are §30 (customer-owned leads) and §37
+(operator branding), which is a customer designing the roadmap. **Leslie
+Rogers** sent three support requests in eleven days — two of them *the same
+question three weeks apart* — and cancelled on 2026-09-08. Both facts were
+sitting in an inbox and nowhere else.
+
+### 46.2 — Insert before send, and the response ladder that follows
+
+Both routes now write the row **first** and email second. The record of the ask
+is the durable half; the email is best-effort beside it — the claim-by-write
+discipline `credit_invoice` and `announcement_deliveries` already use (§19.5,
+§22.2).
+
+⚠️ **That changes a public endpoint's contract, so it is written down.** A 502
+after a successful insert would tell the customer to retry and manufacture a
+duplicate ticket:
+
+| Row | Email | Status | Body |
+|---|---|---|---|
+| ok | ok | **200** | `{ok, reference}` |
+| ok | failed | **200** | `{ok, reference}`, logged. Recovery is `/admin/support`. |
+| failed | ok | **200** | `{ok}` — exactly the old behaviour |
+| failed | failed | **502** | exactly the old message |
+
+⚠️ **A failed insert must never block the email.** `logSupportTicket` returns
+null and never throws. Losing the log row is a reporting gap; losing the
+customer's message is their problem going unanswered.
+
+The email subject carries the reference — `[Support] STF-0007 — Change my
+email` — which is the payoff for having one: a reply thread and a row can be
+tied together by a human. It falls back to the old string when the insert
+failed.
+
+### 46.3 — ⚠️ Notes are a separate table, and that is the boundary
+
+`support_ticket_notes` is the admin log book: append-only, dated, and never
+shown to a customer.
+
+**RLS is not what protects it.** Both the admin read and the customer read run
+on the **service role**, which bypasses policies — both tables are RLS-on with
+no policies, the deny-all posture of `subscription_pauses` and
+`operator_proof_snapshots`. What protects the notes is that the customer query
+names **six columns on one table and never mentions the other**.
+
+As a `jsonb` column on the ticket, a single `select("*")` would ship them — and
+`getCurrentCustomer()` already does exactly that on `customers`, so every
+dashboard page trains you to write it. §32.8 is the precedent: stripping a field
+at the page boundary is a presentation control, not a security boundary. A
+separate table makes "could a customer see the notes" a question a reviewer
+answers by grepping for one table name.
+
+Append-only is enforced by the **absence of a route** — no PATCH and no DELETE
+handler is exported, so Next answers 405 for free (the `lead_events` posture,
+§3). Editing a note is editing the record of what we decided.
+
+### 46.4 — Visibility is a column, not derived from the source
+
+`visible_to_customer` defaults **false** in the database and is set true by
+`defaultVisibility()` for the two in-app sources, so a writer that forgets fails
+closed.
+
+⚠️ **A form ticket is the customer's own words; a hand-logged one is ours about
+them.** Showing somebody the request they typed is honest. Showing them an
+admin's summary of a phone call — which may reasonably read "sounds like she is
+about to churn" — is not. So `source = 'admin'` starts hidden and sharing it is
+a deliberate second act through PATCH; the create route does not read the field
+from the body at all, the same argument the announcements create route makes for
+refusing `status`.
+
+It is a column rather than derived from `source` because origin never changes
+and visibility legitimately does. Deriving them from one column means the day
+they diverge you add the column anyway and have to guess the backfill.
+
+An anonymous submission is never visible: there is nobody to show it to, and
+`customer_id is null` can never match the customer read's `.eq` on a uuid —
+which is also why there is **no CHECK** tying the two. Such a CHECK would turn
+a customer deletion into a constraint violation, since the FK is
+`on delete set null`.
+
+### 46.5 — ⚠️ `plan_snapshot` uses `holdsProduct()`, never `account_status`
+
+Two facts, deliberately not one column:
+
+- **`product`** — which service the *request* concerns. Admin-settable, and
+  **nullable meaning platform-wide**. Marcus's branding request is the row that
+  proves the nullability: §37 opens branding to both products, so filing it
+  under either would be wrong.
+- **`plan_snapshot`** — what the customer was *paying* when they asked, written
+  once and never read for logic.
+
+The snapshot is not recoverable later, which is the whole reason to store it:
+Leslie Rogers is `cancelled` today, so her row now says nothing at all about the
+three tickets she raised while paying. The admin list therefore shows the
+snapshot **and** the live plan side by side, never one collapsed into the other
+— §21's "always two numbers, never one".
+
+⚠️ **The trap this column would have shipped with.** A GR-only subscriber sits
+at `account_status = 'waitlisted'` for ever (§18A), so a snapshot taken from
+that column files a paying customer as an unconverted prospect. **Two of the
+nine backfilled tickets are exactly that shape** — Karey Summers and Emanuela
+Sharra — so it would have been wrong on 22% of the history on day one.
+`holdsProduct()` is the one correct predicate (invariant 6), and
+`supportTickets.test.ts` pins it with a mutation-tested case.
+
+### 46.6 — The backfill, and the customer id that is not the email
+
+Nine tickets reconstructed from the inbox, inside the migration rather than as
+an admin action: it is small, exact, known now, and a screen used once and then
+dead is the drift 0131 had to clean up.
+
+⚠️ **NEVER A BARE `values` LIST.** A scratch Postgres built from 0001 has no
+`customers`, so nine hardcoded FK values would fail on every fresh build. Each
+insert is a `select … from customers where id = …`, which inserts **zero rows**
+on an empty database and does not error. That is asserted directly in
+verification, because it is the mistake the shape exists to prevent.
+
+⚠️ **THE CUSTOMER ID COMES FROM THE EMAIL'S OWN "Account on file" BLOCK, NOT
+FROM MATCHING THE SUBMITTER ADDRESS.** Emily Kitts wrote from
+`info@thehostingedit.co.uk`; her account is `emily@thehostingedit.co.uk`.
+Matching on the address she wrote from lands on `0a712500-…`, the **archived**
+duplicate (§18D), rather than `22a61faf-…`, the live paying row. This was caught
+only because the email carries the id — the first attempt at the backfill had
+the wrong customer. It is why `submitter_email` and `customer_id` are separate
+columns, and it is §43's trap (a login address and the address somebody writes
+from are different facts) showing up one section later.
+
+`backfill_key` is both the idempotency claim and the provenance marker:
+non-null on exactly those nine rows, null on everything the running system
+writes. Postgres allows many nulls under a unique index — 0102's argument for
+`monday_item_id`.
+
+`resolved_at` is left **NULL on the seven closed rows** even though we know they
+were answered. We do not know *when*: the reply dates are when Zac wrote back,
+not when the ask was settled, and for the two that became features the settling
+date is a release weeks later. A fabricated timestamp is worse than a missing
+one, so the admin list says "closed, date unknown".
+
+`shipped_migration` / `shipped_claude_section` are filled in **only where the
+link is certain** — a confident wrong reference is worse than none, because the
+next session follows it. Where a request was answered across several migrations
+the section is recorded and the migration left null.
+
+⚠️ **The two seeded notes that matter most.** STF-0007 (branding) is marked done
+*with a note saying it shipped partially* — §37 delivered the logo, colour and
+palette across the presentation, and did not rebrand the analysis PDF, carry
+contact details through, or add the "Affiliated with Stayful" mark he asked for.
+And STF-0009 carries a note that **the open feature request is for exactly what
+§27.1 forbids**: an API write scope, an MCP write tool or a lead-creating
+webhook. Without that note the next session picks the ticket up and builds the
+one thing that rule exists to refuse.
+
+### 46.7 — ⚠️ `/admin/support` shows archived and cancelled customers
+
+Every other admin surface hides archived rows (§18D) and this one deliberately
+does not. Of the nine backfilled tickets, **three belong to a customer who has
+since cancelled** and one to a customer whose other row is archived. A ticket is
+a record of something that happened, and the customer's current circulation
+status does not unhappen it — hiding them would lose a third of the history. The
+customer cell carries an `archived` / `cancelled` marker instead.
+
+Counters worth having, and why: **oldest open ticket in days** (§42.9's lesson —
+a page nobody is asked to open needs a number that shames you), **customers who
+have written in** (the engagement figure this exists for), and **done with
+nothing recording what shipped it**, which is the count that keeps the log book
+honest. A ticket closed with no reference is a ticket a future session cannot
+pick up, which is the entire stated requirement.
+
+Aggregates are computed over the **whole table**, never over the filtered page:
+a count that moved when you clicked a filter would answer a different question
+from the one its label asks.
+
+### 46.8 — The tick-box, and what it deliberately cannot say
+
+The tick-box sets `done` and is the control the page is built around. It sits
+beside a small `select` because a tick-box cannot express `in_progress` or
+`wont_do`, and a tri-state checkbox is not a thing anyone can read.
+
+⚠️ **Unticking returns to `open`, never to a remembered previous status.**
+Remembering one needs a column, and "I ticked that by mistake" is the only
+reason anybody unticks. **`wont_do` is reachable only from the select**, behind
+an arm-then-confirm, so a tick can never quietly mean "we refused it".
+
+⚠️ **`wont_do` must never render to a customer as "Won't do".** They asked us
+for something; a blunt refusal in a dashboard, with no sentence beside it and
+nobody to reply to, reads as contempt. The customer wording is **"Not planned"**
+— GitHub's own word for the same state, describing the decision rather than
+dismissing the person. Two label maps, one vocabulary, and a test that asserts
+no customer label contains the word.
+
+### 46.9 — One definition of who a submission belongs to
+
+`loadTicketAccount` replaces a `loadAccount` helper that was **duplicated
+verbatim** in both routes — two readings of "whose submission is this" that
+would eventually have disagreed silently (§22.1, §19.4). It selects a wider
+column list than the old copies, because the plan snapshot needs the per-product
+columns.
+
+⚠️ **It keeps `maybeSingle()`, and that is a measurement rather than an
+oversight.** `maybeSingle()` errors (PGRST116) on more than one match and both
+old copies swallowed that into `null`, treating a signed-in customer as
+anonymous. §18D says archived duplicates exist and §43.3 warns a mismatched
+Stripe email can create a second row and a second auth user, so the shape is
+reachable in principle. Measured on production 2026-09-09: **26 rows carry a
+`user_id` and zero `user_id` values are duplicated.** Behaviour kept, per §43.1's
+discipline of measuring first and recording the measurement.
+
+The library is split in two for the reason `featureRequest.ts` records:
+`supportTickets.ts` is pure and client-safe because the admin table is a
+`"use client"` component that needs the labels; `supportTicketLog.ts` holds
+everything that reaches supabase-js and the plan helpers.
+
+### 46.10 — Deferred
+
+- ⚠️ **A durable rate limit on `/api/feedback`.** It is public, unauthenticated
+  and now writes a row. The abuse surface is **not new** — it already fired an
+  unlimited email to the team on every anonymous POST, and a row is cheaper than
+  an email — but it should be bounded. Length caps at both the validator and the
+  CHECK are what ships. `consume_reset_budget` (0130) is the obvious reuse and
+  is **the wrong shape**: its `subject_kind` CHECK admits only `email` and `ip`,
+  and the table it writes is named for password resets. A namespaced subject
+  hash would keep the budgets separate, but it would leave two features sharing
+  a table whose name lies about one of them.
+- Threading email replies back into the log book automatically. Today a reply
+  lives in the inbox and the note is typed by hand.
+- Customer-facing status-change emails. Every tick of a box would mail somebody,
+  and §22's argument for a deliberate confirm step applies.
+- Deciding STF-0009 — see §27.1 before touching it.
+
+### Verification
+
+**Scratch Postgres 16.13 from empty**, Supabase-shaped bootstrap, **126 of 129
+migrations applied**; the three failures are `pg_cron` only (0002, 0014, 0065),
+the documented local exception. 0133 was then applied twice more for
+idempotency.
+
+⚠️ **§45.14's "a rebuild from the directory fails at 0124" is now STALE and is
+corrected here.** 0124 applied cleanly, because `0100a_worked_conversion.sql`
+is committed (§36.8) and sorts between 0100 and 0101, so the fourteen-column
+`get_customer_scoreboard` exists before 0124 replaces it.
+
+Asserted on scratch: both tables RLS on with **zero policies**; every CHECK
+exercised on its boundaries — unknown status, source, kind, channel and product
+all refused, a blank subject refused, a 10,001-character body refused and 10,000
+accepted, `shipped_migration = '133'` refused and `'0100a'` accepted (the §36.8
+case), an empty `submitter_business` refused by the floor of 1.
+
+**The backfill inserted zero rows on an empty `customers` table and did not
+error** — the assertion that catches the bare-`values` mistake. With the five
+customers seeded it inserted **nine rows with references 1–9 in ascending
+`submitted_at` order** and seven notes, and a third apply changed nothing.
+
+Both FK directions confirmed: deleting a customer leaves the ticket alive with a
+null `customer_id` (proving `set null`, and proving no CHECK blocks the delete);
+deleting a ticket cascades its notes.
+
+**1,437 vitest cases green** (43 new), `npx tsc --noEmit` clean, `npm run lint`
+clean. Five assertions were **mutation-tested** before being kept — §42.8's
+lesson that a test which never fails proves nothing. Making `planSnapshot` read
+`account_status` fails the GR-only case; rendering "Won't do" to a customer
+fails two; adding `status` to `TICKET_PATCH_FIELDS` fails one; embedding
+`support_ticket_notes` in the customer read fails two; and adding a `DELETE`
+handler to the notes route fails one. All restore to green.
+
+⚠️ `supportTicketBoundary.test.ts` reads the REAL source files rather than
+restating their queries, because §42.8's 91 destroyed sequence runs came from a
+test that hand-wrote its own equivalent of a query and therefore asserted one
+that was never running. It strips comments before matching: the customer page's
+own docblock explains the boundary and so names both `support_ticket_notes` and
+`select("*")`, and a naive substring check fails on the explanation — which
+would train the next person to delete the explanation.
+
+**Not yet exercised:** the two forms driven end to end against a deployed
+preview signed in and signed out, and one hand-logged ticket.
+
+### Deployment order — migration BEFORE code
+
+0133 first, applied and verified against production **before the pull request
+merges** (§1.1). It is additive and inert: nothing reads either table until the
+code ships, and nothing here touches a balance, counter, pacing or capacity
+column. Code arriving first would fail every ticket insert — and because the
+insert is deliberately non-fatal, it would fail **silently**, which is the worst
+of both worlds: the emails would keep arriving and the log would stay empty.

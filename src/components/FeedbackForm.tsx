@@ -38,6 +38,7 @@ export function FeedbackForm({
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reference, setReference] = useState<string | null>(null);
 
   function update(key: keyof typeof form) {
     return (
@@ -57,6 +58,7 @@ export function FeedbackForm({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not send");
+      setReference(typeof data.reference === "string" ? data.reference : null);
       setSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send");
@@ -73,6 +75,18 @@ export function FeedbackForm({
           The Stayful team has your {type === "bug" ? "bug report" : "feature request"} and
           will be in touch if anything's needed.
         </p>
+        {/*
+          The reference exists because the ticket row is written BEFORE the
+          email (§46), so by the time this renders there is something to quote.
+          It is absent only when the insert failed, in which case saying
+          nothing is right — a reference to a row that does not exist is worse
+          than none.
+        */}
+        {reference && (
+          <p className="mt-2 font-mono text-xs text-muted-foreground">
+            Your reference is {reference}
+          </p>
+        )}
       </div>
     );
   }

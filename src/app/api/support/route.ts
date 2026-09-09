@@ -1,14 +1,36 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { sendSupportEmail } from "@/lib/emails";
+import { loadTicketAccount, logSupportTicket } from "@/lib/supportTicketLog";
+import {
+  MAX_BODY,
+  MAX_SUBJECT,
+  MAX_SUBMITTER_BUSINESS,
+  MAX_SUBMITTER_EMAIL,
+  MAX_SUBMITTER_NAME,
+  ticketReference,
+} from "@/lib/supportTickets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Receive a customer support request and email it to the Stayful team. If the
- * sender is signed in, their account record is attached for context.
+ * Receive a customer support request, LOG IT, and email it to the Stayful team.
+ * If the sender is signed in, their account record is attached for context.
+ *
+ * ⚠️ THE TICKET IS WRITTEN BEFORE THE EMAIL IS SENT (§46). Until this changed,
+ * a Resend failure returned 502 and the submission was gone — the customer was
+ * told to try again and nothing recorded that they had asked. The row is now
+ * the durable half.
+ *
+ * ⚠️ SO THE RESPONSE LADDER CHANGED, AND A FAILED SEND IS NO LONGER A 502 WHEN
+ * THE ROW LANDED. Telling a customer to retry after we have kept their request
+ * only manufactures a duplicate ticket. The four cases:
+ *
+ *   row ok  + email ok      → 200 {ok, reference}
+ *   row ok  + email failed  → 200 {ok, reference}, logged. Recovery is /admin/support.
+ *   row fail + email ok     → 200 {ok}            — exactly today's behaviour.
+ *   row fail + email failed → 502                 — exactly today's message.
  */
 export async function POST(request: NextRequest) {
   let body: {
@@ -28,6 +50,7 @@ export async function POST(request: NextRequest) {
   const email = body.email?.trim();
   const subject = body.subject?.trim();
   const message = body.message?.trim();
+  const business = body.business?.trim() || null;
 
   if (!name || !email || !subject || !message) {
     return NextResponse.json(
@@ -36,50 +59,68 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Length caps mirror 0133's CHECK constraints. Before §46 nothing here was
+  // capped because the only cost of a long field was a long email; now an
+  // over-long field would be a constraint violation instead of a clear 400.
+  const tooLong =
+    name.length > MAX_SUBMITTER_NAME ||
+    email.length > MAX_SUBMITTER_EMAIL ||
+    subject.length > MAX_SUBJECT ||
+    message.length > MAX_BODY ||
+    (business?.length ?? 0) > MAX_SUBMITTER_BUSINESS;
+  if (tooLong) {
+    return NextResponse.json(
+      { error: "That message is too long to send. Please shorten it." },
+      { status: 400 }
+    );
+  }
+
   // Attach the signed-in customer's account, if any (authoritative source).
-  let account = null as Awaited<ReturnType<typeof loadAccount>>;
+  let context: Awaited<ReturnType<typeof loadTicketAccount>> = null;
   try {
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) account = await loadAccount(user.id);
+    if (user) context = await loadTicketAccount(user.id);
   } catch {
     /* treat as anonymous */
   }
 
+  const ticket = await logSupportTicket({
+    source: "support_form",
+    kind: "support",
+    name,
+    email,
+    business,
+    subject,
+    body: message,
+    account: context?.account ?? null,
+    customer: context?.customer ?? null,
+  });
+
   const { error } = await sendSupportEmail({
     name,
     email,
-    business: body.business?.trim() || null,
+    business,
     subject,
     message,
-    account,
+    reference: ticket ? ticketReference(ticket.reference) : null,
+    account: context?.account ?? null,
   });
 
   if (error) {
-    return NextResponse.json(
-      { error: "Could not send your request. Please try again." },
-      { status: 502 }
-    );
+    if (!ticket) {
+      return NextResponse.json(
+        { error: "Could not send your request. Please try again." },
+        { status: 502 }
+      );
+    }
+    console.error("support: ticket logged but the email failed", error);
   }
 
-  return NextResponse.json({ ok: true });
-}
-
-async function loadAccount(userId: string) {
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from("customers")
-    .select("id, business_name, contact_name, email, phone")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!data) return null;
-  return {
-    customer_id: data.id as string,
-    business_name: data.business_name as string,
-    contact_name: data.contact_name as string,
-    email: data.email as string,
-    phone: (data.phone as string | null) ?? null,
-  };
+  return NextResponse.json({
+    ok: true,
+    reference: ticket ? ticketReference(ticket.reference) : null,
+  });
 }
