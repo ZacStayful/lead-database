@@ -9554,9 +9554,18 @@ Nothing else moves: `endDate: undefined` leaves both date cells alone, the start
 date is still first-write-wins, and the label cache makes the Status write a
 no-op for everybody already correct.
 
-Measured read-only on production before the code shipped: **24 to write** (22
-Management, 2 Guaranteed rent), **22 skipped** — 18 holding no product and 4
-archived. Nobody reads as Both today.
+Measured read-only on production on 2026-09-09: **23 to write** (21 Management,
+2 Guaranteed rent), **27 skipped** — 23 holding no product and 4 archived.
+Nobody reads as Both today.
+
+⚠️ **That is a VERDICT count intersected with "has an item on the status board",
+and the two are not the same number.** 24 customers get a non-null verdict; one
+of them has no item on 18420649520, so the backfill reports them as
+`no_status_board_item` and writes nothing. A figure taken from the verdict alone
+overstates the write by exactly the customers §23.5's matcher never resolved —
+which is the population the check tool exists to report. Re-measure before
+pressing the button rather than trusting this line: the book grows, and an
+earlier reading of it (24/22, on 47 customers) was already stale within two days.
 
 ### Verification
 

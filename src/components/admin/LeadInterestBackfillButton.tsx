@@ -17,7 +17,7 @@ interface BackfillResult {
 
 /**
  * Admin button: fill in "What kind of leads" on the Monday enquiries board for
- * every customer who already holds a product (§46).
+ * every customer who already holds a product (§47).
  *
  * The SyncMondayButton / CheckLeadQualityButton pattern, with one addition:
  * DRY RUN FIRST, ALWAYS. This writes to somebody else's board, once per

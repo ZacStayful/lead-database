@@ -9,7 +9,7 @@ import {
 } from "../mondayStatus";
 
 /**
- * "What kind of leads" — the value written to Monday's text_mm6c5qba (§46).
+ * "What kind of leads" — the value written to Monday's text_mm6c5qba (§47).
  *
  * Two things are being pinned, and the second is the one that matters. The
  * vocabulary has to agree with the CHECK constraint, because a drift there is

@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
   // 1. Push to Monday. Non-fatal — we still create the account if this fails.
   //
   //    ONE BOARD, whichever service they asked for, with the "What kind of leads"
-  //    cell saying which (§46). Guaranteed Rent enquiries used to go to their own
+  //    cell saying which (§47). Guaranteed Rent enquiries used to go to their own
   //    board (18420913271), and that was a dead end: it has no Status column, so
   //    setEnquiryStatus refused it outright, the item could never carry a label or
   //    sit in a pipeline group, and §23.7 records that the one real GR customer had

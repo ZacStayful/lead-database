@@ -139,7 +139,7 @@ export function enquiryBoardId(): string {
 
 /*
  * Board 18420913271 "Stayful Guaranteed rent database enquiries" is RETIRED
- * (§46). Every enquiry now creates its item on the board above, whichever
+ * (§47). Every enquiry now creates its item on the board above, whichever
  * service it is for, with "What kind of leads" saying which.
  *
  * It was always a dead end: it has no Status column, so an item there could
@@ -716,7 +716,7 @@ async function createBoardContact(
  * submission. Returns the new Monday item id.
  *
  * EVERY enquiry lands here now, whichever service it is for, with leadInterest
- * saying which (§46). That is what makes the board one pipeline: the Status
+ * saying which (§47). That is what makes the board one pipeline: the Status
  * column, its ten group-moving automations and the whole customer sync only
  * exist on this board, so a GR enquirer sent anywhere else could never carry a
  * label and had to be re-created by hand.
