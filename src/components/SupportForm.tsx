@@ -20,6 +20,7 @@ export function SupportForm({
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reference, setReference] = useState<string | null>(null);
 
   function update(key: keyof typeof form) {
     return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -38,6 +39,7 @@ export function SupportForm({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not send");
+      setReference(typeof data.reference === "string" ? data.reference : null);
       setSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send");
@@ -55,6 +57,12 @@ export function SupportForm({
         <p className="mt-1 text-sm text-muted-foreground">
           The Stayful team has your message and will get back to you by email.
         </p>
+        {/* See FeedbackForm on why this can be absent. */}
+        {reference && (
+          <p className="mt-2 font-mono text-xs text-muted-foreground">
+            Your reference is {reference}
+          </p>
+        )}
       </div>
     );
   }

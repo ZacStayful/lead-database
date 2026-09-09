@@ -15,7 +15,13 @@
  *
  * The destination is the EXISTING feedback form (`src/app/feedback/page.tsx`),
  * which prefills from the signed-in customer and emails FEEDBACK_EMAIL via
- * `sendFeedbackEmail`. Nothing here persists a request; see CLAUDE.md §22.8.
+ * `sendFeedbackEmail`. Since §46 that route also LOGS the request to
+ * `support_tickets` before sending, so a request made through this button is
+ * durable and shows up on /admin/support — the module itself still persists
+ * nothing, which is what keeps it import-free. (This comment used to say
+ * "nothing here persists a request; see CLAUDE.md §22.8": the claim is now
+ * false, and the section was 21.8 — the subsections under §22 are numbered
+ * 21.x, a pre-existing off-by-one in that file.)
  */
 
 /**

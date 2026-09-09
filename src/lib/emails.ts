@@ -107,6 +107,13 @@ export async function sendFeedbackEmail(params: {
   subject: string;
   details: string;
   page?: string | null;
+  /**
+   * The ticket reference (STF-0007), when the row was written before this send.
+   * Absent means the insert failed, and the subject falls back to exactly the
+   * string it used before §46 — a reply thread that cannot be tied to a row is
+   * still better than a subject line saying so.
+   */
+  reference?: string | null;
   account?: {
     customer_id: string;
     business_name: string;
@@ -116,7 +123,9 @@ export async function sendFeedbackEmail(params: {
   } | null;
 }): Promise<{ id: string | null; error: unknown }> {
   const label = params.type === "bug" ? "Bug report" : "Feature request";
-  const subject = `[${label}] ${params.subject}`;
+  const subject = params.reference
+    ? `[${label}] ${params.reference} — ${params.subject}`
+    : `[${label}] ${params.subject}`;
 
   const row = (k: string, v: string) =>
     `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:150px;vertical-align:top">${k}</td><td style="padding:6px 0;font-size:14px">${v}</td></tr>`;
@@ -176,6 +185,8 @@ export async function sendSupportEmail(params: {
   business?: string | null;
   subject: string;
   message: string;
+  /** The ticket reference (STF-0007). See `sendFeedbackEmail` on the fallback. */
+  reference?: string | null;
   account?: {
     customer_id: string;
     business_name: string;
@@ -184,7 +195,9 @@ export async function sendSupportEmail(params: {
     phone: string | null;
   } | null;
 }): Promise<{ id: string | null; error: unknown }> {
-  const subject = `[Support] ${params.subject}`;
+  const subject = params.reference
+    ? `[Support] ${params.reference} — ${params.subject}`
+    : `[Support] ${params.subject}`;
 
   const row = (k: string, v: string) =>
     `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:150px;vertical-align:top">${k}</td><td style="padding:6px 0;font-size:14px">${v}</td></tr>`;

@@ -20,6 +20,7 @@ export default async function AdminLayout({
     { href: "/admin/leads", label: "Leads" },
     { href: "/admin/imported-leads", label: "Imported leads" },
     { href: "/admin/outcomes", label: "Outcomes" },
+    { href: "/admin/support", label: "Support" },
     { href: "/admin/pool", label: "Expired leads" },
     { href: "/admin/offers", label: "Offers" },
     { href: "/admin/training", label: "Training" },
