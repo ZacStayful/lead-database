@@ -45,6 +45,20 @@ export const KILL_SWITCH_CACHE_MS = 30_000;
 /** Most keys a customer may hold at once, un-revoked. */
 export const MAX_KEYS_PER_CUSTOMER = 5;
 
+/** Most inbound lead webhooks a customer may hold at once, un-revoked (§48). */
+export const MAX_LEAD_WEBHOOKS_PER_CUSTOMER = 3;
+
+/**
+ * The inbound lead receiver's own per-minute ceiling, per webhook.
+ *
+ * Lower than the read surface's 60 deliberately: this one WRITES, and an
+ * automation that fires on a CRM status change sends one request per approved
+ * enquiry. Twenty a minute is a busy morning; a thousand is a loop, and the
+ * damage a loop does here is rows in somebody's lead list rather than load on a
+ * read path. The daily per-customer window is the shared one.
+ */
+export const LEAD_WEBHOOK_PER_MINUTE = 20;
+
 /** Page size for /v1/leads. */
 export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 100;
