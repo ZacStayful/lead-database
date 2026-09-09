@@ -9378,8 +9378,19 @@ own docblock explains the boundary and so names both `support_ticket_notes` and
 `select("*")`, and a naive substring check fails on the explanation — which
 would train the next person to delete the explanation.
 
-**Not yet exercised:** the two forms driven end to end against a deployed
-preview signed in and signed out, and one hand-logged ticket.
+**Not yet exercised:** the two forms driven end to end signed in and signed
+out, and one hand-logged ticket.
+
+⚠️ **AND THAT CANNOT BE DONE ON A PREVIEW DEPLOYMENT** — the same wall §45
+hit. Vercel Deployment Protection is on for previews, so every request is
+intercepted before it reaches Next: `/feedback`, `/dashboard/support` and
+`/admin/support` all answer **302 to `vercel.com/sso-api`**, checked on this
+branch's own preview. Test on `leads.stayful.co.uk` after merge.
+
+⚠️ **And when you do, remember a preview runs against PRODUCTION Supabase
+(§1.1), so a test submission writes a REAL row and emails the team.** Submit
+one deliberately rather than by accident, and delete it by `reference`
+afterwards — it will be STF-0010, since the backfill took 1–9.
 
 ### Deployment order — migration BEFORE code
 
