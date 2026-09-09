@@ -10,7 +10,6 @@
  * and the POST that follows it cannot reach different verdicts.
  */
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,7 +19,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { oauthEnabled } from "@/lib/oauth/enabled";
 import { holdsProduct } from "@/lib/products";
 import { SCOPE_LABELS, type ApiScope } from "@/lib/api/scopes";
-import { mintNonce } from "@/lib/oauth/tokens";
 import {
   errorRedirectUrl,
   validateAuthorizeRequest,
@@ -29,9 +27,6 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** The cookie half of the double-submit CSRF pair. */
-export const CONSENT_NONCE_COOKIE = "sf_oauth_consent";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -162,14 +157,13 @@ export default async function AuthorizePage({
     );
   }
 
-  const nonce = mintNonce();
-  cookies().set(CONSENT_NONCE_COOKIE, nonce, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 600,
-  });
+  // ⚠️ THE CSRF NONCE IS NOT MINTED HERE, AND MUST NOT BE. cookies() is
+  // read-only in a Server Component on Next 14, so calling .set() throws — and
+  // because every guard above returns early, only a VALID request reached it.
+  // The consent screen 500'd for exactly the people entitled to see it while
+  // both error paths rendered correctly, which is why it read as a client
+  // problem. ConsentForm now asks GET /api/oauth/consent-nonce, which is a
+  // Route Handler and may set the cookie. The POST is unchanged.
 
   const redirectHost = new URL(verdict.redirectUri).host;
   const cancel = new URL(verdict.redirectUri);
@@ -227,7 +221,7 @@ export default async function AuthorizePage({
             </p>
           </div>
 
-          <ConsentForm params={hidden} nonce={nonce} cancelUrl={cancel.toString()} />
+          <ConsentForm params={hidden} cancelUrl={cancel.toString()} />
 
           <p className="text-center text-xs text-muted-foreground">
             You can disconnect it at any time in{" "}

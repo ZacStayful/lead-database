@@ -30,7 +30,7 @@ import {
   validateAuthorizeRequest,
   type ClientRecord,
 } from "@/lib/oauth/authorizeRequest";
-import { CONSENT_NONCE_COOKIE } from "@/app/oauth/authorize/page";
+import { CONSENT_NONCE_COOKIE } from "@/lib/oauth/consentNonce";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

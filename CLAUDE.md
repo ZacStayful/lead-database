@@ -9072,6 +9072,90 @@ byte-for-byte. `oauth_enabled` ships **false**, so even with the code deployed
 the discovery documents 404 and every client behaves exactly as it does today.
 Flip it only after the end-to-end tests above.
 
+### 45.15 — ⚠️ The consent screen 500'd for every VALID request *(no migration)*
+
+`oauth_enabled` was flipped on production, and the first customer to connect
+Claude got as far as the consent screen and no further. Discovery worked,
+dynamic client registration returned a 201 with a `client_id`, and then
+`/oauth/authorize` answered **500** — "Application error: a server-side
+exception has occurred", digest `3574262920`.
+
+**`src/app/oauth/authorize/page.tsx` called `cookies().set()` to mint the
+double-submit nonce.** That is a Server Component, and on Next 14 `cookies()`
+returns a read-only store there: `.set()` throws *"Cookies can only be modified
+in a Server Action or Route Handler."*
+
+⚠️ **What hid it is the shape worth keeping.** The page returns early on every
+invalid request, so the throw was unreachable except on a fully valid one:
+
+| Request | Outcome |
+|---|---|
+| Unrecognised `client_id` | the proper error page — returns at the `fatal` verdict |
+| No parameters at all | the proper error page — same early return |
+| Not signed in | redirects to `/login` — the guard sits above the write |
+| **Valid, signed in** | **500** — the only path that reached the cookie |
+
+So every way of poking at it by hand reported the feature working, and only a
+customer with a real OAuth client could see it fail. `next build` cannot catch
+it either: it is a runtime throw on a page nothing renders. This is the sixth
+time this file has recorded a bug living in the seam between two well-tested
+pieces (§23.10, §25's `items(ids:)`, §27.8's `!inner`, §40.8's two seams,
+§42.8's 91 destroyed runs), and the first where the tested pieces either side
+were both *correct*.
+
+**The read and the delete were never the problem.** `POST /api/oauth/authorize`
+gets the cookie and deletes it, and a Route Handler may do both. Only the write
+was in the wrong kind of file.
+
+#### The nonce is now fetched, and middleware could not host it
+
+`GET /api/oauth/consent-nonce` mints it, sets the cookie and returns the value;
+`ConsentForm` asks for it on mount and arms Allow only once it arrives. The POST
+is **unchanged** — the pair still works exactly as designed.
+
+⚠️ **Middleware was the obvious answer and is not available: `middleware.ts` has
+never run.** It sits at the repository root while the app lives in `src/`, so
+Next resolves `src/middleware.ts` and finds nothing. The production build prints
+no `ƒ Middleware` line and no middleware compile step. That is not a security
+hole — `admin/layout.tsx` independently calls `getUser()` and `isAdminUser()`
+and redirects, so `updateSession`'s route protection is redundant rather than
+load-bearing — but it means the file is dead code that reads as live, and moving
+it into `src/` would wake dormant request handling for every dashboard and admin
+route. That is its own change, not a hotfix.
+
+Three details on the route that are not decoration:
+
+- **`Cache-Control: no-store` on the success response.** A cached nonce would be
+  handed to the next visitor and the pair would then match for somebody who
+  never saw the consent screen. ⚠️ The first version of the guard test asserted
+  `no-store` *anywhere in the file* and passed with the header stripped off the
+  only response that carries a nonce, because the 401 and 503 branches have one
+  too. It is now anchored on the success response specifically.
+- **It requires a session.** A nonce is meaningless without one and an open
+  minter is a needless endpoint.
+- **`CONSENT_NONCE_COOKIE` moved to `src/lib/oauth/consentNonce.ts`.** The POST
+  route imported it *from the page*, dragging the whole page module into a
+  route's graph to read one string.
+
+Two consequences accepted knowingly: **Allow now needs JavaScript** (the form
+was already a client component and nothing reaches this screen without a JS
+OAuth client), and two consent tabs still clobber each other's nonce — which is
+exactly what the old code did on every render, so it is not a regression.
+
+**Verified by file-text guards, mutation-checked**, the §42.8 discipline: the
+page contains no `cookies().set(` and does not import `cookies` at all, the
+route sets the cookie and is uncacheable, and the POST reads the shared constant
+rather than the page. ⚠️ A render test would be the stronger check and does not
+belong here: `vitest.config.ts` states **"PURE UNITS ONLY — no network, no
+database, no React"**, and that constraint is what makes it safe to gate
+`next build` on. Do not widen it for this.
+
+⚠️ **Not reproducible locally in a fresh clone**: there is no `.env.local`, so
+the page cannot reach Supabase to resolve a client. And §45 already records that
+a Vercel preview cannot test OAuth at all. **The proof is on the real domain**,
+signed in, with a registered client — which is where this bug was found and
+where its fix has to be confirmed.
+
 ---
 
 ## 46. Logging what customers ask for *(0133)*
