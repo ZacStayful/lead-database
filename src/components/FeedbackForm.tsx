@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ClarifyStep } from "@/components/feedback/ClarifyStep";
 
 type FeedbackType = "feature" | "bug";
 
@@ -39,6 +40,11 @@ export function FeedbackForm({
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reference, setReference] = useState<string | null>(null);
+  /**
+   * Set only when the route came back `clarify: true` — signed in, and a key
+   * configured. Everyone else takes the pre-§47 path and never sees a question.
+   */
+  const [clarifyTicketId, setClarifyTicketId] = useState<string | null>(null);
 
   function update(key: keyof typeof form) {
     return (
@@ -59,12 +65,32 @@ export function FeedbackForm({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Could not send");
       setReference(typeof data.reference === "string" ? data.reference : null);
+      // The ticket is already written either way (§46). `clarify` only decides
+      // whether we ask the questions before the team is notified, so a missing
+      // or malformed flag falls through to exactly today's behaviour.
+      if (data.clarify === true && typeof data.ticketId === "string") {
+        setClarifyTicketId(data.ticketId);
+        return;
+      }
       setSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (clarifyTicketId && !sent) {
+    return (
+      <ClarifyStep
+        ticketId={clarifyTicketId}
+        reference={reference}
+        onDone={(ref) => {
+          setReference(ref);
+          setSent(true);
+        }}
+      />
+    );
   }
 
   if (sent) {

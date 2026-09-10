@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import {
+  FEATURE_REQUEST_HEADER_PATH,
+  FEATURE_REQUEST_LABEL,
+} from "@/lib/featureRequest";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { markFirstLoginAndNotify } from "@/lib/firstLogin";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -57,6 +61,16 @@ export default async function DashboardLayout({
   // most two clicks with nothing hidden behind an unlabelled overflow control.
   // The groups are built here, on the server, so the visibility rules stay
   // beside the reasoning for them.
+  //
+  // ⚠️ "Request a feature" IS A DIRECT LINK, NOT A GROUP (§50). Folding it into
+  // a "Feedback" menu alongside the bug link and Support would be tidier and
+  // would defeat the point: the thing being promoted would end up one click
+  // DEEPER than the footer link it exists to replace. Bug reporting stays in
+  // the footer and Support stays under Account.
+  //
+  // ⚠️ It sits before Account, NOT last. "Admin" is appended last for admins,
+  // and the last entry is the one that collided with the notification bell the
+  // time this row overflowed.
   const navGroups: NavGroup[] = [
     { label: "Dashboard", href: "/dashboard" },
     {
@@ -106,6 +120,7 @@ export default async function DashboardLayout({
         { href: "/dashboard/documents", label: "Documents" },
       ],
     },
+    { label: FEATURE_REQUEST_LABEL, href: FEATURE_REQUEST_HEADER_PATH },
     {
       label: "Account",
       items: [

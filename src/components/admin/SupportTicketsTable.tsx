@@ -13,6 +13,11 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
+  TicketBriefPanel,
+  type TicketBrief,
+  type TicketClarification,
+} from "@/components/admin/TicketBriefPanel";
+import {
   TICKET_STATUSES,
   adminStatusLabel,
   channelLabel,
@@ -48,6 +53,12 @@ export type SupportTicketRow = {
   customer_name: string | null;
   customer_state: "archived" | "cancelled" | null;
   live_plan: string | null;
+  /** §50. Null on every pre-0136 ticket and every signed-out submission. */
+  ai_status: string | null;
+  clarifications: TicketClarification[] | null;
+  brief: TicketBrief | null;
+  generated_prompt: string | null;
+  severity: string | null;
 };
 
 export type SupportTicketNoteRow = {
@@ -387,6 +398,13 @@ export function SupportTicketsTable({
                     <TableCell colSpan={7} className="bg-accent/20">
                       <div className="space-y-4 py-2">
                         <p className="whitespace-pre-wrap text-sm">{t.body}</p>
+
+                        <TicketBriefPanel
+                          aiStatus={t.ai_status}
+                          clarifications={t.clarifications}
+                          brief={t.brief}
+                          generatedPrompt={t.generated_prompt}
+                        />
 
                         <div className="text-xs text-muted-foreground">
                           {t.submitter_name}
