@@ -74,6 +74,10 @@ The claim policy itself (the window, the effort gate, the hidden allowance
 maths, peer corroboration and contradiction) is unit-tested separately in
 `src/lib/quality/claimPolicy.test.ts` — run it with `npm test`.
 
+`npm test` runs `scripts/assert-tests-found.mjs` first. `node --test` exits 0
+when its glob matches nothing, so without that guard a renamed directory would
+turn the test step green while running nothing.
+
 ## Adding a test file
 
 Anything matching `supabase/tests/*_test.sql` is picked up automatically. Write
