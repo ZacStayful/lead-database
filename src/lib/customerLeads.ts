@@ -14,8 +14,15 @@ import { extractPostcode, postcodeArea } from "./postcode";
 import { normaliseUkMobile } from "./leadQuality";
 import type { LeadType } from "./types";
 
-/** How an owned lead was created. */
-export type OwnedLeadSource = "import" | "manual";
+/**
+ * How an owned lead was created.
+ *
+ * ⚠️ THIS UNION AND `leads_owner_source_check` MUST MOVE TOGETHER. The column
+ * carries a CHECK naming exactly these values, so a member added here without
+ * the migration fails every insert that uses it — and one added to the CHECK
+ * without this compiles nowhere. `webhook` arrived with §48 and 0135.
+ */
+export type OwnedLeadSource = "import" | "manual" | "webhook";
 
 /** What `create_customer_leads` did with one input row. */
 export type CreateOutcome = "created" | "duplicate" | "empty";

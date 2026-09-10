@@ -9611,3 +9611,288 @@ migration is inert exactly as designed.
 It is additive and redefines nothing, so code arriving first would merely fail
 the cache update while still writing the cell correctly. Nothing here touches a
 balance, counter, pacing or capacity column.
+
+---
+
+## 48. An inbound door for a customer's own leads *(0135)*
+
+`support_tickets` reference **STF-0009**, open since 2026-09-08 from Marcus Chong
+(Unity Space Property Ltd): *connect approved landlord leads to the Stayful
+analyser*. His Make workflow approves an enquiry and he wants it in Stayful,
+analysed, and presented — with a human on both ends.
+
+The admin note on that ticket made the decisive observation, and it is the whole
+shape of this section: **the capability already exists.** Customers add their own
+leads (§30) and pay £3 to analyse them (§31). **The gap was the automated door,
+not the capability.**
+
+`POST /api/webhook/customer-leads/[token]` · `/api/customer/lead-webhooks`
+(+ `DELETE /[id]`) · `LeadWebhookPanel` in Settings.
+
+### 48.1 — ⚠️ This does NOT open the public API, and that was the design constraint
+
+The ticket asked for a write, and §27.1's standing rule is that `/api/v1` and the
+MCP tools never take a query, a table name, a column list or an arbitrary filter.
+All five v1 routes export `GET` and nothing else, and "the public API is
+read-only" is a sentence the whole containment design in §27 rests on.
+
+Three ways to serve the ticket were weighed. A `leads:write` scope and an MCP
+write tool were both **rejected**: either would make that sentence false, and
+both invite the next write to arrive as one more scope on a credential that
+already reads everything. A **receiver on its own surface** serves the ticket
+with §27.1 untouched rather than amended — and it is a shape this codebase has
+built twice already, in `/api/webhook/timelines/[token]` and
+`/api/webhook/resend/[token]`.
+
+⚠️ Not to be confused with `/api/webhook/n8n`, which ingests Stayful's **own**
+Monday leads into the marketplace. This one only ever creates leads owned by the
+customer who holds the token.
+
+### 48.2 — ⚠️ IT NEVER CHARGES, and that is what makes the credential proportionate
+
+`POST /api/customer/my-leads` has a `run_analysis` branch that buys the £3
+analysis. **This route has none and must not grow one.**
+
+That branch would not work here anyway — it re-fetches its own origin
+**forwarding the session cookie**, and there is no cookie on a webhook, so it
+returns 401. ⚠️ **Do not forward a token to make it work.** The reason is the
+decision underneath: an unattended credential that can spend a customer's money
+is a different kind of credential from one that can create a row, and this one
+travels in a **URL path**, where it reaches server logs, proxy logs and
+referrers. A path token is the same trade the two existing receivers make, and
+it is proportionate **only** because this door spends nothing. If it is ever
+widened to charge, it must become a signed request first — not merely a longer
+token.
+
+So the response reports whether the lead **could** be analysed and links to the
+page where one click does it. Marcus gets steps 1 and 2 automated, step 3 one
+click, and steps 4 and 5 unchanged and still human-gated, which is what he asked
+for.
+
+`leadWebhook.test.ts` reads the route file's own text and asserts it contains no
+`lead-analysis`, no `run_analysis` and no `headers.get("cookie")` — the §42.8
+discipline of anchoring a guard on the real file rather than on a restatement of
+it, because the restatement is what let 91 sequence runs be destroyed.
+
+### 48.3 — ⚠️ `analysable` is the field that makes this endpoint worth having
+
+**Creation and analysis have different bars, and nothing said so before.**
+`create_customer_leads` accepts a lead with only a name; `analysability()`
+(§32.5) needs an address, an unambiguous postcode and a bedroom count. So a lead
+can be perfectly real and completely unanalysable, and a caller who does not know
+that discovers it by clicking Analyse on forty leads and having eleven refused.
+
+```jsonc
+{ "ok": true, "outcome": "created", "replayed": false, "lead_id": "…",
+  "url": "https://leads.stayful.co.uk/dashboard/leads/…",
+  "analysable": { "ok": false, "code": "no_postcode" } }
+```
+
+`analysability()` is pure and free, so saying it costs nothing and turns a
+surprise into a field an automation can branch on.
+
+### 48.4 — Request idempotency, which this surface had none of anywhere
+
+⚠️ **THERE WAS NO REQUEST IDEMPOTENCY ANYWHERE ON THE API SURFACE.** Every guard
+in §27 and §45 is keyed on something the server generates **inside** the request,
+so a caller whose connection drops after we commit gets a second of everything
+when it retries.
+
+`create_customer_leads` does dedupe, but on **content**, and `lead_identity_key`
+requires all three of name, email and phone (§30.3) — so a partial row does not
+dedupe at all. A Make retry after a timeout creates a second landlord, and a
+timeout on a partial row is precisely what a retrying automation hits.
+
+`src/lib/api/idempotency.ts` is the house pattern: **claim by INSERT, then act**,
+as `credit_invoice()` does against Stripe redelivery (§19.5), the announcement
+send does (§21.2), `stripe_events` does, and every outbound message does
+(§40.13). It lives in `src/lib/api/` so a future write surface reuses it rather
+than inventing a second one.
+
+- **The key is REQUIRED**, 400 when absent, and the record id from the caller's
+  own system is the natural value. Optional, it would be omitted by exactly the
+  integrations that most need it.
+- **The unique index leads on `customer_id`**, mirroring
+  `lead_messages_idempotency_idx` (0116) — what that migration's header calls the
+  containment guarantee. Two customers may use the same key without colliding.
+- **The claim stores the MAPPING, not the response.** A replay rebuilds the body
+  from the lead, so nothing stored can go stale.
+- ⚠️ **THE CLAIM IS DELETED WHEN CREATION THEN FAILS.** Left behind, the key is
+  poisoned for ever: every retry finds it, replays a success, and reports a lead
+  that does not exist. `stripe_events` deletes its claim on a throw for exactly
+  this reason, and §40.8 records the cost of getting it wrong once already.
+- ⚠️ **The surface is a closed union, never a table name from a request.** A
+  helper that accepted one would be §27.1 undone one layer down, so adding a
+  second surface is a deliberate edit to that file.
+
+### 48.5 — The body is a named, closed set of fields
+
+`toOwnedLeadInput` maps a posted body onto the existing `OwnedLeadInput`, and
+**nothing else reaches the insert**. A test posts nine real column names an
+automation might plausibly send — `owner_customer_id`, `max_assignments`,
+`price_paid`, `gross_annual_income`, `owner_resale_qualified_at` among them — and
+asserts every one is dropped.
+
+An **unrecognised field is ignored rather than refused**: Make sends whole
+records, and 400-ing a lead because it included an `id` column would make the
+door useless.
+
+⚠️ **The aliases are exact names only, never content sniffing.** `leadImport.ts`
+guesses at column meaning because a spreadsheet's headings are whatever somebody
+typed — and it can afford to, because a human confirms the mapping on the next
+screen (§30.4). **Nobody confirms anything here**, so a wrong guess is stored
+silently.
+
+⚠️ **Two passes, and their order is the rule.** An exact field name beats an
+alias whatever order the keys arrive in. A single pass let whichever the platform
+happened to serialise first decide, which is not something the customer controls
+and therefore must not be something that matters. Caught by the test, not by
+review.
+
+**No creation logic lives in the route.** It calls `createOwnedLeads`, which
+already trims, normalises the phone through `normaliseUkMobile` (§40.9A), prefers
+an explicit postcode over one dug out of the address, derives `postcode_area`
+(0097's lesson about a second regex), and inserts the lead with its assignment
+atomically.
+
+### 48.6 — Who may post: `availableLeadTypes`, not `holdsProduct`
+
+The gate is §32.1's: a customer's own leads are free and unlimited and **stay
+that way through a pause and a cancellation**, because the database side is not
+part of what a subscription buys. So the automated door has to stay open in
+exactly the case the API-key creation gate closes.
+
+What is still required is that they have actually run the pipeline the lead needs
+— a GR lead gets GR's stages (invariant 6) — so an account that has never held
+either product is refused, and the panel is not rendered for it.
+
+**The product is fixed at webhook creation, not read per request.** A lead
+arriving with no product would have to default to something, and a wrong default
+puts a GR landlord into a management pipeline. Two products means two webhooks,
+which is how the customer's own automation is usually shaped anyway.
+
+### 48.7 — The management routes are session-only
+
+`/api/customer/lead-webhooks` and its `DELETE /[id]` call `getCurrentCustomer()`
+directly and never `resolveCaller()`, for the reason the API-key routes already
+state: **a credential that can mint credentials can grant itself authority it was
+not given and outlive its own revocation.** A webhook token is a *write*
+credential, so that argument is stronger here, not weaker. They also ignore
+`api_enabled`, so a leaked URL can be revoked while the API is switched off.
+
+Revoke is **a stamp, never a delete**: the row says the webhook existed and when
+it was last used, which is the evidence wanted if the URL leaks — and
+`customer_lead_webhook_claims` carries an FK to it, so deleting would orphan the
+idempotency record of everything it created.
+
+### 48.8 — ⚠️ `sweep_api_tables` keeps its TWO-ARGUMENT signature
+
+The claims table needs sweeping, and the obvious move is a third parameter for
+its retention. **It must not be added.** A defaulted third argument creates an
+**overload**, not a replacement, and every existing two-argument call then fails
+`function is not unique` — the §34/§35 trap this repo has hit twice.
+
+So the signature stays `sweep_api_tables(integer, integer)` and the claim cleanup
+reuses `p_log_retention_days` (30). A claim row is a mapping nobody reads and
+wants the same lifetime as the request log beside it. Dropping a month-old key
+means a caller replaying it creates a second lead, which is the right trade: at
+that distance it is a new request, not a retry.
+
+Two findings, both verified rather than assumed:
+
+- ⚠️ **Production's body is 0132's, not 0096's, and that is correct rather than
+  drift.** Both migrations define the function; 0132 added the OAuth cleanup and
+  three return keys. 0135 copies 0132's body verbatim and adds one delete and one
+  return key.
+- **The new `'webhook'` rate-limit windows needed no sweep change.** The blanket
+  window delete is not filtered by `subject_kind`. Only the roll-up into
+  `api_usage_daily` is `'key'`-scoped, and that is right: its `key_id` is an FK
+  to `customer_api_keys` and cannot hold a webhook id — the same reason OAuth
+  windows are discarded rather than rolled up (§45.10).
+
+### 48.9 — ⚠️ Diffing production against this migration means STRIPPING COMMENTS
+
+0135 was applied to production with its `--` comment lines removed, following the
+practice §31 records — and that was **proven schema-identical first**, not
+assumed: the full file and the stripped form were each applied to a scratch
+Postgres built from empty, and a 141-line fingerprint of columns, constraints,
+indexes and function ACLs came back identical.
+
+The consequence matters for the next §11 audit. All three replaced functions —
+`create_customer_leads`, `consume_api_rate_limit`, `sweep_api_tables` — now match
+**the file body with comment lines stripped**, byte for byte:
+
+| Function | Production `md5(prosrc)` | Length |
+|---|---|---|
+| `create_customer_leads` | `217a9f626a620575750636c08f51c3b4` | 3244 |
+| `consume_api_rate_limit` (5-arg) | `756cf7da707ea2ed0d9c9b22fdda6929` | 1493 |
+| `sweep_api_tables` | `9b9550c118598e62a86c9bf9c8645bfe` | 2744 |
+
+⚠️ A raw diff against the file will report a difference that is not one. Strip
+the comments first — that is how `sweep_api_tables` was confirmed undrifted
+before it was copied.
+
+### 48.10 — ⚠️ §45.14's rebuild warning is STALE, and this is the check
+
+§45.14 says a schema rebuilt from `supabase/migrations/` dies at 0124 on
+`get_customer_scoreboard`'s return type. **It does not, and has not since
+`0100a_worked_conversion.sql` was committed** (§36.8) — 0100a sorts between 0100
+and 0101, so the fourteen-column signature exists before 0124 replaces it.
+
+Measured while verifying this migration: **127 of 130 migrations apply to a
+scratch Postgres 16 from empty.** The three failures are 0002, 0014 and 0065,
+all `pg_cron`, which is the documented local exception and not a repo fault.
+
+### Verification
+
+Scratch **Postgres 16.13** from empty with a Supabase-shaped bootstrap, 127 of
+130 applying as above, then 0135 re-applied **twice** for idempotency.
+
+Schema: both tables RLS on with **zero policies**; all six indexes present; all
+three widened CHECKs exercised on their new value **and** a junk one, alongside
+the empty-name, empty-key, over-length-key and bad-outcome boundaries — seven
+refusals, seven acceptances. All three replaced functions `service_role`-only by
+`has_function_privilege`, and invariant 7's four re-checked.
+
+**The regression that matters**, against seeded rows: a lead created with
+`source = 'webhook'` is stored owned, is `lead_retired_from_allocation` and
+`lead_pool_barred`, returns **zero** candidates from
+`get_next_customers_for_lead`, `get_escalation_candidates` and
+`get_pool_entry_candidates`, is refused by **both** assign functions for a second
+customer, and is still invisible to `find_duplicate_lead` — so an owned lead
+still cannot poison ingest (§30.1). Beside it a marketplace lead still returns
+candidates and still allocates spending **exactly one** credit (10 → 9, counter
+0 → 1).
+
+The claim index was driven directly: the same `(customer, key)` collides on
+23505, the same key from a **different** customer does not, the sweep deletes an
+aged claim and reports it under `webhook_claims_deleted`, revoking a webhook
+leaves its claims standing with a null `webhook_id`, and deleting the customer
+cascades both.
+
+**1,464 vitest cases green** (27 new), lint clean, `npm run build` passes and
+registers all three routes. Four guards were **mutation-tested** before being
+kept, each failing exactly the intended test and no others: dropping the
+`releaseClaim` call, reading the session cookie in the receiver, letting the body
+mapper accept any key it is given, and unscoping the claim from `customer_id`.
+
+**Not yet exercised end to end.** No real automation has posted to this. Create a
+webhook in Settings, post one real approved lead from Make, confirm the phone
+normalised and the postcode area derived, check `analysable` matches what the
+Analyse button then offers, and force a retry with the same key to confirm it
+creates nothing second.
+
+### Deployment order — migration BEFORE code
+
+**0135 is applied to `znlfwbnvhlacwzgfalcf` (2026-09-09), before the PR merges**,
+per §1.1. Pre-apply: no collision on either table, any constraint or any index.
+Post-apply: **487 leads, 9 owned, 51 customers and 511 assignments untouched**,
+both tables RLS-on with zero policies, all three CHECKs widened, ACLs as above,
+and **no new Supabase advisory** — the two new tables join the deliberate
+deny-all posture shared with forty-six others.
+
+It is additive and inert on its own: the three CHECK widenings only **admit** a
+value nothing writes yet, and the two function replacements change one string
+list each. Nothing here touches a balance, counter, pacing or capacity column.
+Code arriving first would fail every `create_customer_leads` call — which is
+every manual add and every spreadsheet import, not just this feature.

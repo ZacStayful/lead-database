@@ -12,12 +12,16 @@ import {
   ConnectedAppsPanel,
   type ConnectedApp,
 } from "@/components/dashboard/ConnectedAppsPanel";
+import {
+  LeadWebhookPanel,
+  type LeadWebhookRow,
+} from "@/components/dashboard/LeadWebhookPanel";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getEmailDomain, getWhatsappConnection, messagingActiveFor } from "@/lib/messaging/service";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { holdsProduct } from "@/lib/products";
+import { availableLeadTypes, holdsProduct } from "@/lib/products";
 import { recentRequestsForCustomer, usageForKeys } from "@/lib/api/usage";
 import { APP_URL } from "@/lib/env";
 
@@ -35,7 +39,16 @@ export default async function SettingsPage() {
     holdsProduct(customer, "management") ||
     holdsProduct(customer, "guaranteed_rent");
 
+  // §48's inbound receiver is offered on `availableLeadTypes`, NOT `holdsAny`:
+  // a customer's own leads stay free through a pause and a cancellation (§32.1),
+  // so the automated door has to stay open in exactly the cases the read API's
+  // creation gate closes. The panel is hidden only for an account that has
+  // never run either pipeline, because a lead needs a product to get its
+  // pipeline stages (invariant 6).
+  const ownLeadProducts = availableLeadTypes(customer);
+
   let apiKeys: ApiKeyRow[] = [];
+  let leadWebhooks: LeadWebhookRow[] = [];
   let apiUsage: Awaited<ReturnType<typeof usageForKeys>> = {};
   let apiRecent: Awaited<ReturnType<typeof recentRequestsForCustomer>> = [];
   // OAuth connections. Loaded for any customer who holds a product, and the
@@ -47,6 +60,15 @@ export default async function SettingsPage() {
   let emailDomain: Awaited<ReturnType<typeof getEmailDomain>> = null;
   let whatsappConnection: Awaited<ReturnType<typeof getWhatsappConnection>> = null;
   let showMessaging = false;
+
+  if (ownLeadProducts.length > 0) {
+    const { data: hooks } = await createAdminClient()
+      .from("customer_lead_webhooks")
+      .select("id, name, lead_type, created_at, last_used_at, revoked_at")
+      .eq("customer_id", customer.id)
+      .order("created_at", { ascending: false });
+    leadWebhooks = (hooks ?? []) as LeadWebhookRow[];
+  }
 
   if (holdsAny) {
     const admin = createAdminClient();
@@ -183,6 +205,13 @@ export default async function SettingsPage() {
       )}
 
       {holdsAny && <ConnectedAppsPanel grants={connectedApps} />}
+
+      {ownLeadProducts.length > 0 && (
+        <LeadWebhookPanel
+          initialWebhooks={leadWebhooks}
+          availableProducts={ownLeadProducts}
+        />
+      )}
 
       {holdsAny && (
         <ApiAccessPanel

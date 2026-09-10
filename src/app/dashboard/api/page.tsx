@@ -319,6 +319,58 @@ export default async function ApiDocsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ⚠️ A SEPARATE DOOR, AND THE COPY SAYS SO. Everything above is
+          read-only, and that sentence has to keep being true — so the inbound
+          receiver is described as its own thing rather than as a sixth
+          endpoint. See §48 and src/lib/api/leadWebhooks.ts. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Sending us your own leads</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            Everything above is read-only. Adding your own leads works the other
+            way round and uses a different address: a webhook URL you create in{" "}
+            <Link href="/dashboard/settings" className="text-brand hover:underline">
+              Settings
+            </Link>{" "}
+            and paste into Make, n8n or Zapier. Your API key is not used for it,
+            and it is not part of the API above.
+          </p>
+
+          <pre className="overflow-x-auto rounded-md border-[0.5px] border-border bg-muted/40 p-3 text-xs">
+{`POST ${APP_URL}/api/webhook/customer-leads/{your-token}
+Idempotency-Key: your own record id
+
+{ "name": "Jane Smith", "phone": "07700 900123",
+  "address": "12 Gill Avenue, Bristol", "postcode": "BS16 2PH",
+  "bedrooms": "3" }`}
+          </pre>
+
+          <p className="text-muted-foreground">
+            Send at least one of <code>name</code>, <code>email</code>,{" "}
+            <code>phone</code> or <code>address</code>. The reply carries the new{" "}
+            <code>lead_id</code>, a link to it, and an{" "}
+            <code>analysable</code> verdict saying whether we have enough to run
+            the property analysis — which needs an address, a clear postcode and
+            a bedroom count.
+          </p>
+
+          <p className="text-muted-foreground">
+            <strong className="text-foreground">Nothing is ever charged here.</strong>{" "}
+            The lead is created and nothing else; running the £3 analysis stays a
+            click you make yourself.
+          </p>
+
+          <p className="text-muted-foreground">
+            <strong className="text-foreground">Always send an Idempotency-Key.</strong>{" "}
+            It is required. If your automation times out and retries, we
+            recognise the key and give you back the lead we already created
+            rather than creating a second one.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
