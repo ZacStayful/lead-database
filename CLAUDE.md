@@ -10754,11 +10754,47 @@ PRODUCTION Supabase (§1.1), so a test claim moves a real credit.
 
 ### Deployment order — migration BEFORE code
 
-0137 first, applied and verified against production **before the pull request
-merges** (§1.1). It is additive and inert: every new column is defaulted, every
-new function is unreferenced until the code ships, and the one existing function
-it replaces — `reset_monthly_counts` — gains a single extra column to zero and
-is otherwise 0018's body verbatim.
+✅ **0137 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-10, before the
+merge**, as §1.1 requires. It is additive and inert: every new column is
+defaulted, every new function is unreferenced until the code ships, and the one
+existing function it replaces — `reset_monthly_counts` — gains a single extra
+column to zero and is otherwise 0018's body verbatim.
+
+Pre-apply: **zero collisions** on the four customer columns, `leads.quality_flag`,
+`lead_assignments.quality_claim_id`, the table, the five functions or the three
+indexes. And the check §11 says not to assume — production's live
+`reset_monthly_counts` was diffed against the body this migration carries
+forward, and with the one added line stripped it matched **byte for byte**
+(`e3da7dcb46bbe748308646438bc82693`, 917 chars). Nothing was being clobbered.
+
+Post-apply, verified against the live database rather than trusted:
+
+- **All six function bodies hash-match the file**, so no transcription slip
+  survived: `claimable_dead_lead_assignments` `d8399879…`,
+  `uphold_dead_lead_claim` `8d0846f1…`, `apply_dead_lead_claim` `9400350c…`,
+  `resolve_dead_lead_claim` `8c77bde1…`, `flag_lead_dead_if_unanimous`
+  `fca304a7…`, `reset_monthly_counts` `edc74cfd…`. All `security definer`, all
+  with `search_path` pinned — so no new linter advisory.
+- **Invariant 7**: `anon` and `authenticated` hold **zero** execute grants on any
+  0137 function, and the four that must stay `authenticated`-executable still are.
+- **Inert as designed**: 52 of 52 customers at every new default, 0 flagged
+  leads, 0 claimed assignments, 0 claims; RLS on with zero policies; all five
+  CHECKs, the UNIQUE idempotency guard, four FKs and all three indexes present.
+- **Nothing moved**: 52 customers, 495 leads and 511 assignments untouched, and
+  an md5 of every customer's balances and monthly counters **identical** before
+  and after (`aad39417349c3aafdf5dc89125731a97`). A hash proves the bodies were
+  transcribed correctly; only this proves the apply spent nobody's credit.
+
+The whole path was then driven **on production itself**, inside a `DO` block that
+raises at the end so every write rolls back: a real worked assignment is
+claimable, a too-short detail is refused, a real claim auto-upholds and restores
+**exactly one** credit with the monthly counter rolled back, `assignment_count`
+is unchanged (§19.6), and a second claim on the same assignment is refused. The
+row counts and the balance fingerprint afterwards confirm it wrote nothing.
+
+⚠️ `lead_events` moved from 1,265 to 1,267 across the apply. That is live
+operator traffic, not the migration — nothing in 0137 writes an event, and the
+balance fingerprint is what carries the "no money moved" claim.
 
 Code arriving first would fail every claim, and would fail the lead page's
 eligibility read on **every** lead — `deadLeadClaimState` fails closed, so the
