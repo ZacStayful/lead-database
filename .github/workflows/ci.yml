@@ -1,0 +1,85 @@
+name: CI
+
+# Nothing ran automatically on a pull request before this: the only signal was
+# Vercel's preview build, which does not run tests. That mattered because the
+# lead-quality claim logic moves customer credits, and a regression there costs
+# real money quietly.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - claude/stayful-lead-marketplace-49kyjq
+
+# A new push supersedes the run in flight for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Typecheck, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22: `node --test "glob"` only expands the pattern itself from
+      # Node 21 onward, and the test script passes a quoted glob.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The build needs no secrets — every environment variable in this app is
+      # read at request time, not at build time.
+      - name: Build
+        run: npm run build
+
+  database:
+    name: Migrations and SQL tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches the major version Supabase runs.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y postgresql-client
+
+      # Applies every migration in order, runs the SQL suite against the
+      # result, then checks the hand-maintained schema.sql snapshot still
+      # produces the same database. See supabase/tests/README.md.
+      - name: Verify the database layer
+        run: supabase/tests/verify.sh
