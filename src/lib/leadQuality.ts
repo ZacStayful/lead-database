@@ -162,6 +162,58 @@ export function ukMobileE164(raw: string | null | undefined): UkMobileResult {
   return { ok: true, value: `+44${uk.value.slice(1)}` };
 }
 
+/** The dial code the enquiry form shows beside its mobile field. */
+export const UK_DIAL_CODE = "+44";
+
+/**
+ * Recombine a `+44`-prefixed field before it is validated or sent.
+ *
+ * The enquiry form shows `+44` as fixed chrome the prospect cannot delete and
+ * keeps only the national part in the box, so the two halves have to be put
+ * back together — the box alone is not a number.
+ *
+ * ⚠️ AN ENTRY THAT ALREADY CARRIES A COUNTRY CODE IS PASSED THROUGH UNTOUCHED.
+ * Someone pasting a full number into a field that already reads `+44` is the
+ * ordinary case, not a mistake. Blindly prefixing `+31 6…` would hand
+ * `normaliseUkMobile` a mangled string and have it answer `not_mobile` — "it
+ * should start 07" — about a Dutch number, when `foreign` is the true reason
+ * and the only one that tells them anything.
+ *
+ * ⚠️ A BARE `447…` IS ALSO PASSED THROUGH, and that case is easy to miss. It is
+ * the shape WhatsApp and most exports use, and it carries a country code with
+ * no `+` in front of it — so prefixing yields `+44447700900123`, which the
+ * parser correctly rejects as `not_mobile`. Refusing a number the field would
+ * have accepted before the affix existed is a regression, not a rule. The
+ * length test is what separates it from a national number: a UK mobile's
+ * national part is ten digits and starts `7`, so it can never reach twelve
+ * beginning `44`.
+ *
+ * `07…` is deliberately NOT special-cased. Prefixing gives `+4407700900123`,
+ * which is exactly the shape §36.2's parser exists for — 89 of 193 live leads
+ * are stored that way — so it resolves with no help from here.
+ */
+export function withUkDialCode(typed: string | null | undefined): string {
+  const value = String(typed ?? "").trim();
+  if (!value) return "";
+  const digits = value.replace(/\D/g, "");
+  // `00` is the international dialling prefix, which normaliseUkMobile reads as
+  // an explicit country code exactly as it reads a leading `+`.
+  if (value.startsWith("+") || digits.startsWith("00")) return value;
+  // A bare `44…` long enough to be a full international number (see above).
+  if (digits.startsWith("44") && digits.length >= 12) return value;
+  return `${UK_DIAL_CODE}${value}`;
+}
+
+/**
+ * The national part of a UK E.164 number, for redisplay beside the `+44` affix.
+ *
+ * `+447700900123` -> `7700900123`. Without this the field would read
+ * `+44` `+447700900123` after it reformats — the dial code twice.
+ */
+export function stripUkDialCode(e164: string): string {
+  return e164.startsWith(UK_DIAL_CODE) ? e164.slice(UK_DIAL_CODE.length) : e164;
+}
+
 /**
  * What a member of the public is told when their number is refused.
  *

@@ -9,7 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 import { PLANS, toPlanKey, type PlanKey } from "@/lib/plans";
-import { ukMobileE164, UK_MOBILE_ERRORS } from "@/lib/leadQuality";
+import {
+  stripUkDialCode,
+  ukMobileE164,
+  UK_DIAL_CODE,
+  UK_MOBILE_ERRORS,
+  withUkDialCode,
+} from "@/lib/leadQuality";
 
 /**
  * What the picker offers, in the order it offers it.
@@ -67,6 +73,12 @@ function EnquiryForm() {
     properties_managed: "",
     current_lead_source: "",
   });
+  // The affix stands down when the box already carries its own country code —
+  // mid-paste, or on an overseas number we are about to refuse. Left showing,
+  // the field reads "+44 +31 6 12345678", which is not a number in any country
+  // and makes the message underneath look like our mistake rather than theirs.
+  const carriesOwnDialCode = /^(\+|00)/.test(form.mobile.trim());
+
   const [error, setError] = useState<string | null>(null);
   const [mobileError, setMobileError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -94,10 +106,12 @@ function EnquiryForm() {
   function onMobileBlur(e: React.FocusEvent<HTMLInputElement>) {
     const typed = e.target.value.trim();
     if (!typed) return; // `required` already covers an empty field; don't nag.
-    const result = ukMobileE164(typed);
+    const result = ukMobileE164(withUkDialCode(typed));
     if (result.ok) {
       setMobileError(null);
-      setForm((f) => ({ ...f, mobile: result.value }));
+      // The dial code is already on screen beside the box, so only the national
+      // part goes back in — otherwise the field reformats to read "+44 +44…".
+      setForm((f) => ({ ...f, mobile: stripUkDialCode(result.value) }));
       return;
     }
     // Leave what they typed alone — it is theirs to correct, and blanking or
@@ -116,6 +130,9 @@ function EnquiryForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          // The box holds only the national part; the dial code beside it is
+          // chrome. Sent apart, the server would see a number with no country.
+          mobile: withUkDialCode(form.mobile),
           plan,
           lead_interest: leadInterest,
           // Kept for anything still reading the old field. It cannot express
@@ -243,23 +260,51 @@ function EnquiryForm() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="mobile">Mobile</Label>
-            <Input
-              id="mobile"
-              type="tel"
-              placeholder="07700 900123"
-              value={form.mobile}
-              onChange={update("mobile")}
-              onBlur={onMobileBlur}
-              required
-              autoComplete="tel"
-              aria-invalid={mobileError ? true : undefined}
-              aria-describedby={mobileError ? "mobile-error" : undefined}
-            />
+            {/*
+              The dial code is CHROME, not a value: it sits outside the input,
+              cannot be deleted, and is put back by withUkDialCode() on submit.
+              Pre-filling the box with "+44" instead would be one backspace from
+              a number that means something else entirely.
+
+              The placeholder deliberately carries NO leading zero. It used to
+              read "07700 900123", which sat next to a +44 field telling the
+              prospect to do the opposite of what the field wanted.
+            */}
+            <div className="relative">
+              {carriesOwnDialCode ? null : (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-y-0 left-0 flex items-center border-r-[0.5px] border-input pl-3 pr-2 text-sm text-muted-foreground"
+                >
+                  {UK_DIAL_CODE}
+                </span>
+              )}
+              <Input
+                id="mobile"
+                type="tel"
+                inputMode="tel"
+                className={carriesOwnDialCode ? undefined : "pl-14"}
+                placeholder="7700 900123"
+                value={form.mobile}
+                onChange={update("mobile")}
+                onBlur={onMobileBlur}
+                required
+                autoComplete="tel-national"
+                aria-invalid={mobileError ? true : undefined}
+                aria-describedby={
+                  mobileError ? "mobile-error" : "mobile-hint"
+                }
+              />
+            </div>
             {mobileError ? (
               <p id="mobile-error" className="text-sm text-destructive">
                 {mobileError}
               </p>
-            ) : null}
+            ) : (
+              <p id="mobile-hint" className="text-xs text-muted-foreground">
+                UK mobile. We store it as {UK_DIAL_CODE}7700900123.
+              </p>
+            )}
           </div>
           {/* Optional, and asked of everybody — the column exists on the one
               board every enquiry now lands on, and GR operators have websites

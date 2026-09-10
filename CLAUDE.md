@@ -10048,11 +10048,46 @@ than telling a UK enquirer they are abroad.
 
 ### 49.3 — The form shows it, the route decides it
 
-`/enquiry` reformats the field **on blur**, never on every keystroke — rewriting
-a half-typed number moves the caret and fights the person typing, and `07` would
+**The `+44` is on screen before anything is typed.** It sits OUTSIDE the input as
+fixed chrome the prospect cannot delete, and the box holds only the national
+part — `withUkDialCode()` puts the two back together on blur and on submit.
+
+⚠️ **Pre-filling the box with `"+44"` instead is the obvious version and is
+worse**: it is one backspace from a number that means something else entirely,
+and `required` is satisfied by `+44` alone.
+
+⚠️ **The placeholder carries NO leading zero.** It read `07700 900123` for one
+commit, which sat beside a `+44` field telling the prospect to do the opposite
+of what the field wanted — the whole reason this section has a second pass.
+
+`/enquiry` reformats **on blur**, never on every keystroke — rewriting a
+half-typed number moves the caret and fights the person typing, and `07` would
 become `+447` before they finished. A number it cannot read is **left exactly as
 typed** with the message underneath: blanking or rewriting it loses the digits
 they got right (§40.9A's rule).
+
+Two shapes in `withUkDialCode()` are load-bearing, and both are cases where the
+affix must NOT be applied:
+
+- **An entry carrying its own country code passes through** (`+…`, `00…`).
+  Prefixing `+31 6…` hands the parser a mangled string and it answers
+  `not_mobile` — *"it should start 07"* — about a Dutch number, when `foreign`
+  is the true reason and the only one that tells them anything.
+- ⚠️ **A bare `447…` of twelve digits or more passes through too**, and this one
+  is easy to miss. It is WhatsApp's shape and it carries a country code with no
+  `+`; prefixing yields `+44447700900123`, correctly rejected. Refusing a number
+  the field accepted before the affix existed is a regression, not a rule. The
+  length test separates it from a national number, which starts `7` and is ten
+  digits, so it can never reach twelve beginning `44`.
+
+`07…` is deliberately not special-cased: `+4407700900123` is exactly the shape
+§36.2's parser exists for, so it resolves with no help.
+
+**The affix stands down whenever the box already carries its own dial code**, so
+the field never reads `+44 +31 6 12345678` — which is not a number in any
+country and makes the message underneath look like our mistake rather than
+theirs. `stripUkDialCode()` is the other half: without it a valid number
+reformats to `+44` `+447700900123`, the dial code twice.
 
 Both halves import the same function and the same copy from `leadQuality.ts`,
 which has **zero imports** and is therefore safe in a client component. The
@@ -10098,10 +10133,16 @@ of them.
 
 `npx tsc --noEmit` clean, `npm run lint` clean, `npm run build` passes.
 
-Then driven for real rather than reasoned about. The form in **Chromium**:
-`07700 900123` and `447700900123` both become `+447700900123` on blur,
-`+4407304208011` becomes `+447304208011`, and a landline and an overseas number
-are left exactly as typed with their own message underneath. No page errors.
+The affix added 6 more cases, **mutation-checked**: removing the country-code
+pass-through fails 6 of them, including the one asserting an overseas paste
+still resolves as `foreign` rather than as a malformed UK number.
+
+Then driven for real rather than reasoned about. The form in **Chromium**, with
+the dial code rendered beside the box: `7700900123`, `07700 900123`,
+`447700900123`, `+4407304208011` and `+447711387707` all collapse to the same
+national part next to `+44`. A landline and an overseas number are left exactly
+as typed with their own message underneath, and the affix disappears for the
+overseas one. No page errors.
 
 The route over HTTP, all six cases. The four refusals return 400 with the right
 message; both valid shapes fall through to the **next** guard, which is what
