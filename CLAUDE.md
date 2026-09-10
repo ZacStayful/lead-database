@@ -10456,6 +10456,17 @@ tokens and emails the team. Submit one deliberately and delete it by
 
 ### Deployment order — migration BEFORE code
 
+✅ **0136 was applied to production on 2026-09-10, before the merge**, as §1.1
+requires. Verified there afterwards rather than trusting the apply: seven
+columns present, three CHECKs present, the sweeper index present, RLS still on
+with zero policies, and **all ten existing tickets carrying `ai_status` NULL** —
+the state §50.7 depends on. Each CHECK was then exercised against production
+inside a rolled-back block (`pending`, `critical`, a `brief` array and a
+20,001-character prompt all refused); the ticket count and the reference
+sequence were unchanged afterwards, so the probes wrote nothing. `get_advisors`
+reports no new finding — `support_tickets` keeps the deliberate
+RLS-on-no-policy posture it shares with 47 other tables.
+
 0136 first, applied and verified against production **before the pull request
 merges** (§1.1). It is additive and inert: every column is nullable, every
 existing row keeps `ai_status` NULL, and nothing touches a balance, counter,
