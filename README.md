@@ -195,6 +195,15 @@ Postgres — see that directory's README. They cover the invariants where money
 moves: one credit per upheld claim, no double-refunds, and the rule that a
 rejected slot is never resold.
 
+```bash
+PGHOST=localhost PGPORT=5432 PGUSER=postgres supabase/tests/verify.sh
+```
+
+`.github/workflows/ci.yml` runs all of the above on every pull request: one job
+for typecheck, unit tests and build, and one that applies every migration in
+order against a Postgres service container, runs the SQL suite, and checks
+`schema.sql` has not drifted from the migrations.
+
 ## Scheduled jobs
 
 Both new cron routes take `Authorization: Bearer $CRON_SECRET`, like the
