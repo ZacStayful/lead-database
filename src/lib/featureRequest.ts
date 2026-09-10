@@ -25,21 +25,36 @@
  */
 
 /**
- * Where the button goes.
+ * Where the button goes, and where it says it came from.
  *
  * `type=feature` is passed EXPLICITLY even though the feedback page already
  * defaults to `feature` for any non-`bug` value — the link must not depend on
  * that default staying put.
  *
- * `page=Announcement` is the attribution: it prefills the form's "Which page or
- * screen?" field, so a request that came from an announcement says so in the
- * email that lands in the team inbox. Without it every request looks alike and
- * there is no way to tell whether this button does anything.
+ * `page=<source>` is the attribution: it prefills the form's "Which page or
+ * screen?" field, so a request says where it was made from in the email and on
+ * the ticket. WITHOUT IT EVERY REQUEST LOOKS ALIKE AND THERE IS NO WAY TO TELL
+ * WHETHER A BUTTON DOES ANYTHING — which is the entire reason to have more than
+ * one entry point.
+ *
+ * ⚠️ It became a FUNCTION in §47, when the header gained a second copy of this
+ * button. A single constant would have made both entry points report
+ * themselves as "Announcement" and the comparison would have been quietly
+ * meaningless. The old constant survives as the announcement caller's argument,
+ * so nothing about that link changed.
  *
  * NOTE for any HTML caller: the `&` between the two params must be escaped to
  * `&amp;` before it goes into an `href` attribute. See `sendAnnouncementEmail`.
  */
-export const FEATURE_REQUEST_PATH = "/feedback?type=feature&page=Announcement";
+export function featureRequestPath(source: string): string {
+  return `/feedback?type=feature&page=${encodeURIComponent(source)}`;
+}
+
+/** The announcement email and dashboard banner. Unchanged from before §47. */
+export const FEATURE_REQUEST_PATH = featureRequestPath("Announcement");
+
+/** The dashboard header nav entry (§47). */
+export const FEATURE_REQUEST_HEADER_PATH = featureRequestPath("Header");
 
 /** The line above the button. Kept short: it sits under an admin's own copy. */
 export const FEATURE_REQUEST_PROMPT = "Something you want the platform to do?";

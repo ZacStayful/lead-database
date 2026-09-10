@@ -222,4 +222,51 @@ export async function finaliseTicket(
   return { answers, status: brief ? "ready" : "failed" };
 }
 
+/**
+ * Re-run synthesis for a ticket whose first attempt failed.
+ *
+ * The customer has already been emailed and their answers are already stored,
+ * so this only fills in the brief that a transient model outage cost. It reads
+ * the answers back out of `clarifications` rather than taking them from
+ * anywhere else — they are the only record of what was asked and said.
+ *
+ * ⚠️ CLAIMED BEFORE THE WORK, like the abandonment sweep. Without the
+ * conditional update two overlapping runs would both spend a synthesis call on
+ * the same row.
+ */
+export async function retryFailedSynthesis(ticketId: string): Promise<"ready" | "failed" | "skipped"> {
+  const admin = createAdminClient();
+
+  const { data: claimed } = await admin
+    .from("support_tickets")
+    .update({ ai_status: "awaiting_answers", updated_at: new Date().toISOString() })
+    .eq("id", ticketId)
+    .eq("ai_status", "failed")
+    .select(TICKET_COLUMNS);
+
+  const ticket = (claimed?.[0] ?? null) as unknown as ClarifyTicket | null;
+  if (!ticket) return "skipped";
+
+  // The full customer row, for the account state the prompt needs. A ticket
+  // whose customer has since been deleted still synthesises — accountState()
+  // handles null — it just has less to go on.
+  let customer: Customer | null = null;
+  if (ticket.customer_id) {
+    const { data } = await admin
+      .from("customers")
+      .select("*")
+      .eq("id", ticket.customer_id)
+      .maybeSingle();
+    customer = (data as Customer | null) ?? null;
+  }
+
+  const stored = ticket.clarifications ?? [];
+  const { status } = await finaliseTicket(
+    ticket,
+    customer,
+    stored.map((q) => ({ id: q.id, answer: q.answer ?? "" }))
+  );
+  return status;
+}
+
 export { answersComplete };

@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isAdminUser } from "@/lib/auth";
 import { sendFeedbackEmail } from "@/lib/emails";
 import { ticketReference } from "@/lib/supportTickets";
-import type { ClarifyTicket } from "@/lib/feedback/session";
+import { retryFailedSynthesis, type ClarifyTicket } from "@/lib/feedback/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +48,17 @@ const GRACE_MS = 2 * 60 * 60 * 1000;
 
 /** One run's ceiling, so a backlog cannot turn into an unbounded mail-out. */
 const BATCH = 25;
+
+/**
+ * Retries are model calls, not emails, so this is tighter.
+ *
+ * ⚠️ A ticket that fails synthesis repeatedly will be retried on every run, for
+ * ever. That is deliberate and it is why the number is small: the failure modes
+ * worth recovering from are transient, and a permanent one costs five calls an
+ * hour rather than a backlog that never drains. If that ever becomes a real
+ * cost, the fix is an attempt counter, not a bigger batch.
+ */
+const RETRY_BATCH = 5;
 
 async function handle(request: NextRequest) {
   const auth = request.headers.get("authorization");
@@ -124,7 +135,33 @@ async function handle(request: NextRequest) {
     swept += 1;
   }
 
-  return NextResponse.json({ status: "ok", scanned: data?.length ?? 0, swept, failed });
+  // Second job: fill in briefs a transient model outage cost. The customer was
+  // already emailed when they finished, so this changes nothing they can see —
+  // it recovers the thing on /admin/support that makes the ticket actionable.
+  const { data: stale } = await admin
+    .from("support_tickets")
+    .select("id")
+    .eq("ai_status", "failed")
+    .order("submitted_at", { ascending: true })
+    .limit(RETRY_BATCH);
+
+  let retried = 0;
+  let recovered = 0;
+  for (const row of (stale ?? []) as { id: string }[]) {
+    const status = await retryFailedSynthesis(row.id);
+    if (status === "skipped") continue;
+    retried += 1;
+    if (status === "ready") recovered += 1;
+  }
+
+  return NextResponse.json({
+    status: "ok",
+    scanned: data?.length ?? 0,
+    swept,
+    failed,
+    retried,
+    recovered,
+  });
 }
 
 export const GET = handle;

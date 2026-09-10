@@ -53,6 +53,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 44, title: "Telling a customer their card was declined", migrations: "0125" },
   { n: 45, title: "Connecting an AI assistant: OAuth 2.1", migrations: "0132" },
   { n: 46, title: "Logging what customers ask for", migrations: "0133" },
+  { n: 47, title: "Asking the questions before the ticket lands", migrations: "0134" },
 ];
 
 /**

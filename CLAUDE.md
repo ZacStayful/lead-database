@@ -9400,3 +9400,233 @@ code ships, and nothing here touches a balance, counter, pacing or capacity
 column. Code arriving first would fail every ticket insert — and because the
 insert is deliberately non-fatal, it would fail **silently**, which is the worst
 of both worlds: the emails would keep arriving and the log would stay empty.
+
+---
+
+## 47. Asking the questions before the ticket lands *(0134)*
+
+§46 fixed the bookkeeping. Every request is a row now, with a reference, a plan
+snapshot and a status. What it did not fix is the **content**: `subject` is one
+line and `body` is one paragraph, written by an operator who does not know the
+app calls it a pipeline stage, cannot remember which screen they were on, and
+has no reason to state what "fixed" would look like.
+
+So every request still cost a follow-up conversation. The interrogation that
+makes a request actionable happened days later, in a Claude Code session,
+against a customer who had moved on.
+
+0134 moves that interrogation to the moment of reporting. Three to five
+questions, generated from what they wrote **and from their live account state**,
+answered in taps, then one synthesised brief and a ready-to-paste implementation
+prompt on `/admin/support`.
+
+### 47.1 — The questions are generated, and the account state is half of why they work
+
+There is no question bank. Three inputs go in, and only the first is the same on
+every call: the product pack (`productContext.ts`), the customer's live account
+state (`accountState.ts`), and what they just typed.
+
+The account state is the part that is easy to underestimate. **"I'm not getting
+any leads any more" reads as a bug from the text alone and as an empty balance
+from the account**, and those are completely different conversations. So
+`accountState()` does not just list the numbers, it draws the conclusion:
+a zero balance renders as "if they are reporting that leads have stopped, that
+is WHY — it is a billing or plan matter, not a fault", and a product they do not
+hold renders as "never ask about that screen".
+
+⚠️ Each of those flags is **self-contained**, not cross-referenced. An earlier
+draft had the GR flag say "same reasoning as above", which for a GR-only
+customer pointed at a Management flag that never fired — a dangling sentence in
+a prompt. The test that caught it asserts on the text, not on the branch.
+
+### 47.2 — ⚠️ There is no skip button, and "not sure" simplifies instead
+
+A skipped question puts a hole in the brief in exactly the place that mattered,
+so **every question must be answered** and the send control is disabled until
+they all are. `answersComplete` enforces it server-side too; a disabled button
+is a courtesy, not a control.
+
+That is only fair because not understanding a question leads somewhere. Under
+each one sits "Not sure what this means?", which asks it again more simply:
+
+| Depth | What comes back |
+|---|---|
+| 0 | The question as first generated |
+| 1 | Plainer wording, concrete options, or the decision split in half |
+| 2 | Terminal — a yes/no pair, or "in your own words" |
+
+⚠️ **Terminality is enforced in `normaliseSimplified`, not requested of the
+model.** The prompt says depth 2 must be answerable by anyone; the code
+guarantees it. A model returning another four-way choice at the floor would
+otherwise leave a customer in front of a compulsory question with no way
+forward, which is the one state this feature must never produce. Every failure
+path — no key, a timeout, malformed output, a crafted depth — lands on the
+free-text form.
+
+**Depth is recorded with each answer and is a finding in its own right.** A
+question that needed simplifying twice means the customer could not follow the
+product's own vocabulary in that area, and that is very often where the real
+problem is. It shows on the ticket and in the generated prompt.
+
+The budget is 6 simplifications per ticket, counted from the **stored depths**
+rather than a counter column, so it cannot desynchronise and cannot be advanced
+by a crafted request.
+
+### 47.3 — ⚠️ The email is deferred, never dropped, and the sweeper is why
+
+`/api/feedback` now sometimes holds the notification back: signed in, key
+configured, ticket lands `awaiting_answers`, email waits for the answers that
+make it worth reading.
+
+That is a deliberate weakening of §46.2's insert-then-send, bounded on both
+sides. The **insert** still happens first and for everyone, so §46's guarantee
+is untouched. Only the **send** moves.
+
+Which leaves the obvious hole: a customer can close the tab at question two.
+`/api/cron/ticket-synthesis` runs hourly at :20 and, after a two-hour grace
+window, emails anything still waiting **exactly as a pre-§47 request would have
+arrived** and marks it `abandoned`. That floor is what makes removing the skip
+button defensible: the worst case is a ticket merely as good as a pre-0134 one,
+never worse. It is also why the form has no "are you sure you want to leave"
+prompt — that would be a lie about the stakes.
+
+⚠️ The sweep **claims each row before sending**, with the update conditional on
+the row still being `awaiting_answers`. That is `credit_invoice`'s
+claim-by-write discipline against Stripe redelivery: two overlapping runs race
+on the update, the loser changes zero rows and sends nothing. Marking after the
+send would double-email on any retry.
+
+The same cron retries `failed` synthesis, 5 per run. A permanently failing
+ticket is retried for ever by design — the failures worth recovering from are
+transient, and the small batch is what bounds the cost. If that ever bites, the
+fix is an attempt counter, not a bigger batch.
+
+⚠️ The Hobby-plan constraint that once removed sub-daily crons **no longer
+applies** — `poll-whatsapp-status` already runs every five minutes.
+
+### 47.4 — The model does not write the implementation prompt
+
+It fills in a structured brief; `render.ts` lays the prompt out. A model asked
+for fifteen sections of markdown quietly drops the boring ones, and the boring
+ones here — tests, migration order, invariants in the blast radius — are exactly
+the ones that decide whether the resulting build comes back green. Splitting it
+also makes the renderer a pure function, so every branch is tested without
+spending a penny.
+
+Four sections exist that no hand-written request has ever had: **prior art**,
+**what could NOT be determined**, **invariants in the blast radius**, and the
+**test files** covering the paths it points at (derived from the route map, not
+asked of the model, because `npm run build` runs vitest first).
+
+**Prior art is the one that changes the task.** The digest of recent tickets
+carries `shipped_migration` and `shipped_claude_section`, so a request matching
+something already shipped comes back saying so — which makes it a regression or
+a discoverability failure, not a feature request. That reframing is the single
+most expensive thing to get wrong and is invisible without the history.
+
+### 47.5 — ⚠️ The context pack is derived from this file, and pinned
+
+`sectionIndex.ts` is **generated** from CLAUDE.md by
+`scripts/generate-section-index.mjs` (`npm run gen:context`): every `## N.`
+heading with its migrations, §9 verbatim, §11 and §12 one line each.
+
+Generated rather than read at runtime because **CLAUDE.md is not traced into the
+Vercel bundle** — a `readFileSync` at request time works locally and returns
+ENOENT in production. Committed derivatives rot, so `sectionIndex.test.ts`
+re-runs the real generator with `--check` and fails if the two have parted.
+
+§9 verbatim is the highest-value few hundred words in this repository for this
+purpose: it is the list of things that **look like bugs and are not**. Without
+it in front of a model, "reject does not refund" reads as a billing fault and
+gets helpfully fixed.
+
+Only the **route map** in `productContext.ts` is hand-maintained, and it is
+pinned against the real filesystem: a dashboard page with no entry, an entry for
+a page that no longer exists, a file path that has been renamed, or a § that
+does not exist all fail the build. Writing it found one immediately — a claimed
+`pacing.test.ts` that has never existed.
+
+⚠️ **The pack is a cache prefix.** It is ~3k tokens, identical on every call of
+all three kinds, and sits in `system` with the breakpoint immediately after it.
+Everything varying — the customer, their words, the ticket history — goes in the
+user turn. Move one varying byte above the breakpoint and every request pays
+full price; `usage.cache_read_input_tokens` is how you check. Roughly 20p per
+fully-clarified ticket.
+
+### 47.6 — ⚠️ The new columns are admin-only, and the boundary is the same one §46.3 relies on
+
+`clarifications`, `brief`, `generated_prompt`, `ai_status`, `ai_model`,
+`ai_error` and `severity` are columns on `support_tickets`, which the customer
+also reads on `/dashboard/support`.
+
+§46.3 put notes in a separate **table** precisely because a `select("*")` would
+ship them. These could not take that route — a clarification belongs to its
+ticket, and splitting it off would fork the admin screen — so the boundary is
+the fixed `CUSTOMER_TICKET_COLUMNS` list, and
+`supportTicketBoundary.test.ts` now fails if it grows any of these names.
+Mutation-tested: adding `brief` to that list fails two assertions.
+
+### 47.7 — `ai_status` NULL is a real state
+
+NULL means **no questions were ever offered** — every pre-0134 ticket, the nine
+§46 backfilled rows, and every signed-out submission. It is not a missing value,
+and the admin panel renders nothing at all for it rather than an empty section.
+
+`skipped` is the different thing: signed in, but no key configured. Keeping them
+distinct is what tells you later whether the feature was off or the submitter
+was anonymous.
+
+### 47.8 — Where it is offered from
+
+`featureRequestPath(source)` replaced the `FEATURE_REQUEST_PATH` constant,
+because the header gained a second copy of the button and one constant would
+have made both report themselves as `Announcement` — leaving "did promoting it
+work?" unanswerable while still looking answered. The announcement link is
+unchanged: it is now `featureRequestPath("Announcement")`.
+
+"Request a feature" is a **direct link in the header nav**, not a Feedback
+group. A group would be tidier and would put the promoted thing one click
+*deeper* than the footer link it exists to replace. It sits before Account and
+never last, because the last entry is the one that met the notification bell the
+time this row overflowed.
+
+### 47.9 — Two assertions that were written weak
+
+Both passed under the mutation they were meant to catch. Recorded because the
+shape recurs and §42.8's lesson clearly needs restating:
+
+- "the sweeper claims before sending" measured `indexOf` of the guard — which
+  found the **scan query**, present regardless. It now asserts the guard appears
+  between the `abandoned` mark and the send.
+- "the email sends even when synthesis failed" asserted only ordering, which an
+  early `return` between the two satisfies while still swallowing the request.
+  It now asserts that **nothing returns** between finalising and sending.
+
+### 47.10 — Deferred
+
+- **A durable rate limit on `/api/feedback`** — still open from §46.10. Gating
+  clarification on a signed-in customer bounds the model spend, which is the
+  half §47 needed, but the underlying unauthenticated write is unchanged.
+- **Screenshots.** The largest remaining accuracy win for bug reports, and the
+  `lead-files` bucket pattern is right there. Cut to keep 0134 focused.
+- **Prompt-quality feedback.** Nothing records whether a generated prompt was
+  any good. Two buttons writing to a column would let the clarify prompt be
+  tuned against data rather than impressions.
+- **A second round of questions.** The schema has room. Simplification covers
+  the case a second round was meant to catch, so this needs evidence first.
+- ⚠️ **`supabase/schema.sql` is stale** and has been since around 0037. It
+  claims to reflect "migrations 0001 → 0006" and knows nothing of `lead_files`,
+  `announcements`, `support_tickets` or the OAuth tables. 0133 did not update it
+  and neither does 0134. Either delete it or regenerate it; leaving it is a file
+  that looks authoritative and is not.
+
+### Deployment order — migration BEFORE code
+
+0134 first, applied and verified against production **before the pull request
+merges** (§1.1). It is additive and inert: every column is nullable, every
+existing row keeps `ai_status` NULL, and nothing touches a balance, counter,
+pacing or capacity column.
+
+Code arriving first would fail every write to the new columns — and because the
+ticket insert is deliberately non-fatal (§46.2), **it would fail silently**,
+which is the failure mode §46 already warned about in exactly these words.
