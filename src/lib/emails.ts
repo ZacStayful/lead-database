@@ -1507,3 +1507,66 @@ export async function sendCardDeclinedEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * A dead-lead claim that needs a person to read it (§51).
+ *
+ * Sent to the team, never to the customer. It carries the landlord's own words
+ * verbatim, because that is the whole basis for deciding — and for tracing the
+ * lead back to whichever source produced it, which is the half of §51 that
+ * improves the leads rather than merely refunding them.
+ *
+ * ⚠️ It states WHY the claim needs review in words, not as a number. "Beyond
+ * what we uphold automatically" rather than "3 of 2 used": this email is one
+ * forward away from the customer, and §51's whole mechanism rests on the
+ * allowance staying unpublished.
+ */
+export async function sendDeadLeadReviewEmail(params: {
+  reason: string;
+  detail: string;
+  contactedOn: string | null;
+  /** Why a person is looking at it, in plain words. */
+  trigger: string;
+  leadName: string;
+  leadAddress: string | null;
+  leadId: string;
+  assignedAt: string | null;
+  business: string;
+  contactName: string;
+  customerEmail: string;
+  peerNote: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const row = (k: string, v: string) =>
+    `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:150px;vertical-align:top">${k}</td><td style="padding:6px 0;font-size:14px">${v}</td></tr>`;
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Dead-lead claim to review</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">${esc(params.trigger)}</p>
+    <table style="width:100%;border-collapse:collapse">
+      ${row("Operator", esc(params.business))}
+      ${row("Contact", esc(params.contactName))}
+      ${row("Email", esc(params.customerEmail))}
+      ${row("Lead", esc(params.leadName))}
+      ${params.leadAddress ? row("Address", esc(params.leadAddress)) : ""}
+      ${params.assignedAt ? row("Assigned", esc(params.assignedAt)) : ""}
+      ${row("Reason", esc(params.reason))}
+      ${params.contactedOn ? row("Spoke to them", esc(params.contactedOn)) : ""}
+      ${row("Other operators", esc(params.peerNote))}
+    </table>
+    <h2 style="margin:20px 0 6px;font-size:14px">What the landlord said</h2>
+    <div style="white-space:pre-wrap;font-size:14px;line-height:1.6">${esc(params.detail)}</div>
+    ${button(`${APP_URL}/admin/quality`, "Review this claim")}
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to: supportTo(),
+      subject: `[Lead quality] ${params.business} — ${params.leadName}`,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
