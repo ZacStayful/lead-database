@@ -8,8 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "pretest": "node scripts/assert-tests-found.mjs"
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.15",

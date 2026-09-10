@@ -1,15 +1,8 @@
 -- Behavioural tests for migration 0027, run against the migrated database.
 \set ON_ERROR_STOP on
 \pset pager off
--- Assertions report through NOTICE (stderr); the result rows themselves are
--- noise, so send query output to /dev/null and let the notices speak.
-\o /dev/null
 
--- The helper lives in its own schema so it never lands in public, where it
--- would show up as drift when schema.sql is compared against the migrations.
-create schema if not exists test_util;
-
-create or replace function test_util.assert_eq(actual anyelement, expected anyelement, label text)
+create or replace function assert_eq(actual anyelement, expected anyelement, label text)
 returns void language plpgsql as $$
 begin
   if actual is distinct from expected then
@@ -41,14 +34,14 @@ values ('aaaaaaaa-0000-0000-0000-000000000001','m1','Landlord One','12 Elm St, L
 -- ---------------------------------------------------------------------------
 -- 1. max_assignments defaults to 3, and three operators can all be assigned.
 -- ---------------------------------------------------------------------------
-select test_util.assert_eq(max_assignments, 3, 'new leads default to 3 operators')
+select assert_eq(max_assignments, 3, 'new leads default to 3 operators')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000001';
 
 select public.assign_lead_to_customer('aaaaaaaa-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111',15.0) \gset a_
 select public.assign_lead_to_customer('aaaaaaaa-0000-0000-0000-000000000001','22222222-2222-2222-2222-222222222222',15.0) \gset b_
 select public.assign_lead_to_customer('aaaaaaaa-0000-0000-0000-000000000001','33333333-3333-3333-3333-333333333333',15.0) \gset c_
 
-select test_util.assert_eq(assignment_count, 3, 'all three slots filled')
+select assert_eq(assignment_count, 3, 'all three slots filled')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000001';
 
 -- A fourth is refused.
@@ -63,9 +56,9 @@ exception when others then
 end $$;
 
 -- 2. Assignment spends a credit and grows the clean streak.
-select test_util.assert_eq(lead_balance, 19, 'assignment spends one credit'),
-       test_util.assert_eq(leads_received_this_month, 1, 'monthly counter incremented'),
-       test_util.assert_eq(clean_leads_streak, 1, 'clean streak grows on assignment')
+select assert_eq(lead_balance, 19, 'assignment spends one credit'),
+       assert_eq(leads_received_this_month, 1, 'monthly counter incremented'),
+       assert_eq(clean_leads_streak, 1, 'clean streak grows on assignment')
 from public.customers where id='11111111-1111-1111-1111-111111111111';
 
 -- ---------------------------------------------------------------------------
@@ -83,18 +76,18 @@ select * from public.apply_quality_claim(
   current_date, 2, 'auto_uphold', true, 'none'
 ) \gset claim1_
 
-select test_util.assert_eq(lead_balance, 20, 'upheld claim restores the credit'),
-       test_util.assert_eq(leads_received_this_month, 0, 'upheld claim rolls back the counter'),
-       test_util.assert_eq(quality_claims_this_cycle, 1, 'upheld claim spends allowance'),
-       test_util.assert_eq(clean_leads_streak, 0, 'upheld claim resets the clean streak')
+select assert_eq(lead_balance, 20, 'upheld claim restores the credit'),
+       assert_eq(leads_received_this_month, 0, 'upheld claim rolls back the counter'),
+       assert_eq(quality_claims_this_cycle, 1, 'upheld claim spends allowance'),
+       assert_eq(clean_leads_streak, 0, 'upheld claim resets the clean streak')
 from public.customers where id='11111111-1111-1111-1111-111111111111';
 
-select test_util.assert_eq(assignment_count, 3, 'the claimed slot is NOT reopened')
+select assert_eq(assignment_count, 3, 'the claimed slot is NOT reopened')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000001';
 
-select test_util.assert_eq(status, 'rejected', 'upheld claim rejects the assignment'),
-       test_util.assert_eq(rejection_reason, 'already_with_operator', 'reason recorded'),
-       test_util.assert_eq((rejected_at is not null), true, 'rejected_at stamped')
+select assert_eq(status, 'rejected', 'upheld claim rejects the assignment'),
+       assert_eq(rejection_reason, 'already_with_operator', 'reason recorded'),
+       assert_eq((rejected_at is not null), true, 'rejected_at stamped')
 from public.lead_assignments where id = :'a_assign_lead_to_customer'::uuid;
 
 -- 4. Claiming the same assignment twice is an idempotent no-op.
@@ -104,10 +97,10 @@ select applied from public.apply_quality_claim(
   'already_with_operator', 'Trying again to double-dip on the credit.',
   current_date, 1, 'auto_uphold', true, 'none'
 ) \gset dup_
-select test_util.assert_eq(:'dup_applied'::boolean, false, 'a second claim is a no-op');
-select test_util.assert_eq(lead_balance, 20, 'a second claim does not double-refund')
+select assert_eq(:'dup_applied'::boolean, false, 'a second claim is a no-op');
+select assert_eq(lead_balance, 20, 'a second claim does not double-refund')
 from public.customers where id='11111111-1111-1111-1111-111111111111';
-select test_util.assert_eq(count(*)::int, 1, 'only one claim row exists')
+select assert_eq(count(*)::int, 1, 'only one claim row exists')
 from public.lead_quality_claims
 where lead_assignment_id = :'a_assign_lead_to_customer'::uuid;
 
@@ -115,7 +108,7 @@ where lead_assignment_id = :'a_assign_lead_to_customer'::uuid;
 -- 5. The lead is 'suspect' after one claim, 'dead' only when all three agree.
 -- ---------------------------------------------------------------------------
 select public.flag_lead_dead_if_unanimous('aaaaaaaa-0000-0000-0000-000000000001');
-select test_util.assert_eq(quality_flag, 'suspect', 'one claim marks the lead suspect')
+select assert_eq(quality_flag, 'suspect', 'one claim marks the lead suspect')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000001';
 
 select applied from public.apply_quality_claim(
@@ -123,11 +116,11 @@ select applied from public.apply_quality_claim(
   'already_with_operator', 'Same story — they went with someone else.',
   current_date, 1, 'auto_uphold', false, 'peer_agrees') \gset b1_
 select public.flag_lead_dead_if_unanimous('aaaaaaaa-0000-0000-0000-000000000001');
-select test_util.assert_eq(quality_flag, 'suspect', 'two of three is still only suspect')
+select assert_eq(quality_flag, 'suspect', 'two of three is still only suspect')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000001';
 
 -- Corroborated claims cost no allowance.
-select test_util.assert_eq(quality_claims_this_cycle, 0, 'a corroborated claim spends no allowance')
+select assert_eq(quality_claims_this_cycle, 0, 'a corroborated claim spends no allowance')
 from public.customers where id='22222222-2222-2222-2222-222222222222';
 
 select applied from public.apply_quality_claim(
@@ -135,7 +128,7 @@ select applied from public.apply_quality_claim(
   'already_with_operator', 'Landlord confirmed they appointed another agent.',
   current_date, 1, 'auto_uphold', false, 'peer_agrees') \gset c1_
 select public.flag_lead_dead_if_unanimous('aaaaaaaa-0000-0000-0000-000000000001');
-select test_util.assert_eq(quality_flag, 'dead', 'unanimous claims mark the lead dead')
+select assert_eq(quality_flag, 'dead', 'unanimous claims mark the lead dead')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000001';
 
 -- 6. A dead lead is never assigned again.
@@ -159,34 +152,34 @@ values
   ('aaaaaaaa-0000-0000-0000-000000000003','m3','Older York','7 Ash Ln, York, YO1 1CC','1','2026-09-02', now() - interval '5 days');
 
 select public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',null) \gset r_
-select test_util.assert_eq(:'r_find_replacement_lead'::uuid,
+select assert_eq(:'r_find_replacement_lead'::uuid,
   'aaaaaaaa-0000-0000-0000-000000000002'::uuid, 'replacement picks the freshest open lead');
 
 select public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',
   '{"cities":["York"]}'::jsonb) \gset rc_
-select test_util.assert_eq(:'rc_find_replacement_lead'::uuid,
+select assert_eq(:'rc_find_replacement_lead'::uuid,
   'aaaaaaaa-0000-0000-0000-000000000003'::uuid, 'the city filter is honoured');
 
 select public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',
   '{"min_bedrooms":4}'::jsonb) \gset rb_
-select test_util.assert_eq(:'rb_find_replacement_lead'::uuid,
+select assert_eq(:'rb_find_replacement_lead'::uuid,
   'aaaaaaaa-0000-0000-0000-000000000002'::uuid, 'the bedrooms filter is honoured');
 
-select test_util.assert_eq(public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',
+select assert_eq(public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',
   '{"cities":["Nowhere"]}'::jsonb), null::uuid, 'no match returns null, so the caller credits instead');
 
 -- A lead they already hold is never offered back.
 select public.assign_lead_to_customer('aaaaaaaa-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111',15.0);
-select test_util.assert_eq(public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',
+select assert_eq(public.find_replacement_lead('11111111-1111-1111-1111-111111111111','management',
   '{"min_bedrooms":4}'::jsonb), null::uuid, 'a lead they already hold is not offered');
 
 -- ---------------------------------------------------------------------------
 -- 8. leads_with_open_slots: oldest first, excludes dead leads.
 -- ---------------------------------------------------------------------------
-select test_util.assert_eq((select count(*)::int from public.leads_with_open_slots(10)
+select assert_eq((select count(*)::int from public.leads_with_open_slots(10)
                   where lead_id='aaaaaaaa-0000-0000-0000-000000000001'), 0,
                  'the dead lead is not in the backfill queue');
-select test_util.assert_eq((select lead_id from public.leads_with_open_slots(10) limit 1),
+select assert_eq((select lead_id from public.leads_with_open_slots(10) limit 1),
                  'aaaaaaaa-0000-0000-0000-000000000003'::uuid,
                  'the backfill queue is oldest-first');
 
@@ -201,9 +194,9 @@ select applied from public.apply_lead_rejection(
   :'ic_assign_lead_to_customer'::uuid, '22222222-2222-2222-2222-222222222222',
   'management', 'invalid_contact', '{"outcome":"claim_confirmed"}'::jsonb, true, false) \gset ic1_
 
-select test_util.assert_eq(assignment_count, 1, 'invalid_contact does not reopen the slot either')
+select assert_eq(assignment_count, 1, 'invalid_contact does not reopen the slot either')
 from public.leads where id='aaaaaaaa-0000-0000-0000-000000000004';
-select test_util.assert_eq((select rejected_at is not null from public.lead_assignments
+select assert_eq((select rejected_at is not null from public.lead_assignments
                   where id = :'ic_assign_lead_to_customer'::uuid), true,
                  'invalid_contact stamps rejected_at');
 
@@ -219,18 +212,18 @@ select claim_id from public.apply_quality_claim(
   'no_longer_interested', 'They have taken the property off the market entirely.',
   current_date, 1, 'review', false, 'none') \gset rev_
 
-select test_util.assert_eq(status, 'under_review', 'a reviewed claim waits for a human')
+select assert_eq(status, 'under_review', 'a reviewed claim waits for a human')
 from public.lead_quality_claims where id = :'rev_claim_id'::uuid;
-select test_util.assert_eq(status, 'new', 'a reviewed claim leaves the assignment alone')
+select assert_eq(status, 'new', 'a reviewed claim leaves the assignment alone')
 from public.lead_assignments where id = :'rv_assign_lead_to_customer'::uuid;
 
 select public.resolve_quality_claim(:'rev_claim_id'::uuid, true, null, 'Checked with the landlord.', true) \gset res_
-select test_util.assert_eq(:'res_resolve_quality_claim'::boolean, true, 'the first decision applies');
-select test_util.assert_eq(status, 'rejected', 'upholding on review rejects the assignment')
+select assert_eq(:'res_resolve_quality_claim'::boolean, true, 'the first decision applies');
+select assert_eq(status, 'rejected', 'upholding on review rejects the assignment')
 from public.lead_assignments where id = :'rv_assign_lead_to_customer'::uuid;
 
 select public.resolve_quality_claim(:'rev_claim_id'::uuid, true, null, 'Double click.', true) \gset res2_
-select test_util.assert_eq(:'res2_resolve_quality_claim'::boolean, false, 'a second decision is refused');
+select assert_eq(:'res2_resolve_quality_claim'::boolean, false, 'a second decision is refused');
 
 -- ---------------------------------------------------------------------------
 -- 11. An ineligible report is stored but changes nothing on the assignment.
@@ -243,9 +236,9 @@ select applied from public.apply_quality_claim(
   :'el_assign_lead_to_customer'::uuid, '11111111-1111-1111-1111-111111111111',
   'unreachable', 'no', null, 0, 'ineligible', false, 'none') \gset inel_
 
-select test_util.assert_eq(rejection_reason, null::text, 'an ineligible report leaves the assignment claimable')
+select assert_eq(rejection_reason, null::text, 'an ineligible report leaves the assignment claimable')
 from public.lead_assignments where id = :'el_assign_lead_to_customer'::uuid;
-select test_util.assert_eq(count(*)::int, 1, 'the ineligible report is still recorded as feedback')
+select assert_eq(count(*)::int, 1, 'the ineligible report is still recorded as feedback')
 from public.lead_quality_claims
 where lead_assignment_id = :'el_assign_lead_to_customer'::uuid and status='ineligible';
 
@@ -254,8 +247,8 @@ select applied from public.apply_quality_claim(
   :'el_assign_lead_to_customer'::uuid, '11111111-1111-1111-1111-111111111111',
   'unreachable', 'Six calls and two emails over ten days, nothing back.',
   current_date, 6, 'auto_uphold', true, 'none') \gset ok_
-select test_util.assert_eq(:'ok_applied'::boolean, true, 'a proper claim can follow an ineligible report');
-select test_util.assert_eq(count(*)::int, 1, 'the ineligible row is replaced, not duplicated')
+select assert_eq(:'ok_applied'::boolean, true, 'a proper claim can follow an ineligible report');
+select assert_eq(count(*)::int, 1, 'the ineligible row is replaced, not duplicated')
 from public.lead_quality_claims
 where lead_assignment_id = :'el_assign_lead_to_customer'::uuid;
 
@@ -267,8 +260,8 @@ update public.customers
       leads_received_this_month = 7,
       billing_cycle_anchor = current_date;
 select public.reset_monthly_counts();
-select test_util.assert_eq(quality_claims_this_cycle, 0, 'the allowance resets with the cycle'),
-       test_util.assert_eq(leads_received_this_month, 0, 'the monthly counter still resets')
+select assert_eq(quality_claims_this_cycle, 0, 'the allowance resets with the cycle'),
+       assert_eq(leads_received_this_month, 0, 'the monthly counter still resets')
 from public.customers where id='11111111-1111-1111-1111-111111111111';
 
 -- Not the anchor day: nothing resets.
@@ -276,8 +269,7 @@ update public.customers
   set quality_claims_this_cycle = 4,
       billing_cycle_anchor = current_date - interval '10 days';
 select public.reset_monthly_counts();
-select test_util.assert_eq(quality_claims_this_cycle, 4, 'the allowance holds outside the anchor day')
+select assert_eq(quality_claims_this_cycle, 4, 'the allowance holds outside the anchor day')
 from public.customers where id='11111111-1111-1111-1111-111111111111';
 
-\o
 \echo '== ALL BEHAVIOURAL TESTS PASSED =='

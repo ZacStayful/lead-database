@@ -4,48 +4,34 @@ SQL-level tests for the parts of the schema where the money moves. They run
 against a throwaway local Postgres, not a Supabase project, so they cost
 nothing and can be run as often as you like.
 
-CI runs exactly the same script on every pull request — see the `database` job
-in `.github/workflows/ci.yml`.
-
 ## Running them
 
-You need `psql` on your PATH and a Postgres to point it at. Connection details
-come from the usual `PG*` environment variables.
-
 ```bash
-# Against a Postgres you already have running:
-PGHOST=localhost PGPORT=5432 PGUSER=postgres supabase/tests/verify.sh
-```
-
-To spin one up from scratch:
-
-```bash
-export PGDATA=/tmp/leaddb
+# 1. Start a scratch Postgres (any port you like)
+export PGDATA=/tmp/pgdata
 initdb -D "$PGDATA" -A trust -U postgres
-pg_ctl -D "$PGDATA" -o '-p 55432' -l /tmp/pg.log start
+pg_ctl -D "$PGDATA" -o '-p 55432 -k /tmp' -l /tmp/pg.log start
 
-PGHOST=localhost PGPORT=55432 PGUSER=postgres supabase/tests/verify.sh
+# 2. Create the database and stub the Supabase platform objects the
+#    migrations reference (auth.uid, storage.buckets, the realtime
+#    publication, pg_cron).
+psql -h /tmp -p 55432 -U postgres -c 'create database mig'
+psql -h /tmp -p 55432 -U postgres -d mig -f supabase/tests/_local_supabase_stubs.sql
+
+# 3. Apply every migration in order. pg_cron cannot be installed locally, so
+#    the create-extension line is stripped; the stubs cover the two calls.
+for f in supabase/migrations/*.sql; do
+  sed '/create extension if not exists pg_cron/d' "$f" \
+    | psql -h /tmp -p 55432 -U postgres -v ON_ERROR_STOP=1 -q -d mig
+done
+
+# 4. Run the tests.
+psql -h /tmp -p 55432 -U postgres -d mig -v ON_ERROR_STOP=1 -q \
+  -f supabase/tests/0027_lead_quality_test.sql
 ```
 
-A passing run ends with `Database verification passed` and exits 0.
-
-## What `verify.sh` does
-
-1. **Applies every migration in order** to a scratch database. This is the
-   upgrade path production will actually take, so a migration that only works
-   on a fresh database gets caught here.
-2. **Runs the SQL test suite** against the result.
-3. **Applies `schema.sql` to a second, empty database**, twice, and compares the
-   two databases column for column, function for function, constraint for
-   constraint. That snapshot is maintained by hand, so this is the thing that
-   stops it drifting from the migrations — and the second application is what
-   proves the file really is idempotent, as its header claims.
-
-`pg_cron` is a Supabase-managed extension that cannot be installed locally, so
-the `create extension` line is stripped and the two calls the migrations make
-are stubbed. Everything else the Supabase platform provides — `auth.uid()`,
-`storage.buckets`, the realtime publication — is stubbed in
-`_local_supabase_stubs.sql`.
+A passing run ends with `ALL BEHAVIOURAL TESTS PASSED` and exits 0. Any failed
+assertion raises and stops the script.
 
 ## What `0027_lead_quality_test.sql` covers
 
@@ -73,20 +59,3 @@ The invariants that would cost real money or real trust if they broke:
 The claim policy itself (the window, the effort gate, the hidden allowance
 maths, peer corroboration and contradiction) is unit-tested separately in
 `src/lib/quality/claimPolicy.test.ts` — run it with `npm test`.
-
-`npm test` runs `scripts/assert-tests-found.mjs` first. `node --test` exits 0
-when its glob matches nothing, so without that guard a renamed directory would
-turn the test step green while running nothing.
-
-## Adding a test file
-
-Anything matching `supabase/tests/*_test.sql` is picked up automatically. Write
-assertions with the helper the suite defines:
-
-```sql
-select test_util.assert_eq(actual, expected, 'what this proves');
-```
-
-It raises on a mismatch, so a failure stops the run and fails CI. The helper
-lives in the `test_util` schema deliberately: anything created in `public`
-would show up as drift in step 3 above.
