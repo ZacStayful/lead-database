@@ -141,6 +141,59 @@ export function normaliseUkMobile(raw: string | null | undefined): UkMobileResul
 }
 
 /**
+ * The same rule, in E.164 (`+447…`) rather than national `07…` form.
+ *
+ * ⚠️ A THIN WRAPPER ON PURPOSE. `normaliseUkMobile` is the parser and stays the
+ * only one: the strip-zeros-then-add-one order above is load-bearing and its
+ * comment explains why. Everything this adds is the `0` -> `+44` swap, which
+ * three call sites were already writing out by hand — `sendOneMessage` as
+ * `+44${uk.value.slice(1)}` and `handoff` as the bare `44…` a wa.me link wants.
+ * A second parser here is how the enquiry form and the send path would
+ * eventually disagree about what a valid number is.
+ *
+ * The failure reason passes through untouched, because the caller showing a
+ * message to a member of the public needs to say WHICH thing is wrong: an
+ * overseas number is a fact about the enquirer, where `not_mobile` is usually a
+ * landline or a typo they can correct.
+ */
+export function ukMobileE164(raw: string | null | undefined): UkMobileResult {
+  const uk = normaliseUkMobile(raw);
+  if (!uk.ok) return uk;
+  return { ok: true, value: `+44${uk.value.slice(1)}` };
+}
+
+/**
+ * What a member of the public is told when their number is refused.
+ *
+ * ⚠️ ONE DEFINITION, because the enquiry FORM and the enquiry ROUTE both show
+ * it. The form checks on blur so the message arrives while the number is still
+ * in front of them; the route checks again because a client check is not a
+ * check. Two copies of this text is two messages that drift, and the pair are
+ * seen seconds apart by the same person — the same discipline
+ * `announcementTargetsCustomer` and `customer_can_see_pool_lead` apply to
+ * predicates, applied to copy.
+ *
+ * It lives here rather than in a copy module because the keys ARE this file's
+ * own `UkMobileFailure` vocabulary: a new failure reason cannot be added
+ * without the compiler demanding its wording.
+ *
+ * One message per reason rather than one for all four, because the remedy
+ * differs. `foreign` is a fact about the enquirer that no amount of retyping
+ * fixes; `not_mobile` is usually a landline or a dropped digit they can correct
+ * on the spot. A single "invalid number" sends the second person away believing
+ * the first person's problem.
+ */
+export const UK_MOBILE_ERRORS: Record<UkMobileFailure, string> = {
+  missing: "Please enter your mobile number.",
+  placeholder: "That does not look like a real mobile number.",
+  // Covers a genuinely overseas number AND the `+07…` typo, which arrives here
+  // as an explicit country code that is not ours. Worded to read correctly
+  // either way, rather than telling a UK enquirer they are abroad.
+  foreign: "Please enter a UK mobile number, starting 07 or +44.",
+  not_mobile: "That does not look like a UK mobile number — it should start 07.",
+};
+
+/**
  * Does this read as a human name?
  *
  * ⚠️ A JUNK DETECTOR, NOT A FORMAT CHECK, and that is a measured decision rather

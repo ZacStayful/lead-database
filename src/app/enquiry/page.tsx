@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 import { PLANS, toPlanKey, type PlanKey } from "@/lib/plans";
+import { ukMobileE164, UK_MOBILE_ERRORS } from "@/lib/leadQuality";
 
 /**
  * What the picker offers, in the order it offers it.
@@ -67,11 +68,41 @@ function EnquiryForm() {
     current_lead_source: "",
   });
   const [error, setError] = useState<string | null>(null);
+  const [mobileError, setMobileError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   function update(key: keyof typeof form) {
-    return (e: React.ChangeEvent<HTMLInputElement>) =>
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      // Clear the mobile complaint the moment they start fixing it. Leaving it
+      // up while they retype reads as the new number being wrong too.
+      if (key === "mobile") setMobileError(null);
       setForm((f) => ({ ...f, [key]: e.target.value }));
+    };
+  }
+
+  /**
+   * Show what will actually be stored, before they submit.
+   *
+   * ⚠️ ON BLUR, NEVER ON EVERY KEYSTROKE. Rewriting a half-typed number as
+   * somebody types it moves the caret and fights them; `07` would become `+447`
+   * before they had finished the first field.
+   *
+   * The server re-derives this with the same function, so this is confirmation
+   * rather than validation — a browser with the script broken still submits and
+   * still gets the identical verdict from /api/enquiry.
+   */
+  function onMobileBlur(e: React.FocusEvent<HTMLInputElement>) {
+    const typed = e.target.value.trim();
+    if (!typed) return; // `required` already covers an empty field; don't nag.
+    const result = ukMobileE164(typed);
+    if (result.ok) {
+      setMobileError(null);
+      setForm((f) => ({ ...f, mobile: result.value }));
+      return;
+    }
+    // Leave what they typed alone — it is theirs to correct, and blanking or
+    // rewriting a number we could not read loses the digits they got right.
+    setMobileError(UK_MOBILE_ERRORS[result.reason]);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -215,11 +246,20 @@ function EnquiryForm() {
             <Input
               id="mobile"
               type="tel"
+              placeholder="07700 900123"
               value={form.mobile}
               onChange={update("mobile")}
+              onBlur={onMobileBlur}
               required
               autoComplete="tel"
+              aria-invalid={mobileError ? true : undefined}
+              aria-describedby={mobileError ? "mobile-error" : undefined}
             />
+            {mobileError ? (
+              <p id="mobile-error" className="text-sm text-destructive">
+                {mobileError}
+              </p>
+            ) : null}
           </div>
           {/* Optional, and asked of everybody — the column exists on the one
               board every enquiry now lands on, and GR operators have websites

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createEnquiryContact, enquiryBoardId, toLeadInterest, LEAD_INTEREST } from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
+import { ukMobileE164, UK_MOBILE_ERRORS } from "@/lib/leadQuality";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,7 +57,6 @@ export async function POST(request: NextRequest) {
 
   const name = body.name?.trim();
   const email = body.email?.trim().toLowerCase();
-  const mobile = body.mobile?.trim() ?? "";
   // Accept scheme-less input (e.g. "stayful.co.uk", "www.stayful.co.uk") and
   // normalise to a proper URL so the stored/Monday value is a working link.
   let websiteUrl = body.website_url?.trim() ?? "";
@@ -72,6 +72,28 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+
+  // The mobile is stored in E.164 and in no other shape, so it is resolved here
+  // and every write below reads the one variable.
+  //
+  // ⚠️ THIS REFUSES, where the rest of the route is forgiving. `/api/enquiry`
+  // has always taken the number exactly as typed, and §16's instinct is never to
+  // turn a prospect away — so this is a deliberate exception, not an oversight.
+  // The trade accepted: a landline or an overseas number cannot enquire through
+  // the form, and support is the route for those. If that ever costs a real
+  // enquiry, the fallback is to keep the raw string here instead of returning.
+  //
+  // It sits BEFORE the Monday push on purpose. A refusal must leave no board
+  // item and no customer row, or a rejected enquiry still creates the duplicate
+  // that a retry then can never tidy up.
+  const mobileResult = ukMobileE164(body.mobile);
+  if (!mobileResult.ok) {
+    return NextResponse.json(
+      { error: UK_MOBILE_ERRORS[mobileResult.reason] },
+      { status: 400 }
+    );
+  }
+  const mobile = mobileResult.value;
 
   const planKey = toPlanKey(body.plan);
   const plan = PLANS[planKey];
@@ -158,7 +180,7 @@ export async function POST(request: NextRequest) {
           .update({
             contact_name: name,
             business_name: name,
-            phone: mobile || null,
+            phone: mobile,
             monthly_allocation: monthlyAllocation,
             website_url: websiteUrl || null,
             properties_managed: propertiesManaged || null,
@@ -185,7 +207,7 @@ export async function POST(request: NextRequest) {
         business_name: name,
         contact_name: name,
         email,
-        phone: mobile || null,
+        phone: mobile,
         monthly_allocation: monthlyAllocation,
         subscription_status: "inactive",
         account_status: "waitlisted",

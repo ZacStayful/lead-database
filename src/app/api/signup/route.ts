@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
 import { isOwnerEmail } from "@/lib/owner";
 import { GR_PLANS, stripeGrPriceIdFor, toGrPlanKey } from "@/lib/plans";
+import { ukMobileE164, UK_MOBILE_ERRORS } from "@/lib/leadQuality";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,12 +36,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { business_name, contact_name, email, phone, password, product } = body;
+  const { business_name, contact_name, email, phone: rawPhone, password, product } = body;
   if (!business_name || !contact_name || !email || !password) {
     return NextResponse.json(
       { error: "business_name, contact_name, email and password are required" },
       { status: 400 }
     );
+  }
+
+  // Stored in E.164, the same rule /api/enquiry applies, so the two doors into
+  // `customers` cannot disagree about what a phone number looks like.
+  //
+  // ⚠️ THE PHONE IS OPTIONAL HERE and stays optional — this form has always
+  // labelled it so. Absent means null, exactly as before; only a number somebody
+  // actually typed has to be a UK mobile. Rejecting an absent phone would break
+  // the owner and Guaranteed Rent paths that legitimately omit it.
+  let phone: string | null = null;
+  if (rawPhone != null && String(rawPhone).trim() !== "") {
+    const result = ukMobileE164(rawPhone);
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: UK_MOBILE_ERRORS[result.reason] },
+        { status: 400 }
+      );
+    }
+    phone = result.value;
   }
 
   // Product routing: ?product=guaranteed-rent signs the customer up for the GR
