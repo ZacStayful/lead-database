@@ -9980,3 +9980,170 @@ value nothing writes yet, and the two function replacements change one string
 list each. Nothing here touches a balance, counter, pacing or capacity column.
 Code arriving first would fail every `create_customer_leads` call — which is
 every manual add and every spreadsheet import, not just this feature.
+
+---
+
+## 49. Every enquiry mobile is stored as `+44` *(no migration)*
+
+`/api/enquiry` did exactly one thing to the number a prospect typed: `trim()`. It
+then wrote that string verbatim to `customers.phone` **and** to the Monday
+enquiries board's Mobile cell (`text_mm50hfvg`). Whatever they typed is what we
+kept — `07…`, `+44 7…`, `+4407…`, a landline, spaces and all.
+
+It was the only phone-capturing path in the repo applying **no normalisation at
+all**. Every other one already had a rule: `toRpcRow` tidies a customer's
+imported leads (§40.9A), the lead-quality gate judges an ingested lead (§36), and
+the send path re-derives E.164 on every message. The front door had nothing.
+
+`ukMobileE164()` and `UK_MOBILE_ERRORS` in `src/lib/leadQuality.ts` ·
+`/api/enquiry` · `/api/signup` · `/enquiry`.
+
+### 49.1 — One parser, and this is a wrapper on it
+
+`normaliseUkMobile()` (§36.2) stays the only parser. `ukMobileE164()` calls it and
+swaps the leading `0` for `+44`, nothing more.
+
+That matters because §36.2's comment is emphatic about the strip-zeros-then-
+add-one order: **89 of 193 live management leads store the number as `+44`
+followed by a FULL national number**, and the obvious `startsWith("+44")` slice
+turns `+4407304208011` into `007304208011` and rejects 46% of the book. A second
+parser written for the enquiry form is how the front door and the send path
+would eventually disagree about what a valid number is.
+
+The `+44${uk.value.slice(1)}` idiom was already hand-written at
+`sendOneMessage.ts` and, as the bare `44…` a wa.me link wants, at `handoff.ts`.
+Those two are unchanged here; pointing them at the helper is a free follow-on.
+
+### 49.2 — ⚠️ It REFUSES, where this route has always been forgiving
+
+A number that is not a UK mobile gets a **400 and no account**. That is a new
+refusal on a public acquisition form, and it runs against §16's instinct — "never
+refuse a sale", the reason both capacity waitlists were removed. It is deliberate
+and was asked for twice.
+
+The trade, stated so nobody has to rediscover it: **an operator whose only number
+is an office landline, or who is overseas, cannot enquire through the form.**
+Support is their route. If it ever costs a real enquiry the fallback is one line
+— keep the raw string instead of returning — and nothing downstream needs
+touching, because both formats already work everywhere (49.4).
+
+Sharper since §47: that route is now the **single door** for management,
+guaranteed rent and both, so this refuses every enquiry rather than the
+management share of them.
+
+**The guard sits BEFORE the Monday push**, so a refusal leaves no board item and
+no customer row. Otherwise a rejected enquiry still creates the duplicate that a
+retry can never tidy up — and `/api/enquiry` creates a new item on **every**
+submission (§23.10).
+
+`UK_MOBILE_ERRORS` is one message per reason rather than one for all four,
+because the remedy differs. `foreign` is a fact about the enquirer that retyping
+cannot fix; `not_mobile` is usually a landline or a dropped digit they can
+correct on the spot. It is keyed on `UkMobileFailure`, so a new reason cannot be
+added without the compiler demanding its wording.
+
+⚠️ **`foreign` also catches the `+07700900123` typo**, which arrives as an
+explicit country code that is not ours. The wording covers both readings rather
+than telling a UK enquirer they are abroad.
+
+### 49.3 — The form shows it, the route decides it
+
+`/enquiry` reformats the field **on blur**, never on every keystroke — rewriting
+a half-typed number moves the caret and fights the person typing, and `07` would
+become `+447` before they finished. A number it cannot read is **left exactly as
+typed** with the message underneath: blanking or rewriting it loses the digits
+they got right (§40.9A's rule).
+
+Both halves import the same function and the same copy from `leadQuality.ts`,
+which has **zero imports** and is therefore safe in a client component. The
+client check is confirmation; the route re-derives regardless, so a browser with
+the script broken submits and gets the identical verdict.
+
+**`/api/signup` follows the same rule with one difference: the phone stays
+OPTIONAL.** Absent means null exactly as before, and only a number somebody
+actually typed has to be a mobile. Rejecting an absent phone would break the
+owner and Guaranteed Rent paths that legitimately omit it.
+
+### 49.4 — Why the stored format could change at all
+
+Four things read a customer's phone, and every one already tolerated `+44`.
+Asserted in `leadQuality.test.ts` rather than reasoned about, because if either
+of the first two ever stopped tolerating a leading `+` the damage is **silent**:
+a customer who simply never receives a text, or a Monday item that quietly stops
+matching.
+
+| Reader | Why it survives |
+|---|---|
+| Twilio (`sms.ts`) | `toE164UK` returns a `+`-prefixed string untouched; `looksLikePhone` counts digits and a stored `+44` number has 12 |
+| Monday matcher tier 2 (§23.5) | `phoneMatchKey` strips non-digits and takes the **last 9**, so a `+44` row matches an `07` board cell in both directions |
+| Stripe | `customers.create({ phone })` prefers E.164 |
+| `customers.phone` | bare `text`, no CHECK (`0001_init.sql:18`) |
+
+⚠️ **`referral_phone` is deliberately NOT touched**, by this or by the backfill.
+0131's header and `referralIdentity.ts` both state that a **landline is valid**
+there and that `normaliseUkMobile` is the wrong rule for it: that column is a
+number a landlord rings, where `customers.phone` is an SMS destination.
+Converting it would overrule an operator about how they want to be contacted.
+
+The one visible change is the landlord referral email (§41), which renders the
+operator's phone verbatim to a **member of the public**. It now reads
+`+447700900123`.
+
+### Verification
+
+`npm run test` — 1515 green, 20 new. The conversions, every refusal reason, and
+the two downstream regressions above. **Mutation-checked**: dropping the
+`.slice(1)`, which is the exact `+44007304208011` bug §36.2 warns about, fails 8
+of them.
+
+`npx tsc --noEmit` clean, `npm run lint` clean, `npm run build` passes.
+
+Then driven for real rather than reasoned about. The form in **Chromium**:
+`07700 900123` and `447700900123` both become `+447700900123` on blur,
+`+4407304208011` becomes `+447304208011`, and a landline and an overseas number
+are left exactly as typed with their own message underneath. No page errors.
+
+The route over HTTP, all six cases. The four refusals return 400 with the right
+message; both valid shapes fall through to the **next** guard, which is what
+proves they passed. Because the mobile check precedes the env check, this runs
+without any credentials at all — worth knowing, since it means the refusal path
+is testable on any machine.
+
+### 49.5 — The backfill
+
+Run against production on **2026-09-10**, from the **shipped `ukMobileE164`**,
+never a SQL rewrite of the rule. §36.6 records why: a SQL copy of the normaliser
+is a second implementation that must change in step and silently would not, and
+§36.2 records that getting it wrong blanks half the book. `leadQuality.ts` was
+bundled and the real exported function run over the rows read out of the table.
+
+| | |
+|---|---|
+| Customers | 52 |
+| Carrying a phone | 42 |
+| Rewritten | **32** |
+| Already `+44` | 10 |
+| Left alone | **0** |
+
+**Zero failures is the headline.** Every number in the book was a genuine UK
+mobile — no landline, nothing overseas, no placeholder — so the "leave a number
+we cannot read exactly as typed" branch never fired. Two rows were more than a
+prefix swap: `+44 7852 722093` carried spaces, and `7301 235343` had lost its
+leading zero entirely and would have failed `looksLikePhone` on the Twilio path.
+
+Afterwards: 42 of 42 match `^\+447[0-9]{9}$` exactly, and `referral_phone` still
+has its 3 values, untouched (49.4).
+
+Two things made it safe to do in one pass, and both are worth repeating for any
+future column rewrite:
+
+- **The old values were written to a file first.** A dry-run printout scrolls
+  out of a terminal; a backup is a backup.
+- **Every update was guarded on the old value** — `where c.id = v.id and c.phone
+  = v.old` — so a row edited between the read and the write is skipped rather
+  than clobbered. The returned count is what confirms all 32 actually matched.
+
+### Deployment order
+
+No migration and nothing to apply. The two formats coexist (49.4), so the code
+and the backfill were independent and neither had to wait for the other.
