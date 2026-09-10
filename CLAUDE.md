@@ -9620,6 +9620,51 @@ shape recurs and §42.8's lesson clearly needs restating:
   and neither does 0134. Either delete it or regenerate it; leaving it is a file
   that looks authoritative and is not.
 
+### Verification
+
+**Scratch Postgres 16.13 from empty**, Supabase-shaped bootstrap (auth/storage
+schemas, the four roles, `auth.uid()`, `storage.foldername()`), **117 of 130
+migrations applied**. The failures are the documented `pg_cron` exceptions
+(0002, 0014, 0065) plus a cascade from re-running `0001_init.sql` after 0004 has
+already dropped `overflow_enabled` — an artefact of the apply loop, not of any
+migration. 0134 applied cleanly and was then applied **twice more unchanged**.
+
+**Every CHECK exercised on its boundaries, 24 assertions, all green.** All five
+`ai_status` values accepted and NULL accepted; `pending` and `''` refused. Both
+ends of `severity` accepted, `critical` refused. `clarifications` accepts an
+array and refuses an object and a scalar; `brief` accepts an object and refuses
+an array. `generated_prompt` accepts 20,000 characters and refuses 20,001 and
+`''`; `ai_model` 80 and refuses 81; `ai_error` 500 and refuses 501.
+
+A row inserted without the new columns comes back with **`ai_status` NULL**, the
+"no questions were offered" state §47.7 depends on. `support_tickets` is still
+**RLS-on with zero policies** — 0134 does not touch §46's posture. The sweeper's
+partial index carries exactly the predicate it scans on.
+
+**1,526 vitest cases green** (89 new), `npx tsc --noEmit` clean, `npm run lint`
+clean, `next build` clean with all five new routes compiled. Six assertions were
+**mutation-tested**: adding `brief` to `CUSTOMER_TICKET_COLUMNS` fails two;
+renaming a file in the route map fails one; adding a dashboard page with no map
+entry fails one; removing the sweeper's conditional claim fails one; and gating
+the notification email on synthesis succeeding fails one. All restore to green.
+
+⚠️ **Two of those six were written WEAK and passed under the mutation they
+existed to catch** before being rewritten — see §47.9. That is the second time
+§42.8's lesson has had to be relearned in this repository.
+
+**Not yet exercised: the flow end to end against a real model.** No question has
+been generated, no ladder walked, no brief synthesised. Everything below the API
+boundary is tested; the three model calls are not, because they cost money and
+need a key.
+
+⚠️ **AND THAT CANNOT BE DONE ON A PREVIEW DEPLOYMENT** — the wall §45 and §46
+both hit. Deployment Protection intercepts every request, so `/feedback` and
+`/admin/support` answer **302 to `vercel.com/sso-api`**. Test on
+`leads.stayful.co.uk` after merge — and remember a preview runs against
+PRODUCTION Supabase (§1.1), so a test submission writes a REAL row, spends REAL
+tokens and emails the team. Submit one deliberately and delete it by
+`reference` afterwards.
+
 ### Deployment order — migration BEFORE code
 
 0134 first, applied and verified against production **before the pull request
