@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/utils";
+import { formatDate, enquiryDateWithAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
@@ -110,12 +110,14 @@ export function LeadDetail({
   }
 
   function handleRejectResult(result: {
-    outcome: "processed" | "denied";
+    outcome: "processed" | "pending" | "denied";
     message: string;
     claimDenied: boolean;
   }) {
-    // 'processed' — the lead was rejected. 'denied' — verification cleared the
-    // contact details, so the lead stays assigned; only surface the message.
+    // 'processed' — the lead was rejected. 'pending' — a dead-lead report is
+    // recorded and waiting on the Stayful team, so the lead is not rejected
+    // yet. 'denied' — verification cleared the contact details, so the lead
+    // stays assigned; only surface the message.
     if (result.outcome === "processed") {
       setStatus("rejected");
     }
@@ -275,7 +277,7 @@ export function LeadDetail({
           <Detail
             icon={Calendar}
             label="Enquiry date"
-            value={formatDate(lead.enquiry_date)}
+            value={enquiryDateWithAge(lead.enquiry_date)}
           />
         </div>
 

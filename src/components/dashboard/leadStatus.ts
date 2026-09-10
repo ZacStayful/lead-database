@@ -1,6 +1,7 @@
 /**
  * Presentation for a lead assignment status. Colours follow the product spec:
- *   new → blue · contacted → amber · in_discussion → purple · won → green
+ *   new → blue · contacted → amber · no_answer → orange
+ *   in_discussion → purple · gone_elsewhere → slate · won → green
  *   not_relevant → grey · rejected → grey, italic
  */
 export interface StatusBadge {
@@ -17,9 +18,17 @@ const MAP: Record<string, StatusBadge> = {
     label: "Contacted",
     className: "border-transparent bg-amber-100 text-amber-700",
   },
+  no_answer: {
+    label: "No answer",
+    className: "border-transparent bg-orange-100 text-orange-700",
+  },
   in_discussion: {
     label: "In discussion",
     className: "border-transparent bg-purple-100 text-purple-700",
+  },
+  gone_elsewhere: {
+    label: "Gone elsewhere",
+    className: "border-transparent bg-slate-200 text-slate-700",
   },
   won: {
     label: "Won",
