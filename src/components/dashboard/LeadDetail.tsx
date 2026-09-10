@@ -26,6 +26,7 @@ import { AnalysisOfferPanel } from "@/components/dashboard/AnalysisOfferPanel";
 import { LEAD_ANALYSIS_PRICE_PENCE, analysability } from "@/lib/leadAnalysis";
 import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import { LeadMessageButtons } from "@/components/dashboard/LeadMessageButtons";
+import { DeadLeadClaimCard } from "@/components/dashboard/DeadLeadClaimCard";
 import type {
   AssignmentWithLead,
   ClientLeadEventType,
@@ -63,6 +64,7 @@ export function LeadDetail({
   messageChannels,
   messages,
   contactTimeline,
+  deadLeadClaim,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -87,6 +89,13 @@ export function LeadDetail({
    * renders and the page looks exactly as it did before.
    */
   contactTimeline?: ContactTimelineView | null;
+  /**
+   * Whether this lead can be reported as dead on arrival (§51), resolved
+   * server-side by `deadLeadClaimState` because the predicate is
+   * `security definer` and the claims table is deny-all to the browser.
+   * Absent renders nothing, so the page looks exactly as it did before.
+   */
+  deadLeadClaim?: { claimable: boolean; claimStatus: string | null };
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -783,6 +792,21 @@ export function LeadDetail({
               ))}
           </div>
         )}
+
+        {/*
+          Dead on arrival (§51). A separate control from reject, and deliberately
+          OUTSIDE the showActions block: reject needs the pipeline still at cold,
+          where this needs the opposite — proof the operator actually worked the
+          lead. Gating the two together is how they would come to disagree.
+        */}
+        {deadLeadClaim && (
+          <DeadLeadClaimCard
+            assignmentId={assignment.id}
+            claimable={deadLeadClaim.claimable}
+            claimStatus={deadLeadClaim.claimStatus}
+          />
+        )}
+
         {/* Terminal positive outcome. Available once the lead has been worked
             (contacted / in discussion) — signing is the conversion signal the
             ROI funnel counts. */}

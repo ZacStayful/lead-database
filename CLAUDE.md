@@ -353,7 +353,7 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/settings/notifications`, `/api/customer/goal` (§13),
 `/api/customer/subscribe` (§17), `/api/customer/subscription/pause` (§21),
 `/api/customer/subscription/plan` (§24),
-`/api/customer/subscription/cancel` (§29), `/api/leads/[id]/reject`,
+`/api/customer/subscription/cancel` (§29), `/api/customer/dead-lead-claim` (§51), `/api/leads/[id]/reject`,
 `/api/leads/[id]/discard`, `/api/leads/[id]/close`,
 `/api/leads/[id]/report` (§25 — the stored analysis PDF),
 `/api/customer/presentation/[leadId]` (§26),
@@ -383,6 +383,7 @@ write of free text into a table, which is why its length caps are load-bearing.
 `/api/admin/settings/escalation`, `/api/admin/pool` (§19),
 `/api/admin/post-call-offer`, `/api/admin/monday-status-check` (§23.8),
 `/api/admin/support-tickets` (+ `/[id]`, `/[id]/status`, `/[id]/notes` — §46),
+`/api/admin/quality-claims/[id]` (§51),
 `/api/admin/customers/[id]/monday-link` (§23.8).
 
 **Webhooks / cron:** `/api/webhook/stripe`, `/api/webhook/n8n`,
@@ -401,12 +402,17 @@ write of free text into a table, which is why its length caps are load-bearing.
    claim bypasses the cap entirely** (§19), so `assignment_count` may exceed
    `max_assignments` — nothing enforces the comparison, and the two queries that
    subtract them clamp with `greatest(…, 0)`.
-4. Every delivered lead is chargeable. Reject does not refund. **One narrow
-   exception, since 0114 (§39): a lead that is UNDELIVERED — untouched,
-   returned to the pool at the customer's own request when they apply a lead
-   filter that excludes it — is refunded.** The untouched predicate in
-   `releasable_filter_assignments` is what keeps that distinct from a refund on
-   worked-for value, and must never be loosened.
+4. Every delivered lead is chargeable. Reject does not refund. **Two
+   exceptions, and they are mirror images of each other.** **0114 (§39)**
+   refunds a lead that was UNDELIVERED — untouched, returned to the pool at the
+   customer's own request when they apply a filter that excludes it. **0137
+   (§51)** refunds a lead that was DEAD ON ARRIVAL — worked, and the landlord
+   already gone before the operator reached them. Neither is a refund on
+   worked-for value the operator merely disliked; that is still reject, and
+   still chargeable. The two predicates that keep each honest —
+   `releasable_filter_assignments` (untouched) and
+   `claimable_dead_lead_assignments` (worked) — are exact inverses and must
+   never be loosened toward each other.
 5. Ingest is idempotent on `monday_item_id`; Stripe on `stripe_events`.
 6. Management and GR are fully parallel. Every balance/counter/pacing/eligibility
    branch must handle both `lead_type` values — and must not use a
@@ -10475,3 +10481,286 @@ pacing or capacity column.
 Code arriving first would fail every write to the new columns — and because the
 ticket insert is deliberately non-fatal (§46.2), **it would fail silently**,
 which is the failure mode §46 already warned about in exactly these words.
+
+---
+
+## 51. A lead that was already gone *(0137)*
+
+Operators kept saying the same thing: they rang the landlord and the landlord
+had already appointed someone, or was no longer letting. Not every lead, but
+often enough that "the leads are poor" became the sentence, and the product had
+no answer to it. Reject records the outcome and refunds nothing (invariant 4,
+0019), close records that the landlord said no (§18), and neither is a way to
+say *this lead was spent before you sold it to me*.
+
+An operator can now report exactly that, on a lead they have actually worked.
+An upheld report puts one credit back — and the landlord's own words go into a
+queue that says which sources keep producing leads that are already gone.
+
+`POST /api/customer/dead-lead-claim` · `/admin/quality` ·
+`POST /api/admin/quality-claims/[id]` · `DeadLeadClaimCard` on the lead page.
+
+### 51.1 — ⚠️ THIS AMENDS INVARIANT 4, AND THE MIRROR IS THE ARGUMENT
+
+Invariant 4 has had one exception since 0114: §39 refunds a lead the customer
+never touched, released when a filter excludes it, and `releasable_filter_
+assignments` guards it with an untouched predicate that "must never be
+loosened" precisely so it stays distinct from a refund on worked-for value.
+
+This is the second, and it is deliberately the opposite shape:
+
+| | Refunds because | Predicate demands |
+|---|---|---|
+| §39 (0114) | **no** value was delivered | the lead is **untouched** |
+| §51 (0137) | the value delivered was **void** | the lead was **worked** |
+
+The two are exact inverses and must never be loosened toward each other. What
+sits between them, untouched by both, is the case invariant 4 has always been
+about: the operator worked the lead, reached a live landlord, and did not win.
+That is still `reject_lead_assignment`, still chargeable, and this section
+changes nothing about it.
+
+### 51.2 — The effort gate is telemetry, and that is what makes it un-fakeable
+
+A claim is only possible on an assignment carrying an operator-generated
+`lead_event` — `detail_opened`, `tel_click`, `mailto_click` or
+`whatsapp_click`. §3 is why that works: `lead_events` has **no browser insert
+policy**, writes go through `/api/customer/events` on the service role, and the
+route caps and dedupes. So the gate on a refund cannot be manufactured by the
+customer it gates.
+
+⚠️ **`nudge_sent` is excluded**, for the reason §3 already gives about every
+aggregate that means "operator activity": it is something WE did to them, and
+counting it would qualify the least engaged customers on the strength of our own
+reminders.
+
+⚠️ **Notes are deliberately NOT the gate**, even though a note is stronger
+evidence of work. §40.6 records why: around twenty-five predicates read
+`lead_notes`, and a note bars the lead from the pool, exempts it from
+escalation, blocks discard and blocks the §39 refund. Requiring one would tell
+operators to write a note in order to get a credit, and every one of those five
+things would move as a side effect.
+
+### 51.3 — The allowance is hidden, earned, and never a refusal
+
+The obvious abuse is fishing: report the leads you do not fancy, keep drawing
+fresh ones. What bounds it is a per-cycle budget the customer never sees.
+
+| | |
+|---|---|
+| Base | `round(committed allocation × quality_allowance_pct)`, the default being **10%** — 2 on a 20-lead plan, 1 on a 10-lead plan |
+| Earned | one more per unbroken run of **10** leads taken without claiming, capped at **2** |
+| Spent | one per automatic uphold. `clean_leads_streak` resets to 0 on every uphold |
+| Reset | on the customer's **own billing anchor day**, inside `reset_monthly_counts` |
+| Free | a claim corroborated by another operator's already-settled claim |
+
+⚠️ **IT IS NEVER SHOWN, AND NO COPY MAY EVER NAME IT.** An operator told they
+have two claims a month has been handed the exact number of leads it is safe to
+write off without evidence. The mechanism only works while the number is
+discovered rather than announced, so `deadLeadPolicy.test.ts` asserts
+mechanically that no message and no code contains "allowance", "quota",
+"budget", "limit" or "remaining" — **and that a customer over the line reads
+exactly the same sentence as one under it**, so two operators comparing notes
+cannot infer it either.
+
+⚠️ **Going over is not a refusal.** It routes the claim to admin review. An
+operator receiving genuinely dead leads is precisely who exceeds a budget, and
+refusing them automatically would punish the customer this exists for — the
+same instinct §16 states as "never refuse a sale".
+
+**Sized on every product the customer HOLDS**, through `holdsProduct` and for
+its usual reason (invariant 6): `gr_monthly_allocation` defaults to 10 on every
+row, so reading it without the gate hands a management-only customer a budget
+for a product they have never had, and a GR-only customer sits at
+`account_status = 'waitlisted'` for ever (§18A) so reading that column would
+give them nothing. One budget spans both, because it bounds a customer's
+claiming behaviour rather than a product's economics.
+
+### 51.4 — The peers, and the order they are read in
+
+A lead reaches up to three operators (§4), which is evidence nobody else has.
+
+- **A peer with the lead LIVE contradicts the claim** — `in_discussion`, `won`,
+  or any pipeline stage past `cold`. Somebody has built something on this lead,
+  so the landlord was reachable and interested when it was sold. It goes to
+  review, never to an automatic refusal: two operators can honestly disagree
+  about one landlord.
+- **A peer whose own claim is SETTLED corroborates it** — upheld or
+  auto-upheld. That costs no budget, so telling the truth about a lead somebody
+  else has already proved dead is cheaper than fishing.
+
+⚠️ **Only SETTLED claims corroborate.** An `under_review` peer claim must not,
+or two customers holding one lead could agree their way to unlimited free
+credits without a person ever seeing either claim.
+
+⚠️ **Contradiction is tested BEFORE corroboration.** When one peer has it live
+and another has written it off, the live one is the stronger signal.
+
+### 51.5 — What an upheld claim does NOT do
+
+Three deliberate absences, each taken from an existing precedent rather than
+from preference:
+
+- **No replacement lead.** §39.1 is explicit that a release is not a
+  lead-for-lead swap and there is no synchronous re-offer; the credit goes back
+  and ordinary routing (§4) delivers. `lead_quality_claims.resolution` has no
+  `replacement` value, so nothing later can quietly add one.
+- **The slot is never reopened.** `uphold_dead_lead_claim` does **not**
+  decrement `leads.assignment_count`. §19.6's reasoning applies exactly: a lead
+  one operator has shown to be dead is the last lead that should be sold to
+  another. Admin will read "3 / 3 assigned" on a lead with two credits given
+  back, which is truthful and looks odd, as §11 already records for reclaims and
+  pool claims.
+- **`leads.quality_flag` retires nothing.** It is stamped `suspect` on the first
+  upheld claim and `dead` only when **every** assigned operator has one — and it
+  is a reporting column. Invariant 11 names `lead_retired_from_allocation()` as
+  the single expression of what retires a lead from allocation, and adding a
+  fourth basis to it belongs in its own change with its own verification, not
+  smuggled into this one.
+
+The monthly counter IS rolled back (`greatest(… - 1, 0)`), because pacing
+measures leads delivered and this one was not one. The odometer is not
+(invariant 9 — it only ever counts up), and `(gr_)pool_debit` is not
+(invariant 12 — settled only inside `credit_invoice`).
+
+### 51.6 — Why it is a new route, not a reason code on reject
+
+⚠️ Reject is gated on `pipeline_stage = 'cold'` — nothing built on the lead yet
+(§5E) — and a dead-lead claim requires the **opposite**, proof the operator
+worked it. Adding a reason code to `/api/leads/[id]/reject` would put two
+opposite predicates behind one verb, and §5E's own rule is that eligibility
+lives in exactly one place so route and function cannot disagree. Here the
+disagreement would be about money.
+
+The same reasoning shapes the copy: the control reads **"This landlord was
+already gone"**, never "reject with a reason". Two controls a click apart that
+read alike get used interchangeably, which is the fishing this has to avoid.
+
+⚠️ **`src/lib/quality/deadLeadCopy.ts` MUST STAY IMPORT-FREE.** The claim form
+is a `"use client"` component and `deadLeadPolicy.ts` reaches `plans.ts`
+through `products.ts` for the allowance arithmetic, so the three reasons, their
+wording and the length floor live in a module of their own — the split
+`featureRequest.ts` makes from `announcements.ts` for the same reason (§21.8).
+The policy re-exports all of it, so there is still one definition and the form,
+the route and the CHECK on `lead_quality_claims.reason` cannot drift.
+
+### 51.7 — Where each decision is made, and why it is split
+
+| | Decided by | Because |
+|---|---|---|
+| Eligibility | `claimable_dead_lead_assignments` (SQL) | it has to agree with the row lock inside `apply_dead_lead_claim`, the §5E discipline |
+| Allowance and peers | `src/lib/quality/deadLeadPolicy.ts` | arithmetic worth unit-testing directly rather than through a route |
+| The commit | `apply_dead_lead_claim` | re-asserts eligibility under the lock, so two submits cannot both pass |
+
+`lead_quality_claims.lead_assignment_id` is **UNIQUE**, and that constraint is
+the idempotency guard: a double-clicked submit collides on 23505 rather than
+refunding twice. One claim per assignment, ever.
+
+`resolve_dead_lead_claim` returns **false** rather than raising when the claim
+is already settled, so a double-click in admin cannot refund twice either. The
+route reports that as a 409 — nothing went wrong, the decision was simply
+already made.
+
+Both automatic and admin upholds go through **`uphold_dead_lead_claim`**, so
+what an uphold does can never drift between the two paths.
+
+### 51.8 — Admin gets three verbs, and the customer never sees the third
+
+`/admin/quality` shows the landlord's own words, the co-assigned operators and
+what they are doing with the same lead, and how old the lead was when it was
+sold.
+
+- **Uphold** — credit back, one of the hidden budget spent.
+- **Uphold as goodwill** — credit back, **nothing** spent. For a claim that is
+  probably right but unproven: the customer is made whole without their next
+  honest claim being made harder. A separate button rather than a tick-box,
+  because it is a choice an admin has to make rather than a modifier.
+- **Decline** — nothing refunded, and the note is required, because it is what
+  the customer is shown. A decline they cannot make sense of is the one outcome
+  here that loses a customer rather than a credit.
+
+`quality_review_required` is the per-customer kill switch: every claim from that
+customer goes to review, so a pattern can be watched without changing the policy
+for everybody.
+
+**The second half of the page is the point.** Upheld claims broken down by
+postcode area, by bedroom count and by what the landlord said. Crediting a
+customer back keeps them; finding out which sources keep producing leads that
+are already gone is what stops it happening again — a queue with no analysis
+beside it turns this into a refund desk.
+
+⚠️ **By postcode area, not by town.** §40.14 measured `extractCity()` at 173 of
+446 addresses and wrong on the commonest shape: "212 Gill Avenue, Bristol BS16
+2PH" returns the street. `postcode_area` is parsed, indexed, and what the router
+itself matches on.
+
+### 51.9 — Deferred
+
+- **Wiring `quality_flag` into `lead_retired_from_allocation()`**, so a
+  unanimously dead lead stops being offered at all. It is the obvious next step
+  and it changes allocation, so it wants its own migration and its own
+  before-and-after fingerprint of the candidate functions.
+- **Surfacing the claim rate per source on `/admin/leads`**, beside the ingest
+  counters, so a bad batch shows up where leads are actually looked at.
+- **A cycle-end survey.** The inline claim is the half that pays for itself
+  because it is attached to a specific lead; a survey asking about the month in
+  general has nothing to trace back to a source.
+- **Nothing tells the operator when a claim is upheld after review.** They see
+  it on the lead page next time they open it. An email would be one line, and
+  should probably wait until there are enough claims to know whether it reads as
+  responsive or as noise.
+
+### Verification
+
+All 133 migrations applied to a scratch **Postgres 16.13** from empty (0002,
+0014 and 0065 skipped — `pg_cron` is unavailable locally), 0137 re-applied
+twice for idempotency. **32 behavioural assertions** in
+`supabase/tests/0137_dead_lead_claims_test.sql`, run against that build: the
+effort gate in all three directions (no events, `nudge_sent` alone, a real
+`tel_click`); the window, `won` and pool-claim bars; one credit restored with
+the monthly counter rolled back, the budget spent and the streak reset; a second
+claim on the same assignment refused **with the balance unmoved**;
+`assignment_count` unchanged by an uphold; a settled claim refusing a second
+decision; corroboration costing nothing; a GR claim refunding `gr_lead_balance`
+and leaving the management balance alone (invariant 6); the budget resetting on
+the anchor day and holding on every other; and `anon` and `authenticated`
+holding **zero** execute grants on any 0137 function (invariant 7).
+
+The policy module goes through **36 vitest cases**, including each budget rule,
+the peer ordering in both directions, an unadjudicated peer claim failing to
+corroborate, and the three assertions that keep the number unpublished. Five of
+them are **mutation-tested**, each broken and watched to fail before being kept:
+letting an unadjudicated peer claim corroborate fails 2; wording the
+over-budget answer differently from the flagged one fails 3; sizing the budget
+without `holdsProduct` fails 7; giving `deadLeadCopy.ts` an import fails 1; and
+pointing the claim form at the policy module rather than the copy module fails 1.
+
+The routes' RPC calls were checked against the database rather than reviewed:
+every `p_` name the three route files send exists in `pg_proc.proargnames` on a
+scratch build, and the whole sequence — eligibility, commit with a null contact
+date, credit back, flag, and the assignment dropping out of the eligible set —
+was driven through the real functions with the real argument names.
+
+**Not yet exercised end to end.** No claim has been made through the browser
+against a real database. Report one lead on production after merging, and check
+the credit lands, the lead page then reads back "you reported this lead", and a
+second attempt on the same lead is refused.
+
+⚠️ **And that cannot be done on a preview deployment** — the wall §45, §46 and
+§50 all hit. Deployment Protection intercepts every request, so `/dashboard` and
+`/admin/quality` answer 302 to `vercel.com/sso-api`. Test on
+`leads.stayful.co.uk` after merge, remembering that a preview runs against
+PRODUCTION Supabase (§1.1), so a test claim moves a real credit.
+
+### Deployment order — migration BEFORE code
+
+0137 first, applied and verified against production **before the pull request
+merges** (§1.1). It is additive and inert: every new column is defaulted, every
+new function is unreferenced until the code ships, and the one existing function
+it replaces — `reset_monthly_counts` — gains a single extra column to zero and
+is otherwise 0018's body verbatim.
+
+Code arriving first would fail every claim, and would fail the lead page's
+eligibility read on **every** lead — `deadLeadClaimState` fails closed, so the
+control would simply never appear, which is the safe direction but not one to
+rely on.

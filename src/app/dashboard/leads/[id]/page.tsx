@@ -10,6 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { LeadDetail } from "@/components/dashboard/LeadDetail";
 import { fetchOrderedAssignments, parseSource } from "@/lib/leadOrder";
 import { channelAvailability } from "@/lib/messaging/service";
+import { deadLeadClaimState } from "@/lib/quality/claimState";
 import type { AssignmentWithLead, LeadNote, LeadFile } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -129,6 +130,16 @@ export default async function LeadDetailPage({
     preview: isAdminUser(user),
   });
 
+  // Can this lead be reported as dead on arrival (§51)? Resolved here rather
+  // than in the browser: the predicate is `security definer` and the claims
+  // table is deny-all. It fails closed, so an unreadable answer hides the
+  // control rather than offering one the route would refuse.
+  const deadLeadClaim = await deadLeadClaimState(
+    admin,
+    customer.id,
+    assignment.id
+  );
+
   return (
     <LeadDetail
       assignment={assignment}
@@ -143,6 +154,7 @@ export default async function LeadDetailPage({
       messageChannels={messageChannels}
       messages={(messageData ?? []) as never}
       contactTimeline={contactTimeline}
+      deadLeadClaim={deadLeadClaim}
     />
   );
 }
