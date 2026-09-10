@@ -168,6 +168,15 @@ export async function logSupportTicket(params: {
   page?: string | null;
   account: TicketAccount | null;
   customer: TicketPlanFields | null;
+  /**
+   * §47's lifecycle marker, set at insert.
+   *
+   * NULL — the default and the pre-0134 shape — means no questions were ever
+   * offered, which is the truth for every signed-out submission and every
+   * ticket logged by hand. 'awaiting_answers' means the customer is about to be
+   * asked; the sweeper mails and marks 'abandoned' if they never finish.
+   */
+  aiStatus?: "awaiting_answers" | "skipped" | null;
 }): Promise<LoggedTicket | null> {
   const customerId = params.account?.customer_id ?? null;
   try {
@@ -188,6 +197,7 @@ export async function logSupportTicket(params: {
         product: params.customer ? defaultProductFor(params.customer) : null,
         plan_snapshot: params.customer ? planSnapshot(params.customer) : null,
         visible_to_customer: defaultVisibility(params.source, customerId),
+        ai_status: params.aiStatus ?? null,
       })
       .select("id, reference")
       .single();

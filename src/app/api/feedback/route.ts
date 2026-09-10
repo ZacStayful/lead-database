@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { sendFeedbackEmail } from "@/lib/emails";
 import { loadTicketAccount, logSupportTicket } from "@/lib/supportTicketLog";
+import { isClarifyConfigured } from "@/lib/feedback/clarify";
 import {
   MAX_BODY,
   MAX_PAGE,
@@ -34,6 +35,21 @@ export const dynamic = "force-dynamic";
  *
  * See the support route for the response ladder — it is identical, and the
  * reason a failed email is no longer a 502 once the row landed.
+ *
+ * ⚠️ SINCE §47 THIS ROUTE SOMETIMES HOLDS THE EMAIL BACK. When the submitter is
+ * signed in and clarification is available, the ticket lands here with
+ * ai_status='awaiting_answers' and NO email is sent yet — the questions come
+ * next, and the notification is worth more once it carries the answers. The
+ * response says `clarify: true` and the client takes them to the questions.
+ *
+ * That is a deliberate weakening of "insert then send", and it is bounded on
+ * both sides. The INSERT still happens first and still happens for everyone, so
+ * §46's guarantee — a submission is never lost — is untouched. The SEND is what
+ * moves, and it can only be deferred, never dropped: the answers route sends on
+ * completion, and the sweeper sends anything abandoned. A customer who closes
+ * the tab at question two costs a delayed email, not a lost request.
+ *
+ * Everyone else — signed out, no API key — takes exactly the pre-§47 path.
  */
 export async function POST(request: NextRequest) {
   let body: {
@@ -94,6 +110,12 @@ export async function POST(request: NextRequest) {
     /* treat as anonymous */
   }
 
+  // Signed in AND a key configured. Both halves matter: an anonymous submitter
+  // has no account state to reason about, so the questions would be weak, and
+  // the route is public so this is also what keeps model spend off an
+  // unauthenticated endpoint (§46.10's open rate-limit item).
+  const willClarify = Boolean(context) && isClarifyConfigured();
+
   const ticket = await logSupportTicket({
     source: "feedback_form",
     kind: type,
@@ -105,7 +127,23 @@ export async function POST(request: NextRequest) {
     page,
     account: context?.account ?? null,
     customer: context?.customer ?? null,
+    // 'skipped' rather than null when they were signed in but no key is
+    // configured: null means "never offered", and the difference is what tells
+    // you later whether the feature was off or the customer was anonymous.
+    aiStatus: willClarify ? "awaiting_answers" : context ? "skipped" : null,
   });
+
+  // The one case where the email waits. If the insert FAILED there is no ticket
+  // to hang questions off, so fall through and send immediately — a degraded
+  // notification beats none.
+  if (willClarify && ticket) {
+    return NextResponse.json({
+      ok: true,
+      reference: ticketReference(ticket.reference),
+      ticketId: ticket.id,
+      clarify: true,
+    });
+  }
 
   const { error } = await sendFeedbackEmail({
     type,

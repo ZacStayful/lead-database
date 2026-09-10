@@ -62,6 +62,10 @@
     {
       "path": "/api/cron/contact-followups",
       "schedule": "15 8 * * *"
+    },
+    {
+      "path": "/api/cron/ticket-synthesis",
+      "schedule": "20 * * * *"
     }
   ]
 }
