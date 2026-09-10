@@ -291,6 +291,11 @@ export interface Customer {
   // so a monthly renewal costs zero Monday HTTP, and so a manual board edit
   // survives until the customer's next genuine lifecycle change.
   monday_status_label: string | null;
+  // The "What kind of leads" value WE last wrote (0134), on exactly the same
+  // terms as monday_status_label above. Null means we have never written that
+  // cell, or we have nothing to say about this customer — in which case the
+  // sync leaves it alone rather than blanking what is there.
+  monday_lead_interest: string | null;
   monday_status_synced_at: string | null;
   monday_status_error: string | null;
   created_at: string;

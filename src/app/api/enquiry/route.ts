@@ -1,11 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  createEnquiryContact,
-  createGuaranteedRentEnquiryContact,
-  enquiryBoardId,
-  grEnquiryBoardId,
-} from "@/lib/monday";
+import { createEnquiryContact, enquiryBoardId, toLeadInterest, LEAD_INTEREST } from "@/lib/monday";
 import { PLANS, toPlanKey } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -32,6 +27,7 @@ export async function POST(request: NextRequest) {
     properties_managed?: string;
     current_lead_source?: string;
     plan?: string;
+    lead_interest?: string;
     product?: string;
   };
   try {
@@ -40,8 +36,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const isGuaranteedRent =
-    body.product === "guaranteed-rent" || body.product === "guaranteed_rent";
+  // Which service they came for. The form now ASKS — it is a required picker,
+  // and `lead_interest` is what it posts.
+  //
+  // `product` is the legacy fallback and is kept deliberately: it is the hidden
+  // ?product=guaranteed-rent that the GR landing page has always put in the URL,
+  // and it is all a cached copy of the old form, or anything else posting the
+  // previous shape, will send. It could only ever say "guaranteed rent" or
+  // nothing, which is the whole reason this changed: an enquirer reaching the
+  // form directly was silently filed as Management with nobody able to correct
+  // it, and "both" could not be expressed at all.
+  //
+  // Management remains the default of last resort — the same reading the route
+  // has always taken of a body with no product on it.
+  const leadInterest =
+    toLeadInterest(body.lead_interest) ??
+    toLeadInterest(body.product) ??
+    LEAD_INTEREST.management;
 
   const name = body.name?.trim();
   const email = body.email?.trim().toLowerCase();
@@ -85,42 +96,33 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
 
   // 1. Push to Monday. Non-fatal — we still create the account if this fails.
-  //    Guaranteed Rent enquiries go to their own board (no website/plan columns);
-  //    management enquiries go to the management enquiries board.
   //
-  //    Both creators return the new item id, and it is KEPT (0086) rather than
+  //    ONE BOARD, whichever service they asked for, with the "What kind of leads"
+  //    cell saying which (§47). Guaranteed Rent enquiries used to go to their own
+  //    board (18420913271), and that was a dead end: it has no Status column, so
+  //    setEnquiryStatus refused it outright, the item could never carry a label or
+  //    sit in a pipeline group, and §23.7 records that the one real GR customer had
+  //    to be re-created on this board by hand. Sending every enquiry here is also
+  //    what makes resolveItem's stored-link short-circuit work for them.
+  //
+  //    The creator returns the new item id, and it is KEPT (0086) rather than
   //    discarded: it is the customer -> Monday item link the subscription-status
   //    sync needs. Capturing it here is what stops every future customer having to
   //    be matched by email, phone or name later, which is guesswork by comparison.
   let mondayItemId: string | null = null;
   let mondayBoardId: string | null = null;
   try {
-    if (isGuaranteedRent) {
-      mondayItemId = await createGuaranteedRentEnquiryContact({
-        name,
-        email,
-        mobile,
-        propertiesManaged,
-        currentLeadSource,
-      });
-      // The GR enquiries board has no Status column, so this link can never carry
-      // a label. Stored honestly anyway: the status writer refuses a non-status
-      // board outright, and the admin check tool reports these as needing an item
-      // on the management board — which is how the one existing GR customer was
-      // handled by hand.
-      mondayBoardId = grEnquiryBoardId();
-    } else {
-      mondayItemId = await createEnquiryContact({
-        name,
-        email,
-        mobile,
-        websiteUrl,
-        propertiesManaged,
-        preferredPlan,
-        currentLeadSource,
-      });
-      mondayBoardId = enquiryBoardId();
-    }
+    mondayItemId = await createEnquiryContact({
+      name,
+      email,
+      mobile,
+      websiteUrl,
+      propertiesManaged,
+      leadInterest,
+      preferredPlan,
+      currentLeadSource,
+    });
+    mondayBoardId = enquiryBoardId();
   } catch (err) {
     console.error("Monday enquiry push failed", err);
   }

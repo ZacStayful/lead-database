@@ -10,16 +10,54 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 import { PLANS, toPlanKey, type PlanKey } from "@/lib/plans";
 
+/**
+ * What the picker offers, in the order it offers it.
+ *
+ * The VALUES are the wire vocabulary the enquiry route narrows with
+ * toLeadInterest() — deliberately the same hyphenated spelling every marketing
+ * link into this page already uses in ?product=, so the URL and the form speak
+ * one language.
+ */
+const LEAD_INTEREST_OPTIONS = [
+  { value: "management", label: "Management", hint: "Landlords wanting a managing agent" },
+  {
+    value: "guaranteed-rent",
+    label: "Guaranteed rent",
+    hint: "Landlords open to a rent-to-rent deal",
+  },
+  { value: "both", label: "Both", hint: "You run both models" },
+] as const;
+
+type LeadInterestValue = (typeof LEAD_INTEREST_OPTIONS)[number]["value"];
+
 const CALENDLY_URL = "https://calendly.com/zac-stayful/stayful-lead-database";
 
 function EnquiryForm() {
   const params = useSearchParams();
   const productParam = params.get("product");
-  const isGuaranteedRent =
-    productParam === "guaranteed-rent" || productParam === "guaranteed_rent";
   const initialPlan = toPlanKey(params.get("plan"));
 
+  // ?product= is EVIDENCE, not an answer: it is set only by the links on the
+  // guaranteed-rent landing page, so it can seed the picker but must never be
+  // the last word. Anyone arriving here from an ad, a shared link or the
+  // management page carries nothing at all, and used to be filed as Management
+  // silently with no way to say otherwise.
+  //
+  // Never seeded to "both" — that is a claim only the prospect can make.
+  const initialInterest: LeadInterestValue =
+    productParam === "guaranteed-rent" || productParam === "guaranteed_rent"
+      ? "guaranteed-rent"
+      : "management";
+
+  const [leadInterest, setLeadInterest] =
+    useState<LeadInterestValue>(initialInterest);
   const [plan, setPlan] = useState<PlanKey>(initialPlan);
+
+  // Everything below keys on the CHOICE, never on the URL. Reading the URL here
+  // is what would ask somebody who arrived from the management page and picked
+  // Guaranteed rent how they currently get management leads.
+  const wantsGuaranteedRent = leadInterest === "guaranteed-rent";
+  const wantsBoth = leadInterest === "both";
   const [form, setForm] = useState({
     name: "",
     mobile: "",
@@ -48,7 +86,10 @@ function EnquiryForm() {
         body: JSON.stringify({
           ...form,
           plan,
-          product: isGuaranteedRent ? "guaranteed-rent" : undefined,
+          lead_interest: leadInterest,
+          // Kept for anything still reading the old field. It cannot express
+          // "both", which is why lead_interest exists.
+          product: wantsGuaranteedRent ? "guaranteed-rent" : undefined,
         }),
       });
       const data = await res.json();
@@ -73,7 +114,7 @@ function EnquiryForm() {
           <Logo height={36} priority />
         </Link>
         <CardTitle className="pt-2">
-          {isGuaranteedRent
+          {wantsGuaranteedRent
             ? "Enquire about Guaranteed Rent"
             : "Enquire about access"}
         </CardTitle>
@@ -83,41 +124,77 @@ function EnquiryForm() {
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-4">
-          {!isGuaranteedRent && (
-            <div className="space-y-2">
-              <Label>Plan</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(PLANS) as PlanKey[]).map((key) => {
-                  const p = PLANS[key];
-                  const selected = plan === key;
-                  return (
-                    <button
-                      type="button"
-                      key={key}
-                      onClick={() => setPlan(key)}
-                      className={
-                        "rounded-md border p-3 text-left transition " +
-                        (selected
-                          ? "border-brand bg-brand/5 ring-1 ring-brand"
-                          : "border-input hover:border-brand/50")
-                      }
-                    >
-                      <div className="text-base font-semibold">
-                        £{p.priceGbp}
-                        <span className="text-xs font-normal text-muted-foreground">
-                          {" "}
-                          /mo
-                        </span>
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {p.leads} leads / month
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+          {/*
+            First in the form, because everything below reacts to it. There is
+            no "not sure" option and no blank state: one of the three is always
+            selected, so the answer cannot be skipped by inattention.
+          */}
+          <div className="space-y-2">
+            <Label>What kind of leads are you after?</Label>
+            <div className="grid gap-2">
+              {LEAD_INTEREST_OPTIONS.map((option) => {
+                const selected = leadInterest === option.value;
+                return (
+                  <button
+                    type="button"
+                    key={option.value}
+                    aria-pressed={selected}
+                    onClick={() => setLeadInterest(option.value)}
+                    className={
+                      "rounded-md border p-3 text-left transition " +
+                      (selected
+                        ? "border-brand bg-brand/5 ring-1 ring-brand"
+                        : "border-input hover:border-brand/50")
+                    }
+                  >
+                    <div className="text-sm font-semibold">{option.label}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {option.hint}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-          )}
+          </div>
+          {/*
+            Shown for every choice now. The two products are price-identical —
+            PLANS and GR_PLANS are both £150/10 and £300/20, the same reason
+            LEAD_PRICE_GBP needs no per-product branch — so these prices are
+            right whichever service they picked.
+          */}
+          <div className="space-y-2">
+            <Label>Plan</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(PLANS) as PlanKey[]).map((key) => {
+                const p = PLANS[key];
+                const selected = plan === key;
+                return (
+                  <button
+                    type="button"
+                    key={key}
+                    onClick={() => setPlan(key)}
+                    className={
+                      "rounded-md border p-3 text-left transition " +
+                      (selected
+                        ? "border-brand bg-brand/5 ring-1 ring-brand"
+                        : "border-input hover:border-brand/50")
+                    }
+                  >
+                    <div className="text-base font-semibold">
+                      £{p.priceGbp}
+                      <span className="text-xs font-normal text-muted-foreground">
+                        {" "}
+                        /mo
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {p.leads} leads / month
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="space-y-2">
             <Label htmlFor="name">Full name</Label>
             <Input id="name" value={form.name} onChange={update("name")} required />
@@ -144,19 +221,20 @@ function EnquiryForm() {
               autoComplete="tel"
             />
           </div>
-          {!isGuaranteedRent && (
-            <div className="space-y-2">
-              <Label htmlFor="website_url">Website URL</Label>
-              <Input
-                id="website_url"
-                type="text"
-                inputMode="url"
-                placeholder="e.g. stayful.co.uk"
-                value={form.website_url}
-                onChange={update("website_url")}
-              />
-            </div>
-          )}
+          {/* Optional, and asked of everybody — the column exists on the one
+              board every enquiry now lands on, and GR operators have websites
+              too. */}
+          <div className="space-y-2">
+            <Label htmlFor="website_url">Website URL</Label>
+            <Input
+              id="website_url"
+              type="text"
+              inputMode="url"
+              placeholder="e.g. stayful.co.uk"
+              value={form.website_url}
+              onChange={update("website_url")}
+            />
+          </div>
           <div className="space-y-2">
             <Label htmlFor="properties_managed">
               How many properties do you currently manage?
@@ -170,9 +248,11 @@ function EnquiryForm() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="current_lead_source">
-              {isGuaranteedRent
-                ? "How do you currently get guaranteed rent leads?"
-                : "How do you currently get management leads?"}
+              {wantsBoth
+                ? "How do you currently get leads?"
+                : wantsGuaranteedRent
+                  ? "How do you currently get guaranteed rent leads?"
+                  : "How do you currently get management leads?"}
             </Label>
             <Input
               id="current_lead_source"
