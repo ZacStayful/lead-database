@@ -100,8 +100,9 @@ export function AdminLeadControls({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Currently {assignmentCount} of {max} assigned. Default is 2 — raise up
-          to 4 to place a lead with more operators.
+          Currently {assignmentCount} of {max} assigned. Default is 3 — lower it
+          to 1 for exclusivity, or raise it to 4 to place a lead with more
+          operators.
         </p>
       </div>
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { cn, initials, formatDate, formatGBP } from "@/lib/utils";
+import { cn, initials, formatDate, formatGBP, enquiryDateWithAge } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import type { AssignmentWithLead } from "@/lib/types";
@@ -145,7 +145,7 @@ export function LeadCard({
             <Detail
               icon={Calendar}
               label="Enquiry date"
-              value={formatDate(lead.enquiry_date)}
+              value={enquiryDateWithAge(lead.enquiry_date)}
             />
           </div>
           {lead.lead_profile && (

@@ -26,6 +26,24 @@ export const PLANS: Record<PlanKey, Plan> = {
 
 export const DEFAULT_PLAN: PlanKey = "lead_20";
 
+/**
+ * What one delivered lead is booked at, by product. Written to
+ * lead_assignments.price_paid. Previously copied into ingest.ts and the reject
+ * route separately; both now read it from here.
+ */
+export const LEAD_PRICE = 15.0;
+export const GR_LEAD_PRICE = 10.0;
+
+/**
+ * Operators a lead is sold to when the row does not say otherwise. Mirrors the
+ * leads.max_assignments default set in migration 0027 (raised from 2 to 3).
+ */
+export const DEFAULT_MAX_ASSIGNMENTS = 3;
+
+export function leadPriceFor(leadType: string | null | undefined): number {
+  return leadType === "guaranteed_rent" ? GR_LEAD_PRICE : LEAD_PRICE;
+}
+
 /** Narrow an untrusted string to a valid plan key, falling back to the default. */
 export function toPlanKey(value: unknown): PlanKey {
   return value === "lead_10" || value === "lead_20" ? value : DEFAULT_PLAN;
