@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
-import { CustomerQualityPanel } from "@/components/admin/CustomerQualityPanel";
 import { formatDate } from "@/lib/utils";
 import { computeGrPacing } from "@/lib/pacing";
 import { offerState, formatRemaining, type PostCallOffer } from "@/lib/postCallOffers";
@@ -42,35 +41,6 @@ export default async function AdminCustomerDetailPage({
     .eq("customer_id", customer.id)
     .order("assigned_at", { ascending: false });
   const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
-
-  // Claim history for this customer, and the same rate across everyone else so
-  // the number has something to be compared against. A high claim rate on its
-  // own says nothing — it may just mean a thin patch — which is why this is a
-  // comparison and not a threshold.
-  const [{ data: ownClaims }, { data: allClaims }, { count: allAssignments }] =
-    await Promise.all([
-      admin
-        .from("lead_quality_claims")
-        .select("id, status")
-        .eq("customer_id", customer.id),
-      admin.from("lead_quality_claims").select("id, customer_id"),
-      admin
-        .from("lead_assignments")
-        .select("id", { count: "exact", head: true }),
-    ]);
-
-  const ownClaimRows = (ownClaims ?? []) as { id: string; status: string }[];
-  const claimsFiled = ownClaimRows.filter((c) => c.status !== "ineligible").length;
-  const claimsUpheld = ownClaimRows.filter(
-    (c) => c.status === "auto_upheld" || c.status === "upheld"
-  ).length;
-
-  const otherClaims = ((allClaims ?? []) as { customer_id: string }[]).filter(
-    (c) => c.customer_id !== customer.id
-  ).length;
-  const otherAssignments = Math.max((allAssignments ?? 0) - assignments.length, 0);
-  const cohortClaimRate =
-    otherAssignments > 0 ? otherClaims / otherAssignments : 0;
 
   // Post-call offer for this customer — matched at redemption, or by email for a
   // still-pending offer created before signup. Most recent wins. Email is stored
@@ -137,14 +107,6 @@ export default async function AdminCustomerDetailPage({
           </Card>
 
           <GrSubscriptionCard customer={customer} />
-
-          <CustomerQualityPanel
-            customer={customer}
-            claimsFiled={claimsFiled}
-            claimsUpheld={claimsUpheld}
-            leadsReceived={assignments.length}
-            cohortClaimRate={cohortClaimRate}
-          />
         </div>
 
         <div className="lg:col-span-2">

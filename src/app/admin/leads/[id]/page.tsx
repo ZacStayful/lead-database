@@ -4,12 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AdminLeadControls } from "@/components/admin/AdminLeadControls";
-import { formatDate, enquiryDateWithAge } from "@/lib/utils";
-import { statusBadge } from "@/components/dashboard/leadStatus";
-import {
-  pipelineBadgeClass,
-  pipelineLabel,
-} from "@/components/dashboard/pipelineStage";
+import { formatDate } from "@/lib/utils";
 import type { Customer, Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -32,40 +27,15 @@ export default async function AdminLeadDetailPage({
 
   const { data: assignmentsRaw } = await admin
     .from("lead_assignments")
-    .select(
-      "id, assigned_at, customer_id, status, pipeline_stage, rejection_reason, quality_claim_id, customers(id, business_name, email)"
-    )
+    .select("id, assigned_at, customer_id, customers(id, business_name, email)")
     .eq("lead_id", lead.id);
 
   const assignments = (assignmentsRaw ?? []) as unknown as {
     id: string;
     assigned_at: string;
     customer_id: string;
-    status: string;
-    pipeline_stage: string;
-    rejection_reason: string | null;
-    quality_claim_id: string | null;
     customers: { id: string; business_name: string; email: string } | null;
   }[];
-
-  // Every operator's view of this lead in one place. Rejections and quality
-  // claims existed in the database from 0021 onward but were never surfaced to
-  // admin, so a lead that three operators had all written off looked identical
-  // to one nobody had touched.
-  const { data: claimsRaw } = await admin
-    .from("lead_quality_claims")
-    .select("id, lead_assignment_id, reason, status, detail, created_at")
-    .eq("lead_id", lead.id);
-  const claimByAssignment = new Map(
-    ((claimsRaw ?? []) as {
-      id: string;
-      lead_assignment_id: string;
-      reason: string;
-      status: string;
-      detail: string;
-      created_at: string;
-    }[]).map((c) => [c.lead_assignment_id, c])
-  );
   const assignedIds = new Set(assignments.map((a) => a.customer_id));
 
   const { data: customersRaw } = await admin
@@ -96,16 +66,8 @@ export default async function AdminLeadDetailPage({
     ["Address", lead.address],
     ["Bedrooms", lead.bedrooms],
     ["Lead profile", lead.lead_profile],
-    ["Enquiry date", enquiryDateWithAge(lead.enquiry_date)],
+    ["Enquiry date", lead.enquiry_date],
     ["Ingested", formatDate(lead.created_at)],
-    [
-      "Quality flag",
-      lead.quality_flag === "dead"
-        ? "Dead — every operator wrote it off, never reassigned"
-        : lead.quality_flag === "suspect"
-          ? "Suspect — at least one operator reported it dead"
-          : null,
-    ],
   ];
 
   return (
@@ -153,47 +115,19 @@ export default async function AdminLeadDetailPage({
                   </p>
                 ) : (
                   <ul className="space-y-2">
-                    {assignments.map((a) => {
-                      const claim = claimByAssignment.get(a.id);
-                      return (
-                        <li
-                          key={a.id}
-                          className="rounded-md border-[0.5px] border-border px-3 py-2 text-sm"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="font-medium">
-                              {a.customers?.business_name ?? "Unknown"}
-                            </span>
-                            <span className="text-muted-foreground">
-                              {formatDate(a.assigned_at)}
-                            </span>
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <Badge className={statusBadge(a.status).className}>
-                              {statusBadge(a.status).label}
-                            </Badge>
-                            <Badge className={pipelineBadgeClass(a.pipeline_stage)}>
-                              {pipelineLabel(a.pipeline_stage)}
-                            </Badge>
-                            {a.rejection_reason && (
-                              <Badge variant="secondary">
-                                {a.rejection_reason.replace(/_/g, " ")}
-                              </Badge>
-                            )}
-                            {claim && (
-                              <Badge variant="secondary">
-                                claim: {claim.status.replace(/_/g, " ")}
-                              </Badge>
-                            )}
-                          </div>
-                          {claim?.detail && (
-                            <p className="mt-1.5 text-xs text-muted-foreground">
-                              &ldquo;{claim.detail}&rdquo;
-                            </p>
-                          )}
-                        </li>
-                      );
-                    })}
+                    {assignments.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center justify-between rounded-md border-[0.5px] border-border px-3 py-2 text-sm"
+                      >
+                        <span className="font-medium">
+                          {a.customers?.business_name ?? "Unknown"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {formatDate(a.assigned_at)}
+                        </span>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </div>

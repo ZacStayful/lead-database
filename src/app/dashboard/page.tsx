@@ -7,10 +7,8 @@ import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
-import { CycleQualitySurvey } from "@/components/dashboard/CycleQualitySurvey";
 import { formatDate } from "@/lib/utils";
 import { computePacing, pacingMessage } from "@/lib/pacing";
-import { currentCycle, isSurveyDue } from "@/lib/quality/cycle";
 import type { AssignmentWithLead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -47,20 +45,6 @@ export default async function DashboardPage() {
     .order("assigned_at", { ascending: false });
 
   const assignments = (assignmentsRaw ?? []) as AssignmentWithLead[];
-
-  // Cycle-end quality survey: due once the cycle's leads have landed, and shown
-  // until it is answered. The cron may have already created the row when it
-  // sent the invite email, so "answered" is submitted_at, not row existence.
-  const cycle = currentCycle(customer);
-  const { data: surveyRow } = await admin
-    .from("cycle_quality_surveys")
-    .select("submitted_at")
-    .eq("customer_id", customer.id)
-    .eq("cycle_start", cycle.startDate)
-    .maybeSingle();
-  const surveyDue =
-    isSurveyDue(customer) &&
-    !(surveyRow as { submitted_at: string | null } | null)?.submitted_at;
   // Unread mirrors LeadCard's isUnread: a rejected assignment is never unread
   // (it shows no unread dot in the list), so it must not inflate this KPI.
   const unreadLeads = assignments.filter(
@@ -202,10 +186,6 @@ export default async function DashboardPage() {
             {pacingMessage(pacing.deficit, customer.monthly_allocation)}
           </p>
         ))}
-
-      {surveyDue && (
-        <CycleQualitySurvey leadsInCycle={customer.leads_received_this_month} />
-      )}
 
       {hasGuaranteedRent && <CompanyLetAgreement compact />}
 

@@ -7,12 +7,6 @@ export type SubscriptionStatus =
 
 export type LeadType = "management" | "guaranteed_rent";
 
-/** Admin-set criteria used only when picking a replacement lead. */
-export interface ReplacementFilter {
-  cities?: string[];
-  min_bedrooms?: number;
-}
-
 export interface Customer {
   id: string;
   user_id: string | null;
@@ -40,13 +34,6 @@ export interface Customer {
   gr_billing_cycle_anchor: string | null;
   gr_last_assignment_at: string | null;
   gr_lead_balance: number;
-  // Lead-quality allowance (0027). Never surfaced to the customer — these
-  // drive the hidden budget that bounds dead-lead claims.
-  quality_allowance_pct: number;
-  quality_claims_this_cycle: number;
-  clean_leads_streak: number;
-  quality_review_required: boolean;
-  replacement_filter: ReplacementFilter | null;
   // Enquiry-form fields captured on the landing page.
   website_url: string | null;
   properties_managed: string | null;
@@ -67,8 +54,6 @@ export interface Lead {
   lead_type: LeadType;
   assignment_count: number;
   max_assignments: number;
-  /** Set once operators report the lead dead (0027); dead leads never reassign. */
-  quality_flag: "suspect" | "dead" | null;
   created_at: string;
   // GR-specific fields (null for management leads).
   last_contact: string | null;
@@ -90,42 +75,6 @@ export type PipelineStage =
   | "contract_sent"
   | "contract_signed";
 
-/**
- * Outcomes a customer can put on a lead. 'won', 'in_discussion' and
- * 'not_relevant' existed in the database check constraint from the start but
- * were unreachable, because the customer PATCH route only ever accepted
- * 'contacted'. 0027 adds 'no_answer' and 'gone_elsewhere' to complete the axis
- * and the route now accepts the whole set. 'rejected' is set by the reject
- * route only, never by the customer directly.
- */
-export type LeadStatus =
-  | "new"
-  | "contacted"
-  | "no_answer"
-  | "in_discussion"
-  | "gone_elsewhere"
-  | "won"
-  | "not_relevant"
-  | "rejected";
-
-/** Statuses a customer may set on their own assignment. */
-export const CUSTOMER_SETTABLE_STATUSES: LeadStatus[] = [
-  "contacted",
-  "no_answer",
-  "in_discussion",
-  "gone_elsewhere",
-  "won",
-  "not_relevant",
-];
-
-/** Reasons a lead assignment can be rejected. */
-export type RejectReason =
-  | "not_a_fit"
-  | "invalid_contact"
-  | "already_with_operator"
-  | "no_longer_interested"
-  | "unreachable";
-
 export interface LeadAssignment {
   id: string;
   lead_id: string;
@@ -134,7 +83,7 @@ export interface LeadAssignment {
   notification_sent: boolean;
   email_sent: boolean;
   viewed_at: string | null;
-  status: LeadStatus | string;
+  status: string;
   pipeline_stage: PipelineStage | string;
   due_to_call_date: string | null;
   income_estimate: number | null;
@@ -142,46 +91,8 @@ export interface LeadAssignment {
   // Rejection audit (0021). rejection_reason is set for both a completed
   // rejection (status='rejected') and a denied invalid_contact claim
   // (status stays 'new', claim_denied=true).
-  rejection_reason: RejectReason | null;
-  rejected_at: string | null;
+  rejection_reason: "not_a_fit" | "invalid_contact" | null;
   claim_denied: boolean;
-  /** Set when the rejection was a dead-lead quality claim (0027). */
-  quality_claim_id: string | null;
-}
-
-/** A customer's report that a lead was already gone when it arrived (0027). */
-export interface LeadQualityClaim {
-  id: string;
-  lead_assignment_id: string;
-  lead_id: string;
-  customer_id: string;
-  reason: "already_with_operator" | "no_longer_interested" | "unreachable";
-  detail: string;
-  contacted_on: string | null;
-  attempts: number | null;
-  status: "ineligible" | "auto_upheld" | "under_review" | "upheld" | "declined";
-  resolution: "none" | "credit" | "replacement";
-  corroboration: "none" | "peer_agrees" | "peer_contradicts";
-  allowance_consumed: boolean;
-  replacement_assignment_id: string | null;
-  reviewed_by: string | null;
-  reviewed_at: string | null;
-  review_note: string | null;
-  created_at: string;
-}
-
-export interface CycleQualitySurvey {
-  id: string;
-  customer_id: string;
-  cycle_start: string;
-  cycle_end: string | null;
-  leads_in_cycle: number | null;
-  overall_rating: number | null;
-  contactability_rating: number | null;
-  fit_rating: number | null;
-  what_would_improve: string | null;
-  submitted_at: string | null;
-  created_at: string;
 }
 
 export interface AssignmentWithLead extends LeadAssignment {

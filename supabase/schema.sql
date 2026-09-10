@@ -4,7 +4,7 @@
 -- Idempotent: safe to re-run.
 --
 -- This is a consolidated snapshot of the ordered migrations in
--- supabase/migrations (0001 → 0027) and reflects the current build. The
+-- supabase/migrations (0001 → 0026) and reflects the current build. The
 -- migrations remain the source of truth: when you change the schema, add a new
 -- migration and regenerate this file. Function bodies here are copied verbatim
 -- from the migration that last defines each one.
@@ -55,13 +55,6 @@ create table if not exists public.customers (
   gr_billing_cycle_anchor      date,
   gr_last_assignment_at        timestamptz,
   gr_lead_balance              integer not null default 0,
-  -- Lead-quality allowance (0027). Never shown to the customer: the budget is
-  -- a share of the plan plus credits earned by taking leads without claiming.
-  quality_allowance_pct        numeric not null default 0.10,
-  quality_claims_this_cycle    integer not null default 0,
-  clean_leads_streak           integer not null default 0,
-  quality_review_required      boolean not null default false,
-  replacement_filter           jsonb,
   -- Enquiry-form fields captured on the landing page.
   website_url                  text,
   properties_managed           text,
@@ -81,11 +74,7 @@ create table if not exists public.leads (
   enquiry_date             text,
   estimated_monthly_income text,
   assignment_count         integer default 0,
-  -- 3 since 0027 (was 2). Admin can override per lead, 1-4.
-  max_assignments          integer default 3,
-  -- Set once operators report the lead dead (0027). A 'dead' lead is never
-  -- assigned again; 'suspect' means at least one operator wrote it off.
-  quality_flag             text check (quality_flag in ('suspect', 'dead')),
+  max_assignments          integer default 2,
   created_at               timestamptz default now(),
   lead_type                public.lead_type not null default 'management',
   -- Guaranteed Rent lead fields (null for management leads).
@@ -106,16 +95,7 @@ create table if not exists public.lead_assignments (
   email_sent                boolean default false,
   viewed_at                 timestamptz,
   status                    text default 'new'
-    check (status in (
-      'new',
-      'contacted',
-      'no_answer',
-      'in_discussion',
-      'gone_elsewhere',
-      'won',
-      'not_relevant',
-      'rejected'
-    )),
+    check (status in ('new', 'contacted', 'in_discussion', 'won', 'not_relevant', 'rejected')),
   pipeline_stage            text not null default 'cold'
     check (pipeline_stage in (
       'cold',
@@ -131,17 +111,9 @@ create table if not exists public.lead_assignments (
   due_to_call_date          date,
   income_estimate           numeric,
   rejection_reason          text
-    check (rejection_reason is null or rejection_reason in (
-      'not_a_fit',
-      'invalid_contact',
-      'already_with_operator',
-      'no_longer_interested',
-      'unreachable'
-    )),
+    check (rejection_reason in ('not_a_fit', 'invalid_contact')),
   contact_validation_result jsonb,
   claim_denied              boolean not null default false,
-  rejected_at               timestamptz,
-  quality_claim_id          uuid,
   assigned_at               timestamptz default now(),
   unique (lead_id, customer_id)
 );
@@ -194,69 +166,6 @@ create table if not exists public.system_settings (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists public.lead_quality_claims (
-  id                       uuid primary key default gen_random_uuid(),
-  lead_assignment_id       uuid not null unique
-                             references public.lead_assignments(id) on delete cascade,
-  lead_id                  uuid not null references public.leads(id) on delete cascade,
-  customer_id              uuid not null references public.customers(id) on delete cascade,
-  reason                   text not null
-    check (reason in ('already_with_operator', 'no_longer_interested', 'unreachable')),
-  detail                   text not null,
-  contacted_on             date,
-  attempts                 integer,
-  -- ineligible: recorded as feedback only; the assignment is left untouched so
-  -- the customer can claim properly once they have worked the lead.
-  status                   text not null
-    check (status in ('ineligible', 'auto_upheld', 'under_review', 'upheld', 'declined')),
-  resolution               text not null default 'none'
-    check (resolution in ('none', 'credit', 'replacement')),
-  corroboration            text not null default 'none'
-    check (corroboration in ('none', 'peer_agrees', 'peer_contradicts')),
-  -- False for corroborated claims: agreeing with a peer is free, so honest
-  -- claims cost less than dishonest ones.
-  allowance_consumed       boolean not null default false,
-  replacement_assignment_id uuid references public.lead_assignments(id) on delete set null,
-  reviewed_by              uuid references auth.users(id),
-  reviewed_at              timestamptz,
-  review_note              text,
-  created_at               timestamptz not null default now()
-);
-
-create index if not exists idx_quality_claims_status
-  on public.lead_quality_claims (status)
-  where status = 'under_review';
-
-create index if not exists idx_quality_claims_customer
-  on public.lead_quality_claims (customer_id, created_at desc);
-
-create index if not exists idx_quality_claims_lead
-  on public.lead_quality_claims (lead_id);
-
-create table if not exists public.cycle_quality_surveys (
-  id                    uuid primary key default gen_random_uuid(),
-  customer_id           uuid not null references public.customers(id) on delete cascade,
-  cycle_start           date not null,
-  cycle_end             date,
-  leads_in_cycle        integer,
-  overall_rating        integer check (overall_rating between 1 and 5),
-  contactability_rating integer check (contactability_rating between 1 and 5),
-  fit_rating            integer check (fit_rating between 1 and 5),
-  what_would_improve    text,
-  submitted_at          timestamptz,
-  created_at            timestamptz not null default now(),
-  unique (customer_id, cycle_start)
-);
-
--- lead_assignments.quality_claim_id points at the claim that rejected it. Added
--- after both tables exist because the two reference each other.
-alter table public.lead_assignments
-  drop constraint if exists lead_assignments_quality_claim_id_fkey;
-alter table public.lead_assignments
-  add constraint lead_assignments_quality_claim_id_fkey
-  foreign key (quality_claim_id)
-  references public.lead_quality_claims(id) on delete set null;
-
 create table if not exists public.stripe_events (
   id           text primary key,          -- Stripe event id (evt_...)
   type         text,
@@ -275,9 +184,6 @@ create index if not exists idx_lead_notes_assignment on public.lead_notes(lead_a
 create index if not exists idx_lead_notes_customer on public.lead_notes(customer_id);
 create index if not exists idx_lead_files_assignment on public.lead_files(lead_assignment_id);
 create index if not exists idx_lead_files_customer on public.lead_files(customer_id);
-create index if not exists idx_leads_open_slots
-  on public.leads (created_at)
-  where quality_flag is null;
 create index if not exists idx_lead_assignments_claim_denied
   on public.lead_assignments (claim_denied)
   where claim_denied = true;
@@ -385,14 +291,11 @@ declare
   v_customer public.customers%rowtype;
   v_assignment_id uuid;
 begin
+  -- Lock the lead and customer rows for the duration of the transaction.
   select * into v_lead from public.leads
     where id = p_lead_id for update;
   if not found then
     raise exception 'Lead % not found', p_lead_id;
-  end if;
-
-  if v_lead.quality_flag = 'dead' then
-    raise exception 'Lead % is flagged dead and cannot be assigned', p_lead_id;
   end if;
 
   select * into v_customer from public.customers
@@ -401,11 +304,13 @@ begin
     raise exception 'Customer % not found', p_customer_id;
   end if;
 
+  -- Lead capacity check (applies to both product types).
   if v_lead.assignment_count >= v_lead.max_assignments then
     raise exception 'Lead % is at max assignments (%/%)',
       p_lead_id, v_lead.assignment_count, v_lead.max_assignments;
   end if;
 
+  -- Allocation gate, per product type.
   if p_lead_type = 'guaranteed_rent' then
     if v_customer.gr_lead_balance <= 0 then
       raise exception 'Customer % has no remaining GR lead balance', p_customer_id;
@@ -416,20 +321,22 @@ begin
     end if;
   end if;
 
+  -- Insert the assignment (unique constraint guards against duplicates).
   insert into public.lead_assignments (lead_id, customer_id, price_paid)
     values (p_lead_id, p_customer_id, p_price)
     returning id into v_assignment_id;
 
+  -- Increment lead capacity counter (both product types).
   update public.leads
     set assignment_count = assignment_count + 1
     where id = p_lead_id;
 
+  -- Spend one credit and bump the relevant monthly counter.
   if p_lead_type = 'guaranteed_rent' then
     update public.customers
       set gr_lead_balance = gr_lead_balance - 1,
           gr_leads_received_this_month = gr_leads_received_this_month + 1,
           gr_last_assignment_at = now(),
-          clean_leads_streak = clean_leads_streak + 1,
           updated_at = now()
       where id = p_customer_id;
   else
@@ -437,7 +344,6 @@ begin
       set leads_received_this_month = leads_received_this_month + 1,
           lead_balance = lead_balance - 1,
           last_assignment_at = now(),
-          clean_leads_streak = clean_leads_streak + 1,
           updated_at = now()
       where id = p_customer_id;
   end if;
@@ -579,7 +485,7 @@ begin
     set rejection_reason = p_reason,
         contact_validation_result = p_validation_result,
         claim_denied = p_claim_denied,
-        rejected_at = case when p_claim_denied then rejected_at else now() end,
+        -- A denied claim leaves the lead assigned; every other outcome rejects it.
         status = case when p_claim_denied then status else 'rejected' end
     where id = p_assignment_id;
 
@@ -598,8 +504,9 @@ begin
         where id = p_customer_id;
     end if;
 
-    -- Deliberately NOT decrementing leads.assignment_count. The slot stays
-    -- consumed so this lead is never offered to another operator.
+    update public.leads
+      set assignment_count = greatest(assignment_count - 1, 0)
+      where id = v_lead_id;
   end if;
 
   return query select true, p_claim_denied;
@@ -668,15 +575,16 @@ declare
   v_dom       int  := extract(day from v_today);
   v_last_dom  int  := extract(day from (date_trunc('month', v_today) + interval '1 month - 1 day'));
 begin
+  -- Management counter — unchanged from 0014.
   update public.customers
     set leads_received_this_month = 0,
-        quality_claims_this_cycle = 0,
         updated_at = now()
     where
       extract(day from coalesce(billing_cycle_anchor, created_at::date)) = v_dom
       or (v_dom = v_last_dom
           and extract(day from coalesce(billing_cycle_anchor, created_at::date)) > v_last_dom);
 
+  -- GR counter — same anchor-day logic on the GR billing anchor.
   update public.customers
     set gr_leads_received_this_month = 0
     where
@@ -686,277 +594,6 @@ begin
 end;
 $$;
 
-
-create or replace function public.uphold_quality_claim(p_claim_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_claim     public.lead_quality_claims%rowtype;
-  v_lead_type public.lead_type;
-begin
-  select * into v_claim
-    from public.lead_quality_claims
-    where id = p_claim_id
-    for update;
-
-  if not found then
-    raise exception 'Quality claim % not found', p_claim_id;
-  end if;
-
-  select lead_type into v_lead_type from public.leads where id = v_claim.lead_id;
-
-  if v_lead_type = 'guaranteed_rent' then
-    update public.customers
-      set gr_lead_balance = gr_lead_balance + 1,
-          gr_leads_received_this_month = greatest(gr_leads_received_this_month - 1, 0),
-          quality_claims_this_cycle = quality_claims_this_cycle
-            + case when v_claim.allowance_consumed then 1 else 0 end,
-          clean_leads_streak = 0,
-          updated_at = now()
-      where id = v_claim.customer_id;
-  else
-    update public.customers
-      set lead_balance = lead_balance + 1,
-          leads_received_this_month = greatest(leads_received_this_month - 1, 0),
-          quality_claims_this_cycle = quality_claims_this_cycle
-            + case when v_claim.allowance_consumed then 1 else 0 end,
-          clean_leads_streak = 0,
-          updated_at = now()
-      where id = v_claim.customer_id;
-  end if;
-
-  update public.lead_assignments
-    set status = 'rejected'
-    where id = v_claim.lead_assignment_id;
-end;
-$$;
-
-create or replace function public.apply_quality_claim(
-  p_assignment_id uuid,
-  p_customer_id uuid,
-  p_reason text,
-  p_detail text,
-  p_contacted_on date,
-  p_attempts integer,
-  p_decision text,
-  p_consumes_allowance boolean,
-  p_corroboration text
-)
-returns table (applied boolean, claim_id uuid, claim_status text, upheld boolean)
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_lead_id         uuid;
-  v_existing_reason text;
-  v_existing_claim  uuid;
-  v_claim_status    text;
-  v_claim_id        uuid;
-  v_upheld          boolean;
-begin
-  select lead_id, rejection_reason, quality_claim_id
-    into v_lead_id, v_existing_reason, v_existing_claim
-    from public.lead_assignments
-    where id = p_assignment_id
-      and customer_id = p_customer_id
-    for update;
-
-  if not found then
-    raise exception 'Assignment not found or not owned by this customer';
-  end if;
-
-  -- An ineligible report never blocks a later, proper claim, so it is stored
-  -- without consulting or setting the assignment's rejection state.
-  if p_decision = 'ineligible' then
-    insert into public.lead_quality_claims (
-      lead_assignment_id, lead_id, customer_id, reason, detail,
-      contacted_on, attempts, status, corroboration
-    ) values (
-      p_assignment_id, v_lead_id, p_customer_id, p_reason, p_detail,
-      p_contacted_on, p_attempts, 'ineligible', coalesce(p_corroboration, 'none')
-    )
-    on conflict (lead_assignment_id) do nothing
-    returning id into v_claim_id;
-
-    return query select true, v_claim_id, 'ineligible'::text, false;
-    return;
-  end if;
-
-  if v_existing_reason is not null then
-    select status into v_claim_status
-      from public.lead_quality_claims where id = v_existing_claim;
-    return query
-      select false, v_existing_claim, coalesce(v_claim_status, 'under_review'),
-             coalesce(v_claim_status, '') in ('auto_upheld', 'upheld');
-    return;
-  end if;
-
-  v_upheld := p_decision = 'auto_uphold';
-  v_claim_status := case when v_upheld then 'auto_upheld' else 'under_review' end;
-
-  -- A prior ineligible report on this assignment is replaced by the real claim.
-  delete from public.lead_quality_claims
-    where lead_assignment_id = p_assignment_id and status = 'ineligible';
-
-  insert into public.lead_quality_claims (
-    lead_assignment_id, lead_id, customer_id, reason, detail,
-    contacted_on, attempts, status, corroboration, allowance_consumed
-  ) values (
-    p_assignment_id, v_lead_id, p_customer_id, p_reason, p_detail,
-    p_contacted_on, p_attempts, v_claim_status, coalesce(p_corroboration, 'none'),
-    v_upheld and coalesce(p_consumes_allowance, false)
-  )
-  returning id into v_claim_id;
-
-  update public.lead_assignments
-    set rejection_reason = p_reason,
-        rejected_at = now(),
-        quality_claim_id = v_claim_id
-    where id = p_assignment_id;
-
-  if v_upheld then
-    perform public.uphold_quality_claim(v_claim_id);
-  end if;
-
-  return query select true, v_claim_id, v_claim_status, v_upheld;
-end;
-$$;
-
-create or replace function public.resolve_quality_claim(
-  p_claim_id uuid,
-  p_upheld boolean,
-  p_reviewer uuid,
-  p_review_note text,
-  p_consumes_allowance boolean default true
-)
-returns boolean
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_status text;
-begin
-  select status into v_status
-    from public.lead_quality_claims
-    where id = p_claim_id
-    for update;
-
-  if not found then
-    raise exception 'Quality claim % not found', p_claim_id;
-  end if;
-
-  -- Only a pending claim can be adjudicated; anything else is a no-op so a
-  -- double-click in admin cannot refund twice.
-  if v_status <> 'under_review' then
-    return false;
-  end if;
-
-  update public.lead_quality_claims
-    set status = case when p_upheld then 'upheld' else 'declined' end,
-        allowance_consumed = p_upheld and coalesce(p_consumes_allowance, true),
-        reviewed_by = p_reviewer,
-        reviewed_at = now(),
-        review_note = p_review_note
-    where id = p_claim_id;
-
-  if p_upheld then
-    perform public.uphold_quality_claim(p_claim_id);
-  end if;
-
-  return true;
-end;
-$$;
-
-create or replace function public.flag_lead_dead_if_unanimous(p_lead_id uuid)
-returns text
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_total  integer;
-  v_dead   integer;
-  v_flag   text;
-begin
-  select count(*) into v_total
-    from public.lead_assignments where lead_id = p_lead_id;
-
-  select count(*) into v_dead
-    from public.lead_assignments la
-    join public.lead_quality_claims c on c.lead_assignment_id = la.id
-    where la.lead_id = p_lead_id
-      and c.status in ('auto_upheld', 'upheld');
-
-  if v_total = 0 or v_dead = 0 then
-    return null;
-  end if;
-
-  v_flag := case when v_dead >= v_total then 'dead' else 'suspect' end;
-
-  update public.leads set quality_flag = v_flag where id = p_lead_id;
-
-  return v_flag;
-end;
-$$;
-
-create or replace function public.find_replacement_lead(
-  p_customer_id uuid,
-  p_lead_type public.lead_type default 'management',
-  p_filter jsonb default null
-)
-returns uuid
-language sql
-security definer
-set search_path = public
-as $$
-  select l.id
-  from public.leads l
-  where l.lead_type = p_lead_type
-    and l.quality_flag is null
-    and l.assignment_count < l.max_assignments
-    and not exists (
-      select 1 from public.lead_assignments la
-      where la.lead_id = l.id and la.customer_id = p_customer_id
-    )
-    and (
-      p_filter is null
-      or p_filter->'cities' is null
-      or jsonb_array_length(p_filter->'cities') = 0
-      or exists (
-        select 1 from jsonb_array_elements_text(p_filter->'cities') city
-        where l.address ilike '%' || city || '%'
-      )
-    )
-    and (
-      p_filter is null
-      or p_filter->>'min_bedrooms' is null
-      or coalesce(
-           nullif(regexp_replace(coalesce(l.bedrooms, ''), '\D', '', 'g'), '')::int,
-           0
-         ) >= (p_filter->>'min_bedrooms')::int
-    )
-  order by l.created_at desc
-  limit 1;
-$$;
-
-create or replace function public.leads_with_open_slots(p_limit integer default 50)
-returns table (lead_id uuid, lead_type public.lead_type, open_slots integer)
-language sql
-security definer
-set search_path = public
-as $$
-  select l.id, l.lead_type, (l.max_assignments - l.assignment_count)
-  from public.leads l
-  where l.quality_flag is null
-    and l.assignment_count < l.max_assignments
-  order by l.created_at asc
-  limit greatest(coalesce(p_limit, 50), 1);
-$$;
 
 -- ---------------------------------------------------------------------------
 -- Row level security
@@ -970,9 +607,6 @@ alter table public.system_settings  enable row level security;
 alter table public.lead_notes       enable row level security;
 alter table public.lead_files       enable row level security;
 alter table public.stripe_events    enable row level security;
--- RLS on with no policies: service role only, through server routes.
-alter table public.lead_quality_claims   enable row level security;
-alter table public.cycle_quality_surveys enable row level security;
 
 -- Customers: a user can read only their own row. Writes (allocation changes,
 -- billing flags) are never exposed to the browser client — they go through

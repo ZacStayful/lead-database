@@ -13,9 +13,7 @@ export const dynamic = "force-dynamic";
 const STATUSES: { key: string; blurb: string }[] = [
   { key: "new", blurb: "Just arrived and not yet actioned. Your unread count on the dashboard tracks these." },
   { key: "contacted", blurb: "You've reached out — call, email, or message. Use “Mark as contacted” on the lead." },
-  { key: "no_answer", blurb: "You've tried and had no response yet. Keep it in the priority list and try again." },
   { key: "in_discussion", blurb: "An active back-and-forth is underway." },
-  { key: "gone_elsewhere", blurb: "The landlord went with someone else. Closes the lead and tells us the source is producing contested leads." },
   { key: "won", blurb: "Converted — a signed management agreement or guaranteed-rent deal. Counts toward your win rate." },
   { key: "not_relevant", blurb: "Not a fit for you. Closes the lead without marking it won." },
   { key: "rejected", blurb: "You passed on it. The lead still counts and is not refunded — it's a record that you're not pursuing it." },
@@ -55,7 +53,6 @@ export default async function GuidePage() {
     { id: "crm", label: "Status vs pipeline" },
     { id: "notes", label: "Notes & files" },
     { id: "reject", label: "Reject vs discard" },
-    { id: "dead-leads", label: "Leads that were already gone" },
     { id: "priority", label: "Priority call list" },
     { id: "analytics", label: "Analytics" },
     { id: "analyser", label: "STR Analyser" },
@@ -296,9 +293,8 @@ export default async function GuidePage() {
             <List>
               <li>
                 <strong>Reject</strong> — records that you&apos;re passing on the
-                lead. Choosing <em>Does not fit my needs</em> still counts toward
-                your leads for the month and is not refunded, since the lead was
-                delivered and workable. The other reasons are covered below.
+                lead. It still counts toward your leads for the month and is not
+                refunded or replaced. Use it as a pipeline/feedback signal.
               </li>
               <li>
                 <strong>Discard</strong> — only available before you&apos;ve added
@@ -307,47 +303,10 @@ export default async function GuidePage() {
                 allocation, since the lead was delivered and qualified.
               </li>
             </List>
-            <p>
-              If the phone number or email is wrong, choose{" "}
-              <strong>Invalid email or mobile</strong>. We check both against
-              live lookup services on the spot. If either genuinely fails, the
-              lead comes off your count straight away and we send you another one
-              where we can. If both check out, we&apos;ll tell you so and the
-              lead stays with you.
-            </p>
             <Callout variant="warn">
-              We never pass a lead you&apos;ve rejected on to a fourth operator.
-              It stays with whoever is still working it, and you get a different
-              lead instead.
-            </Callout>
-          </Section>
-
-          <Section id="dead-leads" title="Leads that were already gone">
-            <p>
-              Sometimes a landlord has appointed someone else, or gone off the
-              idea entirely, before you ever reach them. Tell us — reject the
-              lead and pick the reason that fits: <em>already signed with
-              another operator</em>, <em>no longer wants to let the property</em>,
-              or <em>could not reach them at all</em>.
-            </p>
-            <p>
-              We&apos;ll ask what the landlord said and when you spoke to them,
-              because that detail is what lets us trace the lead back and stop
-              the same thing happening again. You can report a lead up to 14 days
-              after it lands, and you need to have worked it first — a note on
-              the lead is enough.
-            </p>
-            <p>
-              Every report is reviewed. Where we uphold it, the lead comes off
-              your count and we send you a replacement, or credit it back if
-              nothing suitable is free right then. Reports are not upheld
-              automatically and not all of them are, so it&apos;s worth telling
-              us what happened rather than treating it as a way to swap leads.
-            </p>
-            <Callout>
-              Reporting a lead is never wasted even when it isn&apos;t upheld. It
-              is the main thing that tells us which sources and areas are
-              producing leads that go nowhere.
+              If a lead&apos;s <strong>contact details are factually
+              incorrect</strong>, don&apos;t just reject it — contact the Stayful
+              team and we&apos;ll review it.
             </Callout>
           </Section>
 

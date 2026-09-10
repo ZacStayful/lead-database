@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { formatDateTime, daysSince } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import type { AssignmentWithLead, LeadNote } from "@/lib/types";
 
@@ -60,7 +60,6 @@ export async function GET() {
     Bedrooms: a.lead?.bedrooms ?? "",
     "Lead profile": a.lead?.lead_profile ?? "",
     "Enquiry date": a.lead?.enquiry_date ?? "",
-    "Days since enquiry": daysSince(a.lead?.enquiry_date) ?? "",
     "Received on": a.assigned_at
       ? new Date(a.assigned_at).toLocaleDateString("en-GB")
       : "",

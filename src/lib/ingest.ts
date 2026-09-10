@@ -5,9 +5,10 @@ import {
   sendCreditsExhaustedEmail,
 } from "@/lib/emails";
 import { extractCity } from "@/lib/utils";
-import { leadPriceFor, DEFAULT_MAX_ASSIGNMENTS } from "@/lib/plans";
 import type { Customer, Lead, LeadType, N8nLeadPayload } from "@/lib/types";
 
+const LEAD_PRICE = 15.0;
+const GR_LEAD_PRICE = 10.0;
 // Warn when the customer has this many lead credits left (the real allocation
 // gate is lead_balance, not the monthly counter, and this is plan-agnostic).
 const LOW_CREDITS_REMAINING = 2;
@@ -159,7 +160,7 @@ export async function ingestLead(
     "get_next_customers_for_lead",
     {
       p_lead_id: typedLead.id,
-      p_max: typedLead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS,
+      p_max: typedLead.max_assignments ?? 2,
       p_lead_type: leadType,
     }
   );
@@ -180,7 +181,7 @@ export async function ingestLead(
 
   let assignmentsMade = 0;
 
-  const price = leadPriceFor(leadType);
+  const price = leadType === "guaranteed_rent" ? GR_LEAD_PRICE : LEAD_PRICE;
 
   for (const customerId of customerIds) {
     const { data: assignmentId, error: assignError } = await supabase.rpc(

@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { CapacityPanel } from "@/components/admin/CapacityPanel";
-import { planForAllocation, DEFAULT_MAX_ASSIGNMENTS } from "@/lib/plans";
+import { planForAllocation } from "@/lib/plans";
 import type { Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +50,7 @@ export default async function AdminOverviewPage() {
     .select("id, assignment_count, max_assignments");
   const notFullyAssigned = (openLeads ?? []).filter(
     (l: { assignment_count: number; max_assignments: number }) =>
-      (l.assignment_count ?? 0) < (l.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS)
+      (l.assignment_count ?? 0) < (l.max_assignments ?? 2)
   ).length;
 
   const stats = [
