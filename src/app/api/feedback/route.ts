@@ -36,7 +36,7 @@ export const dynamic = "force-dynamic";
  * See the support route for the response ladder — it is identical, and the
  * reason a failed email is no longer a 502 once the row landed.
  *
- * ⚠️ SINCE §47 THIS ROUTE SOMETIMES HOLDS THE EMAIL BACK. When the submitter is
+ * ⚠️ SINCE §50 THIS ROUTE SOMETIMES HOLDS THE EMAIL BACK. When the submitter is
  * signed in and clarification is available, the ticket lands here with
  * ai_status='awaiting_answers' and NO email is sent yet — the questions come
  * next, and the notification is worth more once it carries the answers. The
@@ -49,7 +49,7 @@ export const dynamic = "force-dynamic";
  * completion, and the sweeper sends anything abandoned. A customer who closes
  * the tab at question two costs a delayed email, not a lost request.
  *
- * Everyone else — signed out, no API key — takes exactly the pre-§47 path.
+ * Everyone else — signed out, no API key — takes exactly the pre-§50 path.
  */
 export async function POST(request: NextRequest) {
   let body: {

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * "Not sure what this means?" — ask one question again, more simply (§47).
+ * "Not sure what this means?" — ask one question again, more simply (§50).
  *
  * ⚠️ THIS ROUTE EXISTS BECAUSE THERE IS NO SKIP BUTTON. The questions are
  * compulsory, which is only fair if not understanding one leads somewhere. It

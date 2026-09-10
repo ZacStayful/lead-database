@@ -11,18 +11,18 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * The safety net under §47's compulsory questions.
+ * The safety net under §50's compulsory questions.
  *
  * WHY THIS EXISTS. The questions cannot be skipped, so a customer can finish
  * typing, be shown three questions, and simply close the tab. Their ticket is
  * already on file — §46's guarantee is untouched — but the email that tells
  * anybody about it is held back waiting for answers that are never coming.
  * Without this sweep, a request nobody abandoned deliberately would sit unread
- * for ever, which is a worse outcome than the pre-§47 behaviour and would make
+ * for ever, which is a worse outcome than the pre-§50 behaviour and would make
  * removing the skip button indefensible.
  *
  * So: anything still awaiting answers after the grace window is emailed
- * unclarified and marked 'abandoned'. It arrives exactly as a pre-§47 request
+ * unclarified and marked 'abandoned'. It arrives exactly as a pre-§50 request
  * would have — the customer's own words, no brief — which is the floor this
  * whole feature promised never to fall below.
  *

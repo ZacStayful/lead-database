@@ -18,7 +18,12 @@ import type { NextRequest } from "next/server";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-export type ApiSurface = "rest" | "mcp" | "oauth";
+/**
+ * ⚠️ Kept in step with `api_request_log_surface`, the CHECK on the column. A
+ * value added here without the migration fails every insert that uses it.
+ * `webhook` arrived with §48 and 0135.
+ */
+export type ApiSurface = "rest" | "mcp" | "oauth" | "webhook";
 
 export interface LogEntry {
   requestId: string;

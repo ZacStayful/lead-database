@@ -213,7 +213,7 @@ describe("normaliseBrief", () => {
   });
 
   it("discards invented enum values instead of writing them to a CHECK-constrained column", () => {
-    // 0134 constrains `severity`. An invented value would fail the insert and
+    // 0136 constrains `severity`. An invented value would fail the insert and
     // lose the whole synthesis, so it is dropped here.
     const out = normaliseBrief({ ...good, severity: "apocalyptic", request_class: "wat" });
     expect(out?.severity).toBeNull();

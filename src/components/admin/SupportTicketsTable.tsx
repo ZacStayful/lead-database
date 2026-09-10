@@ -53,7 +53,7 @@ export type SupportTicketRow = {
   customer_name: string | null;
   customer_state: "archived" | "cancelled" | null;
   live_plan: string | null;
-  /** §47. Null on every pre-0134 ticket and every signed-out submission. */
+  /** §50. Null on every pre-0136 ticket and every signed-out submission. */
   ai_status: string | null;
   clarifications: TicketClarification[] | null;
   brief: TicketBrief | null;

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Generate the questions for a ticket that has just been logged (§47).
+ * Generate the questions for a ticket that has just been logged (§50).
  *
  * ⚠️ AN EMPTY QUESTION LIST IS A SUCCESS, NOT AN ERROR. Every failure — no key,
  * a timeout, malformed output — comes back as `{ questions: [] }` and the client

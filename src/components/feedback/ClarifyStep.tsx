@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 /**
- * The questions, between typing and sending (§47).
+ * The questions, between typing and sending (§50).
  *
  * ⚠️ THERE IS NO SKIP CONTROL, AND THAT IS THE DESIGN. The answers are the
  * whole reason the generated brief is worth anything, and a skipped question

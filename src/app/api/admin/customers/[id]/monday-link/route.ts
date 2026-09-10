@@ -21,6 +21,8 @@ export const dynamic = "force-dynamic";
  * column is "the label we last wrote", and it short-circuits the sync; leaving a
  * stale value against a NEW item would suppress the first push to that item. Set
  * it to null and the customer's next lifecycle event writes the label properly.
+ * monday_lead_interest (0134) is the same kind of cache over the "What kind of
+ * leads" cell and is cleared for exactly the same reason.
  */
 export async function POST(
   request: NextRequest,
@@ -57,6 +59,7 @@ export async function POST(
         monday_link_state: "unlinked",
         monday_link_matched_by: null,
         monday_status_label: null,
+        monday_lead_interest: null,
         monday_status_synced_at: null,
         monday_status_error: null,
         updated_at: new Date().toISOString(),
@@ -133,8 +136,9 @@ export async function POST(
       monday_board_id: enquiryBoardId(),
       monday_link_state: "linked",
       monday_link_matched_by: "manual",
-      // See the header — this must be cleared, not carried over.
+      // See the header — these must be cleared, not carried over.
       monday_status_label: null,
+      monday_lead_interest: null,
       monday_status_synced_at: null,
       monday_status_error: null,
       updated_at: new Date().toISOString(),

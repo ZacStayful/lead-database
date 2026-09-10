@@ -143,7 +143,7 @@ describe("the public feedback route", () => {
   const ROUTE = source("src/app/api/feedback/route.ts");
 
   it("still logs the ticket before anything else can go wrong", () => {
-    // §46's guarantee. §47 defers the SEND; it must never defer the INSERT.
+    // §46's guarantee. §50 defers the SEND; it must never defer the INSERT.
     const insert = ROUTE.indexOf("logSupportTicket");
     const clarifyReturn = ROUTE.indexOf("clarify: true");
     expect(insert).toBeGreaterThan(-1);

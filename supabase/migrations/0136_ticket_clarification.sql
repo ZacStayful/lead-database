@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 0134 — Asking the customer the questions, before the ticket lands (§47).
+-- 0136 — Asking the customer the questions, before the ticket lands (§50).
 --
 -- WHY THIS EXISTS
 -- ---------------
@@ -14,7 +14,7 @@
 -- The interrogation that makes a request actionable happens days later, in a
 -- Claude Code session, against a customer who has moved on.
 --
--- 0134 moves that interrogation to the moment of reporting. Three to five
+-- 0136 moves that interrogation to the moment of reporting. Three to five
 -- questions, generated from what the customer wrote and from their live account
 -- state, answered in taps, and then one synthesised brief and a ready-to-paste
 -- implementation prompt. The columns below hold the conversation and its
@@ -32,7 +32,7 @@
 -- ⚠️ ADDITIVE AND INERT. Every existing row, including the nine backfilled by
 -- 0133, keeps ai_status NULL and renders exactly as it does today. NULL is not
 -- a missing value here, it is a real state: "no questions were ever offered",
--- which is true of every pre-0134 ticket and of every signed-out submission.
+-- which is true of every pre-0136 ticket and of every signed-out submission.
 -- ---------------------------------------------------------------------------
 
 alter table public.support_tickets
@@ -46,7 +46,7 @@ alter table public.support_tickets
 
 -- The lifecycle, and why 'abandoned' has to exist.
 --
---   NULL             no questions were offered (pre-0134, or signed out)
+--   NULL             no questions were offered (pre-0136, or signed out)
 --   awaiting_answers logged at step one, questions not yet answered
 --   ready            answered and synthesised
 --   failed           answered, synthesis errored — retried by the sweeper
@@ -60,7 +60,7 @@ alter table public.support_tickets
 -- fix: a customer who gives up at question two leaving no trace, where today
 -- their paragraph is already on /admin/support. So the ticket is written BEFORE
 -- the first question is asked, and the worst case is a ticket merely as good as
--- a pre-0134 one — never worse.
+-- a pre-0136 one — never worse.
 alter table public.support_tickets drop constraint if exists support_tickets_ai_status_check;
 alter table public.support_tickets add constraint support_tickets_ai_status_check
   check (ai_status is null or ai_status in
@@ -68,7 +68,7 @@ alter table public.support_tickets add constraint support_tickets_ai_status_chec
 
 -- Nullable: severity is the model's reading, and it has none until synthesis
 -- runs. It is deliberately NOT a second status column on the admin list — see
--- §47 — it rides in the brief.
+-- §50 — it rides in the brief.
 alter table public.support_tickets drop constraint if exists support_tickets_severity_check;
 alter table public.support_tickets add constraint support_tickets_severity_check
   check (severity is null or severity in ('blocker', 'major', 'minor', 'cosmetic'));
@@ -101,7 +101,7 @@ comment on column public.support_tickets.clarifications is
   '{question, answer, depth}. `depth` is how many times the customer asked for '
   'the question to be simplified — 0 means they answered it as first asked. A '
   'high depth is itself a finding: it means the customer could not follow the '
-  'app''s own vocabulary in that area. ADMIN ONLY — see §47 and the header of '
+  'app''s own vocabulary in that area. ADMIN ONLY — see §50 and the header of '
   'this migration.';
 
 comment on column public.support_tickets.brief is
@@ -110,10 +110,10 @@ comment on column public.support_tickets.brief is
   'determined. ADMIN ONLY.';
 
 comment on column public.support_tickets.generated_prompt is
-  'The ready-to-paste Claude Code prompt. This is the deliverable of §47. '
+  'The ready-to-paste Claude Code prompt. This is the deliverable of §50. '
   'ADMIN ONLY.';
 
 comment on column public.support_tickets.ai_status is
-  'NULL means no questions were ever offered — every pre-0134 ticket and every '
+  'NULL means no questions were ever offered — every pre-0136 ticket and every '
   'signed-out submission. See the CHECK above for the other five states and '
   'why ''abandoned'' exists.';

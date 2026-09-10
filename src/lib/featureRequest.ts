@@ -37,7 +37,7 @@
  * WHETHER A BUTTON DOES ANYTHING — which is the entire reason to have more than
  * one entry point.
  *
- * ⚠️ It became a FUNCTION in §47, when the header gained a second copy of this
+ * ⚠️ It became a FUNCTION in §50, when the header gained a second copy of this
  * button. A single constant would have made both entry points report
  * themselves as "Announcement" and the comparison would have been quietly
  * meaningless. The old constant survives as the announcement caller's argument,
@@ -50,10 +50,10 @@ export function featureRequestPath(source: string): string {
   return `/feedback?type=feature&page=${encodeURIComponent(source)}`;
 }
 
-/** The announcement email and dashboard banner. Unchanged from before §47. */
+/** The announcement email and dashboard banner. Unchanged from before §50. */
 export const FEATURE_REQUEST_PATH = featureRequestPath("Announcement");
 
-/** The dashboard header nav entry (§47). */
+/** The dashboard header nav entry (§50). */
 export const FEATURE_REQUEST_HEADER_PATH = featureRequestPath("Header");
 
 /** The line above the button. Kept short: it sits under an admin's own copy. */

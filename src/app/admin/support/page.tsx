@@ -63,7 +63,7 @@ export default async function AdminSupportPage({
         "plan_snapshot, visible_to_customer, submitted_at, resolved_at, " +
         "shipped_migration, shipped_claude_section, submitter_name, submitter_email, " +
         "submitter_business, backfill_key, " +
-        // §47. Admin-only — never add these to CUSTOMER_TICKET_COLUMNS on
+        // §50. Admin-only — never add these to CUSTOMER_TICKET_COLUMNS on
         // /dashboard/support; supportTicketBoundary.test.ts fails if you do.
         "ai_status, clarifications, brief, generated_prompt, severity, " +
         "customer:customers!support_tickets_customer_id_fkey(" +
@@ -152,7 +152,7 @@ export default async function AdminSupportPage({
       submitter_email: t.submitter_email,
       submitter_business: t.submitter_business,
       backfill_key: t.backfill_key,
-      // §47. Null on every pre-0134 ticket, which is the shape the panel
+      // §50. Null on every pre-0136 ticket, which is the shape the panel
       // treats as "no questions were ever offered" and renders nothing for.
       ai_status: t.ai_status,
       clarifications: t.clarifications,

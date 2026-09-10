@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * The customer has answered every question. Synthesise, then notify (§47).
+ * The customer has answered every question. Synthesise, then notify (§50).
  *
  * ⚠️ COMPLETENESS IS ENFORCED HERE, NOT ONLY IN THE BROWSER. A disabled button
  * is a courtesy; this is the control. Every question must carry an answer,

@@ -169,9 +169,9 @@ export async function logSupportTicket(params: {
   account: TicketAccount | null;
   customer: TicketPlanFields | null;
   /**
-   * §47's lifecycle marker, set at insert.
+   * §50's lifecycle marker, set at insert.
    *
-   * NULL — the default and the pre-0134 shape — means no questions were ever
+   * NULL — the default and the pre-0136 shape — means no questions were ever
    * offered, which is the truth for every signed-out submission and every
    * ticket logged by hand. 'awaiting_answers' means the customer is about to be
    * asked; the sweeper mails and marks 'abandoned' if they never finish.

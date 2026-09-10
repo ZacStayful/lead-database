@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 /**
- * The clarifying answers and the implementation prompt, on the ticket (§47).
+ * The clarifying answers and the implementation prompt, on the ticket (§50).
  *
  * ⚠️ ADMIN ONLY. `clarifications`, `brief` and `generated_prompt` are columns on
  * `support_tickets`, which the customer also reads on /dashboard/support. §46.3
@@ -41,7 +41,7 @@ export function TicketBriefPanel({
 }) {
   const [copied, setCopied] = useState(false);
 
-  // NULL is the pre-§47 shape and the signed-out shape: no questions were ever
+  // NULL is the pre-§50 shape and the signed-out shape: no questions were ever
   // offered. Rendering an empty panel on nine backfilled tickets and every
   // anonymous submission would be noise, so say nothing at all.
   if (!aiStatus) return null;

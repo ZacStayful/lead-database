@@ -23,7 +23,7 @@ describe("the feature request link", () => {
   });
 
   it("did not change the announcement link", () => {
-    // The email and the banner have shipped; §47 must not move them.
+    // The email and the banner have shipped; §50 must not move them.
     expect(FEATURE_REQUEST_PATH).toBe("/feedback?type=feature&page=Announcement");
   });
 

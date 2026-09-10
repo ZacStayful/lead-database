@@ -62,7 +62,7 @@ export default async function DashboardLayout({
   // The groups are built here, on the server, so the visibility rules stay
   // beside the reasoning for them.
   //
-  // ⚠️ "Request a feature" IS A DIRECT LINK, NOT A GROUP (§47). Folding it into
+  // ⚠️ "Request a feature" IS A DIRECT LINK, NOT A GROUP (§50). Folding it into
   // a "Feedback" menu alongside the bug link and Support would be tidier and
   // would defeat the point: the thing being promoted would end up one click
   // DEEPER than the footer link it exists to replace. Bug reporting stays in

@@ -5,8 +5,14 @@ import {
   isJunkName,
   normaliseUkMobile,
   passesQualityGate,
+  stripUkDialCode,
+  ukMobileE164,
+  UK_DIAL_CODE,
+  UK_MOBILE_ERRORS,
+  withUkDialCode,
   type LeadQualityCode,
 } from "@/lib/leadQuality";
+import { phoneMatchKey } from "@/lib/monday";
 
 const ok = (raw: string) => {
   const r = normaliseUkMobile(raw);
@@ -204,5 +210,173 @@ describe("passesQualityGate", () => {
     expect(
       passesQualityGate({ lead_quality_status: "failed", lead_quality_override_at: null })
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ukMobileE164 — the enquiry form's storage format (§49)
+// ---------------------------------------------------------------------------
+
+const e164 = (raw: string | null | undefined) => {
+  const r = ukMobileE164(raw);
+  return r.ok ? r.value : `FAILED:${r.reason}`;
+};
+
+describe("ukMobileE164", () => {
+  it.each([
+    // The shape §36.2 exists for: +44 followed by a FULL national number, which
+    // 89 of 193 live management leads use. A naive slice yields +44007304208011.
+    ["+4407304208011", "+447304208011"],
+    ["07700900123", "+447700900123"],
+    ["07700 900 123", "+447700900123"],
+    ["+44 7700 900123", "+447700900123"],
+    ["447700900123", "+447700900123"],
+    ["00447700900123", "+447700900123"],
+    ["(07700) 900123", "+447700900123"],
+  ])("%s -> %s", (raw, expected) => {
+    expect(e164(raw)).toBe(expected);
+  });
+
+  it("passes an already-E.164 UK mobile straight through", () => {
+    expect(e164("+447711387707")).toBe("+447711387707");
+  });
+
+  it.each([
+    ["+31 6 12345678", "foreign"],
+    // A `+0…` typo reads as an explicit country code that is not ours. The
+    // wording of UK_MOBILE_ERRORS.foreign has to cover this case too.
+    ["+07700900123", "foreign"],
+    ["0117 963 0000", "not_mobile"],
+    ["07700", "not_mobile"],
+    ["0000 0000000", "placeholder"],
+    ["", "missing"],
+    [null, "missing"],
+    [undefined, "missing"],
+  ])("refuses %s as %s", (raw, reason) => {
+    expect(e164(raw)).toBe(`FAILED:${reason}`);
+  });
+
+  it("never disagrees with normaliseUkMobile about validity", () => {
+    for (const raw of [
+      "07700900123", "+4407304208011", "0117 963 0000", "+31 612345678",
+      "0000", "", "447700900123", "not a number",
+    ]) {
+      expect(ukMobileE164(raw).ok).toBe(normaliseUkMobile(raw).ok);
+    }
+  });
+
+  it("has a message for every failure reason", () => {
+    // A new reason on UkMobileFailure must not reach a member of the public as
+    // `undefined`. The Record type enforces this at compile time; this asserts
+    // the strings are actually present and non-empty at runtime.
+    for (const reason of ["missing", "placeholder", "foreign", "not_mobile"] as const) {
+      expect(UK_MOBILE_ERRORS[reason].length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("changing the stored format breaks nothing downstream", () => {
+  // These two are the whole basis for storing +44 rather than 07. Neither
+  // function is changed by this work; both are asserted because if either ever
+  // stopped tolerating a leading +, the damage would be silent — a customer who
+  // simply never receives an SMS, or a Monday item that quietly stops matching.
+
+  it("the Monday matcher still resolves a +44 row against an 07 board cell", () => {
+    // Tier 2 of matchItemForCustomer (§23.5) compares phoneMatchKey values.
+    expect(phoneMatchKey("+447700900123")).toBe(phoneMatchKey("07700900123"));
+    expect(phoneMatchKey("+447700900123")).toBe("700900123");
+  });
+
+  it("Twilio's own helper leaves an E.164 number untouched", () => {
+    // sms.ts keeps toE164UK module-private, so this reproduces it exactly
+    // rather than importing it. If that function changes, this must change too.
+    const toE164UK = (raw: string) => {
+      const cleaned = raw.replace(/[\s\-()]/g, "");
+      return cleaned.startsWith("+") ? cleaned : cleaned.replace(/^0/, "+44");
+    };
+    expect(toE164UK("+447700900123")).toBe("+447700900123");
+    expect(toE164UK("07700900123")).toBe("+447700900123");
+    // looksLikePhone gates on 10-15 digits; a stored +44 number has 12.
+    expect("+447700900123".replace(/\D/g, "").length).toBe(12);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The +44 affix on the enquiry form (§49.3)
+// ---------------------------------------------------------------------------
+
+describe("withUkDialCode", () => {
+  it.each([
+    ["7700900123", "+447700900123"],
+    ["7700 900 123", "+447700 900 123"],
+    // Typed WITH the zero into a field that already shows +44. Prefixing gives
+    // +4407700900123, which is exactly the shape §36.2's parser exists for.
+    ["07700900123", "+4407700900123"],
+  ])("prefixes %s -> %s", (typed, expected) => {
+    expect(withUkDialCode(typed)).toBe(expected);
+  });
+
+  it.each([
+    "+447700900123",
+    "+44 7700 900123",
+    // ⚠️ The case that matters. Prefixing this would make the parser answer
+    // not_mobile ("it should start 07") about a Dutch number.
+    "+31 6 12345678",
+    "00447700900123",
+    // Bare 44 with no plus: WhatsApp's shape, and a country code all the same.
+    "447700900123",
+    "44 7700 900123",
+  ])("passes %s through untouched", (typed) => {
+    expect(withUkDialCode(typed)).toBe(typed);
+  });
+
+  it("still prefixes a short 44 that is a national number, not a country code", () => {
+    // Not reachable with a real UK mobile (national part starts 7), but the
+    // length test is the only thing separating the two readings, so pin it.
+    expect(withUkDialCode("4477009")).toBe("+444477009");
+  });
+
+  it("returns empty for nothing typed, so the server still says 'missing'", () => {
+    for (const raw of ["", "   ", null, undefined]) {
+      expect(withUkDialCode(raw)).toBe("");
+    }
+  });
+
+  it("keeps an overseas paste resolving as foreign, not as a bad UK number", () => {
+    const r = ukMobileE164(withUkDialCode("+31 6 12345678"));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("foreign");
+  });
+
+  it("round-trips every accepted shape to the same stored number", () => {
+    for (const typed of [
+      "7700900123", "07700900123", "+447700900123", "07700 900 123",
+      "447700900123", "44 7700 900123", "00447700900123", "+44 7700 900123",
+    ]) {
+      const r = ukMobileE164(withUkDialCode(typed));
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.value).toBe("+447700900123");
+    }
+  });
+});
+
+describe("stripUkDialCode", () => {
+  it("takes the dial code back off for redisplay beside the affix", () => {
+    expect(stripUkDialCode("+447700900123")).toBe("7700900123");
+  });
+
+  it("leaves anything that is not +44 alone", () => {
+    expect(stripUkDialCode("+31612345678")).toBe("+31612345678");
+  });
+
+  it("never leaves the field showing the dial code twice", () => {
+    // The bug this pair exists to prevent: field reads "+44" "+447700900123".
+    const r = ukMobileE164(withUkDialCode("07700900123"));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const shown = stripUkDialCode(r.value);
+      expect(shown.startsWith(UK_DIAL_CODE)).toBe(false);
+      expect(`${UK_DIAL_CODE}${shown}`).toBe("+447700900123");
+    }
   });
 });

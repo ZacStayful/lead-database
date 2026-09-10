@@ -9072,6 +9072,90 @@ byte-for-byte. `oauth_enabled` ships **false**, so even with the code deployed
 the discovery documents 404 and every client behaves exactly as it does today.
 Flip it only after the end-to-end tests above.
 
+### 45.15 — ⚠️ The consent screen 500'd for every VALID request *(no migration)*
+
+`oauth_enabled` was flipped on production, and the first customer to connect
+Claude got as far as the consent screen and no further. Discovery worked,
+dynamic client registration returned a 201 with a `client_id`, and then
+`/oauth/authorize` answered **500** — "Application error: a server-side
+exception has occurred", digest `3574262920`.
+
+**`src/app/oauth/authorize/page.tsx` called `cookies().set()` to mint the
+double-submit nonce.** That is a Server Component, and on Next 14 `cookies()`
+returns a read-only store there: `.set()` throws *"Cookies can only be modified
+in a Server Action or Route Handler."*
+
+⚠️ **What hid it is the shape worth keeping.** The page returns early on every
+invalid request, so the throw was unreachable except on a fully valid one:
+
+| Request | Outcome |
+|---|---|
+| Unrecognised `client_id` | the proper error page — returns at the `fatal` verdict |
+| No parameters at all | the proper error page — same early return |
+| Not signed in | redirects to `/login` — the guard sits above the write |
+| **Valid, signed in** | **500** — the only path that reached the cookie |
+
+So every way of poking at it by hand reported the feature working, and only a
+customer with a real OAuth client could see it fail. `next build` cannot catch
+it either: it is a runtime throw on a page nothing renders. This is the sixth
+time this file has recorded a bug living in the seam between two well-tested
+pieces (§23.10, §25's `items(ids:)`, §27.8's `!inner`, §40.8's two seams,
+§42.8's 91 destroyed runs), and the first where the tested pieces either side
+were both *correct*.
+
+**The read and the delete were never the problem.** `POST /api/oauth/authorize`
+gets the cookie and deletes it, and a Route Handler may do both. Only the write
+was in the wrong kind of file.
+
+#### The nonce is now fetched, and middleware could not host it
+
+`GET /api/oauth/consent-nonce` mints it, sets the cookie and returns the value;
+`ConsentForm` asks for it on mount and arms Allow only once it arrives. The POST
+is **unchanged** — the pair still works exactly as designed.
+
+⚠️ **Middleware was the obvious answer and is not available: `middleware.ts` has
+never run.** It sits at the repository root while the app lives in `src/`, so
+Next resolves `src/middleware.ts` and finds nothing. The production build prints
+no `ƒ Middleware` line and no middleware compile step. That is not a security
+hole — `admin/layout.tsx` independently calls `getUser()` and `isAdminUser()`
+and redirects, so `updateSession`'s route protection is redundant rather than
+load-bearing — but it means the file is dead code that reads as live, and moving
+it into `src/` would wake dormant request handling for every dashboard and admin
+route. That is its own change, not a hotfix.
+
+Three details on the route that are not decoration:
+
+- **`Cache-Control: no-store` on the success response.** A cached nonce would be
+  handed to the next visitor and the pair would then match for somebody who
+  never saw the consent screen. ⚠️ The first version of the guard test asserted
+  `no-store` *anywhere in the file* and passed with the header stripped off the
+  only response that carries a nonce, because the 401 and 503 branches have one
+  too. It is now anchored on the success response specifically.
+- **It requires a session.** A nonce is meaningless without one and an open
+  minter is a needless endpoint.
+- **`CONSENT_NONCE_COOKIE` moved to `src/lib/oauth/consentNonce.ts`.** The POST
+  route imported it *from the page*, dragging the whole page module into a
+  route's graph to read one string.
+
+Two consequences accepted knowingly: **Allow now needs JavaScript** (the form
+was already a client component and nothing reaches this screen without a JS
+OAuth client), and two consent tabs still clobber each other's nonce — which is
+exactly what the old code did on every render, so it is not a regression.
+
+**Verified by file-text guards, mutation-checked**, the §42.8 discipline: the
+page contains no `cookies().set(` and does not import `cookies` at all, the
+route sets the cookie and is uncacheable, and the POST reads the shared constant
+rather than the page. ⚠️ A render test would be the stronger check and does not
+belong here: `vitest.config.ts` states **"PURE UNITS ONLY — no network, no
+database, no React"**, and that constraint is what makes it safe to gate
+`next build` on. Do not widen it for this.
+
+⚠️ **Not reproducible locally in a fresh clone**: there is no `.env.local`, so
+the page cannot reach Supabase to resolve a client. And §45 already records that
+a Vercel preview cannot test OAuth at all. **The proof is on the real domain**,
+signed in, with a registered client — which is where this bug was found and
+where its fix has to be confirmed.
+
 ---
 
 ## 46. Logging what customers ask for *(0133)*
@@ -9403,7 +9487,710 @@ of both worlds: the emails would keep arriving and the log would stay empty.
 
 ---
 
-## 47. Asking the questions before the ticket lands *(0134)*
+## 47. Which service the enquiry is for *(0134)*
+
+The Monday enquiries board (**18420649520**) carries a text column
+`text_mm6c5qba`, **"What kind of leads"**. It was empty on all 44 items and
+referenced nowhere in `src/`. Nothing had ever written it, because nothing in
+the product ever asked.
+
+The only product signal an enquiry carried was a hidden
+`?product=guaranteed-rent` in the URL, set solely by the links on the GR landing
+page and `GuaranteedRentNav`. So:
+
+- anyone reaching `/enquiry` directly, from an ad or from a shared link was
+  filed as **Management, silently**, with no way to say otherwise;
+- the form never displayed the choice, so it could not be corrected;
+- **"both" could not be expressed at all**, which is a real population — the
+  operators who run both models are exactly the ones worth the most;
+- and the flag was used only to pick a **board**. Nothing was recorded on the
+  item either way.
+
+The live tell was already on the board: item *Moyo Sankofa* carries a hand-typed
+`Preffered plan` of `"£150/mo — 10 leads (Guaranteed Rent)"` — the product
+annotated by hand into the wrong column because the system had nowhere to put it.
+
+`/enquiry` · `POST /api/enquiry` · `POST /api/admin/monday-lead-interest`
+
+### 47.1 — One board now, and the GR enquiries board is retired
+
+GR enquiries used to create their item on **18420913271**. That board has **no
+Status column**, so `setEnquiryStatus` refused it outright
+(`skipped: "not_status_board"`), the item could never carry a label or sit in a
+pipeline group, and §23.7 records that the one real GR customer had to be
+re-created on the management board by hand. Three items ever reached it.
+
+**Every enquiry now lands on 18420649520**, whichever service it is for, with
+`text_mm6c5qba` saying which. `createGuaranteedRentEnquiryContact`,
+`grEnquiryBoardId` and `GR_ENQUIRY_COLUMN_MAP` are **deleted** rather than left
+as callable dead code. The three existing items stay where they are.
+
+Two things fall out of that, both wanted:
+
+- A GR enquirer's `customers.monday_board_id` is now the status board, so
+  `resolveItem`'s stored-link short-circuit works for them and they stop
+  appearing as orphans in the admin check tool. **§23.7 is closed.**
+- `currentLeadSource` now always lands in `text_mm51bgh6`, titled *"How do you
+  currently get management leads"*. The new column beside it disambiguates.
+  ⚠️ Renaming that column on Monday to "How do you currently get leads" is a
+  one-click manual improvement — the id is unchanged, so it needs no code.
+
+**Allocation was deliberately not touched.** `monthly_allocation` /
+`preferredPlan` are computed exactly as before. That column gates nothing on a
+waitlisted row until the customer holds management, and the invite/subscribe
+routes set the right per-product column at checkout (§17's "one trap", §33).
+Widening a public form into that is its own change.
+
+### 47.2 — The vocabulary is a constant, and it matters MORE than the Status one
+
+`LEAD_INTEREST` in `monday.ts`: `Management` / `Guaranteed rent` / `Both`.
+Casing follows the board's own — `ENQUIRY_STATUS` already spells it
+"Guaranteed rent customer" with a lower-case r.
+
+⚠️ **It is a TEXT column, so Monday validates nothing.** The Status column
+rejects an unknown label outright (`create_labels_if_missing: false`, verified —
+"Guaranteed Rent Customer" is refused); this one accepts anything, and the only
+symptom of a drift is a board that quietly stops grouping. Four writers reach it
+— the form, the enquiry route, the status sync and the admin backfill — so the
+single constant is the whole enforcement, and 0134's CHECK is asserted against it
+**mechanically** (the `cancelOptions.ts` precedent, §29).
+
+A drift there does not fail the write to Monday. It fails the **cache** update,
+so the cell is rewritten on every subsequent event, for ever, in silence.
+
+`toLeadInterest()` accepts the hyphenated marketing spelling for the same reason
+`toLeadType()` does, and round-trips its own labels so a value read off the board
+survives.
+
+### 47.3 — The form asks, and the conditionals had to move off the URL
+
+A required three-option picker, first in the form so everything reacts to it,
+seeded from `?product=` and always changeable. **Never seeded to "Both"** — the
+link is evidence, "Both" is a claim only the prospect can make.
+
+⚠️ **The three conditional fields keyed on `isGuaranteedRent` from the URL, and
+every one had to be rekeyed to the CHOICE.** Left alone, somebody arriving from
+the management page and picking Guaranteed rent is still asked for a management
+plan and *"how do you currently get management leads"* — the same silent
+mismatch one layer up.
+
+The plan picker and the Website URL field are now shown for **every** choice.
+`PLANS` and `GR_PLANS` are price-identical (£150/10, £300/20), the same reason §1
+gives for `LEAD_PRICE_GBP` needing no per-product branch, so those prices are
+right whichever service was picked; and the website column exists on the one
+board every enquiry now reaches.
+
+`product` is still posted alongside `lead_interest`, and the route still falls
+back to it — a cached copy of the old form, or anything else posting the previous
+shape, keeps working. It could only ever say "guaranteed rent" or nothing, which
+is the whole reason `lead_interest` exists.
+
+### 47.4 — It tracks what they HOLD, and that needed its own cache
+
+`mondayLeadInterestFor()` in `mondayStatus.ts`, a **pure function of the row**
+beside `mondayStatusLabelFor()` and following its rules: archived → null,
+otherwise both/one/neither from `holdsProduct()`. `past_due` counts as held for
+the reason label rule 3 gives — a billing problem is not a departure.
+
+⚠️ **NEITHER HELD → NULL, MEANING LEAVE THE CELL ALONE. NEVER BLANK IT.** This
+is the load-bearing rule. A customer holding neither product is either a prospect
+whose cell records the service they asked for on the form, or somebody who has
+left and whose cell records what they held. Both are the only copy of that fact,
+and neither is improved by being erased on the next unrelated Stripe event. Same
+"only write when it changes something" discipline as `startDate`'s
+first-write-wins and `endDateNeedsWrite`. There is deliberately **no way to clear
+this cell** from `setEnquiryStatus`.
+
+⚠️ **THE LABEL CACHE CANNOT DRIVE THIS WRITE, WHICH IS WHY 0134 EXISTS.** A
+customer holding management who then also buys GR keeps the label
+`Management Customer` (label rule 4 — management wins). So `labelUnchanged` is
+true and `syncCustomerMondayStatus`'s fast path returns before Monday is touched
+at all: the cell would never flip to **Both**, the board would look right, and
+nothing would ever say otherwise. `monday_lead_interest` is a second cache with
+exactly the §23.4 semantics — *the value WE last wrote*, never a fact — and
+`interestUnchanged` joins **both** fast-path guards.
+
+The cache update uses `interest ?? row.monday_lead_interest`, not a bare
+assignment: a null verdict wrote nothing to the cell, so it must not erase our
+record of what is in it either. And it is cleared alongside `monday_status_label`
+in `monday-link/route.ts`, for the reason that route already gives — a stale
+value against a *new* item suppresses the first push to it.
+
+`label === null ⟹ interest === null` holds by construction (rule 7 is reached
+only when nothing is held), so the sync's existing `if (!label)` early return
+costs nothing. It is **asserted over a 13-case matrix** rather than reasoned
+about.
+
+### 47.5 — The backfill is the sync
+
+`POST /api/admin/monday-lead-interest`, **dry run by default**, `?apply=1` to
+write, with a *Fill in lead interest* button on `/admin/customers` that shows the
+list and asks before writing. `GET` is the dry run and nothing else.
+
+Every row goes through `syncCustomerMondayStatus`, so the value written is
+decided by exactly the rule that maintains it from here on. A bespoke loop would
+be a second reading of "which products does this customer hold" — the failure
+§23.2 spent a section on. It only ever ADDS: a null verdict is skipped, so
+"backfill what is certain" is a property of the rule rather than a filter
+somebody has to remember.
+
+Nothing else moves: `endDate: undefined` leaves both date cells alone, the start
+date is still first-write-wins, and the label cache makes the Status write a
+no-op for everybody already correct.
+
+Measured read-only on production on 2026-09-09: **23 to write** (21 Management,
+2 Guaranteed rent), **27 skipped** — 23 holding no product and 4 archived.
+Nobody reads as Both today.
+
+⚠️ **That is a VERDICT count intersected with "has an item on the status board",
+and the two are not the same number.** 24 customers get a non-null verdict; one
+of them has no item on 18420649520, so the backfill reports them as
+`no_status_board_item` and writes nothing. A figure taken from the verdict alone
+overstates the write by exactly the customers §23.5's matcher never resolved —
+which is the population the check tool exists to report. Re-measure before
+pressing the button rather than trusting this line: the book grows, and an
+earlier reading of it (24/22, on 47 customers) was already stale within two days.
+
+### Verification
+
+All 130 migration files applied to a scratch **Postgres 16.13** from empty
+(0002/0014/0065 skipped — `pg_cron` is unavailable locally), **0 failures**,
+0134 re-applied twice for idempotency. ⚠️ That also retires §45.14's warning
+that a rebuild from the directory dies at 0124: `0100a` is committed, and the
+chain now builds.
+
+The CHECK was exercised on all three valid values and null, and on **nine**
+invalid ones including every casing near-miss (`management`, `Guaranteed Rent`,
+`guaranteed_rent`, a trailing space, and `Guaranteed rent customer` — the Status
+label it sits beside).
+
+**1417 vitest cases** green (23 new), lint clean, `next build` passes and
+registers `ƒ /api/admin/monday-lead-interest`.
+
+Three guards are **mutation-checked** rather than reviewed, each broken and
+watched to fail:
+
+- returning `""` instead of `null` for "holds nothing" → fails 3 named tests;
+- dropping `interestUnchanged` from the no-date fast path → fails 1;
+- dropping it from the date-instruction fast path → fails 1.
+
+⚠️ **The fast-path guards are asserted against the SOURCE FILE**, not a
+hand-written equivalent. §42.8 records what the alternative cost: a safety
+boundary the PR asserted in words, that a scratch test checked by writing its own
+copy of the query, and that did not exist — 91 follow-up runs destroyed within
+six minutes of deploy. Deleting `interestUnchanged &&` is a one-token change no
+behavioural test here could catch, because observing it needs a real Monday item.
+
+**Not yet exercised:** a real submission through the form against the live board,
+and the backfill applied. Do the dry run and read the list before pressing Write.
+
+### Deployment order — migration BEFORE code
+
+0134 first — **applied to `znlfwbnvhlacwzgfalcf` ahead of the code**. Pre-apply:
+no collision on the column or the constraint. Post-apply: **47 customers, 474
+leads and 468 assignments untouched, all 47 rows null**, and the existing
+`monday_status_label` cache unchanged on all 24 rows that carry one — so the
+migration is inert exactly as designed.
+
+It is additive and redefines nothing, so code arriving first would merely fail
+the cache update while still writing the cell correctly. Nothing here touches a
+balance, counter, pacing or capacity column.
+
+---
+
+## 48. An inbound door for a customer's own leads *(0135)*
+
+`support_tickets` reference **STF-0009**, open since 2026-09-08 from Marcus Chong
+(Unity Space Property Ltd): *connect approved landlord leads to the Stayful
+analyser*. His Make workflow approves an enquiry and he wants it in Stayful,
+analysed, and presented — with a human on both ends.
+
+The admin note on that ticket made the decisive observation, and it is the whole
+shape of this section: **the capability already exists.** Customers add their own
+leads (§30) and pay £3 to analyse them (§31). **The gap was the automated door,
+not the capability.**
+
+`POST /api/webhook/customer-leads/[token]` · `/api/customer/lead-webhooks`
+(+ `DELETE /[id]`) · `LeadWebhookPanel` in Settings.
+
+### 48.1 — ⚠️ This does NOT open the public API, and that was the design constraint
+
+The ticket asked for a write, and §27.1's standing rule is that `/api/v1` and the
+MCP tools never take a query, a table name, a column list or an arbitrary filter.
+All five v1 routes export `GET` and nothing else, and "the public API is
+read-only" is a sentence the whole containment design in §27 rests on.
+
+Three ways to serve the ticket were weighed. A `leads:write` scope and an MCP
+write tool were both **rejected**: either would make that sentence false, and
+both invite the next write to arrive as one more scope on a credential that
+already reads everything. A **receiver on its own surface** serves the ticket
+with §27.1 untouched rather than amended — and it is a shape this codebase has
+built twice already, in `/api/webhook/timelines/[token]` and
+`/api/webhook/resend/[token]`.
+
+⚠️ Not to be confused with `/api/webhook/n8n`, which ingests Stayful's **own**
+Monday leads into the marketplace. This one only ever creates leads owned by the
+customer who holds the token.
+
+### 48.2 — ⚠️ IT NEVER CHARGES, and that is what makes the credential proportionate
+
+`POST /api/customer/my-leads` has a `run_analysis` branch that buys the £3
+analysis. **This route has none and must not grow one.**
+
+That branch would not work here anyway — it re-fetches its own origin
+**forwarding the session cookie**, and there is no cookie on a webhook, so it
+returns 401. ⚠️ **Do not forward a token to make it work.** The reason is the
+decision underneath: an unattended credential that can spend a customer's money
+is a different kind of credential from one that can create a row, and this one
+travels in a **URL path**, where it reaches server logs, proxy logs and
+referrers. A path token is the same trade the two existing receivers make, and
+it is proportionate **only** because this door spends nothing. If it is ever
+widened to charge, it must become a signed request first — not merely a longer
+token.
+
+So the response reports whether the lead **could** be analysed and links to the
+page where one click does it. Marcus gets steps 1 and 2 automated, step 3 one
+click, and steps 4 and 5 unchanged and still human-gated, which is what he asked
+for.
+
+`leadWebhook.test.ts` reads the route file's own text and asserts it contains no
+`lead-analysis`, no `run_analysis` and no `headers.get("cookie")` — the §42.8
+discipline of anchoring a guard on the real file rather than on a restatement of
+it, because the restatement is what let 91 sequence runs be destroyed.
+
+### 48.3 — ⚠️ `analysable` is the field that makes this endpoint worth having
+
+**Creation and analysis have different bars, and nothing said so before.**
+`create_customer_leads` accepts a lead with only a name; `analysability()`
+(§32.5) needs an address, an unambiguous postcode and a bedroom count. So a lead
+can be perfectly real and completely unanalysable, and a caller who does not know
+that discovers it by clicking Analyse on forty leads and having eleven refused.
+
+```jsonc
+{ "ok": true, "outcome": "created", "replayed": false, "lead_id": "…",
+  "url": "https://leads.stayful.co.uk/dashboard/leads/…",
+  "analysable": { "ok": false, "code": "no_postcode" } }
+```
+
+`analysability()` is pure and free, so saying it costs nothing and turns a
+surprise into a field an automation can branch on.
+
+### 48.4 — Request idempotency, which this surface had none of anywhere
+
+⚠️ **THERE WAS NO REQUEST IDEMPOTENCY ANYWHERE ON THE API SURFACE.** Every guard
+in §27 and §45 is keyed on something the server generates **inside** the request,
+so a caller whose connection drops after we commit gets a second of everything
+when it retries.
+
+`create_customer_leads` does dedupe, but on **content**, and `lead_identity_key`
+requires all three of name, email and phone (§30.3) — so a partial row does not
+dedupe at all. A Make retry after a timeout creates a second landlord, and a
+timeout on a partial row is precisely what a retrying automation hits.
+
+`src/lib/api/idempotency.ts` is the house pattern: **claim by INSERT, then act**,
+as `credit_invoice()` does against Stripe redelivery (§19.5), the announcement
+send does (§21.2), `stripe_events` does, and every outbound message does
+(§40.13). It lives in `src/lib/api/` so a future write surface reuses it rather
+than inventing a second one.
+
+- **The key is REQUIRED**, 400 when absent, and the record id from the caller's
+  own system is the natural value. Optional, it would be omitted by exactly the
+  integrations that most need it.
+- **The unique index leads on `customer_id`**, mirroring
+  `lead_messages_idempotency_idx` (0116) — what that migration's header calls the
+  containment guarantee. Two customers may use the same key without colliding.
+- **The claim stores the MAPPING, not the response.** A replay rebuilds the body
+  from the lead, so nothing stored can go stale.
+- ⚠️ **THE CLAIM IS DELETED WHEN CREATION THEN FAILS.** Left behind, the key is
+  poisoned for ever: every retry finds it, replays a success, and reports a lead
+  that does not exist. `stripe_events` deletes its claim on a throw for exactly
+  this reason, and §40.8 records the cost of getting it wrong once already.
+- ⚠️ **The surface is a closed union, never a table name from a request.** A
+  helper that accepted one would be §27.1 undone one layer down, so adding a
+  second surface is a deliberate edit to that file.
+
+### 48.5 — The body is a named, closed set of fields
+
+`toOwnedLeadInput` maps a posted body onto the existing `OwnedLeadInput`, and
+**nothing else reaches the insert**. A test posts nine real column names an
+automation might plausibly send — `owner_customer_id`, `max_assignments`,
+`price_paid`, `gross_annual_income`, `owner_resale_qualified_at` among them — and
+asserts every one is dropped.
+
+An **unrecognised field is ignored rather than refused**: Make sends whole
+records, and 400-ing a lead because it included an `id` column would make the
+door useless.
+
+⚠️ **The aliases are exact names only, never content sniffing.** `leadImport.ts`
+guesses at column meaning because a spreadsheet's headings are whatever somebody
+typed — and it can afford to, because a human confirms the mapping on the next
+screen (§30.4). **Nobody confirms anything here**, so a wrong guess is stored
+silently.
+
+⚠️ **Two passes, and their order is the rule.** An exact field name beats an
+alias whatever order the keys arrive in. A single pass let whichever the platform
+happened to serialise first decide, which is not something the customer controls
+and therefore must not be something that matters. Caught by the test, not by
+review.
+
+**No creation logic lives in the route.** It calls `createOwnedLeads`, which
+already trims, normalises the phone through `normaliseUkMobile` (§40.9A), prefers
+an explicit postcode over one dug out of the address, derives `postcode_area`
+(0097's lesson about a second regex), and inserts the lead with its assignment
+atomically.
+
+### 48.6 — Who may post: `availableLeadTypes`, not `holdsProduct`
+
+The gate is §32.1's: a customer's own leads are free and unlimited and **stay
+that way through a pause and a cancellation**, because the database side is not
+part of what a subscription buys. So the automated door has to stay open in
+exactly the case the API-key creation gate closes.
+
+What is still required is that they have actually run the pipeline the lead needs
+— a GR lead gets GR's stages (invariant 6) — so an account that has never held
+either product is refused, and the panel is not rendered for it.
+
+**The product is fixed at webhook creation, not read per request.** A lead
+arriving with no product would have to default to something, and a wrong default
+puts a GR landlord into a management pipeline. Two products means two webhooks,
+which is how the customer's own automation is usually shaped anyway.
+
+### 48.7 — The management routes are session-only
+
+`/api/customer/lead-webhooks` and its `DELETE /[id]` call `getCurrentCustomer()`
+directly and never `resolveCaller()`, for the reason the API-key routes already
+state: **a credential that can mint credentials can grant itself authority it was
+not given and outlive its own revocation.** A webhook token is a *write*
+credential, so that argument is stronger here, not weaker. They also ignore
+`api_enabled`, so a leaked URL can be revoked while the API is switched off.
+
+Revoke is **a stamp, never a delete**: the row says the webhook existed and when
+it was last used, which is the evidence wanted if the URL leaks — and
+`customer_lead_webhook_claims` carries an FK to it, so deleting would orphan the
+idempotency record of everything it created.
+
+### 48.8 — ⚠️ `sweep_api_tables` keeps its TWO-ARGUMENT signature
+
+The claims table needs sweeping, and the obvious move is a third parameter for
+its retention. **It must not be added.** A defaulted third argument creates an
+**overload**, not a replacement, and every existing two-argument call then fails
+`function is not unique` — the §34/§35 trap this repo has hit twice.
+
+So the signature stays `sweep_api_tables(integer, integer)` and the claim cleanup
+reuses `p_log_retention_days` (30). A claim row is a mapping nobody reads and
+wants the same lifetime as the request log beside it. Dropping a month-old key
+means a caller replaying it creates a second lead, which is the right trade: at
+that distance it is a new request, not a retry.
+
+Two findings, both verified rather than assumed:
+
+- ⚠️ **Production's body is 0132's, not 0096's, and that is correct rather than
+  drift.** Both migrations define the function; 0132 added the OAuth cleanup and
+  three return keys. 0135 copies 0132's body verbatim and adds one delete and one
+  return key.
+- **The new `'webhook'` rate-limit windows needed no sweep change.** The blanket
+  window delete is not filtered by `subject_kind`. Only the roll-up into
+  `api_usage_daily` is `'key'`-scoped, and that is right: its `key_id` is an FK
+  to `customer_api_keys` and cannot hold a webhook id — the same reason OAuth
+  windows are discarded rather than rolled up (§45.10).
+
+### 48.9 — ⚠️ Diffing production against this migration means STRIPPING COMMENTS
+
+0135 was applied to production with its `--` comment lines removed, following the
+practice §31 records — and that was **proven schema-identical first**, not
+assumed: the full file and the stripped form were each applied to a scratch
+Postgres built from empty, and a 141-line fingerprint of columns, constraints,
+indexes and function ACLs came back identical.
+
+The consequence matters for the next §11 audit. All three replaced functions —
+`create_customer_leads`, `consume_api_rate_limit`, `sweep_api_tables` — now match
+**the file body with comment lines stripped**, byte for byte:
+
+| Function | Production `md5(prosrc)` | Length |
+|---|---|---|
+| `create_customer_leads` | `217a9f626a620575750636c08f51c3b4` | 3244 |
+| `consume_api_rate_limit` (5-arg) | `756cf7da707ea2ed0d9c9b22fdda6929` | 1493 |
+| `sweep_api_tables` | `9b9550c118598e62a86c9bf9c8645bfe` | 2744 |
+
+⚠️ A raw diff against the file will report a difference that is not one. Strip
+the comments first — that is how `sweep_api_tables` was confirmed undrifted
+before it was copied.
+
+### 48.10 — ⚠️ §45.14's rebuild warning is STALE, and this is the check
+
+§45.14 says a schema rebuilt from `supabase/migrations/` dies at 0124 on
+`get_customer_scoreboard`'s return type. **It does not, and has not since
+`0100a_worked_conversion.sql` was committed** (§36.8) — 0100a sorts between 0100
+and 0101, so the fourteen-column signature exists before 0124 replaces it.
+
+Measured while verifying this migration: **127 of 130 migrations apply to a
+scratch Postgres 16 from empty.** The three failures are 0002, 0014 and 0065,
+all `pg_cron`, which is the documented local exception and not a repo fault.
+
+### Verification
+
+Scratch **Postgres 16.13** from empty with a Supabase-shaped bootstrap, 127 of
+130 applying as above, then 0135 re-applied **twice** for idempotency.
+
+Schema: both tables RLS on with **zero policies**; all six indexes present; all
+three widened CHECKs exercised on their new value **and** a junk one, alongside
+the empty-name, empty-key, over-length-key and bad-outcome boundaries — seven
+refusals, seven acceptances. All three replaced functions `service_role`-only by
+`has_function_privilege`, and invariant 7's four re-checked.
+
+**The regression that matters**, against seeded rows: a lead created with
+`source = 'webhook'` is stored owned, is `lead_retired_from_allocation` and
+`lead_pool_barred`, returns **zero** candidates from
+`get_next_customers_for_lead`, `get_escalation_candidates` and
+`get_pool_entry_candidates`, is refused by **both** assign functions for a second
+customer, and is still invisible to `find_duplicate_lead` — so an owned lead
+still cannot poison ingest (§30.1). Beside it a marketplace lead still returns
+candidates and still allocates spending **exactly one** credit (10 → 9, counter
+0 → 1).
+
+The claim index was driven directly: the same `(customer, key)` collides on
+23505, the same key from a **different** customer does not, the sweep deletes an
+aged claim and reports it under `webhook_claims_deleted`, revoking a webhook
+leaves its claims standing with a null `webhook_id`, and deleting the customer
+cascades both.
+
+**1,464 vitest cases green** (27 new), lint clean, `npm run build` passes and
+registers all three routes. Four guards were **mutation-tested** before being
+kept, each failing exactly the intended test and no others: dropping the
+`releaseClaim` call, reading the session cookie in the receiver, letting the body
+mapper accept any key it is given, and unscoping the claim from `customer_id`.
+
+**Not yet exercised end to end.** No real automation has posted to this. Create a
+webhook in Settings, post one real approved lead from Make, confirm the phone
+normalised and the postcode area derived, check `analysable` matches what the
+Analyse button then offers, and force a retry with the same key to confirm it
+creates nothing second.
+
+### Deployment order — migration BEFORE code
+
+**0135 is applied to `znlfwbnvhlacwzgfalcf` (2026-09-09), before the PR merges**,
+per §1.1. Pre-apply: no collision on either table, any constraint or any index.
+Post-apply: **487 leads, 9 owned, 51 customers and 511 assignments untouched**,
+both tables RLS-on with zero policies, all three CHECKs widened, ACLs as above,
+and **no new Supabase advisory** — the two new tables join the deliberate
+deny-all posture shared with forty-six others.
+
+It is additive and inert on its own: the three CHECK widenings only **admit** a
+value nothing writes yet, and the two function replacements change one string
+list each. Nothing here touches a balance, counter, pacing or capacity column.
+Code arriving first would fail every `create_customer_leads` call — which is
+every manual add and every spreadsheet import, not just this feature.
+
+---
+
+## 49. Every enquiry mobile is stored as `+44` *(no migration)*
+
+`/api/enquiry` did exactly one thing to the number a prospect typed: `trim()`. It
+then wrote that string verbatim to `customers.phone` **and** to the Monday
+enquiries board's Mobile cell (`text_mm50hfvg`). Whatever they typed is what we
+kept — `07…`, `+44 7…`, `+4407…`, a landline, spaces and all.
+
+It was the only phone-capturing path in the repo applying **no normalisation at
+all**. Every other one already had a rule: `toRpcRow` tidies a customer's
+imported leads (§40.9A), the lead-quality gate judges an ingested lead (§36), and
+the send path re-derives E.164 on every message. The front door had nothing.
+
+`ukMobileE164()` and `UK_MOBILE_ERRORS` in `src/lib/leadQuality.ts` ·
+`/api/enquiry` · `/api/signup` · `/enquiry`.
+
+### 49.1 — One parser, and this is a wrapper on it
+
+`normaliseUkMobile()` (§36.2) stays the only parser. `ukMobileE164()` calls it and
+swaps the leading `0` for `+44`, nothing more.
+
+That matters because §36.2's comment is emphatic about the strip-zeros-then-
+add-one order: **89 of 193 live management leads store the number as `+44`
+followed by a FULL national number**, and the obvious `startsWith("+44")` slice
+turns `+4407304208011` into `007304208011` and rejects 46% of the book. A second
+parser written for the enquiry form is how the front door and the send path
+would eventually disagree about what a valid number is.
+
+The `+44${uk.value.slice(1)}` idiom was already hand-written at
+`sendOneMessage.ts` and, as the bare `44…` a wa.me link wants, at `handoff.ts`.
+Those two are unchanged here; pointing them at the helper is a free follow-on.
+
+### 49.2 — ⚠️ It REFUSES, where this route has always been forgiving
+
+A number that is not a UK mobile gets a **400 and no account**. That is a new
+refusal on a public acquisition form, and it runs against §16's instinct — "never
+refuse a sale", the reason both capacity waitlists were removed. It is deliberate
+and was asked for twice.
+
+The trade, stated so nobody has to rediscover it: **an operator whose only number
+is an office landline, or who is overseas, cannot enquire through the form.**
+Support is their route. If it ever costs a real enquiry the fallback is one line
+— keep the raw string instead of returning — and nothing downstream needs
+touching, because both formats already work everywhere (49.4).
+
+Sharper since §47: that route is now the **single door** for management,
+guaranteed rent and both, so this refuses every enquiry rather than the
+management share of them.
+
+**The guard sits BEFORE the Monday push**, so a refusal leaves no board item and
+no customer row. Otherwise a rejected enquiry still creates the duplicate that a
+retry can never tidy up — and `/api/enquiry` creates a new item on **every**
+submission (§23.10).
+
+`UK_MOBILE_ERRORS` is one message per reason rather than one for all four,
+because the remedy differs. `foreign` is a fact about the enquirer that retyping
+cannot fix; `not_mobile` is usually a landline or a dropped digit they can
+correct on the spot. It is keyed on `UkMobileFailure`, so a new reason cannot be
+added without the compiler demanding its wording.
+
+⚠️ **`foreign` also catches the `+07700900123` typo**, which arrives as an
+explicit country code that is not ours. The wording covers both readings rather
+than telling a UK enquirer they are abroad.
+
+### 49.3 — The form shows it, the route decides it
+
+**The `+44` is on screen before anything is typed.** It sits OUTSIDE the input as
+fixed chrome the prospect cannot delete, and the box holds only the national
+part — `withUkDialCode()` puts the two back together on blur and on submit.
+
+⚠️ **Pre-filling the box with `"+44"` instead is the obvious version and is
+worse**: it is one backspace from a number that means something else entirely,
+and `required` is satisfied by `+44` alone.
+
+⚠️ **The placeholder carries NO leading zero.** It read `07700 900123` for one
+commit, which sat beside a `+44` field telling the prospect to do the opposite
+of what the field wanted — the whole reason this section has a second pass.
+
+`/enquiry` reformats **on blur**, never on every keystroke — rewriting a
+half-typed number moves the caret and fights the person typing, and `07` would
+become `+447` before they finished. A number it cannot read is **left exactly as
+typed** with the message underneath: blanking or rewriting it loses the digits
+they got right (§40.9A's rule).
+
+Two shapes in `withUkDialCode()` are load-bearing, and both are cases where the
+affix must NOT be applied:
+
+- **An entry carrying its own country code passes through** (`+…`, `00…`).
+  Prefixing `+31 6…` hands the parser a mangled string and it answers
+  `not_mobile` — *"it should start 07"* — about a Dutch number, when `foreign`
+  is the true reason and the only one that tells them anything.
+- ⚠️ **A bare `447…` of twelve digits or more passes through too**, and this one
+  is easy to miss. It is WhatsApp's shape and it carries a country code with no
+  `+`; prefixing yields `+44447700900123`, correctly rejected. Refusing a number
+  the field accepted before the affix existed is a regression, not a rule. The
+  length test separates it from a national number, which starts `7` and is ten
+  digits, so it can never reach twelve beginning `44`.
+
+`07…` is deliberately not special-cased: `+4407700900123` is exactly the shape
+§36.2's parser exists for, so it resolves with no help.
+
+**The affix stands down whenever the box already carries its own dial code**, so
+the field never reads `+44 +31 6 12345678` — which is not a number in any
+country and makes the message underneath look like our mistake rather than
+theirs. `stripUkDialCode()` is the other half: without it a valid number
+reformats to `+44` `+447700900123`, the dial code twice.
+
+Both halves import the same function and the same copy from `leadQuality.ts`,
+which has **zero imports** and is therefore safe in a client component. The
+client check is confirmation; the route re-derives regardless, so a browser with
+the script broken submits and gets the identical verdict.
+
+**`/api/signup` follows the same rule with one difference: the phone stays
+OPTIONAL.** Absent means null exactly as before, and only a number somebody
+actually typed has to be a mobile. Rejecting an absent phone would break the
+owner and Guaranteed Rent paths that legitimately omit it.
+
+### 49.4 — Why the stored format could change at all
+
+Four things read a customer's phone, and every one already tolerated `+44`.
+Asserted in `leadQuality.test.ts` rather than reasoned about, because if either
+of the first two ever stopped tolerating a leading `+` the damage is **silent**:
+a customer who simply never receives a text, or a Monday item that quietly stops
+matching.
+
+| Reader | Why it survives |
+|---|---|
+| Twilio (`sms.ts`) | `toE164UK` returns a `+`-prefixed string untouched; `looksLikePhone` counts digits and a stored `+44` number has 12 |
+| Monday matcher tier 2 (§23.5) | `phoneMatchKey` strips non-digits and takes the **last 9**, so a `+44` row matches an `07` board cell in both directions |
+| Stripe | `customers.create({ phone })` prefers E.164 |
+| `customers.phone` | bare `text`, no CHECK (`0001_init.sql:18`) |
+
+⚠️ **`referral_phone` is deliberately NOT touched**, by this or by the backfill.
+0131's header and `referralIdentity.ts` both state that a **landline is valid**
+there and that `normaliseUkMobile` is the wrong rule for it: that column is a
+number a landlord rings, where `customers.phone` is an SMS destination.
+Converting it would overrule an operator about how they want to be contacted.
+
+The one visible change is the landlord referral email (§41), which renders the
+operator's phone verbatim to a **member of the public**. It now reads
+`+447700900123`.
+
+### Verification
+
+`npm run test` — 1515 green, 20 new. The conversions, every refusal reason, and
+the two downstream regressions above. **Mutation-checked**: dropping the
+`.slice(1)`, which is the exact `+44007304208011` bug §36.2 warns about, fails 8
+of them.
+
+`npx tsc --noEmit` clean, `npm run lint` clean, `npm run build` passes.
+
+The affix added 6 more cases, **mutation-checked**: removing the country-code
+pass-through fails 6 of them, including the one asserting an overseas paste
+still resolves as `foreign` rather than as a malformed UK number.
+
+Then driven for real rather than reasoned about. The form in **Chromium**, with
+the dial code rendered beside the box: `7700900123`, `07700 900123`,
+`447700900123`, `+4407304208011` and `+447711387707` all collapse to the same
+national part next to `+44`. A landline and an overseas number are left exactly
+as typed with their own message underneath, and the affix disappears for the
+overseas one. No page errors.
+
+The route over HTTP, all six cases. The four refusals return 400 with the right
+message; both valid shapes fall through to the **next** guard, which is what
+proves they passed. Because the mobile check precedes the env check, this runs
+without any credentials at all — worth knowing, since it means the refusal path
+is testable on any machine.
+
+### 49.5 — The backfill
+
+Run against production on **2026-09-10**, from the **shipped `ukMobileE164`**,
+never a SQL rewrite of the rule. §36.6 records why: a SQL copy of the normaliser
+is a second implementation that must change in step and silently would not, and
+§36.2 records that getting it wrong blanks half the book. `leadQuality.ts` was
+bundled and the real exported function run over the rows read out of the table.
+
+| | |
+|---|---|
+| Customers | 52 |
+| Carrying a phone | 42 |
+| Rewritten | **32** |
+| Already `+44` | 10 |
+| Left alone | **0** |
+
+**Zero failures is the headline.** Every number in the book was a genuine UK
+mobile — no landline, nothing overseas, no placeholder — so the "leave a number
+we cannot read exactly as typed" branch never fired. Two rows were more than a
+prefix swap: `+44 7852 722093` carried spaces, and `7301 235343` had lost its
+leading zero entirely and would have failed `looksLikePhone` on the Twilio path.
+
+Afterwards: 42 of 42 match `^\+447[0-9]{9}$` exactly, and `referral_phone` still
+has its 3 values, untouched (49.4).
+
+Two things made it safe to do in one pass, and both are worth repeating for any
+future column rewrite:
+
+- **The old values were written to a file first.** A dry-run printout scrolls
+  out of a terminal; a backup is a backup.
+- **Every update was guarded on the old value** — `where c.id = v.id and c.phone
+  = v.old` — so a row edited between the read and the write is skipped rather
+  than clobbered. The returned count is what confirms all 32 actually matched.
+
+### Deployment order
+
+No migration and nothing to apply. The two formats coexist (49.4), so the code
+and the backfill were independent and neither had to wait for the other.
+
+---
+## 50. Asking the questions before the ticket lands *(0136)*
 
 §46 fixed the bookkeeping. Every request is a row now, with a reference, a plan
 snapshot and a status. What it did not fix is the **content**: `subject` is one
@@ -9415,12 +10202,12 @@ So every request still cost a follow-up conversation. The interrogation that
 makes a request actionable happened days later, in a Claude Code session,
 against a customer who had moved on.
 
-0134 moves that interrogation to the moment of reporting. Three to five
+0136 moves that interrogation to the moment of reporting. Three to five
 questions, generated from what they wrote **and from their live account state**,
 answered in taps, then one synthesised brief and a ready-to-paste implementation
 prompt on `/admin/support`.
 
-### 47.1 — The questions are generated, and the account state is half of why they work
+### 50.1 — The questions are generated, and the account state is half of why they work
 
 There is no question bank. Three inputs go in, and only the first is the same on
 every call: the product pack (`productContext.ts`), the customer's live account
@@ -9439,7 +10226,7 @@ draft had the GR flag say "same reasoning as above", which for a GR-only
 customer pointed at a Management flag that never fired — a dangling sentence in
 a prompt. The test that caught it asserts on the text, not on the branch.
 
-### 47.2 — ⚠️ There is no skip button, and "not sure" simplifies instead
+### 50.2 — ⚠️ There is no skip button, and "not sure" simplifies instead
 
 A skipped question puts a hole in the brief in exactly the place that mattered,
 so **every question must be answered** and the send control is disabled until
@@ -9472,7 +10259,7 @@ The budget is 6 simplifications per ticket, counted from the **stored depths**
 rather than a counter column, so it cannot desynchronise and cannot be advanced
 by a crafted request.
 
-### 47.3 — ⚠️ The email is deferred, never dropped, and the sweeper is why
+### 50.3 — ⚠️ The email is deferred, never dropped, and the sweeper is why
 
 `/api/feedback` now sometimes holds the notification back: signed in, key
 configured, ticket lands `awaiting_answers`, email waits for the answers that
@@ -9484,9 +10271,9 @@ is untouched. Only the **send** moves.
 
 Which leaves the obvious hole: a customer can close the tab at question two.
 `/api/cron/ticket-synthesis` runs hourly at :20 and, after a two-hour grace
-window, emails anything still waiting **exactly as a pre-§47 request would have
+window, emails anything still waiting **exactly as a pre-§50 request would have
 arrived** and marks it `abandoned`. That floor is what makes removing the skip
-button defensible: the worst case is a ticket merely as good as a pre-0134 one,
+button defensible: the worst case is a ticket merely as good as a pre-0136 one,
 never worse. It is also why the form has no "are you sure you want to leave"
 prompt — that would be a lie about the stakes.
 
@@ -9504,7 +10291,7 @@ fix is an attempt counter, not a bigger batch.
 ⚠️ The Hobby-plan constraint that once removed sub-daily crons **no longer
 applies** — `poll-whatsapp-status` already runs every five minutes.
 
-### 47.4 — The model does not write the implementation prompt
+### 50.4 — The model does not write the implementation prompt
 
 It fills in a structured brief; `render.ts` lays the prompt out. A model asked
 for fifteen sections of markdown quietly drops the boring ones, and the boring
@@ -9524,7 +10311,7 @@ something already shipped comes back saying so — which makes it a regression o
 a discoverability failure, not a feature request. That reframing is the single
 most expensive thing to get wrong and is invisible without the history.
 
-### 47.5 — ⚠️ The context pack is derived from this file, and pinned
+### 50.5 — ⚠️ The context pack is derived from this file, and pinned
 
 `sectionIndex.ts` is **generated** from CLAUDE.md by
 `scripts/generate-section-index.mjs` (`npm run gen:context`): every `## N.`
@@ -9553,7 +10340,7 @@ user turn. Move one varying byte above the breakpoint and every request pays
 full price; `usage.cache_read_input_tokens` is how you check. Roughly 20p per
 fully-clarified ticket.
 
-### 47.6 — ⚠️ The new columns are admin-only, and the boundary is the same one §46.3 relies on
+### 50.6 — ⚠️ The new columns are admin-only, and the boundary is the same one §46.3 relies on
 
 `clarifications`, `brief`, `generated_prompt`, `ai_status`, `ai_model`,
 `ai_error` and `severity` are columns on `support_tickets`, which the customer
@@ -9566,9 +10353,9 @@ the fixed `CUSTOMER_TICKET_COLUMNS` list, and
 `supportTicketBoundary.test.ts` now fails if it grows any of these names.
 Mutation-tested: adding `brief` to that list fails two assertions.
 
-### 47.7 — `ai_status` NULL is a real state
+### 50.7 — `ai_status` NULL is a real state
 
-NULL means **no questions were ever offered** — every pre-0134 ticket, the nine
+NULL means **no questions were ever offered** — every pre-0136 ticket, the nine
 §46 backfilled rows, and every signed-out submission. It is not a missing value,
 and the admin panel renders nothing at all for it rather than an empty section.
 
@@ -9576,7 +10363,7 @@ and the admin panel renders nothing at all for it rather than an empty section.
 distinct is what tells you later whether the feature was off or the submitter
 was anonymous.
 
-### 47.8 — Where it is offered from
+### 50.8 — Where it is offered from
 
 `featureRequestPath(source)` replaced the `FEATURE_REQUEST_PATH` constant,
 because the header gained a second copy of the button and one constant would
@@ -9590,7 +10377,7 @@ group. A group would be tidier and would put the promoted thing one click
 never last, because the last entry is the one that met the notification bell the
 time this row overflowed.
 
-### 47.9 — Two assertions that were written weak
+### 50.9 — Two assertions that were written weak
 
 Both passed under the mutation they were meant to catch. Recorded because the
 shape recurs and §42.8's lesson clearly needs restating:
@@ -9602,13 +10389,13 @@ shape recurs and §42.8's lesson clearly needs restating:
   early `return` between the two satisfies while still swallowing the request.
   It now asserts that **nothing returns** between finalising and sending.
 
-### 47.10 — Deferred
+### 50.10 — Deferred
 
 - **A durable rate limit on `/api/feedback`** — still open from §46.10. Gating
   clarification on a signed-in customer bounds the model spend, which is the
-  half §47 needed, but the underlying unauthenticated write is unchanged.
+  half §50 needed, but the underlying unauthenticated write is unchanged.
 - **Screenshots.** The largest remaining accuracy win for bug reports, and the
-  `lead-files` bucket pattern is right there. Cut to keep 0134 focused.
+  `lead-files` bucket pattern is right there. Cut to keep 0136 focused.
 - **Prompt-quality feedback.** Nothing records whether a generated prompt was
   any good. Two buttons writing to a column would let the clarify prompt be
   tuned against data rather than impressions.
@@ -9617,17 +10404,19 @@ shape recurs and §42.8's lesson clearly needs restating:
 - ⚠️ **`supabase/schema.sql` is stale** and has been since around 0037. It
   claims to reflect "migrations 0001 → 0006" and knows nothing of `lead_files`,
   `announcements`, `support_tickets` or the OAuth tables. 0133 did not update it
-  and neither does 0134. Either delete it or regenerate it; leaving it is a file
+  and neither does 0136. Either delete it or regenerate it; leaving it is a file
   that looks authoritative and is not.
 
 ### Verification
 
 **Scratch Postgres 16.13 from empty**, Supabase-shaped bootstrap (auth/storage
-schemas, the four roles, `auth.uid()`, `storage.foldername()`), **117 of 130
-migrations applied**. The failures are the documented `pg_cron` exceptions
+schemas, the four roles, `auth.uid()`, `storage.foldername()`), **119 of 132
+migrations applied** — re-run from empty after merging `main`, which had taken
+0134 and 0135 while this branch was open (§1.1's trap, and the reason this
+migration is 0136 and this section is 50). The failures are the documented `pg_cron` exceptions
 (0002, 0014, 0065) plus a cascade from re-running `0001_init.sql` after 0004 has
 already dropped `overflow_enabled` — an artefact of the apply loop, not of any
-migration. 0134 applied cleanly and was then applied **twice more unchanged**.
+migration. 0136 applied cleanly and was then applied **twice more unchanged**.
 
 **Every CHECK exercised on its boundaries, 24 assertions, all green.** All five
 `ai_status` values accepted and NULL accepted; `pending` and `''` refused. Both
@@ -9637,8 +10426,8 @@ an array. `generated_prompt` accepts 20,000 characters and refuses 20,001 and
 `''`; `ai_model` 80 and refuses 81; `ai_error` 500 and refuses 501.
 
 A row inserted without the new columns comes back with **`ai_status` NULL**, the
-"no questions were offered" state §47.7 depends on. `support_tickets` is still
-**RLS-on with zero policies** — 0134 does not touch §46's posture. The sweeper's
+"no questions were offered" state §50.7 depends on. `support_tickets` is still
+**RLS-on with zero policies** — 0136 does not touch §46's posture. The sweeper's
 partial index carries exactly the predicate it scans on.
 
 **1,526 vitest cases green** (89 new), `npx tsc --noEmit` clean, `npm run lint`
@@ -9649,7 +10438,7 @@ entry fails one; removing the sweeper's conditional claim fails one; and gating
 the notification email on synthesis succeeding fails one. All restore to green.
 
 ⚠️ **Two of those six were written WEAK and passed under the mutation they
-existed to catch** before being rewritten — see §47.9. That is the second time
+existed to catch** before being rewritten — see §50.9. That is the second time
 §42.8's lesson has had to be relearned in this repository.
 
 **Not yet exercised: the flow end to end against a real model.** No question has
@@ -9667,7 +10456,7 @@ tokens and emails the team. Submit one deliberately and delete it by
 
 ### Deployment order — migration BEFORE code
 
-0134 first, applied and verified against production **before the pull request
+0136 first, applied and verified against production **before the pull request
 merges** (§1.1). It is additive and inert: every column is nullable, every
 existing row keeps `ai_status` NULL, and nothing touches a balance, counter,
 pacing or capacity column.

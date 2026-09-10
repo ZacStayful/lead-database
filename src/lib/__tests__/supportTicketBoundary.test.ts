@@ -73,7 +73,7 @@ describe("the customer's own ticket list", () => {
       "backfill_key",
       "submitter_email",
       "page",
-      // §47's columns. These are the ones 0134 could not put in a separate
+      // §50's columns. These are the ones 0136 could not put in a separate
       // table the way §46.3 did for notes — a clarification belongs to its
       // ticket — so this list is the whole boundary for them.
       "clarifications",
