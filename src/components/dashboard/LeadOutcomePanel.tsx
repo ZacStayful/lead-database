@@ -50,8 +50,19 @@ export function LeadOutcomePanel({
 }: {
   outcomes: LeadOutcomes;
   busy: boolean;
-  /** Null unless the report belongs in the panel rather than the prompt. */
-  deadLead: { assignmentId: string; claimStatus: string | null } | null;
+  /**
+   * Null only when there is no assignment to report at all.
+   *
+   * ⚠️ Since 0139 the report renders on EVERY lead, available or not. An
+   * operator who saw the control last week and not this week reads it as
+   * broken, and nobody learns the rule from something that silently comes and
+   * goes — so an ineligible lead gets the row greyed, with the reason.
+   */
+  deadLead: {
+    assignmentId: string;
+    claimStatus: string | null;
+    reasons?: Record<string, { available: boolean; because: string | null }>;
+  } | null;
   onReject: (reason: string, detail: string) => void;
   onDiscard: (reason: string, detail: string) => void;
   onClose: (reason: string, detail: string) => void;
@@ -59,7 +70,18 @@ export function LeadOutcomePanel({
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Exclude<OutcomeKey, "report"> | null>(null);
 
-  if (outcomes.presentation === "none") return null;
+  /**
+   * ⚠️ "Nothing actionable" is no longer "nothing to show".
+   *
+   * A settled, rejected or out-of-window lead has no outcome left to choose,
+   * and before 0139 that meant the whole block vanished — including any account
+   * of WHY the report was not there. Now the greyed row stands on its own, so
+   * the rule is legible on exactly the leads where it bit.
+   *
+   * Still null when there is no assignment to report at all, which is the only
+   * case where there is genuinely nothing to say.
+   */
+  if (outcomes.presentation === "none" && !deadLead) return null;
 
   const handlers: Record<
     Exclude<OutcomeKey, "report">,
@@ -95,6 +117,35 @@ export function LeadOutcomePanel({
     );
   }
 
+  /**
+   * The report when it cannot be used: the same row, muted, with the reason
+   * underneath instead of the consequence.
+   *
+   * ⚠️ Rendered from OUTCOME_COPY like every other row. A literal label here
+   * fails `leadOutcomes.test.ts`, which reads this file — and the point of that
+   * guard is that copy and grouping assertions are decorative if the component
+   * can hard-code something else.
+   */
+  const disabledReport = (because: string | null) => (
+    <div
+      key="report-disabled"
+      aria-disabled="true"
+      className="w-full rounded-lg border border-black/5 bg-gray-50/60 px-4 py-3 text-left"
+    >
+      <p className="text-sm font-medium text-[#a8a6a1]">
+        {OUTCOME_COPY.report.label}
+      </p>
+      <p className="mt-0.5 text-xs text-[#a8a6a1]">
+        {because ?? outcomes.reportUnavailableBecause}
+      </p>
+    </div>
+  );
+
+  // Nothing to choose, but there is still something to explain.
+  if (outcomes.presentation === "none") {
+    return <div className="mt-3">{disabledReport(null)}</div>;
+  }
+
   // The report is its own control when it is the only thing left — a menu of
   // one headed "What happened with this lead?" containing nothing but the
   // refundable option reads as a prompt to claim.
@@ -111,7 +162,7 @@ export function LeadOutcomePanel({
       ) : null;
     }
     return (
-      <div className="mt-3">
+      <div className="mt-3 space-y-1">
         {step === null ? (
           option(only)
         ) : (
@@ -122,6 +173,10 @@ export function LeadOutcomePanel({
             onCancel={() => setStep(null)}
           />
         )}
+        {/* The report stays visible beside the one live outcome. */}
+        {step === null && !outcomes.reportEnabled && deadLead
+          ? disabledReport(null)
+          : null}
       </div>
     );
   }
@@ -161,13 +216,23 @@ export function LeadOutcomePanel({
         const shown = group.options.filter((k) =>
           outcomes.available.includes(k),
         );
-        if (shown.length === 0) return null;
+        // ⚠️ The report group renders even with nothing actionable in it, which
+        // is what makes the control permanent. Every other group still
+        // disappears when empty.
+        const greyReport =
+          group.options.includes("report") &&
+          !outcomes.reportEnabled &&
+          deadLead != null;
+        if (shown.length === 0 && !greyReport) return null;
         return (
           <div key={group.id} className="mb-3 last:mb-0">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#898781]">
               {group.heading}
             </p>
-            <div className="space-y-1">{shown.map(option)}</div>
+            <div className="space-y-1">
+              {shown.map(option)}
+              {greyReport && disabledReport(null)}
+            </div>
           </div>
         );
       })}

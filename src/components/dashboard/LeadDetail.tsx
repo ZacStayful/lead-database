@@ -28,7 +28,10 @@ import { AnalysisOfferPanel } from "@/components/dashboard/AnalysisOfferPanel";
 import { LEAD_ANALYSIS_PRICE_PENCE, analysability } from "@/lib/leadAnalysis";
 import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import { LeadMessageButtons } from "@/components/dashboard/LeadMessageButtons";
-import { DeadLeadClaimCard } from "@/components/dashboard/DeadLeadClaimCard";
+import {
+  DeadLeadClaimCard,
+  type ReasonVerdicts,
+} from "@/components/dashboard/DeadLeadClaimCard";
 import { LeadOutcomePanel } from "@/components/dashboard/LeadOutcomePanel";
 import { leadOutcomes } from "@/lib/leadOutcomes";
 import type {
@@ -69,6 +72,7 @@ export function LeadDetail({
   messages,
   contactTimeline,
   deadLeadClaim,
+  openReport = false,
 }: {
   assignment: AssignmentWithLead;
   notes: LeadNote[];
@@ -104,7 +108,15 @@ export function LeadDetail({
     claimStatus: string | null;
     /** Resolved server-side; a boolean, never the open count (§51.10). */
     prompt: boolean;
+    /** Days since assignment — publishable, unlike the open count. */
+    ageDays?: number | null;
+    /** Per-reason availability, so the seven-day rule shows in the select. */
+    reasons?: ReasonVerdicts;
+    /** The one sentence to show when nothing can be reported. */
+    unavailableBecause?: string | null;
   };
+  /** Open the report form on arrival — the leads list deep-links here. */
+  openReport?: boolean;
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -364,15 +376,18 @@ export function LeadDetail({
   // router.refresh() straight after submitting, and if the placement flipped,
   // the node would remount lower down the page and destroy the success message
   // mid-read — the one place the credit is named at all.
+  //
+  // ⚠️ Since 0139 an INELIGIBLE lead also lands in the panel, where it renders
+  // greyed with the reason. It used to fall through to "none", which removed
+  // the control and any account of why — so an operator who saw it last week
+  // and not this week read the feature as broken.
   const deadLeadPlacement: "banner" | "panel" | "none" = !deadLeadClaim
     ? "none"
     : deadLeadClaim.claimStatus
       ? "banner"
       : deadLeadClaim.prompt && !promptDismissed
         ? "banner"
-        : deadLeadClaim.claimable
-          ? "panel"
-          : "none";
+        : "panel";
 
   // ⚠️ The gates themselves moved VERBATIM into src/lib/leadOutcomes.ts, where
   // they can be proved: vitest.config.mts is pure units only, so a gate inside
@@ -384,7 +399,8 @@ export function LeadDetail({
     hasNotes,
     isOwnLead,
     isResoldLead,
-    reportAvailable: deadLeadPlacement === "panel",
+    reportAvailable: deadLeadPlacement === "panel" && deadLeadClaim!.claimable,
+    reportUnavailableBecause: deadLeadClaim?.unavailableBecause ?? null,
   });
   const { stageLocked, showActions } = outcomes;
 
@@ -403,6 +419,8 @@ export function LeadDetail({
           assignmentId={assignment.id}
           claimable={deadLeadClaim.claimable}
           claimStatus={deadLeadClaim.claimStatus}
+          reasons={deadLeadClaim.reasons}
+          defaultOpen={openReport && deadLeadClaim.claimable}
           onDismiss={() => setPromptDismissed(true)}
         />
       )}
@@ -773,6 +791,7 @@ export function LeadDetail({
               ? {
                   assignmentId: assignment.id,
                   claimStatus: deadLeadClaim.claimStatus,
+                  reasons: deadLeadClaim.reasons,
                 }
               : null
           }

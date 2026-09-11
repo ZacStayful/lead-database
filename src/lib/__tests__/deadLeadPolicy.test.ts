@@ -529,6 +529,9 @@ describe("the allowance stays unpublished in the COPY too", () => {
     "lib/outcomeReasons.ts",
     "components/dashboard/DeadLeadClaimCard.tsx",
     "components/dashboard/LeadOutcomePanel.tsx",
+    // Added by 0139: the card now carries the report control, so it is a
+    // customer-facing §51 surface like the other five.
+    "components/dashboard/LeadCard.tsx",
   ];
 
   for (const file of surfaces) {
