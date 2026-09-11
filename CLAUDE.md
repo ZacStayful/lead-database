@@ -505,6 +505,14 @@ for being new with no way to earn out of it.
   0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
   the function, which discards its ACL. Re-revoked. Any future
   `create or replace` on a privileged function must re-assert its grants.
+- ⚠️ **`outreach_capacity()` is in production and in NO migration file**
+  (found 2026-09-11 while verifying 0139; applied to the live database that
+  same morning as `outreach_capacity_rpc`, and referenced nowhere in `src/`).
+  It is `security definer` and **executable by `anon`**, so it is callable
+  without signing in via `/rest/v1/rpc/outreach_capacity`, which Supabase's own
+  linter flags. This is the §36.8 drift pattern again: a rebuild from
+  `supabase/migrations/` will not have it. Commit it or drop it — and decide
+  the `anon` grant deliberately either way.
 - ⚠️ **A claim's `lead_assignment_id` must stay `ON DELETE SET NULL`.** It was
   `not null ... on delete cascade` until 0139 (§52), and
   `admin_swap_lead_assignment` DELETES the assignment — so settling a claim by
@@ -11498,8 +11506,30 @@ moves a real credit and a test swap bins a real lead.
 
 ### Deployment order — migration BEFORE code
 
-0139 first, applied and verified against production **before the pull request
-merges** (§1.1).
+✅ **0139 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-11, before the
+merge** (§1.1), and verified there rather than assumed:
+
+- **Pre-apply, no drift.** All three constraints being replaced matched their
+  migration files exactly, and `flag_lead_dead_if_unanimous` matched 0137's
+  body (`fca304a7…`). Zero collisions on the three new columns, the two new
+  functions or the new index.
+- **All four function bodies hash-match a scratch build from the repo file** —
+  `flag_lead_dead_if_unanimous` `9f46a26d…`, `get_assignment_effort`
+  `28682481…`, `resolve_dead_lead_claim_with_swap` `e1ecf84d…`,
+  `set_claim_origin_assignment` `002ea682…` — all `security definer` with
+  `search_path` pinned, `anon`/`authenticated` false, `service_role` true.
+- **Nothing moved.** 52 customers, 501 leads and 512 assignments untouched, and
+  an md5 of every customer's balances and counters **identical** before and
+  after (`973837362f88d8127a3fdec0d70a0ae0`).
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the
+  five mutable-`search_path` functions it lists are all pre-existing.
+- The whole path was then driven **on production itself**, against a real
+  customer and a real worked assignment, inside a block that raises at the end
+  so every write rolled back: the claim **survives** the swap, `resolution` is
+  `swap`, the pointer is nulled, `origin_assignment_id` still names the
+  original, a replacement assignment exists, and the balance, monthly counter
+  and allowance all move by **zero**. The row counts and the balance
+  fingerprint afterwards confirm it wrote nothing.
 
 It is inert: widened CHECKs reject no existing row, dropping a NOT NULL forbids
 nothing, the foreign-key change only alters delete behaviour, the new columns
