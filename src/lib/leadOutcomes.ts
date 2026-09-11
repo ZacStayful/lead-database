@@ -31,8 +31,25 @@ export interface OutcomeGateInputs {
   hasNotes: boolean;
   isOwnLead: boolean;
   isResoldLead: boolean;
-  /** Resolved server-side by `deadLeadClaimState`; the panel only lists it. */
+  /**
+   * Resolved server-side by `deadLeadClaimState`.
+   *
+   * ⚠️ SINCE 0139 THIS DECIDES ENABLED, NOT SHOWN. The report row renders on
+   * every lead either way: an operator who saw the control last week and not
+   * this week reads it as broken, and nobody learns the rule from a control
+   * that silently comes and goes. What an ineligible lead gets instead is the
+   * row, greyed, with the reason underneath (`reportUnavailableBecause`).
+   */
   reportAvailable: boolean;
+  /**
+   * Why the report cannot be used, when it cannot. Rendered under the greyed
+   * row. Null when the report is available.
+   *
+   * ⚠️ It may name the WINDOW, which is publishable policy, and must never name
+   * the per-customer allowance (§51.3) — `deadLeadPolicy.test.ts` bans the
+   * vocabulary from every file this copy passes through.
+   */
+  reportUnavailableBecause?: string | null;
 }
 
 export interface LeadOutcomes {
@@ -42,8 +59,19 @@ export interface LeadOutcomes {
   stageLocked: boolean;
   /** "Mark as contacted" only — not an outcome, and it does not move. */
   showActions: boolean;
-  /** In render order. */
+  /**
+   * In render order.
+   *
+   * ⚠️ ACTIONABLE OUTCOMES ONLY, and that is what keeps `presentation` honest.
+   * The report is always RENDERED, but a greyed row is not something the
+   * operator can do, so counting it here would turn every dead-end lead into a
+   * "panel" and defeat the menu-of-one rule below.
+   */
   available: OutcomeKey[];
+  /** Always true since 0139 — kept as a field so the panel reads from the gates. */
+  reportShown: boolean;
+  reportEnabled: boolean;
+  reportUnavailableBecause: string | null;
   presentation: "panel" | "solo" | "none";
 }
 
@@ -190,6 +218,12 @@ export function leadOutcomes(i: OutcomeGateInputs): LeadOutcomes {
   // an already-rejected assignment, where canReject is false and only the
   // report survives — a panel headed "What happened with this lead?" containing
   // nothing but the refundable option reads as a prompt to claim.
+  //
+  // ⚠️ Since 0139 the report is RENDERED on every lead, so this counts the
+  // actionable options only. A greyed report is not a choice, and counting it
+  // would turn the dead-end case above into exactly the panel this avoids. The
+  // "none" branch therefore still means "nothing to do here", and the panel
+  // shows the greyed report under a heading only when something else is live.
   const presentation =
     available.length === 0 ? "none" : available.length === 1 ? "solo" : "panel";
 
@@ -200,6 +234,11 @@ export function leadOutcomes(i: OutcomeGateInputs): LeadOutcomes {
     stageLocked,
     showActions,
     available,
+    reportShown: true,
+    reportEnabled: i.reportAvailable,
+    reportUnavailableBecause: i.reportAvailable
+      ? null
+      : (i.reportUnavailableBecause ?? null),
     presentation,
   };
 }

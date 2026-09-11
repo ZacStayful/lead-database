@@ -1570,3 +1570,81 @@ export async function sendDeadLeadReviewEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * We looked into a reported lead and the operator was right (§51, 0139).
+ *
+ * Nothing told them anything before this — §51.9 recorded the gap, and the
+ * decision reached them only if they happened to reopen the lead.
+ *
+ * ⚠️ IT TAKES NO GOODWILL FLAG AND MUST NEVER GAIN ONE. `uphold` and
+ * `uphold_goodwill` differ only in whether the hidden per-customer allowance is
+ * spent, so an email that read differently between them would publish that
+ * allowance by comparison — two operators comparing notes would see which of
+ * them had been let off. The guarantee is structural: the parameter does not
+ * exist, so no wording can depend on it.
+ *
+ * ⚠️ The swap variant names NO credit and no money at all. The customer keeps
+ * the slot they already paid for; saying "credit" there would have them expect
+ * a balance that never moves.
+ */
+export async function sendDeadLeadUpheldEmail(params: {
+  to: string;
+  contactName: string | null;
+  leadName: string;
+  resolution: "credit" | "swap";
+  replacementLeadName?: string | null;
+  replacementLeadId?: string | null;
+  note: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const isSwap = params.resolution === "swap";
+  const greeting = params.contactName ? `Hi ${esc(params.contactName)},` : "Hi,";
+
+  const headline = isSwap
+    ? "We've replaced that lead"
+    : "We've put that credit back";
+
+  const body = isSwap
+    ? `You told us <strong>${esc(params.leadName)}</strong> was already gone by the time you got through, and we agree. It's been taken off your list and ${
+        params.replacementLeadName
+          ? `<strong>${esc(params.replacementLeadName)}</strong> is there in its place`
+          : `another lead is there in its place`
+      } — it's in your dashboard now.`
+    : `You told us <strong>${esc(params.leadName)}</strong> was already gone by the time you got through, and we agree. The credit is back on your account, so your next lead comes through as usual.`;
+
+  // ⚠️ The operator's own words about the landlord are what let us trace a bad
+  // lead back to its source, so the note says the reporting was worth doing.
+  const noteBlock = params.note
+    ? `<div style="background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:10px;padding:14px;margin:0 0 18px;font-size:14px;color:#6b706a">${esc(
+        params.note,
+      )}</div>`
+    : "";
+
+  const inner = `
+    <h1 style="margin:0 0 12px;font-size:20px">${headline}</h1>
+    <p style="margin:0 0 6px;font-size:15px">${greeting}</p>
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.6">${body}</p>
+    ${noteBlock}
+    <p style="margin:0 0 18px;font-size:14px;color:#6b706a;line-height:1.6">Telling us about these is what lets us trace a bad lead back to where it came from, so thank you for taking the time.</p>
+    ${button(
+      isSwap && params.replacementLeadId
+        ? `${APP_URL}/dashboard/leads/${params.replacementLeadId}`
+        : `${APP_URL}/dashboard/leads`,
+      isSwap ? "See the new lead" : "Go to your leads",
+    )}
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to: params.to,
+      subject: isSwap
+        ? `We've replaced ${params.leadName}`
+        : `Credit back for ${params.leadName}`,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
