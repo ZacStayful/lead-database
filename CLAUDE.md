@@ -499,19 +499,18 @@ for being new with no way to earn out of it.
   0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
   the function, which discards its ACL. Re-revoked. Any future
   `create or replace` on a privileged function must re-assert its grants.
-- **Orphaned reject columns, AND the function that reads them.**
-  `rejection_reason`, `contact_validation_result`, `claim_denied` exist on
-  `lead_assignments` in production but in **no migration** and no code — left
-  by an abandoned branch. Do not reference them; a schema rebuilt from
-  `supabase/migrations/` will not have them.
-  ⚠️ **`apply_lead_rejection(uuid, uuid, lead_type, text, jsonb, boolean,
-  boolean)` belongs to the same branch** and is the ONLY object still differing
-  between production and a rebuild (§36.8's audit). It selects
-  `rejection_reason` and `claim_denied` under a row lock, and nothing in `src/`
-  calls it. It is **deliberately not committed**: a migration for it would
-  enshrine dead code, and could not apply to a fresh build anyway, because the
-  columns it reads are themselves in no migration. Drop it in production, or
-  commit the columns with it — not one without the other.
+- ~~**Orphaned reject columns, AND the function that reads them.**~~
+  **Closed by 0138 (§51.10).** `rejection_reason`, `contact_validation_result`,
+  `claim_denied` and `apply_lead_rejection(uuid, uuid, lead_type, text, jsonb,
+  boolean, boolean)` existed in production, in **no migration** and in no code,
+  left by an abandoned branch — and §36.8's audit called that function the ONLY
+  object still differing between production and a rebuild. The rule stated here
+  was: drop it, or commit the columns with it, never one without the other.
+  0138 builds reject reasons properly, so inheriting an abandoned branch's shape
+  would have been the wrong half of that choice; all four are dropped, after
+  confirming the columns were empty (0 of 511 rows on the first two, the third
+  never anything but its default). **A rebuild from `supabase/migrations/` now
+  matches production.**
 - **`supabase/schema.sql`** is stale. Migrations are the source of truth.
 - **Admin shows "3 / 2 assigned"** on a reclaimed lead. Truthful, looks odd; the
   Reclaim history block on the lead detail page explains it. A **claimed pool
@@ -5621,6 +5620,8 @@ application half did not. That is why the drift went unnoticed for a week.
 empty, 0 failures; 0100a re-applied twice for idempotency; and every
 `public` function fingerprinted by `md5(prosrc)` against production —
 102 of 103 identical, the one difference being `apply_lead_rejection` (below).
+⚠️ **That last difference is gone — 0138 drops it with its three columns
+(§51.10), so a rebuild from the directory now matches production exactly.**
 
 It is also why `admin_assign_lead` is guarded from the routes rather than
 rewritten in 0111: when this was written that function had been replaced by an
@@ -10800,3 +10801,270 @@ Code arriving first would fail every claim, and would fail the lead page's
 eligibility read on **every** lead — `deadLeadClaimState` fails closed, so the
 control would simply never appear, which is the safe direction but not one to
 rely on.
+
+### 51.10 — Nobody could find it, and nothing recorded why leads die *(0138)*
+
+§51 shipped and went unused. Measured on production the next morning: of 181
+assignments inside the 14-day window, **126 were already eligible to report**,
+spread across 13 of 22 live customers, and **not one report had been made**. The
+effort gate was never the constraint.
+
+It lived in one place — a grey outline button on the lead detail page — stacked
+directly beneath Reject and Discard, which are also grey outline buttons, and
+rendering nothing at all when a lead was ineligible.
+
+The second half is worse and was not part of the original brief. Of the four
+ways a lead can end, only one recorded anything usable:
+
+| Outcome | Recorded, before 0138 |
+|---|---|
+| Report | reason, the landlord's own words, the date they spoke |
+| Close | one of two coarse reasons |
+| Reject | **nothing** |
+| Discard | **nothing** |
+
+25 rejected and 30 closed assignments had ended with no account of why. That is
+the dataset that says which sources produce leads nobody can work, and it did
+not exist.
+
+#### The prompt, and ⚠️ why it demands a contact attempt
+
+A block at the top of the lead, once the operator has opened it **three or more
+times** AND has at least one `tel_click` / `whatsapp_click` / `mailto_click`
+against it.
+
+The second clause is the one that matters. The form asks *"In their words"* and
+*"When did you speak to them?"*. Of the 126 eligible assignments, **only 30 had
+ever had any contact event**; §42 measures the same thing from the other side
+(342 of 356 open assignments have never had a single contact action, against 666
+opens). Prompting the other three quarters is asking them to invent a
+conversation, and invented reasons poison exactly the dataset 0138 exists to
+build. Reach drops from 103 leads to **26**. That is the right trade when the
+output is evidence.
+
+⚠️ **THE THRESHOLD IS OFF BY ONE AND THAT IS NOT A BUG.** `LeadDetail` records
+`detail_opened` in a mount effect — after the server component has resolved — so
+on the Nth visit the server sees **N-1** rows. Testing for 3 would first fire on
+the fourth visit. It is written `MIN_OPENS - 1` with the cause named, and pinned
+three ways so a later "correction" of one constant without the other fails
+loudly rather than quietly costing every operator a visit.
+
+The count is honest because `/api/customer/events` dedupes identical
+`(assignment, event_type)` rows inside 60 seconds, so three rows is three
+genuinely separate visits. `LeadDetail.tsx` is the only writer of
+`detail_opened` in the codebase.
+
+⚠️ **Neither the count nor the threshold reaches the browser.**
+`deadLeadClaimState` returns a boolean. An operator who knows the trigger is
+three opens can produce three opens — the instinct §51.3 applies to the
+allowance, one level down. The event scan is **short-circuited** to run only
+when the lead is eligible and unsettled, so most page loads cost nothing extra,
+and it fails closed exactly as the eligibility read does.
+
+This is **discovery, not a gate**. Eligibility is unchanged and still lives in
+SQL, where one event of any kind qualifies; nothing downstream trusts the
+prompt. So a prompt that can in principle be manufactured by reloading costs
+nothing — the claim behind it still passes the reason CHECK, the detail floor,
+the peer rules, the hidden allowance and a person.
+
+#### ⚠️ The credit is named in one place and not the other
+
+| Surface | May it name the credit? |
+|---|---|
+| The **prompt** — unsolicited, we raised it | **No.** Leading with a credit turns discovery into an inducement to fish. |
+| The **confirmation** — they chose to report and have written what the landlord said | **Yes.** Stating the outcome there is informed consent, not an offer. |
+
+The form never mentioned a credit until after submission, so an operator
+consented without being told the outcome. A line now sits immediately above
+**Send it to us**, and it must read the same whether the claim will auto-uphold
+or go to review — those two paths are deliberately indistinguishable (§51.3).
+
+It says *"your next lead comes through as usual"*, never "replace". Neither
+refund route sends a replacement (§39.1, §51.5); the credit returns and ordinary
+routing delivers.
+
+The prompt also **never names the trigger**. "You have been back to this a few
+times" hands over the recipe for summoning it.
+
+#### One entry point, and ⚠️ the collision consolidating it exposed
+
+Reject, Discard, "Didn't work out" and the report are now one **"What happened
+with this lead?"** control, opening two labelled groups — the operator's own
+**decision**, and the state of the **lead** — with each option's consequence
+stated at the point of choosing rather than after. On 85 of the 126 eligible
+assignments the chargeable verb and the refundable one were adjacent grey
+buttons, which is §51.6's warning made real.
+
+⚠️ Two options are near-identical sentences with **opposite money outcomes**,
+and nobody noticed while they sat at opposite ends of the page:
+
+| Control | Wording | Money |
+|---|---|---|
+| Report, `already_with_operator` | "They had already appointed another operator" | **credit back** |
+| Close, `sorted_elsewhere` | "Already sorted with someone else" | nothing |
+
+The distinction is **timing**, and it is the difference between a bad lead and a
+lost deal. Both labels now carry it — "**since** gone with someone else" against
+"before you got through" — and a test asserts both words. Without them,
+consolidation makes fishing easier rather than harder.
+
+Order is part of the rule: **the operator's own decisions first, the report
+second.** Discovery for the genuine case is the prompt's job; inside a menu the
+option that returns money must not be what the eye lands on. Choosing an option
+**replaces the list**, because four confirms expanding in place next to each
+other is a mis-click into a different money outcome.
+
+**When exactly one outcome is available it renders as itself**, never a menu of
+one — the shape on an already-rejected assignment, where a panel headed "What
+happened with this lead?" containing nothing but the refundable option would be
+a prompt to claim.
+
+⚠️ **`LeadOutcomePanel` renders from `OUTCOME_GROUPS` and `OUTCOME_COPY`, never
+from labels written in the component.** That is the load-bearing rule, not a
+style preference: every copy and grouping assertion is decorative if the
+component can hard-code something else, and a test reads the file and fails if
+the literal labels appear in it.
+
+The four gates moved **verbatim, comments included**, into `src/lib/leadOutcomes.ts`
+— the only way to preserve them exactly and still prove it, since
+`vitest.config.mts` is pure units only and a gate inside a component is a gate
+nothing can test. Lifting reject and discard out of the `showActions` wrapper is
+a **no-op**: `showActions && canReject ≡ canReject` and `showActions &&
+canDiscard ≡ canDiscard`, asserted across a generated matrix rather than argued.
+`showActions` survives gating only "Mark as contacted". "Mark as signed" and
+"Delete this lead" stay their own controls — a win and the deletion of your own
+data are different acts, and delete is gated on `isOwnLead`, which none of the
+four share.
+
+#### `lead_outcome_reasons`, and ⚠️ why it is not a column
+
+Every outcome now asks why, in a word or two. Only the report keeps a free-text
+requirement: its 20-character floor exists because the landlord's words are the
+evidence for a credit, and demanding prose to reject a lead in the wrong county
+is friction on a one-click action that produces "n/a" at scale.
+
+⚠️ **THE REASON CANNOT LIVE ON `lead_assignments`.** `discard_lead_assignment`
+DELETES that row, so a discard reason stored there dies with the thing it
+explains — the trap §13 records for the lifetime odometer, and discard is one of
+the two outcomes that recorded nothing. So: a table of its own, with
+`lead_assignment_id` **ON DELETE SET NULL**, and `postcode_area` / `bedrooms`
+denormalised at write time because the analysis groups by them and a
+customer-added lead can be deleted outright (§30.7).
+
+⚠️ **The reason is a PARAMETER to the function that performs the outcome**, so
+it lands in the same transaction. A reason written beside the outcome is a
+reason that goes missing exactly when the outcome succeeded. For discard the
+insert happens **before** the delete, and the FK nulls the pointer.
+
+⚠️ **NEITHER NEW PARAMETER HAS A DEFAULT.** A default creates an **overload**,
+not a replacement, and every existing call then fails `function is not unique` —
+the trap §34 and §35 both record, and both of those functions already carried a
+defaulted `p_lead_type`. The old arities are kept as delegating shims, which is
+also what makes applying 0138 ahead of the deploy safe: the route still calls
+the short form and behaves exactly as before, recording no reason.
+
+⚠️ **The two vocabularies must never overlap.** Reject and discard describe the
+**operator's own fit** (`wrong_area`, `wrong_property`, `poor_numbers`,
+`at_capacity`, `other`); close and report describe **the landlord**. Nothing
+resembling "the landlord had already gone" may ever appear on the reject list —
+that is the refundable sentence, and a no-refund path to it would make the data
+ambiguous where it should be sharpest while teaching operators that the same
+words pay differently depending on which button they press. The CHECK enforces
+it per outcome and `outcomeReasons.test.ts` asserts the disjointness and the
+character-for-character equality with `src/lib/outcomeReasons.ts` — the
+arrangement §29 uses for `cancelOptions.ts`.
+
+**The report does NOT write a `lead_outcome_reasons` row.**
+`lead_quality_claims` already records its reason, detail and date; a second row
+is duplicated truth that can drift, and writing it would mean editing
+`apply_dead_lead_claim`, the money path. `/admin/quality` unions the two in its
+query instead. The CHECK still admits `outcome = 'report'`, so the option stays
+open without a migration.
+
+#### Two things 0138 closes that §51 did not
+
+⚠️ **An owned lead was reportable.** `claimable_dead_lead_assignments` had no
+owner bar. `create_customer_leads` inserts an owned lead at `price_paid = 0`,
+spending no credit, but `uphold_dead_lead_claim` credits `lead_balance + 1`
+unconditionally — so an operator could upload a lead, open it, report the
+landlord as gone and be credited for a lead nobody charged them for. **Five such
+assignments were eligible on production.** An uploaded lead is exactly the kind
+an operator opens repeatedly, so the new prompt would have landed on them and
+invited it.
+
+⚠️ **The orphans are gone.** `rejection_reason`, `contact_validation_result`,
+`claim_denied` and `apply_lead_rejection()` are dropped. §11 states the rule —
+drop them, or commit the columns with the function, never one without the other
+— and §36.8 called that function "the ONLY object still differing between
+production and a rebuild". Since 0138 builds reject reasons properly,
+inheriting an abandoned branch's shape would have been the wrong half of that
+choice. Verified empty first: `rejection_reason` 0 of 511 rows set,
+`contact_validation_result` 0 of 511, `claim_denied` never anything but its
+default. **This closes the last known drift between production and a rebuild
+from `supabase/migrations/`.**
+
+#### The guide, which contradicted the feature
+
+`/dashboard/guide`'s "Reject vs discard" section never mentioned the report, and
+its warn callout told the operator that if contact details are factually
+incorrect they should "contact the Stayful team and we'll review it" — while the
+report offers "The contact details do not reach them" as a self-serve reason.
+Three surfaces described one situation three ways. It is now "When a lead
+doesn't work out", covering every ending and what each does to the money, with
+the `reject` anchor kept so existing links still land.
+
+### Verification
+
+All 138 migrations applied to a scratch **Postgres 16** from empty, **0
+failures**; 0138 re-applied twice more for idempotency. ⚠️ Before copying them
+forward, production's live `prosrc` for `reject_lead_assignment` (`9a2959f5…`)
+and `discard_lead_assignment` (`86fa1308…`) was diffed against the migration
+files and matched **byte for byte** — the check §11 says not to assume.
+
+**The full 0137 suite still passes**, which is the regression that matters since
+0138 replaced `claimable_dead_lead_assignments`. 0138's own **31 assertions**
+pass, among them: every CHECK on its boundaries including a report reason
+refused on a reject; both arities of all three changed functions resolving; an
+owned lead absent from the predicate while a marketplace lead is still present;
+the orphans gone; and the one the table exists for — **a discard deletes the
+assignment and the reason row survives with its `lead_id` and denormalised area
+intact, its pointer nulled rather than cascaded away**.
+
+**1,705 vitest cases green**, `npx tsc --noEmit` clean, `npm run lint` clean,
+`npm run build` passes.
+
+⚠️ **Eight guards were mutation-tested** — each broken deliberately and watched
+to fail before being kept (§42.8, and §50.9 records two written weak enough to
+survive the mutation they existed to catch). "Correcting" the off-by-one to
+`MIN_OPENS`, dropping the contact-attempt requirement, naming a credit in the
+prompt body, moving the report into the operator's-decisions group, dropping
+"since" from the close consequence, adding a landlord-state reason to the fit
+list, hard-coding a label in the panel, and rendering the report in both slots
+at once — all eight fail their tests and none survives.
+
+⚠️ Two of those guards had to be written to **strip comments first**. Every file
+that explains why the allowance stays unpublished names it in doing so, and
+`LeadOutcomePanel`'s docblock quotes the labels it must not hard-code — so a
+naive substring check fails on the explanation and trains the next person to
+delete the explanation. §46 hit exactly this.
+
+**Not yet exercised in a browser.** The prompt has never been seen on a real
+lead, and no reason has been recorded through the panel. After merging, open an
+eligible lead three times a minute apart with a contact click against it and
+confirm the prompt appears on the third and not the second; confirm it does not
+appear with no contact click; then reject one lead and check the reason reaches
+`/admin/quality`. ⚠️ A preview cannot be used — Deployment Protection answers
+302 to `vercel.com/sso-api` (§45, §46, §50, §51) — and a preview runs against
+**production** Supabase (§1.1), so a test report moves a real credit.
+
+### Deployment order — migration BEFORE code
+
+0138 first, applied and verified against production **before the pull request
+merges** (§1.1). It is **not inert**: the owner bar removes five leads from
+eligibility and the orphan drop removes columns. Re-confirm the three orphan
+counts are still zero immediately before applying rather than trusting the
+numbers above.
+
+Code after it. Deployed the other way round, every reject and discard would fail
+on an unknown parameter — the shims mean the reverse order merely records no
+reason, which is the safe direction for the window.

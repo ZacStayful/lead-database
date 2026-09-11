@@ -20,21 +20,42 @@ import { statusBadge } from "@/components/dashboard/leadStatus";
 export const dynamic = "force-dynamic";
 
 const STATUSES: { key: string; blurb: string }[] = [
-  { key: "new", blurb: "Just arrived and not yet actioned. Your unread count on the dashboard tracks these." },
-  { key: "contacted", blurb: "You've reached out — call, email, or message. Use “Mark as contacted” on the lead." },
+  {
+    key: "new",
+    blurb:
+      "Just arrived and not yet actioned. Your unread count on the dashboard tracks these.",
+  },
+  {
+    key: "contacted",
+    blurb:
+      "You've reached out — call, email, or message. Use “Mark as contacted” on the lead.",
+  },
   { key: "in_discussion", blurb: "An active back-and-forth is underway." },
-  { key: "won", blurb: "Converted — a signed management agreement or guaranteed-rent deal. Counts toward your win rate." },
-  { key: "not_relevant", blurb: "Not a fit for you. Closes the lead without marking it won." },
-  { key: "rejected", blurb: "You passed on it. The lead still counts and is not refunded — it's a record that you're not pursuing it." },
+  {
+    key: "won",
+    blurb:
+      "Converted — a signed management agreement or guaranteed-rent deal. Counts toward your win rate.",
+  },
+  {
+    key: "not_relevant",
+    blurb: "Not a fit for you. Closes the lead without marking it won.",
+  },
+  {
+    key: "rejected",
+    blurb:
+      "You passed on it. The lead still counts and is not refunded — it's a record that you're not pursuing it.",
+  },
 ];
 
 const MGMT_STAGE_BLURBS: Record<string, string> = {
   cold: "Not yet engaged — early contact or no response yet.",
-  interested_in_the_future: "Interested, but not right now. Set a call-back date and revisit.",
+  interested_in_the_future:
+    "Interested, but not right now. Set a call-back date and revisit.",
   web_meeting_booked: "A web meeting is in the diary.",
   web_meeting_no_show: "They booked but didn't attend — chase to rebook.",
   web_meeting_attended: "The web meeting happened. Follow up to close.",
-  abandoned: "No longer progressing — parked as a dead end (you can revive it any time).",
+  abandoned:
+    "No longer progressing — parked as a dead end (you can revive it any time).",
 };
 
 const GR_STAGE_BLURBS: Record<string, string> = {
@@ -62,7 +83,7 @@ export default async function GuidePage() {
     { id: "contact", label: "How to contact a lead" },
     { id: "crm", label: "Status vs pipeline" },
     { id: "notes", label: "Notes & files" },
-    { id: "reject", label: "Reject vs discard" },
+    { id: "reject", label: "When a lead doesn\u2019t work out" },
     { id: "priority", label: "Priority call list" },
     { id: "analytics", label: "Analytics" },
     { id: "analyser", label: "STR Analyser" },
@@ -105,11 +126,12 @@ export default async function GuidePage() {
         <div className="min-w-0 space-y-10">
           <Section id="overview" title="Getting started">
             <p>
-              This portal is where every lead we send you lands, and a lightweight
-              CRM to work each one from first contact to a signed deal. New leads
-              arrive <strong>within minutes of assignment</strong> — you&apos;ll
-              get an email and a real-time notification in the portal (the bell in
-              the top bar shows your unread count).
+              This portal is where every lead we send you lands, and a
+              lightweight CRM to work each one from first contact to a signed
+              deal. New leads arrive{" "}
+              <strong>within minutes of assignment</strong> — you&apos;ll get an
+              email and a real-time notification in the portal (the bell in the
+              top bar shows your unread count).
             </p>
             <p>
               Use the navigation at the top: <NavRef>Dashboard</NavRef> for an
@@ -129,9 +151,9 @@ export default async function GuidePage() {
 
           <Section id="leads" title="Your leads feed">
             <p>
-              Open <NavRef>Leads</NavRef> to see everything you&apos;ve received,
-              newest first. Each row is a lead — click it to expand contact
-              details inline, or open the full lead page to work it.
+              Open <NavRef>Leads</NavRef> to see everything you&apos;ve
+              received, newest first. Each row is a lead — click it to expand
+              contact details inline, or open the full lead page to work it.
             </p>
             <List>
               <li>
@@ -143,9 +165,9 @@ export default async function GuidePage() {
               </li>
               {mgmt && gr && (
                 <li>
-                  <strong>Filter by product</strong> —{" "}
-                  <Pill>Management</Pill> <Pill>Guaranteed Rent</Pill> — appears
-                  automatically when you hold both.
+                  <strong>Filter by product</strong> — <Pill>Management</Pill>{" "}
+                  <Pill>Guaranteed Rent</Pill> — appears automatically when you
+                  hold both.
                 </li>
               )}
               <li>
@@ -153,8 +175,8 @@ export default async function GuidePage() {
                 so the “New” count reflects what you still haven&apos;t seen.
               </li>
               <li>
-                <strong>Export</strong> your leads to a spreadsheet any time with
-                the Export button.
+                <strong>Export</strong> your leads to a spreadsheet any time
+                with the Export button.
               </li>
             </List>
           </Section>
@@ -181,9 +203,11 @@ export default async function GuidePage() {
               </li>
               <li>
                 Every delivered lead is chargeable. Rejecting a lead does{" "}
-                <strong>not</strong> refund a credit (see{" "}
+                <strong>not</strong> refund a credit. The one ending that can is
+                telling us a landlord had already gone before you got through
+                (see{" "}
                 <a href="#reject" className="text-brand hover:underline">
-                  Reject vs discard
+                  When a lead doesn&rsquo;t work out
                 </a>
                 ).
               </li>
@@ -202,7 +226,8 @@ export default async function GuidePage() {
                 {mgmt ? ", and a written lead profile" : ""}.
               </li>
               <li>
-                <strong>Due to call</strong> — set a call-back date; it feeds the{" "}
+                <strong>Due to call</strong> — set a call-back date; it feeds
+                the{" "}
                 <a href="#priority" className="text-brand hover:underline">
                   Priority call list
                 </a>
@@ -244,10 +269,10 @@ export default async function GuidePage() {
             <SubHeading>Ring first, and do not warm them up</SubHeading>
             <p>
               This is the part almost everyone gets the wrong way round. A{" "}
-              <strong>cold call</strong> — nothing sent ahead of it — is answered
-              about <strong>{COLD_CALL_ANSWER_PCT}%</strong> of the time. Once a
-              message or an email has gone first, the answer rate on the call
-              that follows drops to{" "}
+              <strong>cold call</strong> — nothing sent ahead of it — is
+              answered about <strong>{COLD_CALL_ANSWER_PCT}%</strong> of the
+              time. Once a message or an email has gone first, the answer rate
+              on the call that follows drops to{" "}
               <strong>{WARMED_CALL_ANSWER_PCT_MAX}% or less</strong>. Sending a
               friendly introduction before you dial feels polite and costs you
               roughly three quarters of your answer rate.
@@ -279,7 +304,8 @@ export default async function GuidePage() {
             </p>
             <Callout>
               If a landlord told us how they would rather be contacted when we
-              introduced you, the first attempt follows that instead of the call.
+              introduced you, the first attempt follows that instead of the
+              call.
             </Callout>
 
             <SubHeading>What to expect</SubHeading>
@@ -294,14 +320,12 @@ export default async function GuidePage() {
 
           <Section id="crm" title="Status vs pipeline — the mini-CRM">
             <p>
-              Each lead has <strong>two independent tracks</strong>. Keeping both
-              up to date is what powers your analytics and priority list.
+              Each lead has <strong>two independent tracks</strong>. Keeping
+              both up to date is what powers your analytics and priority list.
             </p>
 
             <SubHeading>1 · Status — how the relationship is going</SubHeading>
-            <p>
-              Set from the lead. It answers “where is this conversation?”
-            </p>
+            <p>Set from the lead. It answers “where is this conversation?”</p>
             <div className="mt-3 space-y-2">
               {STATUSES.map((s) => {
                 const b = statusBadge(s.key);
@@ -326,8 +350,8 @@ export default async function GuidePage() {
             </SubHeading>
             <p>
               Click the stage badge on a lead to change it. It&apos;s a separate
-              axis from status — a lead can be at any stage regardless of whether
-              it&apos;s new, contacted, or won.
+              axis from status — a lead can be at any stage regardless of
+              whether it&apos;s new, contacted, or won.
             </p>
 
             {mgmt && (
@@ -363,33 +387,64 @@ export default async function GuidePage() {
                 status, the lead is “yours” and can no longer be discarded.
               </li>
               <li>
-                <strong>Files</strong> — upload documents against a lead, such as
-                your STR Analyser report or figures, so they&apos;re attached to
-                the property.
+                <strong>Files</strong> — upload documents against a lead, such
+                as your STR Analyser report or figures, so they&apos;re attached
+                to the property.
               </li>
             </List>
           </Section>
 
-          <Section id="reject" title="Reject vs discard">
-            <p>Two different actions for a lead you don&apos;t want to pursue:</p>
+          <Section id="reject" title="When a lead doesn't work out">
+            <p>
+              Every lead has one <strong>What happened with this lead?</strong>{" "}
+              button. It only ever offers the endings that still apply, and each
+              one says what it does before you pick it.
+            </p>
+            <p>Things you decide:</p>
             <List>
               <li>
-                <strong>Reject</strong> — records that you&apos;re passing on the
-                lead. It still counts toward your leads for the month and is not
-                refunded or replaced. Use it as a pipeline/feedback signal.
+                <strong>Reject</strong> — you&apos;re passing on it. It still
+                counts toward your leads for the month and isn&apos;t refunded
+                or replaced. Only while the pipeline stage is still Cold.
               </li>
               <li>
-                <strong>Discard</strong> — only available before you&apos;ve added
-                a note or changed the status. It releases an untouched lead so it
-                can go to another operator. It still counts toward your monthly
+                <strong>Discard</strong> — only before you&apos;ve added a note
+                or changed the status. It releases an untouched lead so it can
+                go to another operator, and it still counts toward your
                 allocation, since the lead was delivered and qualified.
               </li>
+              <li>
+                <strong>Didn&apos;t work out</strong> — you reached the landlord
+                and it&apos;s finished: they were never interested, or they have
+                since gone with someone else. Closes it for you and stops us
+                offering that landlord to anyone else. No refund.
+              </li>
             </List>
-            <Callout variant="warn">
-              If a lead&apos;s <strong>contact details are factually
-              incorrect</strong>, don&apos;t just reject it — contact the Stayful
-              team and we&apos;ll review it.
+            <p>And one thing about the lead itself:</p>
+            <List>
+              <li>
+                <strong>This landlord was already gone</strong> — they had
+                appointed someone, had stopped letting, or the contact details
+                reach nobody, <em>before you got through</em>. Tell us what they
+                said and we look into where the lead came from. If it stands up,
+                the credit goes back on your account and your next lead comes
+                through as usual.
+              </li>
+            </List>
+            <Callout>
+              The difference between the last two is <strong>when</strong>. A
+              landlord who chose another operator after you spoke to them is a
+              deal you lost. One who had already chosen before you got through
+              was never a lead we should have sold you — and that is the one we
+              want to hear about, because it is how we find the sources that
+              keep producing them.
             </Callout>
+            <p>
+              Whichever you pick, we ask why in a word or two. Nothing is
+              required beyond that, except on a lead that was already gone,
+              where we ask what the landlord actually said — that sentence is
+              what lets us trace it back.
+            </p>
           </Section>
 
           <Section id="priority" title="Priority call list">
@@ -409,17 +464,18 @@ export default async function GuidePage() {
             </p>
             <List>
               <li>
-                Headline stats — total leads, won, <strong>win rate</strong>, and
-                notes logged.
+                Headline stats — total leads, won, <strong>win rate</strong>,
+                and notes logged.
               </li>
               <li>
-                <strong>Status funnel</strong> and <strong>pipeline stages</strong>{" "}
-                — how many leads sit at each step, in numbers and percentages.
+                <strong>Status funnel</strong> and{" "}
+                <strong>pipeline stages</strong> — how many leads sit at each
+                step, in numbers and percentages.
               </li>
               <li>
                 <strong>Estimated monthly income</strong> — totalled from the
-                figures you enter per lead, split across in-pipeline, won, and all
-                leads.
+                figures you enter per lead, split across in-pipeline, won, and
+                all leads.
               </li>
               <li>
                 Your activity — leads actioned, meetings booked/attended, files
@@ -427,8 +483,8 @@ export default async function GuidePage() {
               </li>
             </List>
             <Callout>
-              The more consistently you set statuses, stages, and income figures,
-              the more useful these numbers become.
+              The more consistently you set statuses, stages, and income
+              figures, the more useful these numbers become.
             </Callout>
           </Section>
 
@@ -444,8 +500,8 @@ export default async function GuidePage() {
               >
                 intelligence.stayful.co.uk
               </a>{" "}
-              — it pulls live Airbnb data for that postcode and tells you in about
-              60 seconds whether the numbers work
+              — it pulls live Airbnb data for that postcode and tells you in
+              about 60 seconds whether the numbers work
               {gr ? " for a guaranteed rent arrangement" : ""}. There&apos;s a
               shortcut to it on every lead
               {gr ? " (“Run figures on this property”)" : ""}.
@@ -458,16 +514,18 @@ export default async function GuidePage() {
                 As a Guaranteed Rent subscriber you get a free, ready-to-sign{" "}
                 <strong>company let tenancy agreement</strong> to get landlords
                 onto a guaranteed-rent arrangement. Find it under{" "}
-                <NavRef>Documents</NavRef> (and on your dashboard) — download the
-                agreement and read the plain-English FAQ that explains exactly
-                what the landlord and your company are each responsible for.
+                <NavRef>Documents</NavRef> (and on your dashboard) — download
+                the agreement and read the plain-English FAQ that explains
+                exactly what the landlord and your company are each responsible
+                for.
               </p>
             </Section>
           )}
 
           <Section id="billing" title="Billing & renewal">
             <p>
-              Open <NavRef>Settings</NavRef> to see your plan and manage billing.
+              Open <NavRef>Settings</NavRef> to see your plan and manage
+              billing.
             </p>
             <List>
               <li>
@@ -480,8 +538,8 @@ export default async function GuidePage() {
                 arriving through the month.
               </li>
               <li>
-                <strong>Cancel any time</strong> — there&apos;s no minimum term or
-                penalty.
+                <strong>Cancel any time</strong> — there&apos;s no minimum term
+                or penalty.
               </li>
             </List>
           </Section>
@@ -490,26 +548,29 @@ export default async function GuidePage() {
             <Card>
               <CardContent className="pt-6">
                 <List className="space-y-2">
-                  <li>Open new leads promptly — speed to contact wins deals.</li>
                   <li>
-                    Set a <strong>Due to call</strong> date on every lead so your
-                    Priority list always tells you who&apos;s next.
+                    Open new leads promptly — speed to contact wins deals.
+                  </li>
+                  <li>
+                    Set a <strong>Due to call</strong> date on every lead so
+                    your Priority list always tells you who&apos;s next.
                   </li>
                   <li>
                     Log a quick <strong>note</strong> after every conversation —
                     future-you will thank you.
                   </li>
                   <li>
-                    Keep <strong>status</strong> and <strong>pipeline stage</strong>{" "}
-                    current so your analytics reflect reality.
+                    Keep <strong>status</strong> and{" "}
+                    <strong>pipeline stage</strong> current so your analytics
+                    reflect reality.
                   </li>
                   <li>
                     Run the <strong>STR Analyser</strong> before you dial so you
                     can talk numbers with confidence.
                   </li>
                   <li>
-                    Enter an <strong>estimated income</strong> per lead to see the
-                    value sitting in your pipeline.
+                    Enter an <strong>estimated income</strong> per lead to see
+                    the value sitting in your pipeline.
                   </li>
                 </List>
               </CardContent>
@@ -554,7 +615,11 @@ function List({
   className?: string;
 }) {
   return (
-    <ul className={"list-disc space-y-1.5 pl-5 text-muted-foreground " + className}>
+    <ul
+      className={
+        "list-disc space-y-1.5 pl-5 text-muted-foreground " + className
+      }
+    >
       {children}
     </ul>
   );
