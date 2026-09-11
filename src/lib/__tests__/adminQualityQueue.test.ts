@@ -70,7 +70,7 @@ describe("the swap picker is reused, not reimplemented", () => {
   it("names the notes a swap destroys", () => {
     // A claimed lead is likelier than average to carry notes, because reporting
     // one requires having worked it — and the customer never sees this warning.
-    expect(actions()).toMatch(/note.*deleted with it/is);
+    expect(actions()).toMatch(/note[\s\S]*deleted with it/i);
   });
 
   it("says no credit goes back", () => {
