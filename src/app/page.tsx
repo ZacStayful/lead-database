@@ -64,7 +64,7 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
     q: "What happens if I receive a poor-quality lead?",
     a: (
       <>
-        {"Every lead is delivered with the full information received — name, address, phone, email, bedroom count, estimated income, and a written profile. If a lead's contact details are factually incorrect, contact the Stayful team and it will be reviewed. Leads that simply don't convert are not refundable — the 5% conversion rate is a long-run average across thousands of enquiries, not a per-lead guarantee."}{" "}
+        {"Every lead is delivered with the full information received — name, address, phone, email, bedroom count, estimated income, and a written profile. If you work a lead and find the landlord had already gone — they'd appointed someone else, stopped letting, or the details don't reach them — you report it from the lead itself, and if it stands up the credit goes back on your account. Leads that simply don't convert are not refundable — the 5% conversion rate is a long-run average across thousands of enquiries, not a per-lead guarantee."}{" "}
         <Link
           href="/policies/lead-quality-and-data"
           style={{
@@ -88,7 +88,7 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
   },
   {
     q: "What if I get a lead I want to pass on immediately?",
-    a: "Each lead is assigned to a maximum of two operators simultaneously. If you are the only subscriber covering a particular area, you receive those leads exclusively. By default, leads are not filtered by geography — you decide which leads to pursue, and you are charged per lead received, not per lead pursued. If you'd rather only receive leads from specific cities, you can set that in Lead filtering. Leads outside your selected areas are then routed to other subscribers instead and do not count against your monthly allocation.",
+    a: "Each lead is normally assigned to no more than three operators at once, and a lead nobody takes up can be passed on further. If you are the only subscriber covering a particular area, you receive those leads exclusively. By default, leads are not filtered by geography — you decide which leads to pursue, and you are charged per lead received, not per lead pursued. If you'd rather only receive leads from specific cities, you can set that in Lead filtering. Leads outside your selected areas are then routed to other subscribers instead and do not count against your monthly allocation.",
   },
 ];
 

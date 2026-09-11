@@ -45,6 +45,11 @@ export {
   DEAD_LEAD_REASONS,
   DEAD_LEAD_REASON_LABELS,
   MIN_DETAIL_LENGTH,
+  DEAD_LEAD_CONTROL_LABEL,
+  DEAD_LEAD_PROMPT_HEADING,
+  DEAD_LEAD_PROMPT_BODY,
+  DEAD_LEAD_PROMPT_DISMISS,
+  DEAD_LEAD_CONFIRM_CONSEQUENCE,
 } from "@/lib/quality/deadLeadCopy";
 export type { DeadLeadReason } from "@/lib/quality/deadLeadCopy";
 
@@ -59,6 +64,85 @@ export type { DeadLeadReason } from "@/lib/quality/deadLeadCopy";
  * be checked against what the landlord says now.
  */
 export const CLAIM_WINDOW_DAYS = 14;
+
+/**
+ * How many separate visits to a lead before the page offers the report
+ * prominently (§51.10).
+ *
+ * Three, because one visit is a drive-by and the prompt must not read as an
+ * invitation to write off any lead you did not fancy. `/api/customer/events`
+ * dedupes identical (assignment, event_type) rows inside 60 seconds, so three
+ * rows is three genuinely separate visits rather than a refresh spree.
+ */
+export const DEAD_LEAD_PROMPT_MIN_OPENS = 3;
+
+/**
+ * ⚠️ OFF BY ONE, DELIBERATELY, AND THIS IS NOT A BUG TO FIX.
+ *
+ * `LeadDetail` records `detail_opened` in a mount effect — AFTER the server
+ * component has already resolved its data. So on the operator's Nth visit the
+ * server sees N-1 rows, and testing for MIN_OPENS would first fire on the
+ * FOURTH visit rather than the third.
+ *
+ * Written as MIN_OPENS - 1 rather than as a literal 2 so a later "correction"
+ * of one without the other fails `deadLeadPolicy.test.ts` instead of silently
+ * costing every operator a visit. The alternative — re-checking on the client
+ * after the event posts — is a second round trip and a block of content
+ * appearing under the reader mid-page.
+ */
+export const DEAD_LEAD_PROMPT_PRIOR_OPENS = DEAD_LEAD_PROMPT_MIN_OPENS - 1;
+
+/**
+ * Whether to offer the report prominently, rather than leaving it in the
+ * outcome panel.
+ *
+ * ⚠️ A CONTACT ATTEMPT IS REQUIRED, and it is the most important clause here.
+ * The form asks "In their words" and "When did you speak to them?". An operator
+ * with three opens and no phone, WhatsApp or email click has read the lead
+ * three times and never rung it — prompting them to report what the landlord
+ * said is asking them to invent it, and invented reasons poison precisely the
+ * dataset this exists to build. Measured on production: of 126 assignments
+ * eligible to report, only 30 had ever had any contact event. §42 says the same
+ * thing from the other side — 342 of 356 open assignments have never had a
+ * single contact action, against 666 opens.
+ *
+ * This is discovery, NOT a gate. Eligibility is unchanged and lives in SQL,
+ * where one event of any kind already qualifies; nothing downstream trusts this
+ * answer. So a prompt that can in principle be manufactured by reloading costs
+ * nothing — the claim behind it still passes the reason CHECK, the detail
+ * floor, the peer rules, the hidden allowance and, over all of it, a person.
+ */
+export function shouldPromptDeadLead(input: {
+  claimable: boolean;
+  claimStatus: string | null;
+  priorOpens: number;
+  hasContactEvent: boolean;
+}): boolean {
+  if (!input.claimable) return false;
+  if (input.claimStatus) return false;
+  if (!input.hasContactEvent) return false;
+  return input.priorOpens >= DEAD_LEAD_PROMPT_PRIOR_OPENS;
+}
+
+/**
+ * Narrow an admin-supplied claim allowance to something the column can hold.
+ *
+ * ⚠️ THIS IS A FRACTION AND MUST NEVER BE FLOORED. Every other number on the
+ * admin allocation form is a whole count and goes through
+ * `Math.max(0, Math.floor(x))`; copying that here turns the default 0.10 into
+ * 0 and silently zeroes the base budget of whoever was saved. It lives in this
+ * module rather than inline in the route so the rule is provable under
+ * `vitest.config.mts`, which is pure units only — the same argument §33 makes
+ * for lifting the credit decision out of the Stripe webhook.
+ *
+ * Clamped to 0..1: a budget larger than the allocation it is a share of is not
+ * a meaningful setting. Returns null for anything that is not a finite number,
+ * so the caller leaves the column alone rather than writing a guess.
+ */
+export function normaliseAllowancePct(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(1, Math.max(0, value));
+}
 
 /** Chargeable leads taken without a claim that earn one extra claim of headroom. */
 export const STREAK_LEADS_PER_BONUS = 10;
@@ -139,7 +223,10 @@ export function committedAllocation(customer: ClaimCustomer): number {
 /** Earned headroom: one claim per unbroken run of leads taken without claiming. */
 export function earnedBonus(customer: ClaimCustomer): number {
   const streak = Math.max(0, Math.trunc(customer.clean_leads_streak ?? 0));
-  return Math.min(Math.floor(streak / STREAK_LEADS_PER_BONUS), MAX_EARNED_BONUS);
+  return Math.min(
+    Math.floor(streak / STREAK_LEADS_PER_BONUS),
+    MAX_EARNED_BONUS,
+  );
 }
 
 /**
@@ -150,9 +237,10 @@ export function earnedBonus(customer: ClaimCustomer): number {
  */
 export function claimBudget(customer: ClaimCustomer): number {
   const pct = Number(customer.quality_allowance_pct ?? 0.1);
-  const base = Number.isFinite(pct) && pct > 0
-    ? Math.round(committedAllocation(customer) * pct)
-    : 0;
+  const base =
+    Number.isFinite(pct) && pct > 0
+      ? Math.round(committedAllocation(customer) * pct)
+      : 0;
   return Math.max(0, base) + earnedBonus(customer);
 }
 
@@ -212,7 +300,7 @@ function peerAgrees(peer: PeerAssignment): boolean {
  * the claim wants a person's eyes.
  */
 export function decideDeadLeadClaim(
-  input: DeadLeadClaimInputs
+  input: DeadLeadClaimInputs,
 ): DeadLeadClaimVerdict {
   const ineligible = (code: string, message: string): DeadLeadClaimVerdict => ({
     decision: "ineligible",
@@ -225,7 +313,7 @@ export function decideDeadLeadClaim(
   if (!isReason(input.reason)) {
     return ineligible(
       "reason_required",
-      "Tell us which of the three applies, so we can trace where the lead came from."
+      "Tell us which of the three applies, so we can trace where the lead came from.",
     );
   }
 
@@ -233,7 +321,7 @@ export function decideDeadLeadClaim(
   if (detail.length < MIN_DETAIL_LENGTH) {
     return ineligible(
       "detail_too_short",
-      `Tell us what the landlord actually said, in at least ${MIN_DETAIL_LENGTH} characters. It is what lets us trace the lead back to its source.`
+      `Tell us what the landlord actually said, in at least ${MIN_DETAIL_LENGTH} characters. It is what lets us trace the lead back to its source.`,
     );
   }
 
@@ -242,7 +330,7 @@ export function decideDeadLeadClaim(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(contactedOn)) {
     return ineligible(
       "contacted_on_required",
-      "Tell us roughly when you spoke to them."
+      "Tell us roughly when you spoke to them.",
     );
   }
 
@@ -254,7 +342,8 @@ export function decideDeadLeadClaim(
       consumesAllowance: false,
       corroboration: "none",
       code: "customer_under_review",
-      message: "Thanks — we are looking into this one and will come back to you.",
+      message:
+        "Thanks — we are looking into this one and will come back to you.",
     };
   }
 
@@ -264,7 +353,8 @@ export function decideDeadLeadClaim(
       consumesAllowance: false,
       corroboration: "peer_contradicts",
       code: "peer_contradicts",
-      message: "Thanks — we are looking into this one and will come back to you.",
+      message:
+        "Thanks — we are looking into this one and will come back to you.",
     };
   }
 
@@ -279,7 +369,10 @@ export function decideDeadLeadClaim(
     };
   }
 
-  const used = Math.max(0, Math.trunc(input.customer.quality_claims_this_cycle ?? 0));
+  const used = Math.max(
+    0,
+    Math.trunc(input.customer.quality_claims_this_cycle ?? 0),
+  );
   if (used < claimBudget(input.customer)) {
     return {
       decision: "auto_uphold",

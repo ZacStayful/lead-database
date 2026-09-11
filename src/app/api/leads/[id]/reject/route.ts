@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isFitReason, normaliseOutcomeDetail } from "@/lib/outcomeReasons";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -31,15 +32,17 @@ export async function POST(req: NextRequest) {
   }
 
   let assignment_id: string | undefined;
+  let reason: unknown;
+  let detail: unknown;
   try {
-    ({ assignment_id } = await req.json());
+    ({ assignment_id, reason, detail } = await req.json());
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
   if (!assignment_id) {
     return NextResponse.json(
       { error: "assignment_id required" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -67,15 +70,22 @@ export async function POST(req: NextRequest) {
   if (ownership?.ownerCustomerId === customer.id) {
     return NextResponse.json(
       { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   // Atomic status flip. Fails (400) if the assignment is not owned by this
   // customer or is no longer in 'new' status. No refund, no reassignment.
+  // ⚠️ The reason is a PARAMETER, not a write beside this one. It lands in the
+  // same transaction, so a reason cannot go missing exactly when the reject
+  // succeeded (0138). An unrecognised reason is refused by the CHECK and the
+  // whole call fails rather than recording something wrong, which is why the
+  // route narrows it first and sends null rather than guessing.
   const { error: rejectError } = await admin.rpc("reject_lead_assignment", {
     p_assignment_id: assignment_id,
     p_customer_id: customer.id,
+    p_reason: isFitReason(reason) ? reason : null,
+    p_detail: normaliseOutcomeDetail(detail),
   });
   if (rejectError) {
     return NextResponse.json({ error: rejectError.message }, { status: 400 });

@@ -74,7 +74,7 @@ export const KNOWN_ISSUES: string[] = [
   "viewed_at ≠ telemetry. viewed_at is set *only* by expanding a lead card in the feed. Opening /dashboard/leads/[id] does not set it, so a lead read end-to-end via a direct link leaves it null forever.…",
   "enquiry_date is not displayed anywhere, admin included (0071 branch). It is free text of uneven quality from Monday — safe_enquiry_date() exists in 0062 precisely because it does not always parse. Le…",
   "~~get_next_customers_for_lead is executable by anon.~~ Fixed in 0049. 0028 blanket-revoked schema-wide, then 0038 dropped and recreated the function, which discards its ACL. Re-revoked. Any future cr…",
-  "Orphaned reject columns, AND the function that reads them. rejection_reason, contact_validation_result, claim_denied exist on lead_assignments in production but in no migration and no code — left by…",
+  "~~Orphaned reject columns, AND the function that reads them.~~ Closed by 0138 (§51.10). rejection_reason, contact_validation_result, claim_denied and apply_lead_rejection(uuid, uuid, lead_type, text,…",
   "supabase/schema.sql is stale. Migrations are the source of truth.",
   "Admin shows \"3 / 2 assigned\" on a reclaimed lead. Truthful, looks odd; the Reclaim history block on the lead detail page explains it. A claimed pool lead does the same and can read \"4 / 3\" — claiming…",
   "Stripe's billing cycle keeps running underneath a pause. pause_collection: { behavior: \"void\" } generates invoices and voids them; resuming does not create a charge, it stops voiding future ones. So…",
@@ -98,7 +98,7 @@ export const DEFERRED: string[] = [
 ];
 
 /** Highest committed migration, from the directory rather than the prose. */
-export const LATEST_MIGRATION = 137;
+export const LATEST_MIGRATION = 138;
 
 /** The number a new migration must take. Migrations deploy BEFORE the code that reads them. */
-export const NEXT_MIGRATION = "0138";
+export const NEXT_MIGRATION = "0139";

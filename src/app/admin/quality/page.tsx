@@ -20,14 +20,56 @@ import { QualityClaimActions } from "@/components/admin/QualityClaimActions";
 import { formatDate } from "@/lib/utils";
 import {
   DEAD_LEAD_REASON_LABELS,
+  claimBudget,
+  type ClaimCustomer,
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadPolicy";
+import { FIT_REASONS, type FitReason } from "@/lib/outcomeReasons";
+import { CLOSE_REASONS, type CloseReason } from "@/lib/closeReasons";
 
 export const dynamic = "force-dynamic";
 
 const LIST_LIMIT = 300;
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+/**
+ * What the queue needs to know about the operator who made a claim.
+ *
+ * ⚠️ It extends `ClaimCustomer` rather than restating the allowance columns, so
+ * the budget shown here is computed by `claimBudget()` — the same function the
+ * claim route decides with. Restating the arithmetic would let the page explain
+ * a decision it had worked out differently.
+ */
+type QueueCustomer = ClaimCustomer & {
+  id: string;
+  business_name: string;
+  contact_name: string;
+  email: string;
+};
+
+/**
+ * Where this operator stands against their hidden budget.
+ *
+ * ⚠️ Admin-only, and it must stay that way (§51.3). The whole mechanism rests
+ * on the number being discovered rather than announced: an operator told they
+ * have two a month has been handed the number of leads it is safe to write off
+ * without evidence.
+ */
+function budgetLine(customer: QueueCustomer | undefined): string | null {
+  if (!customer) return null;
+  const budget = claimBudget(customer);
+  const used = Math.max(0, Math.trunc(customer.quality_claims_this_cycle ?? 0));
+  return `${used} of ${budget} used this cycle`;
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
     <div className="rounded-md border-[0.5px] border-border p-4">
       <p className="text-xs text-muted-foreground">{label}</p>
@@ -53,9 +95,59 @@ type ClaimRow = {
   created_at: string;
 };
 
+/**
+ * One label lookup across all four vocabularies. They cannot collide — 0138's
+ * CHECK keeps the fit list and the landlord lists disjoint, and
+ * `outcomeReasons.test.ts` asserts it — so a flat lookup is safe where a
+ * per-outcome one would be noise.
+ */
 function reasonLabel(reason: string): string {
   return (
-    DEAD_LEAD_REASON_LABELS[reason as DeadLeadReason] ?? reason.replace(/_/g, " ")
+    DEAD_LEAD_REASON_LABELS[reason as DeadLeadReason] ??
+    FIT_REASONS[reason as FitReason] ??
+    CLOSE_REASONS[reason as CloseReason] ??
+    reason.replace(/_/g, " ")
+  );
+}
+
+function outcomeLabel(outcome: string): string {
+  return (
+    {
+      reject: "Rejected",
+      discard: "Discarded",
+      close: "Didn't work out",
+      report: "Reported as gone",
+    }[outcome] ?? outcome
+  );
+}
+
+function Tally({
+  title,
+  rows,
+  label,
+}: {
+  title: string;
+  rows: [string, number][];
+  label?: (key: string) => string;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </p>
+      {rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">—</p>
+      ) : (
+        <ul className="space-y-1 text-sm">
+          {rows.map(([key, n]) => (
+            <li key={key} className="flex justify-between gap-2">
+              <span>{label ? label(key) : key}</span>
+              <span className="text-muted-foreground">{n}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -71,7 +163,7 @@ export default async function AdminQualityPage() {
     .from("lead_quality_claims")
     .select(
       "id, lead_id, customer_id, lead_assignment_id, reason, detail, contacted_on, " +
-        "status, resolution, corroboration, allowance_consumed, review_note, created_at"
+        "status, resolution, corroboration, allowance_consumed, review_note, created_at",
     )
     .order("created_at", { ascending: false })
     .limit(LIST_LIMIT);
@@ -87,28 +179,24 @@ export default async function AdminQualityPage() {
         .from("customers")
         .select(
           "id, business_name, contact_name, email, quality_claims_this_cycle, " +
-            "clean_leads_streak, quality_review_required"
+            "clean_leads_streak, quality_review_required, account_status, " +
+            "subscription_status, gr_subscription_status, monthly_allocation, " +
+            "gr_monthly_allocation, quality_allowance_pct",
         )
         .in("id", customerIds)
     : { data: [] };
 
   const customers = new Map(
     (
-      (customerData ?? []) as unknown as {
-        id: string;
-        business_name: string;
-        contact_name: string;
-        email: string;
-        quality_review_required: boolean;
-      }[]
-    ).map((c) => [c.id, c])
+      (customerData ?? []) as unknown as (QueueCustomer[])
+    ).map((c) => [c.id, c]),
   );
 
   const { data: leadData } = leadIds.length
     ? await admin
         .from("leads")
         .select(
-          "id, lead_name, address, postcode_area, bedrooms, lead_type, created_at, quality_flag"
+          "id, lead_name, address, postcode_area, bedrooms, lead_type, created_at, quality_flag",
         )
         .in("id", leadIds)
     : { data: [] };
@@ -125,7 +213,7 @@ export default async function AdminQualityPage() {
         created_at: string;
         quality_flag: string | null;
       }[]
-    ).map((l) => [l.id, l])
+    ).map((l) => [l.id, l]),
   );
 
   // Peers, for the pending queue only. The single most useful thing on the
@@ -142,7 +230,12 @@ export default async function AdminQualityPage() {
 
   const peersByLead = new Map<
     string,
-    { id: string; customer_id: string; status: string; pipeline_stage: string }[]
+    {
+      id: string;
+      customer_id: string;
+      status: string;
+      pipeline_stage: string;
+    }[]
   >();
   for (const p of (peerData ?? []) as unknown as {
     id: string;
@@ -157,15 +250,14 @@ export default async function AdminQualityPage() {
   }
 
   const assignedAt = new Map(
-    ((peerData ?? []) as unknown as { id: string; assigned_at: string }[]).map((p) => [
-      p.id,
-      p.assigned_at,
-    ])
+    ((peerData ?? []) as unknown as { id: string; assigned_at: string }[]).map(
+      (p) => [p.id, p.assigned_at],
+    ),
   );
 
   // ── The analysis half ────────────────────────────────────────────────────
   const upheld = claims.filter(
-    (c) => c.status === "auto_upheld" || c.status === "upheld"
+    (c) => c.status === "auto_upheld" || c.status === "upheld",
   );
 
   const byArea = new Map<string, number>();
@@ -193,13 +285,51 @@ export default async function AdminQualityPage() {
     .from("lead_assignments")
     .select("id", { count: "exact", head: true });
 
+  // ── Why leads end at all (0138) ──────────────────────────────────────────
+  //
+  // The reports above are the half that costs money. This is the half that
+  // says which sources produce leads nobody can do anything with: before 0138
+  // reject recorded no reason at all, discard recorded none, and close recorded
+  // one of two coarse options.
+  //
+  // ⚠️ Read straight from lead_outcome_reasons rather than joined back to
+  // leads. A discarded assignment is gone and a customer-added lead can be
+  // deleted outright (§30.7), so the area and bedroom count are denormalised on
+  // the row — joining would silently drop exactly the rows worth counting.
+  const { data: outcomeData } = await admin
+    .from("lead_outcome_reasons")
+    .select("outcome, reason, postcode_area, bedrooms, created_at")
+    .order("created_at", { ascending: false })
+    .limit(2000);
+
+  const outcomeRows = (outcomeData ?? []) as {
+    outcome: string;
+    reason: string;
+    postcode_area: string | null;
+    bedrooms: string | null;
+  }[];
+
+  const tally = (get: (r: (typeof outcomeRows)[number]) => string) => {
+    const m = new Map<string, number>();
+    for (const r of outcomeRows) m.set(get(r), (m.get(get(r)) ?? 0) + 1);
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
+  };
+
+  const outcomeCounts = tally((r) => r.outcome);
+  const outcomeReasons = tally((r) => r.reason).slice(0, 8);
+  const outcomeAreas = tally((r) => r.postcode_area ?? "unknown").slice(0, 8);
+  const outcomeBedrooms = tally((r) => r.bedrooms?.trim() || "unstated").slice(
+    0,
+    6,
+  );
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Lead quality</h1>
         <p className="text-sm text-muted-foreground">
-          Leads an operator says were already gone when they got there, and where
-          they came from.
+          Leads an operator says were already gone when they got there, and
+          where they came from.
         </p>
       </div>
 
@@ -215,7 +345,11 @@ export default async function AdminQualityPage() {
           value={pct(upheld.length, totalAssignments ?? 0)}
           hint={`${totalAssignments ?? 0} assignments`}
         />
-        <Stat label="Reported by" value={String(customerIds.length)} hint="operators" />
+        <Stat
+          label="Reported by"
+          value={String(customerIds.length)}
+          hint="operators"
+        />
       </div>
 
       <Card>
@@ -233,13 +367,13 @@ export default async function AdminQualityPage() {
             const lead = leads.get(c.lead_id);
             const customer = customers.get(c.customer_id);
             const peers = (peersByLead.get(c.lead_id) ?? []).filter(
-              (p) => p.customer_id !== c.customer_id
+              (p) => p.customer_id !== c.customer_id,
             );
             const live = peers.filter(
               (p) =>
                 p.status === "in_discussion" ||
                 p.status === "won" ||
-                (p.pipeline_stage && p.pipeline_stage !== "cold")
+                (p.pipeline_stage && p.pipeline_stage !== "cold"),
             );
             const assigned = assignedAt.get(c.lead_assignment_id) ?? null;
             const ageDays =
@@ -247,12 +381,15 @@ export default async function AdminQualityPage() {
                 ? Math.round(
                     (new Date(assigned).getTime() -
                       new Date(lead.created_at).getTime()) /
-                      86_400_000
+                      86_400_000,
                   )
                 : null;
 
             return (
-              <div key={c.id} className="rounded-md border-[0.5px] border-border p-4">
+              <div
+                key={c.id}
+                className="rounded-md border-[0.5px] border-border p-4"
+              >
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <p className="font-medium">
                     {lead?.lead_name ?? "Lead"}{" "}
@@ -267,14 +404,20 @@ export default async function AdminQualityPage() {
                 </div>
 
                 <p className="mt-1 text-sm text-muted-foreground">
-                  <Link href={`/admin/customers/${c.customer_id}`} className="underline">
+                  <Link
+                    href={`/admin/customers/${c.customer_id}`}
+                    className="underline"
+                  >
                     {customer?.business_name ?? "Operator"}
                   </Link>{" "}
                   · {reasonLabel(c.reason)}
                   {c.contacted_on
                     ? ` · spoke to them ${formatDate(c.contacted_on)}`
                     : ""}
-                  {customer?.quality_review_required ? " · flagged for review" : ""}
+                  {customer?.quality_review_required
+                    ? " · flagged for review"
+                    : ""}
+                  {budgetLine(customer) ? ` · ${budgetLine(customer)}` : ""}
                 </p>
 
                 <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-border pl-3 text-sm">
@@ -287,7 +430,8 @@ export default async function AdminQualityPage() {
                     : `${peers.length} other operator${peers.length === 1 ? "" : "s"} hold it, ${live.length} still working it.`}
                   {c.corroboration === "peer_contradicts" &&
                     " Contradicted — that is why it is here."}
-                  {c.corroboration === "peer_agrees" && " Another operator agrees."}
+                  {c.corroboration === "peer_agrees" &&
+                    " Another operator agrees."}
                   {ageDays != null &&
                     ` Lead was ${ageDays} day${ageDays === 1 ? "" : "s"} old when it was sold.`}
                 </p>
@@ -306,7 +450,9 @@ export default async function AdminQualityPage() {
           </CardHeader>
           <CardContent>
             {topAreas.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing upheld yet.</p>
+              <p className="text-sm text-muted-foreground">
+                Nothing upheld yet.
+              </p>
             ) : (
               <ul className="space-y-1 text-sm">
                 {topAreas.map(([area, n]) => (
@@ -326,7 +472,9 @@ export default async function AdminQualityPage() {
           </CardHeader>
           <CardContent>
             {topBedrooms.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing upheld yet.</p>
+              <p className="text-sm text-muted-foreground">
+                Nothing upheld yet.
+              </p>
             ) : (
               <ul className="space-y-1 text-sm">
                 {topBedrooms.map(([beds, n]) => (
@@ -346,7 +494,9 @@ export default async function AdminQualityPage() {
           </CardHeader>
           <CardContent>
             {byReason.size === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing upheld yet.</p>
+              <p className="text-sm text-muted-foreground">
+                Nothing upheld yet.
+              </p>
             ) : (
               <ul className="space-y-1 text-sm">
                 {Array.from(byReason.entries())
@@ -362,6 +512,32 @@ export default async function AdminQualityPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Why leads end</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Every recorded outcome, not only the ones that cost a credit. A lead
+            rejected for being in the wrong county says as much about where the
+            leads come from as one the landlord had already left.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {outcomeRows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nothing recorded yet. Reasons start arriving as operators use the
+              outcome panel on a lead.
+            </p>
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-4">
+              <Tally title="Ending" rows={outcomeCounts} label={outcomeLabel} />
+              <Tally title="Reason" rows={outcomeReasons} label={reasonLabel} />
+              <Tally title="Postcode area" rows={outcomeAreas} />
+              <Tally title="Bedrooms" rows={outcomeBedrooms} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -396,7 +572,9 @@ export default async function AdminQualityPage() {
                         {leads.get(c.lead_id)?.lead_name ?? "—"}
                       </td>
                       <td className="py-2 pr-3">{reasonLabel(c.reason)}</td>
-                      <td className="py-2 pr-3">{c.status.replace(/_/g, " ")}</td>
+                      <td className="py-2 pr-3">
+                        {c.status.replace(/_/g, " ")}
+                      </td>
                       <td className="py-2 pr-3">
                         {c.resolution === "credit" ? "refunded" : "—"}
                       </td>

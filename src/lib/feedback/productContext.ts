@@ -1,5 +1,10 @@
 import { GR_PLANS, PLANS } from "@/lib/plans";
-import { CLAUDE_SECTIONS, DEFERRED, INVARIANTS, KNOWN_ISSUES } from "./sectionIndex";
+import {
+  CLAUDE_SECTIONS,
+  DEFERRED,
+  INVARIANTS,
+  KNOWN_ISSUES,
+} from "./sectionIndex";
 
 /**
  * What Claude needs to know about this product before it asks a customer
@@ -52,28 +57,51 @@ export const ROUTES: RouteEntry[] = [
   {
     path: "/dashboard/leads",
     purpose: "Every lead they have been given, newest first.",
-    files: ["src/app/dashboard/leads/page.tsx", "src/components/dashboard/LeadsList.tsx"],
+    files: [
+      "src/app/dashboard/leads/page.tsx",
+      "src/components/dashboard/LeadsList.tsx",
+    ],
     section: 4,
   },
   {
     path: "/dashboard/leads/priority",
     purpose:
       "The ranked 'work these first' list. Ordering is computed, not chosen by the customer.",
-    files: ["src/app/dashboard/leads/priority/page.tsx", "src/lib/leadOrder.ts"],
+    files: [
+      "src/app/dashboard/leads/priority/page.tsx",
+      "src/lib/leadOrder.ts",
+    ],
     section: 4,
   },
   {
     path: "/dashboard/leads/[id]",
     purpose:
-      "One lead: contact details, income analysis, notes, pipeline stage, reject and discard.",
-    files: ["src/app/dashboard/leads/[id]/page.tsx", "src/components/dashboard/LeadDetail.tsx"],
+      "One lead: contact details, income analysis, notes, pipeline stage, and the one outcome panel that ends it.",
+    files: [
+      "src/app/dashboard/leads/[id]/page.tsx",
+      "src/components/dashboard/LeadDetail.tsx",
+      "src/components/dashboard/LeadOutcomePanel.tsx",
+      "src/lib/leadOutcomes.ts",
+      "src/lib/outcomeReasons.ts",
+    ],
+    tests: [
+      "src/lib/__tests__/leadOutcomes.test.ts",
+      "src/lib/__tests__/outcomeReasons.test.ts",
+    ],
     section: 5,
   },
   {
     path: "/dashboard/leads/add",
     purpose: "Upload their own leads from a spreadsheet.",
-    files: ["src/app/dashboard/leads/add/page.tsx", "src/lib/leadImport.ts", "src/lib/claudeMapping.ts"],
-    tests: ["src/lib/__tests__/leadImport.test.ts", "src/lib/__tests__/claudeMapping.test.ts"],
+    files: [
+      "src/app/dashboard/leads/add/page.tsx",
+      "src/lib/leadImport.ts",
+      "src/lib/claudeMapping.ts",
+    ],
+    tests: [
+      "src/lib/__tests__/leadImport.test.ts",
+      "src/lib/__tests__/claudeMapping.test.ts",
+    ],
     section: 30,
   },
   {
@@ -85,13 +113,17 @@ export const ROUTES: RouteEntry[] = [
   {
     path: "/dashboard/follow-ups",
     purpose: "Leads due a chase, from the per-lead contact plan.",
-    files: ["src/app/dashboard/follow-ups/page.tsx", "src/lib/contact/contactPlan.ts"],
+    files: [
+      "src/app/dashboard/follow-ups/page.tsx",
+      "src/lib/contact/contactPlan.ts",
+    ],
     tests: ["src/lib/contact/__tests__/contactPlan.test.ts"],
     section: 42,
   },
   {
     path: "/dashboard/filtering",
-    purpose: "Choose which leads they want by area and type. Changes what gets delivered.",
+    purpose:
+      "Choose which leads they want by area and type. Changes what gets delivered.",
     files: ["src/app/dashboard/filtering/page.tsx"],
     section: 39,
   },
@@ -114,18 +146,21 @@ export const ROUTES: RouteEntry[] = [
   },
   {
     path: "/dashboard/goals",
-    purpose: "A target for signed management clients. Management only, no GR equivalent.",
+    purpose:
+      "A target for signed management clients. Management only, no GR equivalent.",
     files: ["src/app/dashboard/goals/page.tsx"],
     section: 13,
   },
   {
     path: "/dashboard/training",
-    purpose: "The video training library, on running an operation and working leads.",
+    purpose:
+      "The video training library, on running an operation and working leads.",
     files: ["src/app/dashboard/training/page.tsx"],
   },
   {
     path: "/dashboard/training/[slug]",
-    purpose: "One training video, played in the dashboard with progress tracked.",
+    purpose:
+      "One training video, played in the dashboard with progress tracked.",
     files: ["src/app/dashboard/training/[slug]/page.tsx"],
   },
   {
@@ -135,7 +170,8 @@ export const ROUTES: RouteEntry[] = [
   },
   {
     path: "/dashboard/training/case-studies/[slug]",
-    purpose: "One written case study of an operator working a lead to signature.",
+    purpose:
+      "One written case study of an operator working a lead to signature.",
     files: ["src/app/dashboard/training/case-studies/[slug]/page.tsx"],
   },
   {
@@ -150,7 +186,8 @@ export const ROUTES: RouteEntry[] = [
   },
   {
     path: "/dashboard/documents",
-    purpose: "Contracts and templates. The company let agreement is Guaranteed Rent only.",
+    purpose:
+      "Contracts and templates. The company let agreement is Guaranteed Rent only.",
     files: ["src/app/dashboard/documents/page.tsx"],
   },
   {
@@ -162,12 +199,16 @@ export const ROUTES: RouteEntry[] = [
   {
     path: "/dashboard/settings",
     purpose: "Business details, billing portal, pause and cancel.",
-    files: ["src/app/dashboard/settings/page.tsx", "src/components/dashboard/SettingsPanel.tsx"],
+    files: [
+      "src/app/dashboard/settings/page.tsx",
+      "src/components/dashboard/SettingsPanel.tsx",
+    ],
     section: 29,
   },
   {
     path: "/dashboard/settings/messaging",
-    purpose: "Connect WhatsApp or email so landlords can be messaged from the database.",
+    purpose:
+      "Connect WhatsApp or email so landlords can be messaged from the database.",
     files: ["src/app/dashboard/settings/messaging/page.tsx"],
     section: 40,
   },
@@ -185,7 +226,10 @@ export const ROUTES: RouteEntry[] = [
   {
     path: "/dashboard/support",
     purpose: "Ask for help, and see the requests they have already made.",
-    files: ["src/app/dashboard/support/page.tsx", "src/components/SupportForm.tsx"],
+    files: [
+      "src/app/dashboard/support/page.tsx",
+      "src/components/SupportForm.tsx",
+    ],
     section: 46,
   },
 ];
@@ -201,8 +245,10 @@ export const GLOSSARY: Record<string, string> = {
     "The join between a lead and the operator it was given to. Almost everything the customer thinks of as 'the lead' actually lives here: pipeline stage, notes, when it arrived.",
   "lead balance":
     "Credits. Spent one at a time on delivery. This is the gate on whether a lead can be assigned at all — an empty balance looks exactly like 'the system has stopped working'.",
-  allocation: "How many leads the plan includes per month. Separate from the balance.",
-  pacing: "Whether delivery is on track for the month. Deliberately smoothed, not all at once.",
+  allocation:
+    "How many leads the plan includes per month. Separate from the balance.",
+  pacing:
+    "Whether delivery is on track for the month. Deliberately smoothed, not all at once.",
   reject:
     "Saying a delivered lead was not good enough. It does NOT refund a credit, by design. Customers frequently report this as a billing fault.",
   discard:
@@ -213,7 +259,8 @@ export const GLOSSARY: Record<string, string> = {
   "lead filter": "The customer's stated preferences for which leads they want.",
   "expired pool":
     "Leads nobody worked, returned for anyone to claim. A claim bypasses the normal delivery cap.",
-  management: "One of the two products. The operator signs the landlord to a management contract.",
+  management:
+    "One of the two products. The operator signs the landlord to a management contract.",
   "guaranteed rent":
     "The other product. Fully parallel to Management, with its own balance, allocation, pacing and status columns. A customer may hold either, both or neither.",
   analysis: "The paid income projection on a lead.",
@@ -227,7 +274,7 @@ export const EXTERNAL_SYSTEMS = [
   "Monday.com — where leads originate. Board structure and column names are outside this repo; ingest is idempotent on monday_item_id.",
   "Stripe — all billing, subscriptions, prices, promo codes and the customer portal.",
   "Resend — every outbound email. No code path may ask Supabase to send one.",
-  "Twilio and ZeroBounce — phone and email verification.",
+  "Twilio — SMS notifications to operators. There is NO phone or email verification vendor: leadQuality.ts checks the SHAPE of a number only, and nothing calls a lookup service.",
   "Supabase — database and auth. Privileged writes go through server routes on the service role.",
 ];
 
@@ -265,14 +312,17 @@ export function planModel(): string {
  */
 export function productContext(): string {
   const routes = ROUTES.map((r) => {
-    const bits = [`${r.path} — ${r.purpose}`, `    files: ${r.files.join(", ")}`];
+    const bits = [
+      `${r.path} — ${r.purpose}`,
+      `    files: ${r.files.join(", ")}`,
+    ];
     if (r.tests?.length) bits.push(`    tests: ${r.tests.join(", ")}`);
     if (r.section) bits.push(`    see CLAUDE.md §${r.section}`);
     return bits.join("\n");
   }).join("\n");
 
   const sections = CLAUDE_SECTIONS.map(
-    (s) => `  §${s.n} ${s.title}${s.migrations ? ` (${s.migrations})` : ""}`
+    (s) => `  §${s.n} ${s.title}${s.migrations ? ` (${s.migrations})` : ""}`,
   ).join("\n");
 
   return [

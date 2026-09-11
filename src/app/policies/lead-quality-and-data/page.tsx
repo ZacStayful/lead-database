@@ -1,7 +1,20 @@
 import type { CSSProperties } from "react";
 
-// Customer-facing content page describing the reject-reason / contact-detail
-// verification flow and how lead data is handled.
+// Customer-facing content page describing how a lead can be ended, which of
+// those endings returns a credit, and how lead data is handled.
+//
+// ⚠️ THIS PAGE WAS ALMOST ENTIRELY FICTION UNTIL 0138 (CLAUDE.md §51.11). It
+// described a reject-reason popup that ran an automated contact-detail check
+// and assigned a REPLACEMENT LEAD. None of it existed: the feature was built on
+// a branch that was abandoned in July 2026, leaving three orphaned columns in
+// production that 0138 has since dropped. What replaced it is a credit, never a
+// replacement — §39.1 and §51.5 both refuse one, and
+// `lead_quality_claims.resolution` has no such value.
+//
+// ⚠️ NOTHING HERE MAY NAME THE CLAIM ALLOWANCE (§51.3). The number of automatic
+// upholds a customer gets each cycle is deliberately unpublished: an operator
+// told they have two a month has been handed the count of leads it is safe to
+// write off without evidence.
 //
 // Styling mirrors the static-page convention (src/app/privacy-policy/page.tsx,
 // src/app/guaranteed-rent/page.tsx): inline styles using the --sf-* brand
@@ -14,7 +27,7 @@ import type { CSSProperties } from "react";
 export const metadata = {
   title: "If something's not right — Stayful",
   description:
-    "How lead rejections, contact-detail checks, and your data are handled on the Stayful Lead Marketplace.",
+    "How a lead can be ended, when a credit goes back on your account, and how your data is handled on the Stayful Lead Marketplace.",
 };
 
 const display = (extra?: CSSProperties): CSSProperties => ({
@@ -55,61 +68,89 @@ export default function LeadQualityAndDataPage() {
           </h1>
 
           {/* ── Section 1 ── */}
-          <Heading>If a lead&apos;s contact details are wrong</Heading>
-          <P>When you reject a lead, you&apos;re asked why.</P>
+          <Heading>When a lead doesn&apos;t work out</Heading>
           <P>
-            If you select <strong>does not fit my needs</strong>, the lead is
-            removed from your queue and a replacement is assigned — no further
-            steps.
-          </P>
-          <P>
-            If you select <strong>invalid email or mobile</strong>, we check the
-            phone number and email address on file immediately — confirming
-            whether the number is a genuine, active UK mobile, and whether the
-            email address is real and able to receive mail. You get an outcome
-            straight away, not after a manual review:
+            When you end a lead, you&apos;re asked why in a word or two. There
+            are four ways to end one, and only one of them puts a credit back.
           </P>
           <List
             items={[
               <>
-                If either check confirms the details are genuinely wrong, your
-                allocation is restored automatically and a replacement is
-                assigned.
+                <strong>Reject it</strong> — you&apos;re passing on it before
+                you&apos;ve built anything on it. It still counts toward your
+                leads for the month.
               </>,
               <>
-                If both check out as valid, the lead stays assigned, and
-                you&apos;re told plainly that the contact details on file are
-                correct.
+                <strong>Discard it</strong> — available only while you
+                haven&apos;t written a note or moved the status. It goes back
+                for another operator, and it still counts toward your month.
+              </>,
+              <>
+                <strong>It didn&apos;t work out</strong> — you reached the
+                landlord and it&apos;s finished, either because they&apos;ve
+                since gone elsewhere or because they were never interested. We
+                stop offering that landlord to anyone else.
+              </>,
+              <>
+                <strong>The landlord was already gone</strong> — they had
+                already appointed someone, had stopped letting, or the contact
+                details don&apos;t reach them at all. This is the one that
+                returns a credit.
               </>,
             ]}
           />
           <P>
-            This covers the accuracy of the phone number and email address only.
-            A lead that simply doesn&apos;t convert isn&apos;t grounds for review
-            — lead generation is a volume and consistency game, not a per-lead
-            guarantee, and the 5% conversion rate is a long-run average across
-            more than 1,100 enquiries.
+            The first three don&apos;t return a credit, and that&apos;s
+            deliberate — a lead you&apos;ve been given and decided against is
+            still a lead we sourced and delivered.
+          </P>
+
+          <Heading>If the landlord had already gone</Heading>
+          <P>
+            This covers a lead that was spent before you got to it: the landlord
+            had already appointed another operator, is no longer letting the
+            property, or cannot be reached on the details we supplied.
+          </P>
+          <P>
+            You can report it on any lead you&apos;ve actually worked, within
+            two weeks of it being assigned to you. We ask for the reason, what
+            the landlord said, and when you spoke to them. That last part
+            matters more than it looks: it&apos;s what lets us trace the lead
+            back to where it came from and stop the same thing happening again.
+          </P>
+          <P>
+            If the report stands up, the credit goes back on your account and
+            your next lead comes through in the normal way. It is a credit, not
+            a specific replacement lead — we don&apos;t hold one back to swap
+            in, and leads are allocated in the order they arrive.
+          </P>
+          <P>
+            Some reports are looked at by a person before the credit is
+            returned, particularly where another operator is visibly still
+            working the same landlord. Either way the outcome, and the reason
+            for it, shows on the lead itself.
+          </P>
+          <P>
+            A lead that simply doesn&apos;t convert isn&apos;t grounds for a
+            credit. Lead generation is a volume and consistency game, not a
+            per-lead guarantee, and the 5% conversion rate is a long-run average
+            across more than 1,100 enquiries.
           </P>
 
           {/* ── Section 2 ── */}
           <Heading>How your data is handled</Heading>
           <P>
-            Leads are delivered to you via an encrypted, real-time connection,
-            and every landlord referred to you has already been sent a message
-            before assignment explaining that a trusted local operator will be
-            in touch — their consent is already in place by the time you receive
-            their details.
+            Leads are delivered to you via an encrypted, real-time connection.
+            When a lead is assigned to you, we email the landlord to introduce
+            you by name — so by the time you call, they know who you are and
+            that you&apos;re expecting to speak to them.
           </P>
           <P>
-            If you dispute a lead&apos;s contact details, we run an automated
-            check against that specific phone number and email address using a
-            verification service. This is limited to confirming validity — it
-            isn&apos;t used for anything else.
-          </P>
-          <P>
-            Leads are never resold beyond a maximum of two operators, and your
-            own account data is never sold to third parties. For full legal
-            detail, see our Privacy Policy.
+            A lead is normally shared with up to three operators. One that
+            nobody works can be passed on further, to no more than five, and a
+            lead left untouched long enough can be opened to other subscribers
+            to claim. Your own account data is never sold to third parties. For
+            full legal detail, see our Privacy Policy.
           </P>
         </div>
       </article>
