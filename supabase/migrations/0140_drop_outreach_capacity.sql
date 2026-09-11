@@ -1,0 +1,82 @@
+-- ===========================================================================
+-- 0140 — Drop outreach_capacity(), which published our sales headroom and our
+--        unsold inventory to anyone on the internet
+--
+-- §11 has carried this as an open decision since it was found on 2026-09-11
+-- while verifying 0139: "It is security definer and executable by anon, so it
+-- is callable without signing in via /rest/v1/rpc/outreach_capacity, which
+-- Supabase's own linter flags. Commit it or drop it — and decide the anon
+-- grant deliberately either way."
+--
+-- This drops it. The exposure was VERIFIED against the live REST API rather
+-- than inferred from the ACL, with only the publishable key that ships in the
+-- browser bundle as NEXT_PUBLIC_SUPABASE_ANON_KEY and no session at all:
+--
+--   POST /rest/v1/rpc/outreach_capacity
+--     -> 200  [{"room_for_customers":5,"unsold_leads_now":33,
+--               "captured_on":"2026-09-11"}]
+--
+--   GET  /rest/v1/service_capacity_snapshots?select=room_for_customers
+--     -> 200  []                      -- the table itself is deny-all
+--
+--   POST /rest/v1/rpc/get_service_capacity
+--     -> 401  permission denied for function get_service_capacity
+--
+-- ⚠️ THOSE THREE LINES ARE THE WHOLE ARGUMENT. service_capacity_snapshots is
+-- RLS-on with ZERO policies — the deliberate deny-all posture it shares with
+-- some fifty other tables — so the browser cannot read it. This function was
+-- SECURITY DEFINER with an explicit anon grant, so it walked straight past
+-- that and handed over the newest row's figures. The committed equivalent,
+-- get_service_capacity, correctly refuses the same caller.
+--
+-- ⚠️ THE TWO NUMBERS ARE NOT PUBLIC FIGURES. §18.1 and §21 are explicit that
+-- capacity is reporting and admin judgement: room_for_customers is how much
+-- headroom is left to sell, unsold_leads_now is standing inventory. A
+-- competitor reading both learns our supply position and our sales ceiling.
+--
+-- Nothing breaks. It is referenced NOWHERE in src/ — the only two matches in
+-- the repository are CLAUDE.md §11 itself and src/lib/feedback/sectionIndex.ts,
+-- which is generated from CLAUDE.md (§50.5). serviceHealth.ts reads columns of
+-- the same NAME, but from get_service_capacity on the service role, which is
+-- untouched here.
+--
+-- Committing it instead would have meant DECIDING to publish those numbers,
+-- and the repo already has the right shape for anything genuinely public:
+-- §28.6's public_filter_volume, a built and cached payload with contention
+-- applied at build time, deliberately shipping shares rather than counts. A
+-- security-definer passthrough over an internal snapshot table is not that.
+--
+-- It was in no migration file, so a rebuild from supabase/migrations/ never
+-- had it and this drop closes the last of the drift §36.8 tracked. Recorded
+-- here verbatim so it can be recreated if the decision is ever reversed:
+--
+--   create or replace function public.outreach_capacity()
+--   returns table(room_for_customers integer, unsold_leads_now integer,
+--                 captured_on date)
+--   language sql stable security definer set search_path = public as $$
+--     select s.room_for_customers::integer, s.unsold_leads_now::integer,
+--            s.captured_on
+--     from public.service_capacity_snapshots s
+--     where s.lead_type = 'management'
+--     order by s.captured_on desc, s.created_at desc
+--     limit 1
+--   $$;
+--
+--   md5(prosrc) = 3687ccc4e05908c57cb5050ea48eb56d, 221 chars
+--   proacl      = {postgres=X/postgres, service_role=X/postgres,
+--                  anon=X/postgres, authenticated=X/postgres}
+--
+-- ⚠️ Reversing it must NOT restore the anon grant. That grant is the defect,
+-- not the function.
+--
+-- Inert on a rebuild: `if exists` makes this a no-op on any database built
+-- from this directory, which never had the function. Nothing here touches a
+-- balance, a counter, pacing or capacity, and no other object references it.
+-- ===========================================================================
+
+-- ⚠️ Name the argument list explicitly. A bare `drop function
+-- public.outreach_capacity` is ambiguous the moment an overload exists, and
+-- this repo has hit the overload trap twice already (§34, §35) — both times
+-- because a defaulted parameter created a second signature rather than
+-- replacing the first. Being explicit here costs nothing and cannot surprise.
+drop function if exists public.outreach_capacity();
