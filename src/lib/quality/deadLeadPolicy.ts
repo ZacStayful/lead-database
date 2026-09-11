@@ -246,7 +246,15 @@ export function claimBudget(customer: ClaimCustomer): number {
   return Math.max(0, base) + earnedBonus(customer);
 }
 
-function isReason(v: unknown): v is DeadLeadReason {
+/**
+ * Narrow untrusted input to one of the six reasons.
+ *
+ * Exported since 0139 because the route must know the reason BEFORE it reads
+ * the database — the reason decides the window (§51), and an unknown one has to
+ * be refused without a round trip. It was private while the window was a single
+ * constant and the reason could be checked afterwards.
+ */
+export function isReason(v: unknown): v is DeadLeadReason {
   return (
     typeof v === "string" &&
     (DEAD_LEAD_REASONS as readonly string[]).includes(v)

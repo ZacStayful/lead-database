@@ -760,3 +760,92 @@ describe("⚠️ the competitor reason cannot be confused with the close reason"
     expect(new Set(all).size).toBe(all.length);
   });
 });
+
+/**
+ * ⚠️ FILE-TEXT GUARDS ON THE ROUTES.
+ *
+ * §42.8 records what the alternative costs: a safety boundary asserted in a
+ * pull request, checked by a test that wrote its own copy of the query, and
+ * never actually present — 91 follow-up runs destroyed within six minutes of
+ * deploy. These read the real files.
+ *
+ * Comments are stripped first. Both files explain these rules in prose and
+ * necessarily contain the very tokens being banned, so a naive check fails on
+ * the explanation and trains the next person to delete the explanation (§46).
+ */
+describe("the seven-day rule is actually wired into the route", () => {
+  const strip = (p: string) =>
+    readFileSync(resolve(__dirname, "..", "..", p), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+  const claimRoute = () => strip("app/api/customer/dead-lead-claim/route.ts");
+
+  it("sends a per-reason window, not the fortnight", () => {
+    const src = claimRoute();
+    expect(src).toContain("windowDaysForReason(reason)");
+    // ⚠️ Reverting either call site to the constant is a ONE-TOKEN change that
+    // silently restores a fortnight to the reason that must not have one, and
+    // no behavioural test in this suite could see it.
+    expect(src).not.toMatch(/p_window_days:\s*CLAIM_WINDOW_DAYS/);
+  });
+
+  it("uses the same window for the commit as for the eligibility read", () => {
+    const src = claimRoute();
+    const uses = src.match(/p_window_days:\s*windowDays/g) ?? [];
+    // Both call sites. One would mean the row lock re-asserts a different rule
+    // from the one the route just applied, and the lock is the authority.
+    expect(uses.length).toBe(2);
+  });
+
+  it("narrows the reason before it touches the database", () => {
+    const src = claimRoute();
+    const narrow = src.indexOf("isReason(body?.reason)");
+    const firstRpc = src.indexOf("claimable_dead_lead_assignments");
+    expect(narrow).toBeGreaterThan(-1);
+    expect(firstRpc).toBeGreaterThan(-1);
+    // An empty submit must cost no round trip and write nothing.
+    expect(narrow).toBeLessThan(firstRpc);
+  });
+});
+
+describe("the admin decision route settles a swap atomically", () => {
+  const strip = (p: string) =>
+    readFileSync(resolve(__dirname, "..", "..", p), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+  const adminRoute = () => strip("app/api/admin/quality-claims/[id]/route.ts");
+
+  it("goes through the one transactional RPC", () => {
+    expect(adminRoute()).toContain("resolve_dead_lead_claim_with_swap");
+  });
+
+  /**
+   * ⚠️ Two HTTP calls cannot settle this. The swap deletes the assignment,
+   * which nulls the claim's pointer; a failure in between leaves an
+   * under_review claim, no assignment, and a free lead already delivered.
+   */
+  it("never posts to the standalone swap endpoint instead", () => {
+    expect(adminRoute()).not.toContain("/api/admin/assignments");
+  });
+
+  it("requires the filter override to be sent explicitly", () => {
+    // A truthy 1 must not place a lead the customer filtered out.
+    expect(adminRoute()).toContain("body?.allow_filter_mismatch === true");
+  });
+
+  /**
+   * ⚠️ `uphold` and `uphold_goodwill` differ only in whether the hidden
+   * allowance is spent. An email that read differently between them would
+   * publish the allowance to any two operators comparing notes, so the
+   * distinction must not reach the send.
+   */
+  it("tells the customer nothing about which uphold verb fired", () => {
+    const src = adminRoute();
+    const send = src.slice(src.indexOf("async function notifyUpheld"));
+    expect(send).not.toContain("goodwill");
+    expect(send).not.toContain("consumesAllowance");
+    expect(send).not.toContain("allowance_consumed");
+  });
+});
