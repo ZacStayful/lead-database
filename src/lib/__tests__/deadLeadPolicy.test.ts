@@ -3,12 +3,18 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CLAIM_WINDOW_DAYS,
+  DEAD_LEAD_CONFIRM_CONSEQUENCE,
+  DEAD_LEAD_PROMPT_BODY,
+  DEAD_LEAD_PROMPT_HEADING,
+  DEAD_LEAD_PROMPT_MIN_OPENS,
+  DEAD_LEAD_PROMPT_PRIOR_OPENS,
   DEAD_LEAD_REASONS,
   MIN_DETAIL_LENGTH,
   claimBudget,
   committedAllocation,
   decideDeadLeadClaim,
   earnedBonus,
+  shouldPromptDeadLead,
   type ClaimCustomer,
   type DeadLeadClaimInputs,
 } from "../quality/deadLeadPolicy";
@@ -50,13 +56,13 @@ describe("committedAllocation", () => {
         account_status: "waitlisted",
         subscription_status: "inactive",
         gr_subscription_status: "active",
-      })
+      }),
     ).toBe(10);
   });
 
   it("sums both products for a customer holding both", () => {
     expect(
-      committedAllocation({ ...customer, gr_subscription_status: "active" })
+      committedAllocation({ ...customer, gr_subscription_status: "active" }),
     ).toBe(30);
   });
 
@@ -67,7 +73,7 @@ describe("committedAllocation", () => {
         account_status: "cancelled",
         subscription_status: "inactive",
         gr_subscription_status: "inactive",
-      })
+      }),
     ).toBe(0);
   });
 });
@@ -97,7 +103,7 @@ describe("claimBudget", () => {
   it("treats a missing or nonsense percentage as no base budget", () => {
     expect(claimBudget({ ...customer, quality_allowance_pct: 0 })).toBe(0);
     expect(
-      claimBudget({ ...customer, quality_allowance_pct: Number.NaN })
+      claimBudget({ ...customer, quality_allowance_pct: Number.NaN }),
     ).toBe(0);
   });
 });
@@ -112,7 +118,7 @@ describe("decideDeadLeadClaim — the submission itself", () => {
   it("accepts each of the three real reasons", () => {
     for (const reason of DEAD_LEAD_REASONS) {
       expect(decideDeadLeadClaim({ ...input, reason }).decision).toBe(
-        "auto_uphold"
+        "auto_uphold",
       );
     }
   });
@@ -126,17 +132,17 @@ describe("decideDeadLeadClaim — the submission itself", () => {
   it("counts the trimmed length, so whitespace cannot pad it out", () => {
     const padded = `${" ".repeat(40)}gone${" ".repeat(40)}`;
     expect(decideDeadLeadClaim({ ...input, detail: padded }).code).toBe(
-      "detail_too_short"
+      "detail_too_short",
     );
     expect("gone".length).toBeLessThan(MIN_DETAIL_LENGTH);
   });
 
   it("refuses a missing or malformed contact date", () => {
     expect(decideDeadLeadClaim({ ...input, contactedOn: null }).code).toBe(
-      "contacted_on_required"
+      "contacted_on_required",
     );
     expect(
-      decideDeadLeadClaim({ ...input, contactedOn: "last Tuesday" }).code
+      decideDeadLeadClaim({ ...input, contactedOn: "last Tuesday" }).code,
     ).toBe("contacted_on_required");
   });
 
@@ -381,7 +387,131 @@ describe("the claim form's imports stay out of the server's half", () => {
 
   it("and the policy still re-exports it, so there is one definition", () => {
     const src = read("lib/quality/deadLeadPolicy.ts");
-    expect(src).toContain('export {');
+    expect(src).toContain("export {");
     expect(src).toContain('from "@/lib/quality/deadLeadCopy"');
   });
+});
+
+describe("the prompt at the top of a lead (§51.10)", () => {
+  const ok = {
+    claimable: true,
+    claimStatus: null as string | null,
+    priorOpens: 2,
+    hasContactEvent: true,
+  };
+
+  it("fires on the third open, not the second", () => {
+    expect(shouldPromptDeadLead({ ...ok, priorOpens: 1 })).toBe(false);
+    expect(shouldPromptDeadLead({ ...ok, priorOpens: 2 })).toBe(true);
+  });
+
+  it("keeps the off-by-one tied to its cause", () => {
+    /**
+     * ⚠️ Asserting only the boundary above would survive somebody "fixing" the
+     * threshold to 3 and the constant to 4 together — which silently costs
+     * every operator a visit. LeadDetail records detail_opened in a mount
+     * effect, AFTER the server component resolved, so on the Nth visit the
+     * server sees N-1 rows.
+     */
+    expect(DEAD_LEAD_PROMPT_MIN_OPENS).toBe(3);
+    expect(DEAD_LEAD_PROMPT_PRIOR_OPENS).toBe(DEAD_LEAD_PROMPT_MIN_OPENS - 1);
+  });
+
+  it("⚠️ requires an actual contact attempt, however many opens there are", () => {
+    /**
+     * The form asks "In their words" and "When did you speak to them?". An
+     * operator with opens and no phone, WhatsApp or email click never rang, so
+     * prompting them is asking them to invent a conversation — and invented
+     * reasons poison the dataset the whole change exists to build. Of 126
+     * assignments eligible to report on production, only 30 had any contact
+     * event at all.
+     */
+    expect(shouldPromptDeadLead({ ...ok, hasContactEvent: false })).toBe(false);
+    expect(
+      shouldPromptDeadLead({ ...ok, priorOpens: 99, hasContactEvent: false }),
+    ).toBe(false);
+  });
+
+  it("never offers what the route would refuse", () => {
+    expect(shouldPromptDeadLead({ ...ok, claimable: false })).toBe(false);
+  });
+
+  it("never re-offers a claim that has already been made", () => {
+    for (const status of [
+      "under_review",
+      "upheld",
+      "auto_upheld",
+      "declined",
+    ]) {
+      expect(shouldPromptDeadLead({ ...ok, claimStatus: status })).toBe(false);
+    }
+  });
+});
+
+describe("⚠️ the credit is named in one place and not the other", () => {
+  /**
+   * The split that keeps this honest, and it must be maintained:
+   *
+   * - The PROMPT is unsolicited — we raised it. Leading with a credit turns
+   *   discovery into an inducement to fish, which is what §51.3's hidden
+   *   allowance exists to prevent.
+   * - The CONFIRMATION comes after the operator chose to report and wrote what
+   *   the landlord said. Stating the outcome there is informed consent.
+   */
+  it("the prompt asks what happened and offers nothing", () => {
+    for (const copy of [DEAD_LEAD_PROMPT_HEADING, DEAD_LEAD_PROMPT_BODY]) {
+      expect(copy).not.toMatch(
+        /credit|refund|free|money|£|back on your account/i,
+      );
+    }
+  });
+
+  it("the confirmation says plainly what happens if it stands up", () => {
+    expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).toMatch(/credit/i);
+  });
+
+  it("and promises no replacement, because neither refund route sends one", () => {
+    // §39.1 and §51.5. The credit returns and ordinary routing delivers.
+    expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).not.toMatch(
+      /replace|swap|another lead now/i,
+    );
+  });
+
+  it("never names the trigger, which would be the recipe for summoning it", () => {
+    for (const copy of [DEAD_LEAD_PROMPT_HEADING, DEAD_LEAD_PROMPT_BODY]) {
+      expect(copy).not.toMatch(/three|3 times|few times|opened|visit/i);
+    }
+  });
+});
+
+describe("the allowance stays unpublished in the COPY too", () => {
+  /**
+   * The block above this one asserts it over `decideDeadLeadClaim`'s verdicts —
+   * server-side messages only. Every customer-facing string was unguarded until
+   * §51.10, and the prompt added more of them.
+   */
+  const banned = ["allowance", "quota", "budget", "limit", "remaining"];
+  const surfaces = [
+    "lib/quality/deadLeadCopy.ts",
+    "lib/leadOutcomes.ts",
+    "lib/outcomeReasons.ts",
+    "components/dashboard/DeadLeadClaimCard.tsx",
+    "components/dashboard/LeadOutcomePanel.tsx",
+  ];
+
+  for (const file of surfaces) {
+    it(`${file} names none of it`, () => {
+      /**
+       * ⚠️ Comments are stripped first. Every one of these files explains why
+       * the allowance must stay unpublished, and explaining it means naming it
+       * — so a naive substring check fails on the explanation and trains the
+       * next person to delete the explanation. §46 hit exactly this trap.
+       */
+      const src = readFileSync(resolve(__dirname, "..", "..", file), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .toLowerCase();
+      for (const word of banned) expect(src).not.toContain(word);
+    });
+  }
 });

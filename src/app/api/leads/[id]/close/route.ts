@@ -6,6 +6,7 @@ import {
   getAssignmentLeadOwnership,
 } from "@/lib/customerLeads";
 import { CLOSE_REASONS, isCloseReason } from "@/lib/closeReasons";
+import { normaliseOutcomeDetail } from "@/lib/outcomeReasons";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,19 +42,25 @@ export async function POST(req: NextRequest) {
 
   let assignment_id: string | undefined;
   let reason: string | undefined;
+  let detail: unknown;
   try {
-    ({ assignment_id, reason } = await req.json());
+    ({ assignment_id, reason, detail } = await req.json());
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   if (!assignment_id) {
-    return NextResponse.json({ error: "assignment_id required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "assignment_id required" },
+      { status: 400 },
+    );
   }
   if (!isCloseReason(reason)) {
     return NextResponse.json(
-      { error: `reason must be one of: ${Object.keys(CLOSE_REASONS).join(", ")}` },
-      { status: 400 }
+      {
+        error: `reason must be one of: ${Object.keys(CLOSE_REASONS).join(", ")}`,
+      },
+      { status: 400 },
     );
   }
 
@@ -81,7 +88,7 @@ export async function POST(req: NextRequest) {
   if (ownership?.ownerCustomerId === customer.id) {
     return NextResponse.json(
       { error: OWNED_LEAD_OUTCOME_REFUSAL, code: "owned_lead" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -89,6 +96,7 @@ export async function POST(req: NextRequest) {
     p_assignment_id: assignment_id,
     p_customer_id: customer.id,
     p_reason: reason,
+    p_detail: normaliseOutcomeDetail(detail),
   });
   if (closeError) {
     return NextResponse.json({ error: closeError.message }, { status: 400 });

@@ -44,7 +44,7 @@ const SIGNED_URL_TTL_SECONDS = 60;
  */
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: { id: string } },
 ) {
   const supabase = createClient();
   const {
@@ -95,12 +95,16 @@ export async function GET(
   if (!allowed) {
     const { data: visible, error: visibleError } = await admin.rpc(
       "customer_can_see_pool_lead",
-      { p_lead_id: leadId, p_customer_id: customer.id }
+      { p_lead_id: leadId, p_customer_id: customer.id },
     );
     if (visibleError) {
       // Fail CLOSED. The pool half is the permissive one, and an unreadable
       // predicate is not permission.
-      console.error("lead report: pool visibility check failed", leadId, visibleError);
+      console.error(
+        "lead report: pool visibility check failed",
+        leadId,
+        visibleError,
+      );
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     allowed = visible === true;
@@ -118,7 +122,7 @@ export async function GET(
     console.error("lead report: signing failed", leadId, signError);
     return NextResponse.json(
       { error: "Could not open the report" },
-      { status: 502 }
+      { status: 502 },
     );
   }
 

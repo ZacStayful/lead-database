@@ -9,7 +9,6 @@ import { formatDate, formatLeadAge } from "@/lib/utils";
 import { recordLeadEvent } from "@/lib/contact/leadEvents";
 import { ContactTimeline } from "@/components/dashboard/ContactTimeline";
 import type { ContactTimelineView } from "@/lib/contact/contactPlan";
-import { CLOSE_REASONS, type CloseReason } from "@/lib/closeReasons";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import {
   pipelineStatusText,
@@ -17,7 +16,10 @@ import {
   pipelineLabel,
   stagesForLeadType,
 } from "@/components/dashboard/pipelineStage";
-import { LeadNotes, type TimelineMessage } from "@/components/dashboard/LeadNotes";
+import {
+  LeadNotes,
+  type TimelineMessage,
+} from "@/components/dashboard/LeadNotes";
 import { LandlordHandoff } from "@/components/dashboard/LandlordHandoff";
 import { LeadFiles } from "@/components/dashboard/LeadFiles";
 import { SignedCelebration } from "@/components/dashboard/SignedCelebration";
@@ -27,6 +29,8 @@ import { LEAD_ANALYSIS_PRICE_PENCE, analysability } from "@/lib/leadAnalysis";
 import { IncomeReportLink } from "@/components/dashboard/IncomeReportLink";
 import { LeadMessageButtons } from "@/components/dashboard/LeadMessageButtons";
 import { DeadLeadClaimCard } from "@/components/dashboard/DeadLeadClaimCard";
+import { LeadOutcomePanel } from "@/components/dashboard/LeadOutcomePanel";
+import { leadOutcomes } from "@/lib/leadOutcomes";
 import type {
   AssignmentWithLead,
   ClientLeadEventType,
@@ -95,7 +99,12 @@ export function LeadDetail({
    * `security definer` and the claims table is deny-all to the browser.
    * Absent renders nothing, so the page looks exactly as it did before.
    */
-  deadLeadClaim?: { claimable: boolean; claimStatus: string | null };
+  deadLeadClaim?: {
+    claimable: boolean;
+    claimStatus: string | null;
+    /** Resolved server-side; a boolean, never the open count (§51.10). */
+    prompt: boolean;
+  };
 }) {
   const router = useRouter();
   const lead = assignment.lead;
@@ -105,20 +114,26 @@ export function LeadDetail({
   const [pipelineStage, setPipelineStage] = useState(assignment.pipeline_stage);
   const [dueDate, setDueDate] = useState(assignment.due_to_call_date ?? "");
   const [income, setIncome] = useState(
-    assignment.income_estimate != null ? String(assignment.income_estimate) : ""
+    assignment.income_estimate != null
+      ? String(assignment.income_estimate)
+      : "",
   );
   const [editingPipeline, setEditingPipeline] = useState(false);
   const [hasNotes, setHasNotes] = useState(notes.length > 0);
-  const [showRejectConfirm, setShowRejectConfirm] = useState(false);
-  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
-  const [showCloseOptions, setShowCloseOptions] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Session-only. Dismissing moves the report into the outcome panel rather
+  // than removing it — the operator can still reach it, it just stops leading.
+  const [promptDismissed, setPromptDismissed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [celebrateOpen, setCelebrateOpen] = useState(false);
 
-  const prevHref = prevLeadId ? `/dashboard/leads/${prevLeadId}?from=${from}` : null;
-  const nextHref = nextLeadId ? `/dashboard/leads/${nextLeadId}?from=${from}` : null;
+  const prevHref = prevLeadId
+    ? `/dashboard/leads/${prevLeadId}?from=${from}`
+    : null;
+  const nextHref = nextLeadId
+    ? `/dashboard/leads/${nextLeadId}?from=${from}`
+    : null;
 
   const assignmentId = assignment.id;
 
@@ -126,8 +141,9 @@ export function LeadDetail({
   // pipeline card records identically. Deliberately fire-and-forget — see
   // `recordLeadEvent` for why the response is never read.
   const recordEvent = useCallback(
-    (eventType: ClientLeadEventType) => recordLeadEvent(assignmentId, eventType),
-    [assignmentId]
+    (eventType: ClientLeadEventType) =>
+      recordLeadEvent(assignmentId, eventType),
+    [assignmentId],
   );
 
   // Opening the detail page is the honest "this lead was read" signal, and it is
@@ -220,17 +236,16 @@ export function LeadDetail({
     }
   }
 
-  async function handleReject() {
+  async function handleReject(reason: string, detail: string) {
     setBusy(true);
     try {
       const res = await fetch(`/api/leads/${assignment.lead_id}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignment_id: assignment.id }),
+        body: JSON.stringify({ assignment_id: assignment.id, reason, detail }),
       });
       if (!res.ok) throw new Error();
       setStatus("rejected");
-      setShowRejectConfirm(false);
       setToast("Lead marked as rejected.");
       router.refresh();
     } catch {
@@ -251,17 +266,16 @@ export function LeadDetail({
    * Stays on the page rather than routing away like discard does: the lead is
    * still theirs and still in their list, it is simply finished.
    */
-  async function handleClose(reason: CloseReason) {
+  async function handleClose(reason: string, detail: string) {
     setBusy(true);
     try {
       const res = await fetch(`/api/leads/${assignment.lead_id}/close`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignment_id: assignment.id, reason }),
+        body: JSON.stringify({ assignment_id: assignment.id, reason, detail }),
       });
       if (!res.ok) throw new Error();
       setStatus("not_relevant");
-      setShowCloseOptions(false);
       setToast("Thanks — that helps us send better leads.");
       router.refresh();
     } catch {
@@ -271,13 +285,13 @@ export function LeadDetail({
     }
   }
 
-  async function handleDiscard() {
+  async function handleDiscard(reason: string, detail: string) {
     setBusy(true);
     try {
       const res = await fetch(`/api/leads/${assignment.lead_id}/discard`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignment_id: assignment.id }),
+        body: JSON.stringify({ assignment_id: assignment.id, reason, detail }),
       });
       if (!res.ok) throw new Error();
       router.push("/dashboard/leads");
@@ -339,42 +353,60 @@ export function LeadDetail({
   // lead you own, and the API refuses the other three regardless of this.
   const isOwnLead = Boolean(lead.owner_customer_id);
 
-  // A RESOLD lead is excluded too, and the buyer is who that catches. Discard
-  // decrements assignment_count, which would reopen the slot on a lead already
-  // sold once (§32.6) — the API refuses it and 0107 raises inside the function,
-  // so offering the button here would only ever produce a 400. `isOwnLead` does
-  // not cover them: viewerScopedLead has nulled the owner id they cannot see,
-  // which is exactly the point of it.
-  //
-  // owner_resale_qualified_at survives that scoping deliberately — it says a
-  // lead was analysed and is shared, and identifies nobody.
+  // owner_resale_qualified_at survives viewerScopedLead deliberately — it says
+  // a lead was analysed and is shared, and identifies nobody.
   const isResoldLead = Boolean(lead.owner_resale_qualified_at);
-  const canDiscard = status === "new" && !hasNotes && !isOwnLead && !isResoldLead;
 
-  // Once this customer has rejected the lead the stage is read-only. Rejection
-  // is their own settled decision on their own assignment — another operator
-  // holding the same lead is unaffected.
-  const stageLocked = status === "rejected";
+  // ⚠️ Where the report sits, decided ONCE so it can never render in two places
+  // — which would be §51.6's own warning turned on itself.
+  //
+  // A settled claim keeps the prominent slot too: the card calls
+  // router.refresh() straight after submitting, and if the placement flipped,
+  // the node would remount lower down the page and destroy the success message
+  // mid-read — the one place the credit is named at all.
+  const deadLeadPlacement: "banner" | "panel" | "none" = !deadLeadClaim
+    ? "none"
+    : deadLeadClaim.claimStatus
+      ? "banner"
+      : deadLeadClaim.prompt && !promptDismissed
+        ? "banner"
+        : deadLeadClaim.claimable
+          ? "panel"
+          : "none";
 
-  // Reject is gated on the pipeline stage, not the status (0043). A lead still
-  // at 'cold' has had nothing built on it — no meeting, no viewing, no contract
-  // — so passing on it costs nothing downstream, even if the status has already
-  // moved to 'contacted' (which now also happens automatically, e.g. on a phone
-  // click). Terminal outcomes are excluded: rejecting a signed lead would
-  // destroy a conversion record. Mirrors reject_lead_assignment exactly.
-  const canReject =
-    pipelineStage === "cold" &&
-    status !== "won" &&
-    status !== "rejected" &&
-    !isOwnLead;
-
-  // Unchanged by ownership: the block also carries "Mark as contacted", which
-  // an owned lead wants exactly as much as an allocated one. Reject and discard
-  // inside it are gated individually.
-  const showActions = status === "new" || canReject;
+  // ⚠️ The gates themselves moved VERBATIM into src/lib/leadOutcomes.ts, where
+  // they can be proved: vitest.config.mts is pure units only, so a gate inside
+  // a component is a gate nothing can test. Nothing about their meaning changed
+  // in the move, and leadOutcomes.test.ts asserts that across a matrix.
+  const outcomes = leadOutcomes({
+    status,
+    pipelineStage,
+    hasNotes,
+    isOwnLead,
+    isResoldLead,
+    reportAvailable: deadLeadPlacement === "panel",
+  });
+  const { stageLocked, showActions } = outcomes;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
+      {/*
+        ⚠️ Above everything, and only once the operator has opened this lead
+        three or more times AND actually tried to contact the landlord. It asks
+        what happened to the landlord and names no credit — leading with one
+        would turn discovery into an inducement to fish (§51.10). It also never
+        names the trigger, which would hand over the recipe for summoning it.
+      */}
+      {deadLeadPlacement === "banner" && deadLeadClaim && (
+        <DeadLeadClaimCard
+          variant="prominent"
+          assignmentId={assignment.id}
+          claimable={deadLeadClaim.claimable}
+          claimStatus={deadLeadClaim.claimStatus}
+          onDismiss={() => setPromptDismissed(true)}
+        />
+      )}
+
       {/* Back + prev/next */}
       <div className="flex items-center justify-between">
         <Link
@@ -409,9 +441,9 @@ export function LeadDetail({
             {formatLeadAge(assignment.assigned_at)}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            This lead was offered to another operator first and wasn&apos;t taken
-            up, so it&apos;s come to you at a reduced rate. The landlord may not
-            have been contacted yet.
+            This lead was offered to another operator first and wasn&apos;t
+            taken up, so it&apos;s come to you at a reduced rate. The landlord
+            may not have been contacted yet.
           </p>
         </div>
       )}
@@ -464,7 +496,10 @@ export function LeadDetail({
                 {(stageOptions.some((s) => s.value === pipelineStage)
                   ? stageOptions
                   : [
-                      { value: pipelineStage, label: pipelineLabel(pipelineStage) },
+                      {
+                        value: pipelineStage,
+                        label: pipelineLabel(pipelineStage),
+                      },
                       ...stageOptions,
                     ]
                 ).map((s) => (
@@ -527,10 +562,7 @@ export function LeadDetail({
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <FieldRow label="Bedrooms" value={lead.bedrooms} />
           <div>
-            <label
-              htmlFor="due-date"
-              className="text-xs text-muted-foreground"
-            >
+            <label htmlFor="due-date" className="text-xs text-muted-foreground">
               Due to call
             </label>
             <input
@@ -542,10 +574,7 @@ export function LeadDetail({
             />
           </div>
           <div>
-            <label
-              htmlFor="income"
-              className="text-xs text-muted-foreground"
-            >
+            <label htmlFor="income" className="text-xs text-muted-foreground">
               Estimated monthly income (£)
             </label>
             <div className="mt-0.5 flex items-center rounded-md border-[0.5px] border-input bg-background px-2">
@@ -688,7 +717,9 @@ export function LeadDetail({
               rel="noopener noreferrer"
             >
               <Presentation className="h-4 w-4" />
-              {isGuaranteedRent ? "Income presentation" : "Presentation for this lead"}
+              {isGuaranteedRent
+                ? "Income presentation"
+                : "Presentation for this lead"}
             </a>
           </Button>
         </div>
@@ -700,8 +731,12 @@ export function LeadDetail({
         */}
         {!isGuaranteedRent && !presentationConfigured && (
           <p className="mt-2 text-xs text-muted-foreground">
-            The presentation fills itself in from this property&rsquo;s analysis.{" "}
-            <a href="/dashboard/settings#presentation" className="text-brand hover:underline">
+            The presentation fills itself in from this property&rsquo;s
+            analysis.{" "}
+            <a
+              href="/dashboard/settings#presentation"
+              className="text-brand hover:underline"
+            >
               Set up your own fee and terms
             </a>{" "}
             so it uses yours.
@@ -719,93 +754,32 @@ export function LeadDetail({
                 Mark as contacted
               </button>
             )}
-            {canReject &&
-              (!showRejectConfirm ? (
-                <button
-                  onClick={() => setShowRejectConfirm(true)}
-                  disabled={busy}
-                  className="w-full rounded-lg border border-black/10 px-6 py-3 text-sm font-medium text-[#898781] transition-colors hover:bg-gray-50"
-                >
-                  Reject this lead
-                </button>
-              ) : (
-                <div className="rounded-xl border border-black/10 bg-white p-4">
-                  <p className="mb-3 text-sm text-[#52514e]">
-                    Mark this lead as rejected? It still counts toward your leads
-                    this month and won&apos;t be replaced — this just records that
-                    you&apos;re passing on it.
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleReject()}
-                      disabled={busy}
-                      className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
-                    >
-                      Confirm rejection
-                    </button>
-                    <button
-                      onClick={() => setShowRejectConfirm(false)}
-                      disabled={busy}
-                      className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-            {/* Discard — only while brand new and un-noted. */}
-            {canDiscard &&
-              (!showDiscardConfirm ? (
-                <button
-                  onClick={() => setShowDiscardConfirm(true)}
-                  disabled={busy}
-                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-black/10 px-6 py-3 text-sm font-medium text-[#898781] transition-colors hover:bg-gray-50"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Discard lead
-                </button>
-              ) : (
-                <div className="rounded-xl border border-black/10 bg-white p-4">
-                  <p className="mb-3 text-sm text-[#52514e]">
-                    Discard this lead? It will be released for another operator.
-                    You can only do this before adding a note or changing the
-                    status, and it still counts toward your monthly allocation.
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleDiscard()}
-                      disabled={busy}
-                      className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
-                    >
-                      Confirm discard
-                    </button>
-                    <button
-                      onClick={() => setShowDiscardConfirm(false)}
-                      disabled={busy}
-                      className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ))}
           </div>
         )}
 
         {/*
-          Dead on arrival (§51). A separate control from reject, and deliberately
-          OUTSIDE the showActions block: reject needs the pipeline still at cold,
-          where this needs the opposite — proof the operator actually worked the
-          lead. Gating the two together is how they would come to disagree.
+          The one way to end a lead (§51.10). Reject, discard, "Didn't work out"
+          and the §51 report used to be four separate grey outline buttons
+          scattered down this page, each explaining its consequence only after
+          it was clicked — and on 85 of the 126 assignments eligible to report,
+          the chargeable verb and the refundable one sat adjacent and alike,
+          which is exactly what §51.6 warns about.
         */}
-        {deadLeadClaim && (
-          <DeadLeadClaimCard
-            assignmentId={assignment.id}
-            claimable={deadLeadClaim.claimable}
-            claimStatus={deadLeadClaim.claimStatus}
-          />
-        )}
+        <LeadOutcomePanel
+          outcomes={outcomes}
+          busy={busy}
+          deadLead={
+            deadLeadPlacement === "panel" && deadLeadClaim
+              ? {
+                  assignmentId: assignment.id,
+                  claimStatus: deadLeadClaim.claimStatus,
+                }
+              : null
+          }
+          onReject={handleReject}
+          onDiscard={handleDiscard}
+          onClose={handleClose}
+        />
 
         {/* Terminal positive outcome. Available once the lead has been worked
             (contacted / in discussion) — signing is the conversion signal the
@@ -862,9 +836,9 @@ export function LeadDetail({
                 {messages && messages.length > 0 && (
                   <p className="mb-3 text-sm text-amber-700 dark:text-amber-500">
                     This lead has {messages.length}{" "}
-                    {messages.length === 1 ? "message" : "messages"}. They stay in
-                    our records, but they will no longer appear anywhere in your
-                    dashboard.
+                    {messages.length === 1 ? "message" : "messages"}. They stay
+                    in our records, but they will no longer appear anywhere in
+                    your dashboard.
                   </p>
                 )}
                 <div className="flex gap-2">
@@ -879,58 +853,6 @@ export function LeadDetail({
                     onClick={() => setShowDeleteConfirm(false)}
                     disabled={busy}
                     className="flex-1 rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-[#52514e] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Didn't work out. Deliberately sits beside "Mark as signed" and is
-            available from any working state, including 'new' — an operator can
-            ring a landlord without the status ever moving, and that is exactly
-            the case the other two exits refuse. */}
-        {!isOwnLead &&
-          (status === "new" ||
-            status === "contacted" ||
-            status === "in_discussion") && (
-          <div className="mt-3">
-            {!showCloseOptions ? (
-              <button
-                onClick={() => setShowCloseOptions(true)}
-                disabled={busy}
-                className="w-full rounded-lg border border-black/10 px-6 py-2.5 text-sm font-medium text-[#52514e] transition-colors hover:bg-black/[0.03] disabled:opacity-60"
-              >
-                Didn&apos;t work out
-              </button>
-            ) : (
-              <div className="rounded-lg border border-black/10 p-4">
-                <p className="text-sm font-medium">What happened?</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  This closes the lead for you and stops us offering this
-                  landlord to anyone else. It doesn&apos;t refund the lead — if
-                  the contact details were wrong or unusable, contact support
-                  instead.
-                </p>
-                <div className="mt-3 flex flex-col gap-2">
-                  {(
-                    Object.entries(CLOSE_REASONS) as [CloseReason, string][]
-                  ).map(([value, label]) => (
-                    <button
-                      key={value}
-                      onClick={() => handleClose(value)}
-                      disabled={busy}
-                      className="rounded-lg border border-black/10 px-4 py-2 text-sm text-left transition-colors hover:bg-black/[0.03] disabled:opacity-60"
-                    >
-                      {label}
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => setShowCloseOptions(false)}
-                    disabled={busy}
-                    className="px-4 py-1.5 text-sm text-muted-foreground"
                   >
                     Cancel
                   </button>
@@ -1047,13 +969,7 @@ function ArrowControl({
   );
 }
 
-function FieldRow({
-  label,
-  value,
-}: {
-  label: string;
-  value?: string | null;
-}) {
+function FieldRow({ label, value }: { label: string; value?: string | null }) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>

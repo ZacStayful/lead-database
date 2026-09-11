@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isFitReason, normaliseOutcomeDetail } from "@/lib/outcomeReasons";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -19,7 +20,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: { id: string } },
 ) {
   const supabase = createClient();
   const {
@@ -30,13 +31,18 @@ export async function POST(
   }
 
   let assignment_id: string | undefined;
+  let reason: unknown;
+  let detail: unknown;
   try {
-    ({ assignment_id } = await req.json());
+    ({ assignment_id, reason, detail } = await req.json());
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
   if (!assignment_id) {
-    return NextResponse.json({ error: "assignment_id required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "assignment_id required" },
+      { status: 400 },
+    );
   }
 
   const admin = createAdminClient();
@@ -59,7 +65,7 @@ export async function POST(
   if ((assignment as { status?: string }).status !== "new") {
     return NextResponse.json(
       { error: "Only a new lead can be discarded" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -71,7 +77,7 @@ export async function POST(
   if ((noteCount ?? 0) > 0) {
     return NextResponse.json(
       { error: "A lead with notes cannot be discarded" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -100,16 +106,23 @@ export async function POST(
     const isOwner = ownership.ownerCustomerId === callerId;
     return NextResponse.json(
       {
-        error: isOwner ? OWNED_LEAD_OUTCOME_REFUSAL : RESOLD_LEAD_DISCARD_REFUSAL,
+        error: isOwner
+          ? OWNED_LEAD_OUTCOME_REFUSAL
+          : RESOLD_LEAD_DISCARD_REFUSAL,
         code: "owned_lead",
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   // Atomic discard (re-validates status + notes inside the function).
+  // The reason is recorded INSIDE the function, before it deletes the
+  // assignment row — which is the whole reason lead_outcome_reasons is a table
+  // of its own rather than a column here (0138).
   const { error } = await admin.rpc("discard_lead_assignment", {
     p_lead_assignment_id: assignment_id,
+    p_reason: isFitReason(reason) ? reason : null,
+    p_detail: normaliseOutcomeDetail(detail),
   });
 
   if (error) {
