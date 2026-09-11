@@ -5572,14 +5572,17 @@ thing that was wrong.
 
 ### 36.7 — What this does NOT close
 
-`/policies/lead-quality-and-data` tells customers that rejecting a lead as
+~~`/policies/lead-quality-and-data` tells customers that rejecting a lead as
 "invalid email or mobile" triggers an immediate automated check and restores
 their allocation. **None of that exists**: `reject_lead_assignment` takes no
-reason parameter and no verification vendor is called. Softening that copy, or
-building it, is separate work.
+reason parameter and no verification vendor is called.~~ **Both halves closed
+(§51.11).** 0138 gave `reject_lead_assignment` a reason parameter, and the copy
+describing a check that does not exist is gone. There is still no verification
+vendor, and no page claims one.
 
-⚠️ Separately: the landing page, the privacy policy (twice) and that same policy
-page all state a **maximum of two operators** per lead. The default has been 3
+⚠️ ~~Separately: the landing page, the privacy policy (twice) and that same policy
+page all state a **maximum of two operators** per lead.~~ **Corrected in §51.11**,
+in all three places; the figures below are why. The default has been 3
 since 0055, escalation reaches 5, contention 4, and a pool claim bypasses the cap
 entirely — **21 live leads have gone to 3 operators and 3 to 4**. In the privacy
 policy that is a consent statement, not marketing copy.
@@ -11104,3 +11107,119 @@ Post-apply, verified against the live database rather than trusted:
 Code after it. Deployed the other way round, every reject and discard would fail
 on an unknown parameter — the shims mean the reverse order merely records no
 reason, which is the safe direction for the window.
+
+### 51.11 — Setting the allowance, and correcting what we publish *(no migration)*
+
+Two things that came out of reviewing §51 in use.
+
+#### The hidden budget had no way to reach it
+
+`customers.quality_allowance_pct` defaults to `0.10` and all **52** customers
+sat on it, because nothing in `src/` had ever written it. Same for its sibling
+kill switch `quality_review_required`: both were SQL-only, and §40.14 already
+records what that state is worth — **a kill switch nobody can reach is not a
+kill switch**.
+
+Both now sit on `AdminCustomerForm`, posting to the existing
+`POST /api/admin/customers/[id]/allocation`. The default stays at 10% and every
+row stays on it; raising an individual account is the supported move.
+
+⚠️ **THE CLAMP CANNOT BE COPIED FROM THE FIELD ABOVE IT.** Every other number
+on that form is a whole count and goes through `Math.max(0, Math.floor(x))`.
+`Math.floor(0.10)` is **0**, so copying the neighbouring branch zeroes the base
+budget of whoever was saved — no error, no visible change on the form, and no
+symptom until a genuine claim quietly routes to review instead of being upheld.
+`normaliseAllowancePct()` lives in `deadLeadPolicy.ts` rather than inline in the
+route so the rule is provable under `vitest.config.mts`'s pure-units constraint,
+which is §33's argument for lifting the credit decision out of the Stripe
+webhook. Two mutations pin it: flooring the helper fails 2 tests, and inlining a
+floored clamp back into the route fails the file-text guard.
+
+**`quality_review_required` is the right way to say "review everything", not an
+allowance of zero** — `earnedBonus` is added on top of the base, so a zero can
+still be climbed out of by a clean streak.
+
+`/admin/quality` was already selecting `quality_claims_this_cycle` and
+`clean_leads_streak` and **discarding both in its TypeScript cast**. The queue
+now prints the budget on each row, computed through `claimBudget()` so the page
+cannot explain a decision it worked out differently.
+
+⚠️ **Admin-side only.** §51.3's rule is untouched and its banned-word guard still
+passes: nothing here reaches a customer surface.
+
+#### What we published was largely fiction, and this closes §36.7
+
+`/policies/lead-quality-and-data` described a reject-reason popup that ran an
+**immediate automated contact-detail check** and assigned a **replacement lead**.
+None of it existed. §36.7 flagged it and left it; the diagnosis arrived with
+§51.10's push blocker, and it is worth recording because it explains the shape:
+
+⚠️ **The copy was written for a feature built on a branch that was abandoned in
+July 2026.** `origin/claude/lead-quality-feedback-rejection-my9qpr` forks from
+7 July, carries its own parallel migration numbering 0021–0027, and holds
+`src/lib/validation/contactValidation.ts`, `claimPolicy.ts`, `replace.ts` and a
+`RejectLeadDialog`. Its `0021_reject_reason_and_contact_validation.sql` is
+exactly what left `rejection_reason`, `contact_validation_result` and
+`claim_denied` orphaned in production — the columns §11 and §36.8 describe as
+"left by an abandoned branch" and that **0138 dropped**. The page read as
+specific and detailed precisely because it documented something real that never
+merged.
+
+Every claim was checked against production before being rewritten:
+
+| Claim | Reality |
+|---|---|
+| "a replacement is assigned", twice | Neither refund route sends one. §39.1 and §51.5 both refuse it, and `lead_quality_claims.resolution` has no such value — the database cannot record having sent one |
+| Reject reasons "does not fit my needs" / "invalid email or mobile" | Neither label has ever existed. 0138's list is area, property type, numbers, capacity, something else |
+| An immediate automated check on the phone and email | No vendor is called anywhere |
+| **ZeroBounce** as a processor, in the table and in §7 | Appears in **no code at all** outside that page |
+| Twilio "verifying whether a disputed phone number is genuine" | Twilio is real and sends **SMS** (`src/lib/sms.ts`). It has never looked a number up |
+| "maximum of two operators", in three places | **67 leads have reached three or more.** 144 sit at a cap of 3, 24 at 4, 9 at 5 |
+| "contact the Stayful team and it will be reviewed" | Superseded by the report, whose `unreachable` reason is this exact case |
+
+The privacy policy lost **§5.3 entirely** and a data-sources bullet with it.
+⚠️ Its sharing line is a **consent statement to landlords**, not marketing copy,
+so it is the more serious of the two pages — and it is not linked from anywhere
+in `src/`, matching its own note that it is unpublished pending review.
+
+Two things the rewrite says carefully rather than plainly, both because the
+plain version would be a fresh over-promise:
+
+- ⚠️ **"a credit", never "a replacement"**, and the page says in words that we do
+  not hold a lead back to swap in. That expectation is what the old copy created.
+- ⚠️ **The outcome "shows on the lead", not "you are told."** §51.9 records that
+  nothing notifies an operator when a report is upheld after review. Writing
+  "you're told either way" would have been this section's own version of the
+  mistake it exists to correct — caught on the read-through, not by a test.
+
+Also corrected: the operator count on the **landing FAQ**, and
+`EXTERNAL_SYSTEMS` in `productContext.ts`, which told §50's clarification model
+that "Twilio and ZeroBounce" do phone and email verification and would have had
+it generate questions about a check that does not happen.
+
+**Deliberately untouched:** the 5% conversion figure on both pages. It is
+measured outside this database and nothing here can verify or refute it.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npm run lint` clean, **1,724 vitest cases green**
+(19 new), `npm run build` passes.
+
+`publishedClaims.test.ts` reads the three real pages rather than a restatement
+of them (§42.8) and bans the two-operator cap, the replacement promise, the
+absent vendors, and any naming of the allowance. Three mutations were run and
+all three caught.
+
+⚠️ **It strips comments AND collapses whitespace, and the second is part of the
+guard rather than tidying.** Prettier wraps this copy at 80 columns, so
+"maximum of two operators" is routinely split across a newline and eleven spaces
+of indentation. The first version matched the raw file and reported a page as
+clean while the banned sentence sat in it — found when a positive assertion
+failed on a wrapped phrase, which is the only reason the negative ones were
+looked at again. A line break is enough to defeat this class of test.
+
+#### Deployment
+
+No migration, so §1.1's migration-before-merge rule does not apply. Nothing here
+touches a balance, counter, pacing or capacity column, and Change A cannot alter
+any customer's behaviour until an admin deliberately moves a value.

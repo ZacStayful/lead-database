@@ -274,7 +274,7 @@ export const EXTERNAL_SYSTEMS = [
   "Monday.com — where leads originate. Board structure and column names are outside this repo; ingest is idempotent on monday_item_id.",
   "Stripe — all billing, subscriptions, prices, promo codes and the customer portal.",
   "Resend — every outbound email. No code path may ask Supabase to send one.",
-  "Twilio and ZeroBounce — phone and email verification.",
+  "Twilio — SMS notifications to operators. There is NO phone or email verification vendor: leadQuality.ts checks the SHAPE of a number only, and nothing calls a lookup service.",
   "Supabase — database and auth. Privileged writes go through server routes on the service role.",
 ];
 

@@ -2,11 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdminUser } from "@/lib/auth";
+import { normaliseAllowancePct } from "@/lib/quality/deadLeadPolicy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Manually adjust a customer's monthly allocation / active flag. Admin only. */
+/** Manually adjust a customer's allocation, credits and claim controls. Admin only. */
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -29,6 +30,8 @@ export async function POST(
     gr_monthly_allocation?: number;
     gr_leads_received_this_month?: number;
     gr_lead_balance?: number;
+    quality_allowance_pct?: number;
+    quality_review_required?: boolean;
   };
   try {
     body = await request.json();
@@ -79,6 +82,21 @@ export async function POST(
   }
   if (Number.isFinite(body.gr_lead_balance)) {
     update.gr_lead_balance = Math.max(0, Math.floor(body.gr_lead_balance!));
+  }
+
+  // Dead-lead claim controls (§51). Admin-only: the allowance is never shown to
+  // a customer, because a published budget is a budget to play against.
+  //
+  // ⚠️ NOT Math.floor, unlike every field above it. This is a FRACTION — the
+  // default is 0.10 — and flooring it would set the base budget of whoever was
+  // saved to zero, silently, the first time anyone touched this form. The clamp
+  // lives in normaliseAllowancePct so that rule is testable.
+  const allowancePct = normaliseAllowancePct(body.quality_allowance_pct);
+  if (allowancePct !== null) {
+    update.quality_allowance_pct = allowancePct;
+  }
+  if (typeof body.quality_review_required === "boolean") {
+    update.quality_review_required = body.quality_review_required;
   }
 
   const admin = createAdminClient();

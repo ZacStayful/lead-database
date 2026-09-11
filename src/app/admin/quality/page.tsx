@@ -20,6 +20,8 @@ import { QualityClaimActions } from "@/components/admin/QualityClaimActions";
 import { formatDate } from "@/lib/utils";
 import {
   DEAD_LEAD_REASON_LABELS,
+  claimBudget,
+  type ClaimCustomer,
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadPolicy";
 import { FIT_REASONS, type FitReason } from "@/lib/outcomeReasons";
@@ -28,6 +30,36 @@ import { CLOSE_REASONS, type CloseReason } from "@/lib/closeReasons";
 export const dynamic = "force-dynamic";
 
 const LIST_LIMIT = 300;
+
+/**
+ * What the queue needs to know about the operator who made a claim.
+ *
+ * ⚠️ It extends `ClaimCustomer` rather than restating the allowance columns, so
+ * the budget shown here is computed by `claimBudget()` — the same function the
+ * claim route decides with. Restating the arithmetic would let the page explain
+ * a decision it had worked out differently.
+ */
+type QueueCustomer = ClaimCustomer & {
+  id: string;
+  business_name: string;
+  contact_name: string;
+  email: string;
+};
+
+/**
+ * Where this operator stands against their hidden budget.
+ *
+ * ⚠️ Admin-only, and it must stay that way (§51.3). The whole mechanism rests
+ * on the number being discovered rather than announced: an operator told they
+ * have two a month has been handed the number of leads it is safe to write off
+ * without evidence.
+ */
+function budgetLine(customer: QueueCustomer | undefined): string | null {
+  if (!customer) return null;
+  const budget = claimBudget(customer);
+  const used = Math.max(0, Math.trunc(customer.quality_claims_this_cycle ?? 0));
+  return `${used} of ${budget} used this cycle`;
+}
 
 function Stat({
   label,
@@ -147,20 +179,16 @@ export default async function AdminQualityPage() {
         .from("customers")
         .select(
           "id, business_name, contact_name, email, quality_claims_this_cycle, " +
-            "clean_leads_streak, quality_review_required",
+            "clean_leads_streak, quality_review_required, account_status, " +
+            "subscription_status, gr_subscription_status, monthly_allocation, " +
+            "gr_monthly_allocation, quality_allowance_pct",
         )
         .in("id", customerIds)
     : { data: [] };
 
   const customers = new Map(
     (
-      (customerData ?? []) as unknown as {
-        id: string;
-        business_name: string;
-        contact_name: string;
-        email: string;
-        quality_review_required: boolean;
-      }[]
+      (customerData ?? []) as unknown as (QueueCustomer[])
     ).map((c) => [c.id, c]),
   );
 
@@ -389,6 +417,7 @@ export default async function AdminQualityPage() {
                   {customer?.quality_review_required
                     ? " · flagged for review"
                     : ""}
+                  {budgetLine(customer) ? ` · ${budgetLine(customer)}` : ""}
                 </p>
 
                 <blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-border pl-3 text-sm">

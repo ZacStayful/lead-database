@@ -23,6 +23,15 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
     customer.gr_leads_received_this_month
   );
   const [grBalance, setGrBalance] = useState(customer.gr_lead_balance);
+  // Dead-lead claim controls (§51). Held as a STRING, unlike every number above
+  // it: this is a fraction, and Number("0.1") on each keystroke collapses a
+  // half-typed "0.15" to 0.1 and fights the person typing it.
+  const [allowancePct, setAllowancePct] = useState(
+    String(customer.quality_allowance_pct ?? 0.1)
+  );
+  const [reviewRequired, setReviewRequired] = useState(
+    customer.quality_review_required === true
+  );
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -36,6 +45,11 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
       !Number.isFinite(grBalance)
     ) {
       setMessage("Allocation and lead counts must be numbers.");
+      return;
+    }
+    const pct = Number(allowancePct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 1) {
+      setMessage("Claim allowance must be a number between 0 and 1.");
       return;
     }
     setSaving(true);
@@ -55,6 +69,8 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             gr_monthly_allocation: Number(grAllocation),
             gr_leads_received_this_month: Number(grReceived),
             gr_lead_balance: Number(grBalance),
+            quality_allowance_pct: pct,
+            quality_review_required: reviewRequired,
           }),
         }
       );
@@ -174,6 +190,63 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
           GR lead balance is the credit gate — a customer only receives GR leads
           while this is above zero.
         </p>
+      </div>
+
+      {/* Dead-lead claim controls (§51). Admin-only — none of this is ever shown
+          to the customer, because a published budget is a budget to play
+          against. */}
+      <div className="space-y-4 rounded-md border-[0.5px] border-border p-3">
+        <div>
+          <p className="text-sm font-medium">Dead-lead claims</p>
+          <p className="text-xs text-muted-foreground">
+            When an operator reports that a landlord had already gone, this is
+            how many reports a cycle we credit back without a person reading
+            them. Anything beyond it is not refused — it goes to the review
+            queue instead.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="allowance_pct">Claim allowance</Label>
+            <Input
+              id="allowance_pct"
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              value={allowancePct}
+              onChange={(e) => setAllowancePct(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              A share of their plan size, rounded. The default 0.10 gives 1 a
+              cycle on a 10-lead plan and 2 on a 20-lead plan; 0.15 gives 2 and
+              3. They earn one more per run of ten leads taken without
+              claiming, up to two.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Where they are now</Label>
+            <p className="text-sm">
+              {customer.quality_claims_this_cycle ?? 0} used this cycle ·{" "}
+              {customer.clean_leads_streak ?? 0} clean in a row
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Both reset on their own billing anchor day. The streak also
+              resets to zero every time a claim is upheld.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Always review their claims</p>
+            <p className="text-xs text-muted-foreground">
+              Sends every report to the queue whatever the allowance says. Use
+              this rather than an allowance of zero — the earned bonus can
+              still climb out of a zero.
+            </p>
+          </div>
+          <Switch checked={reviewRequired} onCheckedChange={setReviewRequired} />
+        </div>
       </div>
 
       <div className="flex items-center gap-3">

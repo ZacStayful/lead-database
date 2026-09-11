@@ -161,15 +161,6 @@ export default function PrivacyPolicyPage() {
                 an account, and automatically as you use the platform (e.g.
                 updating a lead&apos;s status).
               </>,
-              <>
-                <strong>Contact-detail verification:</strong> if a subscriber
-                reports that a landlord&apos;s phone number or email address
-                appears to be incorrect, we run an automated check against that
-                phone number and email address using third-party verification
-                services (see section 6). This does not involve contacting you —
-                it&apos;s a technical check for validity, not a call or email to
-                confirm.
-              </>,
             ]}
           />
 
@@ -193,13 +184,17 @@ export default function PrivacyPolicyPage() {
               may be a better match.
             </li>
             <li style={liStyle}>
-              Refer your enquiry details to up to two of those operators, who
-              will then contact you directly.
+              Refer your enquiry details to a small number of those operators,
+              who will then contact you directly.
             </li>
           </ol>
           <P>
-            We do not sell or share your enquiry to more than two operators, and
-            we do not pass your details on for any purpose beyond this referral.
+            Your enquiry is normally referred to no more than three operators.
+            Where none of them takes it up, it may be referred to further
+            operators, or made available to other operators on our network to
+            take on, so that it is not left unanswered. We do not sell your
+            enquiry, and we do not pass your details on for any purpose beyond
+            this referral.
           </P>
           <SubHeading>5.2 Subscriber data</SubHeading>
           <P>We process your account data on the basis of:</P>
@@ -220,15 +215,6 @@ export default function PrivacyPolicyPage() {
               </>,
             ]}
           />
-          <SubHeading>5.3 Contact-detail verification</SubHeading>
-          <P>
-            If you dispute the validity of a landlord&apos;s phone number or
-            email address, we check that specific phone number and email address
-            against third-party verification services to confirm whether they
-            are genuinely invalid. This is a narrow, automated check limited to
-            the disputed contact details — it does not involve broader profiling
-            or verification of any other data.
-          </P>
 
           {/* 6 */}
           <Heading n="6">Who we share your data with</Heading>
@@ -241,8 +227,10 @@ export default function PrivacyPolicyPage() {
           <ProvidersTable />
           <P>
             Landlord data referred to subscriber operators is shared with a
-            maximum of two subscribers per lead, and only after the referral
-            email described in section 5.1 has been sent.
+            small number of subscribers per lead — normally no more than three,
+            and more only where earlier recipients do not take the enquiry up.
+            At the point of referral we email you to introduce the operator by
+            name, as described in section 5.1.
           </P>
           <P>
             We do not sell personal data to third parties for marketing
@@ -263,11 +251,6 @@ export default function PrivacyPolicyPage() {
                 <strong>Stripe, Twilio, Vercel</strong> — certified under the UK
                 Extension to the EU-U.S. Data Privacy Framework, backed by the
                 UK International Data Transfer Addendum as a fallback.
-              </>,
-              <>
-                <strong>ZeroBounce</strong> — certified under the EU-U.S. Data
-                Privacy Framework, and processes and stores data primarily in
-                the EU unless a different region is selected.
               </>,
               <>
                 <strong>monday.com</strong> — relies on the UK&apos;s adequacy
@@ -507,13 +490,7 @@ const PROVIDERS: { provider: string; purpose: string }[] = [
   },
   {
     provider: "Twilio",
-    purpose:
-      "Verifying whether a disputed phone number is a genuine, active UK mobile number",
-  },
-  {
-    provider: "ZeroBounce",
-    purpose:
-      "Verifying whether a disputed email address is genuine and deliverable",
+    purpose: "Sending SMS notifications to subscriber operators",
   },
   {
     provider: "Monday.com",

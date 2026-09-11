@@ -14,6 +14,7 @@ import {
   committedAllocation,
   decideDeadLeadClaim,
   earnedBonus,
+  normaliseAllowancePct,
   shouldPromptDeadLead,
   type ClaimCustomer,
   type DeadLeadClaimInputs,
@@ -514,4 +515,62 @@ describe("the allowance stays unpublished in the COPY too", () => {
       for (const word of banned) expect(src).not.toContain(word);
     });
   }
+});
+
+describe("the allowance is settable per customer without being floored", () => {
+  /**
+   * ⚠️ THE ONE DEFECT IN THIS FEATURE THAT WOULD BE SILENT IN PRODUCTION.
+   *
+   * Every other number on the admin allocation form is a whole count, and the
+   * route puts each through `Math.max(0, Math.floor(x))`. This is a FRACTION.
+   * Copying the field above it turns the default 0.10 into 0, which zeroes the
+   * base budget of whoever was saved — with no error, no visible change on the
+   * form, and no symptom until a genuine claim quietly goes to review instead
+   * of being upheld.
+   */
+  it("keeps a raised allowance exactly as typed", () => {
+    expect(normaliseAllowancePct(0.15)).toBe(0.15);
+    expect(normaliseAllowancePct(0.1)).toBe(0.1);
+    expect(normaliseAllowancePct(0.05)).toBe(0.05);
+  });
+
+  it("clamps to the 0..1 a share of an allocation can mean", () => {
+    expect(normaliseAllowancePct(-1)).toBe(0);
+    expect(normaliseAllowancePct(2)).toBe(1);
+    expect(normaliseAllowancePct(0)).toBe(0);
+    expect(normaliseAllowancePct(1)).toBe(1);
+  });
+
+  it("returns null for anything that is not a finite number", () => {
+    // null means "leave the column alone", never "write a guess". An empty
+    // number input submits NaN, which passes a bare typeof check.
+    expect(normaliseAllowancePct(Number.NaN)).toBeNull();
+    expect(normaliseAllowancePct(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(normaliseAllowancePct("0.15")).toBeNull();
+    expect(normaliseAllowancePct(undefined)).toBeNull();
+    expect(normaliseAllowancePct(null)).toBeNull();
+  });
+
+  it("raising it to 0.15 buys one more claim on each plan", () => {
+    // The worked example the admin form's caption states. Asserted here so the
+    // caption cannot drift away from the arithmetic behind it.
+    const at = (pct: number, allocation: number) =>
+      claimBudget({ ...customer, quality_allowance_pct: pct, monthly_allocation: allocation });
+    expect(at(0.1, 10)).toBe(1);
+    expect(at(0.15, 10)).toBe(2);
+    expect(at(0.1, 20)).toBe(2);
+    expect(at(0.15, 20)).toBe(3);
+  });
+
+  it("the route uses the helper and never floors the fraction", () => {
+    // Anchored on the real route file (§42.8). A `Math.floor` reintroduced on
+    // this field is a one-token change no behavioural test here could catch,
+    // because observing it needs a live Supabase write.
+    const src = readFileSync(
+      resolve(__dirname, "..", "..", "app/api/admin/customers/[id]/allocation/route.ts"),
+      "utf8",
+    ).replace(/\/\/[^\n]*/g, ""); // strip comments: they explain the ban by naming it
+    expect(src).toContain("normaliseAllowancePct(body.quality_allowance_pct)");
+    expect(src).not.toMatch(/Math\.floor\([^)]*quality_allowance_pct/);
+  });
 });

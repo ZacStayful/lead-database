@@ -259,6 +259,22 @@ export interface Customer {
   // pacing: a debited customer has already had those leads.
   pool_debit: number;
   gr_pool_debit: number;
+  // Dead-lead claim state (0137, §51). NONE of this may ever be rendered to a
+  // customer: quality_allowance_pct is the hidden budget of automatic upholds
+  // per cycle, and a published budget is a budget to play against. Admin-only.
+  // The budget is round(committed allocation * pct) plus an earned bonus, so
+  // the DEFAULT of 0.10 gives 1 on a 10-lead plan and 2 on a 20-lead plan.
+  quality_allowance_pct: number;
+  // Automatic upholds already spent this cycle; zeroed by reset_monthly_counts
+  // on the customer's own billing anchor day.
+  quality_claims_this_cycle: number;
+  // Chargeable leads taken without a claim. Earns one extra claim per run of
+  // ten, capped at two, and resets to zero on every uphold.
+  clean_leads_streak: number;
+  // Admin kill switch: every claim from this customer goes to review, whatever
+  // the budget says. Clearer than an allowance of zero, which the earned bonus
+  // can still climb out of.
+  quality_review_required: boolean;
   // Subscription is scheduled to cancel at the end of the current period (0087).
   // The billing portal cancels at period end, so this is true for the whole of a
   // leaving customer's last paid period, while subscription_status is still

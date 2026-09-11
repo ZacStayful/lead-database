@@ -124,6 +124,26 @@ export function shouldPromptDeadLead(input: {
   return input.priorOpens >= DEAD_LEAD_PROMPT_PRIOR_OPENS;
 }
 
+/**
+ * Narrow an admin-supplied claim allowance to something the column can hold.
+ *
+ * ⚠️ THIS IS A FRACTION AND MUST NEVER BE FLOORED. Every other number on the
+ * admin allocation form is a whole count and goes through
+ * `Math.max(0, Math.floor(x))`; copying that here turns the default 0.10 into
+ * 0 and silently zeroes the base budget of whoever was saved. It lives in this
+ * module rather than inline in the route so the rule is provable under
+ * `vitest.config.mts`, which is pure units only — the same argument §33 makes
+ * for lifting the credit decision out of the Stripe webhook.
+ *
+ * Clamped to 0..1: a budget larger than the allocation it is a share of is not
+ * a meaningful setting. Returns null for anything that is not a finite number,
+ * so the caller leaves the column alone rather than writing a guess.
+ */
+export function normaliseAllowancePct(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(1, Math.max(0, value));
+}
+
 /** Chargeable leads taken without a claim that earn one extra claim of headroom. */
 export const STREAK_LEADS_PER_BONUS = 10;
 
