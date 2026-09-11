@@ -11059,11 +11059,47 @@ appear with no contact click; then reject one lead and check the reason reaches
 
 ### Deployment order — migration BEFORE code
 
-0138 first, applied and verified against production **before the pull request
-merges** (§1.1). It is **not inert**: the owner bar removes five leads from
-eligibility and the orphan drop removes columns. Re-confirm the three orphan
-counts are still zero immediately before applying rather than trusting the
-numbers above.
+✅ **0138 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-11, before the
+merge** (§1.1). It is **not inert**: the owner bar removes five leads from
+eligibility and the orphan drop removes columns.
+
+Pre-apply: the three orphan counts re-confirmed still zero, no collision on the
+table, the function or any index, and the live `prosrc` for every function being
+replaced diffed against the body the migration carries forward.
+
+⚠️ **`close_lead_assignment` looked drifted and was not.** Production's body
+differs from 0067's file by **blank lines only** — logic byte-identical once
+they are ignored — because that migration was applied with its comment lines
+stripped, which took the blank lines around them. §48.9 records the same shape.
+Check the normalised form before concluding anything has moved.
+
+⚠️ **Applied with comments stripped OUTSIDE function bodies only**, so every
+`prosrc` matches the repo file exactly and the next §11 audit is a straight
+comparison rather than one needing a stripping step. That form was proved
+schema-identical to the full file first, on two scratch builds fingerprinted
+over columns, constraints, indexes, function bodies and ACLs — **identical**.
+Stripping in-body comments too produces a schema that differs on two function
+bodies, which is the trap §48.9 warns about.
+
+Post-apply, verified against the live database rather than trusted:
+
+- **All eight function bodies hash-match the repo**, both arities of all three
+  changed functions included.
+- **Invariant 7 holds**, and `anon`/`authenticated` can execute **none** of the
+  0138 functions.
+- **The owner bar did exactly what it should**: eligible assignments went
+  **126 → 121**, and zero owned leads remain claimable.
+- **Nothing moved**: 495 leads, 511 assignments and 52 customers untouched, and
+  an md5 of every customer's balances **identical** before and after
+  (`9f19b7444f4bc84eafc6da2cadfa9d11`).
+- The whole path was then driven **on production**, inside a block that raises
+  at the end so every write rolled back: an unknown reject reason refused by the
+  CHECK, a discard deleting its assignment, and the reason row surviving with its
+  `lead_id` and denormalised area intact and its pointer nulled. Row counts and
+  the balance fingerprint afterwards confirm it wrote nothing.
+- `get_advisors` reports no new finding — `lead_outcome_reasons` joins the
+  deliberate RLS-on-no-policy posture it now shares with 49 other tables, and no
+  0138 function appears in the mutable-`search_path` list.
 
 Code after it. Deployed the other way round, every reject and discard would fail
 on an unknown parameter — the shims mean the reverse order merely records no
