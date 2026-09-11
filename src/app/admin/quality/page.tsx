@@ -255,6 +255,34 @@ export default async function AdminQualityPage() {
     ),
   );
 
+  /**
+   * How hard the operator actually tried, for the pending queue (0139).
+   *
+   * ⚠️ This is the number the decision turns on and the screen had none of it.
+   * Measured on production: of 25 rejected assignments, 18 were rejected after
+   * exactly ONE look at the lead. Approving a replacement on a lead with one
+   * open and no contact attempt is the case this exists to catch.
+   *
+   * One RPC for the whole queue. `get_assignment_effort` has no status gate —
+   * `get_outcome_evidence` computes most of the same figures but is restricted
+   * to won/not_relevant/rejected and feeds /admin/outcomes, so widening it
+   * would have changed an unrelated page.
+   */
+  const effortIds = pending
+    .map((c) => c.lead_assignment_id)
+    .filter((id): id is string => typeof id === "string");
+
+  const { data: effortData } = effortIds.length
+    ? await admin.rpc("get_assignment_effort", { p_assignment_ids: effortIds })
+    : { data: [] };
+
+  const effortByAssignment = new Map(
+    ((effortData ?? []) as unknown as ClaimEffortRow[]).map((e) => [
+      e.assignment_id,
+      e,
+    ]),
+  );
+
   // ── The analysis half ────────────────────────────────────────────────────
   const upheld = claims.filter(
     (c) => c.status === "auto_upheld" || c.status === "upheld",
@@ -336,6 +364,10 @@ export default async function AdminQualityPage() {
       <div className="grid gap-3 sm:grid-cols-4">
         <Stat label="Awaiting a decision" value={String(pending.length)} />
         <Stat
+          label="Settled with a replacement"
+          value={String(claims.filter((c) => c.resolution === "swap").length)}
+        />
+        <Stat
           label="Upheld"
           value={String(upheld.length)}
           hint={`of ${claims.length} reported`}
@@ -369,13 +401,21 @@ export default async function AdminQualityPage() {
             const peers = (peersByLead.get(c.lead_id) ?? []).filter(
               (p) => p.customer_id !== c.customer_id,
             );
+            const effort = c.lead_assignment_id
+              ? effortByAssignment.get(c.lead_assignment_id)
+              : undefined;
             const live = peers.filter(
               (p) =>
                 p.status === "in_discussion" ||
                 p.status === "won" ||
                 (p.pipeline_stage && p.pipeline_stage !== "cold"),
             );
-            const assigned = assignedAt.get(c.lead_assignment_id) ?? null;
+            // ⚠️ Nullable since 0139: the pointer is nulled when a swap
+            // deletes the assignment. Never null in THIS list, which is
+            // pending-only, but the type is honest about it.
+            const assigned = c.lead_assignment_id
+              ? (assignedAt.get(c.lead_assignment_id) ?? null)
+              : null;
             const ageDays =
               lead && assigned
                 ? Math.round(
@@ -436,7 +476,14 @@ export default async function AdminQualityPage() {
                     ` Lead was ${ageDays} day${ageDays === 1 ? "" : "s"} old when it was sold.`}
                 </p>
 
-                <QualityClaimActions claimId={c.id} />
+                {effort ? <ClaimEffort effort={effort} /> : null}
+
+                <QualityClaimActions
+                  claimId={c.id}
+                  assignmentId={c.lead_assignment_id}
+                  leadName={lead?.lead_name ?? null}
+                  noteCount={effort?.note_count ?? 0}
+                />
               </div>
             );
           })}
@@ -558,7 +605,7 @@ export default async function AdminQualityPage() {
                     <th className="py-2 pr-3">Lead</th>
                     <th className="py-2 pr-3">Reason</th>
                     <th className="py-2 pr-3">Outcome</th>
-                    <th className="py-2 pr-3">Credit</th>
+                    <th className="py-2 pr-3">Outcome</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -576,7 +623,11 @@ export default async function AdminQualityPage() {
                         {c.status.replace(/_/g, " ")}
                       </td>
                       <td className="py-2 pr-3">
-                        {c.resolution === "credit" ? "refunded" : "—"}
+                        {c.resolution === "credit"
+                          ? "refunded"
+                          : c.resolution === "swap"
+                            ? "replaced"
+                            : "—"}
                       </td>
                     </tr>
                   ))}
@@ -586,6 +637,75 @@ export default async function AdminQualityPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** One row of `get_assignment_effort` (0139). */
+type ClaimEffortRow = {
+  assignment_id: string;
+  opens: number;
+  contact_clicks: number;
+  tel_clicks: number;
+  whatsapp_clicks: number;
+  mailto_clicks: number;
+  messages_sent: number;
+  note_count: number;
+  file_count: number;
+  first_event_at: string | null;
+  last_event_at: string | null;
+  assigned_at: string | null;
+  days_held: number | null;
+  pipeline_stage: string | null;
+  status: string | null;
+};
+
+/**
+ * What the operator actually did before writing this lead off.
+ *
+ * ⚠️ THE MARKER IS FOR NO CONTACT ATTEMPT, NOT FOR A LOW SCORE. Opening a lead
+ * is not contacting it (§6), and the two are counted separately for that
+ * reason — an operator with nine opens and no calls has read the lead nine
+ * times and never rung it, which is precisely the shape worth a second look.
+ * Of 25 rejected assignments on the book, 18 were rejected after exactly one
+ * look, so thin is the common case rather than the exception.
+ *
+ * It marks, it does not rank or sort. A queue that buried thin claims would
+ * decide them by not showing them.
+ */
+function ClaimEffort({ effort }: { effort: ClaimEffortRow }) {
+  const channels = [
+    effort.tel_clicks ? `${effort.tel_clicks} call` : null,
+    effort.whatsapp_clicks ? `${effort.whatsapp_clicks} WhatsApp` : null,
+    effort.mailto_clicks ? `${effort.mailto_clicks} email` : null,
+    effort.messages_sent ? `${effort.messages_sent} sent` : null,
+  ].filter(Boolean) as string[];
+
+  const noAttempt = effort.contact_clicks === 0;
+
+  return (
+    <div className="mt-3 rounded-lg border-[0.5px] border-border bg-muted/30 px-3 py-2">
+      <p className="text-xs uppercase tracking-wide text-muted-foreground">
+        What they did with it
+      </p>
+      <p className="mt-1 text-sm">
+        {effort.opens} open{effort.opens === 1 ? "" : "s"}
+        {" · "}
+        {effort.contact_clicks} contact attempt
+        {effort.contact_clicks === 1 ? "" : "s"}
+        {channels.length ? ` (${channels.join(", ")})` : ""}
+        {" · "}
+        {effort.note_count} note{effort.note_count === 1 ? "" : "s"}
+        {effort.file_count ? ` · ${effort.file_count} file${effort.file_count === 1 ? "" : "s"}` : ""}
+        {effort.days_held != null ? ` · held ${effort.days_held} days` : ""}
+        {effort.pipeline_stage ? ` · ${effort.pipeline_stage}` : ""}
+      </p>
+      {noAttempt && (
+        <p className="mt-1 text-sm font-medium text-[#a8620f]">
+          No contact attempt recorded — they never rang, messaged or emailed
+          this landlord.
+        </p>
+      )}
     </div>
   );
 }

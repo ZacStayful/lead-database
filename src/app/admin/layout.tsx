@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getUser, isAdminUser } from "@/lib/auth";
 import { SignOutButton } from "@/components/dashboard/SignOutButton";
 import { MobileNav } from "@/components/dashboard/MobileNav";
+import { DesktopNav, type NavGroup } from "@/components/dashboard/DesktopNav";
 import { Logo } from "@/components/Logo";
 
 export default async function AdminLayout({
@@ -14,22 +15,65 @@ export default async function AdminLayout({
   if (!user) redirect("/login");
   if (!isAdminUser(user)) redirect("/dashboard");
 
-  const nav = [
-    { href: "/admin", label: "Overview" },
-    { href: "/admin/customers", label: "Customers" },
-    { href: "/admin/leads", label: "Leads" },
-    { href: "/admin/imported-leads", label: "Imported leads" },
-    { href: "/admin/outcomes", label: "Outcomes" },
-    { href: "/admin/quality", label: "Lead quality" },
-    { href: "/admin/support", label: "Support" },
-    { href: "/admin/pool", label: "Expired leads" },
-    { href: "/admin/offers", label: "Offers" },
-    { href: "/admin/training", label: "Training" },
-    { href: "/admin/announcements", label: "Announcements" },
-    { href: "/admin/messaging", label: "Messaging" },
-    { href: "/admin/api", label: "API" },
-    { href: "/dashboard", label: "Customer portal" },
+  /**
+   * Grouped, as the customer header has been since §50.8.
+   *
+   * Fourteen flat links had outgrown the row: they wrapped on a laptop, carried
+   * no active state at all, and the two pages an admin opens daily sat between
+   * Training and Announcements with nothing to tell them apart.
+   *
+   * `DesktopNav` is reused unchanged — it takes only `groups` and derives
+   * active state from `usePathname()` by longest-prefix match, so `/admin`
+   * under Insights does not light up on `/admin/leads`.
+   */
+  const navGroups: NavGroup[] = [
+    {
+      label: "Leads",
+      items: [
+        { href: "/admin/leads", label: "Leads" },
+        { href: "/admin/imported-leads", label: "Imported leads" },
+        { href: "/admin/pool", label: "Expired leads" },
+        { href: "/admin/quality", label: "Lead quality" },
+      ],
+    },
+    {
+      label: "Customers",
+      items: [
+        { href: "/admin/customers", label: "Customers" },
+        { href: "/admin/offers", label: "Offers" },
+      ],
+    },
+    {
+      label: "Insights",
+      items: [
+        { href: "/admin", label: "Overview" },
+        { href: "/admin/outcomes", label: "Outcomes" },
+      ],
+    },
+    {
+      label: "Content",
+      items: [
+        { href: "/admin/training", label: "Training" },
+        { href: "/admin/announcements", label: "Announcements" },
+      ],
+    },
+    {
+      label: "System",
+      items: [
+        { href: "/admin/messaging", label: "Messaging" },
+        { href: "/admin/api", label: "API" },
+        { href: "/admin/support", label: "Support" },
+      ],
+    },
+    { label: "Customer portal", href: "/dashboard" },
   ];
+
+  // The mobile menu stays a flat list, exactly as the dashboard layout does it:
+  // a full-height sheet has room for every link, so grouping there would add a
+  // tap for nothing.
+  const nav = navGroups.flatMap((g) =>
+    g.href ? [{ href: g.href, label: g.label }] : (g.items ?? [])
+  );
 
   return (
     <div className="min-h-screen bg-muted/20">
@@ -42,17 +86,13 @@ export default async function AdminLayout({
                 Admin
               </span>
             </Link>
-            <nav className="hidden items-center gap-1 sm:flex">
-              {nav.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
+            {/*
+              ⚠️ This also fixes a breakpoint bug. The old row was `sm:flex`
+              while `MobileNav` is `lg:hidden`, so between those two widths BOTH
+              rendered. `DesktopNav` is `lg:flex`, which puts the pair back in
+              step — the dashboard layout has always had them that way.
+            */}
+            <DesktopNav groups={navGroups} />
           </div>
           <div className="flex flex-shrink-0 items-center gap-1">
             <SignOutButton />
