@@ -505,14 +505,25 @@ for being new with no way to earn out of it.
   0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
   the function, which discards its ACL. Re-revoked. Any future
   `create or replace` on a privileged function must re-assert its grants.
-- ⚠️ **`outreach_capacity()` is in production and in NO migration file**
-  (found 2026-09-11 while verifying 0139; applied to the live database that
-  same morning as `outreach_capacity_rpc`, and referenced nowhere in `src/`).
-  It is `security definer` and **executable by `anon`**, so it is callable
-  without signing in via `/rest/v1/rpc/outreach_capacity`, which Supabase's own
-  linter flags. This is the §36.8 drift pattern again: a rebuild from
-  `supabase/migrations/` will not have it. Commit it or drop it — and decide
-  the `anon` grant deliberately either way.
+- ~~**`outreach_capacity()` is in production and in NO migration file.**~~
+  **Dropped by 0140**, and the decision it was waiting on is made: those
+  figures are not public. It was `security definer` with an explicit `anon`
+  grant over `service_capacity_snapshots`, which is RLS-on with **zero
+  policies** — so it walked past the deny-all the table relies on. Verified
+  against the live REST API rather than inferred from the ACL, with only the
+  publishable key that ships in the browser bundle and no session:
+  `rpc/outreach_capacity` returned **200** with `room_for_customers` and
+  `unsold_leads_now`, the table itself returned an empty array, and
+  `rpc/get_service_capacity` correctly returned **401**. §18.1 and §21 are
+  explicit that capacity is admin judgement — headroom left to sell and
+  standing inventory — so publishing it hands a competitor our supply position.
+  It had no caller: the only repo matches were this file and the section index
+  generated from it, and `serviceHealth.ts` reads columns of the same name from
+  `get_service_capacity` on the service role. ⚠️ **If it is ever restored, do
+  not restore the `anon` grant** — the grant was the defect, not the function,
+  and anything genuinely public belongs in §28.6's `public_filter_volume`
+  shape. This also closes the last of the §36.8 drift: **a rebuild from
+  `supabase/migrations/` now matches production.**
 - ⚠️ **A claim's `lead_assignment_id` must stay `ON DELETE SET NULL`.** It was
   `not null ... on delete cascade` until 0139 (§52), and
   `admin_swap_lead_assignment` DELETES the assignment — so settling a claim by
@@ -5656,7 +5667,14 @@ empty, 0 failures; 0100a re-applied twice for idempotency; and every
 `public` function fingerprinted by `md5(prosrc)` against production —
 102 of 103 identical, the one difference being `apply_lead_rejection` (below).
 ⚠️ **That last difference is gone — 0138 drops it with its three columns
-(§51.10), so a rebuild from the directory now matches production exactly.**
+(§51.10).** ⚠️ **And a second one it could not see: that audit fingerprinted
+functions present in BOTH, so it was blind to a function present only in
+production.** `outreach_capacity()` was exactly that, and it arrived the day
+0139 was verified. **0140 drops it**, so a rebuild from the directory now
+matches production exactly — this time including the set of functions, not
+only their bodies. Any future audit must compare the NAME SET first and the
+bodies second, or it will report a clean match over a function it never
+looked at.
 
 It is also why `admin_assign_lead` is guarded from the routes rather than
 rewritten in 0111: when this was written that function had been replaced by an
