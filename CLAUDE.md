@@ -413,6 +413,12 @@ write of free text into a table, which is why its length caps are load-bearing.
    `releasable_filter_assignments` (untouched) and
    `claimable_dead_lead_assignments` (worked) — are exact inverses and must
    never be loosened toward each other.
+   ⚠️ **0139 (§52) gives the second exception a second SETTLEMENT, not a third
+   exception.** An upheld dead-lead claim now returns either a credit or a
+   REPLACEMENT LEAD, chosen by an admin. A swap moves no money at all: the
+   customer keeps the slot they already paid for at the same `price_paid`, so
+   nothing is refunded and no counter is rolled back. What is refundable is
+   unchanged, and `claimable_dead_lead_assignments` is untouched by it.
 5. Ingest is idempotent on `monday_item_id`; Stripe on `stripe_events`.
 6. Management and GR are fully parallel. Every balance/counter/pacing/eligibility
    branch must handle both `lead_type` values — and must not use a
@@ -499,6 +505,14 @@ for being new with no way to earn out of it.
   0049.** `0028` blanket-revoked schema-wide, then `0038` dropped and recreated
   the function, which discards its ACL. Re-revoked. Any future
   `create or replace` on a privileged function must re-assert its grants.
+- ⚠️ **A claim's `lead_assignment_id` must stay `ON DELETE SET NULL`.** It was
+  `not null ... on delete cascade` until 0139 (§52), and
+  `admin_swap_lead_assignment` DELETES the assignment — so settling a claim by
+  swapping destroyed the claim, its reason and the landlord's own words, by the
+  act of acting on it. Restoring the cascade brings that back silently, and the
+  only thing that would notice is `0139_dead_lead_swap_test.sql`. The
+  idempotency guard moved to `origin_assignment_id`, which carries no foreign
+  key at all, precisely so it cannot be nulled by the same trick.
 - ~~**Orphaned reject columns, AND the function that reads them.**~~
   **Closed by 0138 (§51.10).** `rejection_reason`, `contact_validation_result`,
   `claim_denied` and `apply_lead_rejection(uuid, uuid, lead_type, text, jsonb,
@@ -5175,6 +5189,16 @@ larger change.
 ---
 
 ## 34. A swapped-in lead must match the customer's filter *(0109)*
+
+⚠️ **Since 0139 (§52) the swap has a SECOND CALLER and a second entry point.**
+`resolve_dead_lead_claim_with_swap` calls `admin_swap_lead_assignment` from
+inside its own transaction to settle a dead-lead claim, and
+`/admin/quality` renders the same `SwapLeadControl` beside the review actions.
+Everything below still governs both: the filter guard, the three-argument form
+with an explicit boolean, and the strict `=== true` on the override. The picker
+was extended with three optional props rather than copied, so the matching-first
+ordering and the named acknowledgement cannot drift between the two screens.
+
 
 `/admin/customers/[id]` lets an admin replace one assigned lead with another —
 `SwapLeadControl` → `GET/POST /api/admin/assignments/[id]/swap` →
@@ -10605,10 +10629,19 @@ and another has written it off, the live one is the stronger signal.
 Three deliberate absences, each taken from an existing precedent rather than
 from preference:
 
-- **No replacement lead.** §39.1 is explicit that a release is not a
-  lead-for-lead swap and there is no synchronous re-offer; the credit goes back
-  and ordinary routing (§4) delivers. `lead_quality_claims.resolution` has no
-  `replacement` value, so nothing later can quietly add one.
+- ~~**No replacement lead.**~~ ⚠️ **REVERSED BY 0139 (§52).** This read:
+  "§39.1 is explicit that a release is not a lead-for-lead swap and there is no
+  synchronous re-offer; the credit goes back and ordinary routing (§4)
+  delivers. `lead_quality_claims.resolution` has no `replacement` value, so
+  nothing later can quietly add one." `resolution` now admits `'swap'` and an
+  admin can settle a claim by handing over a lead they pick.
+  **The reasoning was not wrong, the decision changed.** §39.1's argument is
+  about the FILTER RELEASE, where a synchronous re-offer would have to loop
+  `autoAssignLead` inside a request; here a person chooses the replacement by
+  hand, which is neither synchronous nor automatic. Every swap is manual
+  precisely because it costs TWO leads — the reported one is withdrawn as well
+  as a replacement handed over — against management stock of about 70 leads
+  with a free slot.
 - **The slot is never reopened.** `uphold_dead_lead_claim` does **not**
   decrement `leads.assignment_count`. §19.6's reasoning applies exactly: a lead
   one operator has shown to be dead is the last lead that should be sold to
@@ -10656,9 +10689,15 @@ the route and the CHECK on `lead_quality_claims.reason` cannot drift.
 | Allowance and peers | `src/lib/quality/deadLeadPolicy.ts` | arithmetic worth unit-testing directly rather than through a route |
 | The commit | `apply_dead_lead_claim` | re-asserts eligibility under the lock, so two submits cannot both pass |
 
-`lead_quality_claims.lead_assignment_id` is **UNIQUE**, and that constraint is
-the idempotency guard: a double-clicked submit collides on 23505 rather than
-refunding twice. One claim per assignment, ever.
+~~`lead_quality_claims.lead_assignment_id` is **UNIQUE**, and that constraint is
+the idempotency guard~~ — ⚠️ **the guard is `origin_assignment_id` since 0139**
+(§52). That column is UNIQUE and carries **no foreign key at all**, so nothing
+can ever null it. `lead_assignment_id` became nullable and `on delete set null`
+so a claim survives the swap that fulfils it, and a unique index over a column
+that can go null is no guard: Postgres permits unlimited NULLs in one. The
+original UNIQUE is kept — it still holds among non-nulls and costs nothing.
+Either way: one claim per assignment, ever, and a double-clicked submit
+collides on 23505 rather than refunding twice.
 
 `resolve_dead_lead_claim` returns **false** rather than raising when the claim
 is already settled, so a double-click in admin cannot refund twice either. The
@@ -10667,6 +10706,14 @@ already made.
 
 Both automatic and admin upholds go through **`uphold_dead_lead_claim`**, so
 what an uphold does can never drift between the two paths.
+
+⚠️ **A SWAP DELIBERATELY DOES NOT.** `resolve_dead_lead_claim_with_swap` (0139)
+settles the claim and performs the swap in ONE transaction and never calls that
+function — a swap credits nothing, rolls back no counter, spends no allowance
+and resets no streak, because the customer keeps the slot they already paid for
+and a different lead goes into it. The divergence is the point, not drift:
+`uphold_dead_lead_claim` exists to make the CREDIT path identical wherever it
+fires, and this is not that path.
 
 ### 51.8 — Admin gets three verbs, and the customer never sees the third
 
@@ -10709,10 +10756,13 @@ itself matches on.
 - **A cycle-end survey.** The inline claim is the half that pays for itself
   because it is attached to a specific lead; a survey asking about the month in
   general has nothing to trace back to a source.
-- **Nothing tells the operator when a claim is upheld after review.** They see
-  it on the lead page next time they open it. An email would be one line, and
-  should probably wait until there are enough claims to know whether it reads as
-  responsive or as noise.
+- ~~**Nothing tells the operator when a claim is upheld after review.**~~
+  **Closed by 0139 (§52)** — `sendDeadLeadUpheldEmail` goes out on every uphold,
+  credit or swap. ⚠️ It takes no goodwill flag and must never gain one: `uphold`
+  and `uphold_goodwill` differ only in whether the hidden allowance is spent, so
+  wording that varied between them would publish the allowance to any two
+  operators comparing notes. Nothing is sent on a DECLINE, which is still open:
+  the note is shown on the lead page and nowhere else.
 
 ### Verification
 
@@ -11223,3 +11273,241 @@ looked at again. A line break is enough to defeat this class of test.
 No migration, so §1.1's migration-before-merge rule does not apply. Nothing here
 touches a balance, counter, pacing or capacity column, and Change A cannot alter
 any customer's behaviour until an admin deliberately moves a value.
+
+---
+
+## 52. Replacing a lead, not just refunding it *(0139)*
+
+§51 shipped on 2026-09-10 and had been used **zero times** by the following
+morning: production held no `lead_quality_claims` rows at all, against 126
+eligible assignments across 13 customers. Customers were still asking for leads
+to be replaced, by email, because nothing in the product let them ask.
+
+Three things were wrong, and only one of them was the feature's design:
+
+| | |
+|---|---|
+| The control was invisible | Lead detail page only, and only after three opens plus a contact click |
+| The outcome was a credit | Never a replacement, which is what customers were actually asking for |
+| The queue showed no effort | No opens, no contact clicks, no notes — nothing the decision turns on |
+
+What the book looked like when this was written: 512 assignments, 25 of them
+rejected, and **18 of those 25 rejected after exactly one look at the lead**.
+149 of 456 open assignments had no recorded operator engagement at all. That is
+the case the effort figures exist to catch.
+
+### 52.1 — One control, two settlements
+
+An upheld report now resolves as **either** a credit (as before) **or** a swap.
+Not a second control beside the first: two similarly-worded buttons a click
+apart with opposite money outcomes is the failure §51.10 found and had to fix,
+and `src/lib/leadOutcomes.ts` carries the warning as a load-bearing comment.
+
+⚠️ **A SWAP IS ALWAYS MANUAL.** The hidden per-customer allowance still
+auto-upholds credits; nothing auto-upholds into a swap. It costs **two leads**
+rather than one — `admin_swap_lead_assignment` withdraws the reported lead from
+circulation as well as handing over a replacement — against a management pool of
+about 70 leads with a free slot. That arithmetic, not caution, is why a person
+decides every one.
+
+⚠️ **A swap moves no money.** No credit, no monthly-counter rollback, no
+allowance spent, no clean streak reset. The customer keeps the slot they already
+paid for and a different lead goes into it at the same `price_paid`. It
+therefore does **not** call `uphold_dead_lead_claim`, which exists to make the
+credit path identical wherever it fires (§51.7).
+
+### 52.2 — ⚠️ The hazard that decided the whole shape
+
+`admin_swap_lead_assignment` **deletes** the `lead_assignments` row, and
+`lead_quality_claims.lead_assignment_id` was `not null ... on delete cascade`.
+So approving a claim by swapping **destroyed the claim, its reason, and the
+landlord's own words** — the evidence the feature exists to collect, deleted by
+the act of acting on it.
+
+The pointer is now `ON DELETE SET NULL`, which saves the row. But that alone
+silently retires the idempotency guard: §51.7 names the UNIQUE constraint on
+that column as *the* guard against a double-refund, and **Postgres permits
+unlimited NULLs in a unique index**. Reasoning that no reachable path can insert
+a second claim against a nulled one is true, and true only three hops away.
+
+So the guard moved to **`origin_assignment_id`**, which carries **no foreign key
+at all** and is derived by trigger rather than by its writers —
+`apply_dead_lead_claim` inserts without naming it, and so would any future
+writer. Same denormalise-to-survive-the-delete move 0138 makes for
+`postcode_area` and 0116 for `lead_messages`.
+
+Intended consequence, stated so it does not read as a leak later: the
+**replacement** assignment is a fresh row with `quality_claim_id` null, so a
+replacement that is itself dead can be reported too.
+
+### 52.3 — Six reasons, and the one that was deliberately not duplicated
+
+| Key | Window |
+|---|---|
+| `already_with_operator` — gone with another management company | **7 days** |
+| `never_interested` — never interested in the service | 14 |
+| `no_longer_interested` — no longer letting | 14 |
+| `property_sold` — sold or being sold | 14 |
+| `unreachable` — details do not reach them | 14 |
+| `wrong_details` — wrong name, property or postcode | 14 |
+
+The three new ones are distinct **sourcing failures**, which is why they are not
+folded into `no_longer_interested`: `never_interested` means the landlord was
+never a prospect at all, `property_sold` means the property rather than the
+intent is gone, and `wrong_details` points at the ingest source where
+`unreachable` points at a number nobody answers.
+
+⚠️ **A second reason for "has SINCE chosen another company" was asked for and
+deliberately not built.** It would have sat one click from
+`already_with_operator` with the opposite money outcome. **The age decides
+instead**: inside the first week the operator never really got to pitch; after
+that they had their chance and lost, which is a lost deal, chargeable under
+invariant 4, and what "Didn't work out" is for. An age is objective and cannot
+be misreported; a timing adjective can.
+
+⚠️ **That rule needed no new SQL.** `apply_dead_lead_claim` already takes
+`p_window_days` and passes it into `claimable_dead_lead_assignments` under its
+row lock, and the route already passed it at both call sites — so the route
+sends `7` instead of `14` and the database enforces it. And
+`claimable_dead_lead_assignments` has returned `assigned_at` since 0137, so the
+form can grey a reason from what is already on the wire. The map lives in
+TypeScript where it is unit-testable; the lock is still the authority.
+
+⚠️ **Both call sites must send the same number.** Sending the fortnight to the
+commit would have the lock re-assert a different rule from the one the route
+just applied, and the lock wins. A file-text guard pins it, because reverting
+`windowDaysForReason(reason)` is a one-token change no behavioural test can see.
+
+### 52.4 — Saying no, out loud
+
+An ineligible lead now shows the control **greyed with the reason** rather than
+hiding it. A control that silently comes and goes reads as broken and teaches
+nobody the rule. The window is publishable policy.
+
+⚠️ **The per-customer allowance is not, and nothing here may name it** (§51.3).
+`deadLeadPolicy.test.ts` bans "allowance", "quota", "budget", "limit" and
+"remaining" from every file this copy passes through, comments stripped —
+`LeadCard.tsx` was added to that list because it is now one of them. ⚠️ "limit"
+is ordinary English: write "within 14 days of it arriving", never "past the
+14-day limit".
+
+The confirmation **names both outcomes and promises neither**. It said only "the
+credit goes back", which was true when a replacement was not a thing the
+database could record; saying only that now would be the kind of untruth §51.11
+had to strip out of the published policy pages. What it must not become is a
+promise — "we'll send you a replacement" turns every report into a request for a
+better lead. The guard that forbade the words outright is replaced by one
+asserting it names both and commits to neither.
+
+The detail question varies by reason. "In their words" is nonsense for
+`wrong_details` — that reason exists precisely because there was no landlord to
+quote — and asking it anyway produces "n/a" padded to twenty characters, which
+poisons the dataset the 20-character floor exists to protect. The floor is
+unchanged.
+
+### 52.5 — The leads list deep-links rather than carrying state
+
+`LeadCard` gets a link to the lead with the report open, not an inline form.
+The card has no claim state and resolving it per card would be one eligibility
+query each on a list that renders the whole book; worse, per-reason availability
+in the browser for every lead would widen the surface that must never name the
+allowance from five files to six.
+
+⚠️ **And not one click either.** The card carries Reject a few pixels away, and
+a one-press replacement beside a one-press rejection is how an operator learns
+to press whichever one pays.
+
+### 52.6 — What the admin sees
+
+`get_assignment_effort(uuid[])` — opens, contact clicks broken out by channel,
+notes, files, days held, stage — one call for the whole queue, with a marker
+when there was **no contact attempt at all**. It marks; it does not rank or
+sort, because a queue that buried thin claims would decide them by not showing
+them.
+
+⚠️ **Do not widen `get_outcome_evidence` instead.** It computes most of the same
+figures and is gated to `won`/`not_relevant`/`rejected`; `/admin/outcomes` lists
+exactly what that filter returns, so widening it changes an unrelated page.
+
+⚠️ `detail_opened` is counted separately as `opens` and never folded into the
+contact tally — reading a lead is not contacting it (§6), and that distinction
+is the whole point of the screen. `nudge_sent` is excluded (§3).
+
+The swap picker is the **same `SwapLeadControl`**, extended with three optional
+props rather than copied, so the filter guard, matching-first ordering, hidden
+off-filter group and named acknowledgement cannot drift between the two screens.
+Its consequences name the note count, because a swap deletes the customer's
+notes with the assignment and a claimed lead is likelier than average to carry
+some — reporting one requires having worked it.
+
+### 52.7 — The admin header is grouped
+
+Leads / Customers / Insights / Content / System, reusing `DesktopNav`
+unchanged. Fourteen flat links had outgrown the row, carried **no active state
+at all**, and put the two pages opened daily between Training and Announcements.
+
+⚠️ It also fixes a breakpoint bug present since the header was written: the flat
+row was `sm:flex` while `MobileNav` is `lg:hidden`, so **both rendered between
+those two widths**. `DesktopNav` is `lg:flex`, which puts the pair back in step.
+
+### Verification
+
+All **139 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0139 re-applied twice for idempotency, and the 0137 and 0138 suites
+still pass.
+
+⚠️ **One real bug was found by applying it rather than reading it.**
+`origin_assignment_id` is NOT NULL and `apply_dead_lead_claim` inserts without
+naming it, so every claim failed on the constraint. The fix is a trigger, which
+is the honest shape: the column is derived, so no writer should have to remember
+it. Eyeballing the migration would not have caught this.
+
+`0139_dead_lead_swap_test.sql` — **28 assertions**, among them the one the
+migration exists for: a claim **survives** the swap that fulfilled it with its
+reason and the landlord's words intact and `origin_assignment_id` still naming
+where it came from. Also that a swap moves no money, that a refused swap leaves
+the claim `under_review` and the assignment standing (atomicity), that a settled
+claim returns null rather than swapping twice, that the idempotency guard holds
+after the pointer is nulled, and invariant 7.
+
+**1760 vitest cases green**, `npx tsc --noEmit` clean, `npm run lint` clean,
+`npm run build` compiles.
+
+⚠️ **Nine mutations were run and all nine caught** — §50.9 records two
+assertions once written weak enough to survive the mutation they existed to
+catch, and §42.8 records 91 follow-up runs destroyed by a boundary asserted in a
+pull request and never actually written:
+
+| Mutation | Fails |
+|---|---|
+| Restore `ON DELETE CASCADE` on the claim pointer | the survives-a-swap assertion |
+| Route a swap through the credit branch | the resolution assertion |
+| Credit the balance while leaving `resolution` alone | the money assertion, on its own |
+| Add a seventh reason to the copy module only | the vocabulary guard |
+| Give the competitor reason a fortnight | two independent window assertions |
+| Revert either route call site to `CLAIM_WINDOW_DAYS` | two route guards |
+| Name a quota in `LeadCard` | the banned-word guard |
+| Re-introduce a hand-rolled `sm:flex` nav | the breakpoint guard |
+| Settle a swap through the standalone swap endpoint | the atomicity guard |
+
+**Not yet exercised in a browser.** No claim has been reported, settled or
+replaced against a real database. ⚠️ A preview deployment cannot do it —
+Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51)
+— and a preview runs against **production** Supabase (§1.1), so a test claim
+moves a real credit and a test swap bins a real lead.
+
+### Deployment order — migration BEFORE code
+
+0139 first, applied and verified against production **before the pull request
+merges** (§1.1).
+
+It is inert: widened CHECKs reject no existing row, dropping a NOT NULL forbids
+nothing, the foreign-key change only alters delete behaviour, the new columns
+are nullable-then-backfilled over **zero rows**, and the two new functions have
+no caller until the code ships. The only existing body it replaces is
+`flag_lead_dead_if_unanimous`, which is reporting-only and now counts
+swap-settled claims on **both** sides of the ratio — adding them to one side
+would flag leads `dead` that are not.
+
+Code arriving first would fail every claim insert on a new reason and every
+`uphold_swap`.
