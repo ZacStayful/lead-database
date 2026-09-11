@@ -21,6 +21,9 @@ import {
 } from "lucide-react";
 import { recordLeadEvent } from "@/lib/contact/leadEvents";
 import { whatsappHandoffLink } from "@/lib/messaging/handoff";
+// Import-free and client-safe by design (§21.8) — the policy module reaches
+// plans.ts and must never land in this bundle.
+import { DEAD_LEAD_CONTROL_LABEL } from "@/lib/quality/deadLeadCopy";
 
 export function LeadCard({
   assignment: initial,
@@ -323,6 +326,34 @@ export function LeadCard({
               >
                 <Check className="h-4 w-4" />
                 {contacted ? "Contacted" : "Mark as contacted"}
+              </Button>
+            )}
+            {/*
+              ⚠️ A DEEP LINK, NOT AN INLINE FORM, and both halves are decisions.
+
+              Not inline: this card has no claim state, and resolving it per
+              card would be one eligibility query each on a list that renders
+              the whole book. Worse, per-reason availability in the browser for
+              every lead widens the surface that must never name the hidden
+              allowance (§51.3) from five files to six.
+
+              Not one click either: it opens the same confirm flow the lead page
+              uses. This button sits beside "Mark as contacted" on a card that
+              also carries Reject a few pixels away, and a one-press
+              replacement next to a one-press rejection is how an operator
+              learns to press whichever one pays (§51.6, §51.10).
+
+              Gated on `!rejected` only. Eligibility is resolved server-side on
+              the page it links to, which fails closed and — since 0139 —
+              explains a no rather than hiding the control.
+            */}
+            {!rejected && (
+              <Button size="sm" variant="outline" asChild>
+                <Link
+                  href={`/dashboard/leads/${lead.id}?from=${from}&report=1`}
+                >
+                  {DEAD_LEAD_CONTROL_LABEL}
+                </Link>
               </Button>
             )}
           </div>

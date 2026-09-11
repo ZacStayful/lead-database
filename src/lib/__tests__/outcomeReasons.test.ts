@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,18 +11,26 @@ import {
 import { CLOSE_REASONS } from "@/lib/closeReasons";
 import { DEAD_LEAD_REASONS } from "@/lib/quality/deadLeadCopy";
 
-const migration = readFileSync(
-  resolve(
-    __dirname,
-    "..",
-    "..",
-    "..",
-    "supabase",
-    "migrations",
-    "0138_lead_outcome_reasons.sql",
-  ),
-  "utf8",
-);
+/**
+ * Every migration, concatenated in apply order.
+ *
+ * ⚠️ This used to read 0138 by name, and 0139 broke it the moment it widened
+ * the report branch to six reasons: the test read the old file, found three,
+ * and failed on a mismatch that did not exist. Reading only the NEWEST defining
+ * migration is no better — it then misses the detail cap, which 0139 never
+ * restates.
+ *
+ * So the chain is read as a whole and each clause is taken at its LAST
+ * definition, which is what a rebuild from empty actually ends up with. Nothing
+ * needs repointing when the vocabulary moves again.
+ */
+const MIGRATIONS_DIR = resolve(__dirname, "..", "..", "..", "supabase", "migrations");
+
+const migration = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith(".sql"))
+  .sort()
+  .map((f) => readFileSync(resolve(MIGRATIONS_DIR, f), "utf8"))
+  .join("\n");
 
 describe("the vocabulary and the CHECK are one list", () => {
   /**
@@ -32,7 +40,9 @@ describe("the vocabulary and the CHECK are one list", () => {
    * asserted mechanically instead.
    */
   function checkList(outcomeClause: string): string[] {
-    const i = migration.indexOf(outcomeClause);
+    // ⚠️ lastIndexOf, not indexOf. 0138 defines these and 0139 redefines them;
+    // the first occurrence is the superseded one.
+    const i = migration.lastIndexOf(outcomeClause);
     expect(i).toBeGreaterThan(-1);
     const open = migration.indexOf("(", migration.indexOf("reason in", i));
     const close = migration.indexOf(")", open);

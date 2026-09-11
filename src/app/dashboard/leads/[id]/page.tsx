@@ -20,7 +20,7 @@ export default async function LeadDetailPage({
   searchParams,
 }: {
   params: { id: string };
-  searchParams: { from?: string };
+  searchParams: { from?: string; report?: string };
 }) {
   const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
@@ -155,6 +155,10 @@ export default async function LeadDetailPage({
       messages={(messageData ?? []) as never}
       contactTimeline={contactTimeline}
       deadLeadClaim={deadLeadClaim}
+      // The leads list deep-links here rather than carrying claim state per
+      // card — see LeadCard. Eligibility is still resolved server-side above,
+      // so arriving with ?report=1 on an ineligible lead opens nothing.
+      openReport={searchParams.report === "1"}
     />
   );
 }

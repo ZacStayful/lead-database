@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CLOSE_REASONS } from "@/lib/closeReasons";
+import { FIT_REASONS } from "@/lib/outcomeReasons";
 import {
   CLAIM_WINDOW_DAYS,
   DEAD_LEAD_CONFIRM_CONSEQUENCE,
@@ -9,6 +11,13 @@ import {
   DEAD_LEAD_PROMPT_MIN_OPENS,
   DEAD_LEAD_PROMPT_PRIOR_OPENS,
   DEAD_LEAD_REASONS,
+  DEAD_LEAD_REASON_LABELS,
+  REASON_WINDOW_DAYS,
+  REASON_DETAIL_PROMPT,
+  windowDaysForReason,
+  reasonAvailability,
+  anyReasonAvailable,
+  unavailableSummary,
   MIN_DETAIL_LENGTH,
   claimBudget,
   committedAllocation,
@@ -471,10 +480,32 @@ describe("⚠️ the credit is named in one place and not the other", () => {
     expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).toMatch(/credit/i);
   });
 
-  it("and promises no replacement, because neither refund route sends one", () => {
-    // §39.1 and §51.5. The credit returns and ordinary routing delivers.
+  /**
+   * ⚠️ THIS ASSERTION WAS REVERSED BY 0139, DELIBERATELY.
+   *
+   * It used to forbid the words outright — "and promises no replacement,
+   * because neither refund route sends one" — on §39.1 and §51.5, which were
+   * true when written: `resolution` had no such value, so the database could
+   * not record having sent one. A swap is now a real outcome, and copy that
+   * mentioned only the credit would be the same kind of untruth §51.11 had to
+   * strip out of the published policy pages.
+   *
+   * What must not come back is a PROMISE. "We'll send you a replacement" turns
+   * every report into a request for a better lead — the fishing §51.3's hidden
+   * allowance exists to prevent — and management stock cannot absorb it: about
+   * 70 leads carry a free slot and each swap consumes two of them.
+   *
+   * So the rule is now: name both, commit to neither.
+   */
+  it("names both outcomes, so it is not a half-truth about what can happen", () => {
+    expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).toMatch(/either/i);
+    expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).toMatch(/credit/i);
+    expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).toMatch(/different lead|replacement/i);
+  });
+
+  it("and commits to neither, so a report is never a request for a better lead", () => {
     expect(DEAD_LEAD_CONFIRM_CONSEQUENCE).not.toMatch(
-      /replace|swap|another lead now/i,
+      /we'?ll send you a replacement|you'?ll get a replacement|guaranteed|we will replace/i,
     );
   });
 
@@ -498,6 +529,9 @@ describe("the allowance stays unpublished in the COPY too", () => {
     "lib/outcomeReasons.ts",
     "components/dashboard/DeadLeadClaimCard.tsx",
     "components/dashboard/LeadOutcomePanel.tsx",
+    // Added by 0139: the card now carries the report control, so it is a
+    // customer-facing §51 surface like the other five.
+    "components/dashboard/LeadCard.tsx",
   ];
 
   for (const file of surfaces) {
@@ -572,5 +606,249 @@ describe("the allowance is settable per customer without being floored", () => {
     ).replace(/\/\/[^\n]*/g, ""); // strip comments: they explain the ban by naming it
     expect(src).toContain("normaliseAllowancePct(body.quality_allowance_pct)");
     expect(src).not.toMatch(/Math\.floor\([^)]*quality_allowance_pct/);
+  });
+});
+
+/**
+ * The per-reason windows (0139, §51).
+ *
+ * The 7 is the whole rule for the competitor reason and the reason it was not
+ * duplicated: a landlord who appointed someone else inside the first week means
+ * the operator never really got to pitch, and after that they had their chance
+ * and lost — a lost deal, chargeable under invariant 4.
+ */
+describe("how far back each reason reaches", () => {
+  it("gives the competitor reason a week and everything else a fortnight", () => {
+    expect(REASON_WINDOW_DAYS.already_with_operator).toBe(7);
+    for (const reason of DEAD_LEAD_REASONS) {
+      if (reason === "already_with_operator") continue;
+      expect(REASON_WINDOW_DAYS[reason]).toBe(CLAIM_WINDOW_DAYS);
+    }
+  });
+
+  /**
+   * ⚠️ Exhaustive on purpose. A seventh reason added without a window would
+   * otherwise read as `undefined` and compare false against every age, silently
+   * making that reason always available.
+   */
+  it("has a window for every reason and no others", () => {
+    expect(Object.keys(REASON_WINDOW_DAYS).sort()).toEqual(
+      [...DEAD_LEAD_REASONS].sort(),
+    );
+  });
+
+  it("asks something answerable for every reason", () => {
+    expect(Object.keys(REASON_DETAIL_PROMPT).sort()).toEqual(
+      [...DEAD_LEAD_REASONS].sort(),
+    );
+    // ⚠️ "In their words" is nonsense for wrong_details — that reason exists
+    // precisely because there was no landlord to quote.
+    expect(REASON_DETAIL_PROMPT.wrong_details).not.toMatch(/they say|their words/i);
+  });
+
+  it("windowDaysForReason is what the map says", () => {
+    for (const reason of DEAD_LEAD_REASONS) {
+      expect(windowDaysForReason(reason)).toBe(REASON_WINDOW_DAYS[reason]);
+    }
+  });
+});
+
+describe("which reasons a lead can be reported under", () => {
+  const claimable = (ageDays: number) => ({
+    claimable: true,
+    claimStatus: null,
+    ageDays,
+  });
+
+  it("offers all six inside the first week", () => {
+    const r = reasonAvailability(claimable(6));
+    for (const reason of DEAD_LEAD_REASONS) expect(r[reason].available).toBe(true);
+    expect(anyReasonAvailable(r)).toBe(true);
+    expect(unavailableSummary(r)).toBeNull();
+  });
+
+  it("still offers the competitor reason ON the seventh day", () => {
+    expect(reasonAvailability(claimable(7)).already_with_operator.available).toBe(true);
+  });
+
+  it("withdraws it on the eighth, and explains why", () => {
+    const r = reasonAvailability(claimable(8));
+    expect(r.already_with_operator.available).toBe(false);
+    expect(r.already_with_operator.because).toMatch(/lost deal|over a week/i);
+    // The other five are untouched — this is a per-reason rule, not a cliff.
+    for (const reason of DEAD_LEAD_REASONS) {
+      if (reason === "already_with_operator") continue;
+      expect(r[reason].available).toBe(true);
+    }
+  });
+
+  it("keeps the rest available on the fourteenth day", () => {
+    const r = reasonAvailability(claimable(14));
+    expect(r.unreachable.available).toBe(true);
+    expect(r.property_sold.available).toBe(true);
+  });
+
+  /**
+   * ⚠️ An ineligible lead shows the control with a REASON rather than hiding
+   * it. An operator who saw it last week and not this week reads it as broken,
+   * and nobody learns the rule from a control that comes and goes.
+   */
+  it("explains an out-of-window lead as age, not as 'you never worked it'", () => {
+    const r = reasonAvailability({ claimable: false, claimStatus: null, ageDays: 40 });
+    expect(anyReasonAvailable(r)).toBe(false);
+    expect(unavailableSummary(r)).toMatch(/14 days|too long/i);
+  });
+
+  it("explains an unworked lead as unworked", () => {
+    const r = reasonAvailability({ claimable: false, claimStatus: null, ageDays: 2 });
+    expect(anyReasonAvailable(r)).toBe(false);
+    expect(unavailableSummary(r)).toMatch(/worked it/i);
+  });
+
+  it("says a reported lead has already been reported", () => {
+    const r = reasonAvailability({
+      claimable: false,
+      claimStatus: "under_review",
+      ageDays: 2,
+    });
+    expect(anyReasonAvailable(r)).toBe(false);
+    expect(unavailableSummary(r)).toMatch(/already told us/i);
+  });
+
+  it("tolerates an unknown age rather than guessing", () => {
+    const r = reasonAvailability({ claimable: true, claimStatus: null, ageDays: null });
+    // Eligibility is the authoritative answer; a missing age narrows nothing.
+    for (const reason of DEAD_LEAD_REASONS) expect(r[reason].available).toBe(true);
+  });
+
+  /**
+   * ⚠️ §51.3 in its strongest form: none of this copy may name the hidden
+   * per-customer allowance, and an operator over it must read exactly what an
+   * operator under it reads.
+   */
+  it("never names the allowance in any explanation", () => {
+    for (const ageDays of [2, 8, 40]) {
+      for (const claim of [true, false]) {
+        const r = reasonAvailability({ claimable: claim, claimStatus: null, ageDays });
+        for (const reason of DEAD_LEAD_REASONS) {
+          const because = (r[reason].because ?? "").toLowerCase();
+          for (const word of ["allowance", "quota", "budget", "limit", "remaining"]) {
+            expect(because).not.toContain(word);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("⚠️ the competitor reason cannot be confused with the close reason", () => {
+  /**
+   * `CLOSE_REASONS.sorted_elsewhere` ("Already sorted with someone else") and
+   * this reason are near-identical sentences with OPPOSITE money outcomes, one
+   * a bad lead and one a lost deal. §51.10 found them a click apart and had to
+   * add the timing to both.
+   */
+  it("keeps the timing in the label", () => {
+    expect(DEAD_LEAD_REASON_LABELS.already_with_operator).toMatch(
+      /before i got through|already/i,
+    );
+  });
+
+  it("shares no wording with any other vocabulary", () => {
+    const all = [
+      ...Object.values(DEAD_LEAD_REASON_LABELS),
+      ...Object.values(CLOSE_REASONS),
+      ...Object.values(FIT_REASONS),
+    ].map((l) => l.toLowerCase().trim());
+    expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+/**
+ * ⚠️ FILE-TEXT GUARDS ON THE ROUTES.
+ *
+ * §42.8 records what the alternative costs: a safety boundary asserted in a
+ * pull request, checked by a test that wrote its own copy of the query, and
+ * never actually present — 91 follow-up runs destroyed within six minutes of
+ * deploy. These read the real files.
+ *
+ * Comments are stripped first. Both files explain these rules in prose and
+ * necessarily contain the very tokens being banned, so a naive check fails on
+ * the explanation and trains the next person to delete the explanation (§46).
+ */
+describe("the seven-day rule is actually wired into the route", () => {
+  const strip = (p: string) =>
+    readFileSync(resolve(__dirname, "..", "..", p), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+  const claimRoute = () => strip("app/api/customer/dead-lead-claim/route.ts");
+
+  it("sends a per-reason window, not the fortnight", () => {
+    const src = claimRoute();
+    expect(src).toContain("windowDaysForReason(reason)");
+    // ⚠️ Reverting either call site to the constant is a ONE-TOKEN change that
+    // silently restores a fortnight to the reason that must not have one, and
+    // no behavioural test in this suite could see it.
+    expect(src).not.toMatch(/p_window_days:\s*CLAIM_WINDOW_DAYS/);
+  });
+
+  it("uses the same window for the commit as for the eligibility read", () => {
+    const src = claimRoute();
+    const uses = src.match(/p_window_days:\s*windowDays/g) ?? [];
+    // Both call sites. One would mean the row lock re-asserts a different rule
+    // from the one the route just applied, and the lock is the authority.
+    expect(uses.length).toBe(2);
+  });
+
+  it("narrows the reason before it touches the database", () => {
+    const src = claimRoute();
+    const narrow = src.indexOf("isReason(body?.reason)");
+    const firstRpc = src.indexOf("claimable_dead_lead_assignments");
+    expect(narrow).toBeGreaterThan(-1);
+    expect(firstRpc).toBeGreaterThan(-1);
+    // An empty submit must cost no round trip and write nothing.
+    expect(narrow).toBeLessThan(firstRpc);
+  });
+});
+
+describe("the admin decision route settles a swap atomically", () => {
+  const strip = (p: string) =>
+    readFileSync(resolve(__dirname, "..", "..", p), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+  const adminRoute = () => strip("app/api/admin/quality-claims/[id]/route.ts");
+
+  it("goes through the one transactional RPC", () => {
+    expect(adminRoute()).toContain("resolve_dead_lead_claim_with_swap");
+  });
+
+  /**
+   * ⚠️ Two HTTP calls cannot settle this. The swap deletes the assignment,
+   * which nulls the claim's pointer; a failure in between leaves an
+   * under_review claim, no assignment, and a free lead already delivered.
+   */
+  it("never posts to the standalone swap endpoint instead", () => {
+    expect(adminRoute()).not.toContain("/api/admin/assignments");
+  });
+
+  it("requires the filter override to be sent explicitly", () => {
+    // A truthy 1 must not place a lead the customer filtered out.
+    expect(adminRoute()).toContain("body?.allow_filter_mismatch === true");
+  });
+
+  /**
+   * ⚠️ `uphold` and `uphold_goodwill` differ only in whether the hidden
+   * allowance is spent. An email that read differently between them would
+   * publish the allowance to any two operators comparing notes, so the
+   * distinction must not reach the send.
+   */
+  it("tells the customer nothing about which uphold verb fired", () => {
+    const src = adminRoute();
+    const send = src.slice(src.indexOf("async function notifyUpheld"));
+    expect(send).not.toContain("goodwill");
+    expect(send).not.toContain("consumesAllowance");
+    expect(send).not.toContain("allowance_consumed");
   });
 });

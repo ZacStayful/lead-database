@@ -33,8 +33,11 @@
 import { holdsProduct, type ProductCustomerFields } from "@/lib/products";
 import type { LeadType } from "@/lib/types";
 import {
+  CLAIM_WINDOW_DAYS,
   DEAD_LEAD_REASONS,
   MIN_DETAIL_LENGTH,
+  UNAVAILABLE_COPY,
+  windowDaysForReason,
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadCopy";
 
@@ -50,20 +53,19 @@ export {
   DEAD_LEAD_PROMPT_BODY,
   DEAD_LEAD_PROMPT_DISMISS,
   DEAD_LEAD_CONFIRM_CONSEQUENCE,
+  CLAIM_WINDOW_DAYS,
+  COMPETITOR_WINDOW_DAYS,
+  REASON_WINDOW_DAYS,
+  REASON_DETAIL_PROMPT,
+  UNAVAILABLE_COPY,
+  windowDaysForReason,
 } from "@/lib/quality/deadLeadCopy";
-export type { DeadLeadReason } from "@/lib/quality/deadLeadCopy";
+export type { DeadLeadReason, UnavailableCode } from "@/lib/quality/deadLeadCopy";
 
-/**
- * How far back a claim can reach. Passed into
- * `claimable_dead_lead_assignments` rather than baked into the SQL default, so
- * the window this module reasons about and the window the database enforces are
- * one number.
- *
- * Two weeks because a claim is a statement about the landlord's state at a
- * moment: reported three months on, it cannot be traced to a source and cannot
- * be checked against what the landlord says now.
- */
-export const CLAIM_WINDOW_DAYS = 14;
+// CLAIM_WINDOW_DAYS moved to `deadLeadCopy.ts` in 0139 and is re-exported
+// above. It sits beside REASON_WINDOW_DAYS because the two are one rule, and
+// the browser needs to render "within 14 days" without dragging `plans.ts`
+// into the bundle through this module (§21.8).
 
 /**
  * How many separate visits to a lead before the page offers the report
@@ -244,7 +246,15 @@ export function claimBudget(customer: ClaimCustomer): number {
   return Math.max(0, base) + earnedBonus(customer);
 }
 
-function isReason(v: unknown): v is DeadLeadReason {
+/**
+ * Narrow untrusted input to one of the six reasons.
+ *
+ * Exported since 0139 because the route must know the reason BEFORE it reads
+ * the database — the reason decides the window (§51), and an unknown one has to
+ * be refused without a round trip. It was private while the window was a single
+ * constant and the reason could be checked afterwards.
+ */
+export function isReason(v: unknown): v is DeadLeadReason {
   return (
     typeof v === "string" &&
     (DEAD_LEAD_REASONS as readonly string[]).includes(v)
@@ -390,4 +400,109 @@ export function decideDeadLeadClaim(
     code: "needs_review",
     message: "Thanks — we are looking into this one and will come back to you.",
   };
+}
+
+/**
+ * The facts a lead page has about one assignment, as far as reporting goes.
+ *
+ * `claimable` is the AUTHORITATIVE answer and comes from
+ * `claimable_dead_lead_assignments` — the one predicate the route enforces.
+ * `ageDays` exists only to narrow it further per reason. If the two ever
+ * disagree, `claimable` wins: this module may refuse something SQL would
+ * accept, but it must never offer something SQL would refuse, which is the
+ * rule §35 states for the admin picker and §51 for this control.
+ */
+export interface ClaimFacts {
+  claimable: boolean;
+  claimStatus: string | null;
+  ageDays: number | null;
+}
+
+export interface ReasonAvailability {
+  available: boolean;
+  /** Why not, in the operator's own language. Null when it is available. */
+  because: string | null;
+}
+
+/**
+ * Which of the six reasons this assignment can be reported under, and why not
+ * for the rest.
+ *
+ * ⚠️ ONE ELIGIBILITY CALL ANSWERS ALL SIX. The competitor window (7 days) is
+ * strictly narrower than the authoritative one (14), so a single
+ * `claimable_dead_lead_assignments` read at 14 days is enough and nothing can
+ * drift between the reasons. Asking per reason would be six round trips on
+ * every lead page load for an answer that is derivable.
+ *
+ * ⚠️ It returns sentences, never numbers about the customer. The window is
+ * publishable policy and appears in the copy; the per-customer allowance is not
+ * and must never appear anywhere (§51.3).
+ */
+export function reasonAvailability(
+  facts: ClaimFacts,
+): Record<DeadLeadReason, ReasonAvailability> {
+  const out = {} as Record<DeadLeadReason, ReasonAvailability>;
+
+  // A settled claim outranks everything: there is nothing left to ask.
+  const settled = facts.claimStatus
+    ? facts.claimStatus === "under_review"
+      ? UNAVAILABLE_COPY.already_reported
+      : UNAVAILABLE_COPY.settled
+    : null;
+
+  for (const reason of DEAD_LEAD_REASONS) {
+    if (settled) {
+      out[reason] = { available: false, because: settled };
+      continue;
+    }
+
+    if (!facts.claimable) {
+      // ⚠️ Age is the commonest cause by far and is worth naming specifically;
+      // everything else the SQL predicate bars (never worked, won, claimed
+      // from the pool, a lead they added themselves) reads as "not worked",
+      // which is the honest catch-all — the operator's remedy is the same.
+      const tooOld =
+        facts.ageDays != null && facts.ageDays > CLAIM_WINDOW_DAYS;
+      out[reason] = {
+        available: false,
+        because: tooOld ? UNAVAILABLE_COPY.too_old : UNAVAILABLE_COPY.not_worked,
+      };
+      continue;
+    }
+
+    const window = windowDaysForReason(reason);
+    if (facts.ageDays != null && facts.ageDays > window) {
+      out[reason] = {
+        available: false,
+        because: UNAVAILABLE_COPY.too_old_for_reason,
+      };
+      continue;
+    }
+
+    out[reason] = { available: true, because: null };
+  }
+
+  return out;
+}
+
+/** Whether any reason at all can be used — what decides if the control is live. */
+export function anyReasonAvailable(
+  reasons: Record<DeadLeadReason, ReasonAvailability>,
+): boolean {
+  return DEAD_LEAD_REASONS.some((r) => reasons[r].available);
+}
+
+/**
+ * The one sentence to show when nothing can be reported. Every reason carries
+ * the same explanation in that case except the per-reason window, so the first
+ * unavailable reason's wording is the right one to lead with.
+ */
+export function unavailableSummary(
+  reasons: Record<DeadLeadReason, ReasonAvailability>,
+): string | null {
+  if (anyReasonAvailable(reasons)) return null;
+  for (const r of DEAD_LEAD_REASONS) {
+    if (reasons[r].because) return reasons[r].because;
+  }
+  return null;
 }

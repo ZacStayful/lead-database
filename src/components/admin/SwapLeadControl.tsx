@@ -50,10 +50,34 @@ export function SwapLeadControl({
   assignmentId,
   leadName,
   status,
+  submit,
+  triggerLabel,
+  extraConsequence,
 }: {
   assignmentId: string;
   leadName: string | null;
   status: string | null;
+  /**
+   * Where the chosen lead is sent. Defaults to the swap endpoint, which is what
+   * the customer page has always used.
+   *
+   * ⚠️ The dead-lead queue passes its own, because settling a CLAIM by swapping
+   * cannot be two HTTP calls: the swap deletes the assignment, which nulls the
+   * claim's pointer, so a failure in between leaves an under_review claim, no
+   * assignment, and a free lead already delivered (0139). Its route does both
+   * in one transaction.
+   *
+   * The GET half is untouched either way, so the filter guard, the
+   * matching-first ordering, the hidden off-filter group and the named
+   * acknowledgement all come for free.
+   */
+  submit?: (
+    leadId: string,
+    allowFilterMismatch: boolean,
+  ) => Promise<{ ok: boolean; error?: string; notified?: boolean }>;
+  triggerLabel?: string;
+  /** An extra sentence in the consequences block, before the confirm. */
+  extraConsequence?: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -182,14 +206,34 @@ export function SwapLeadControl({
     setSwapping(true);
     setError(null);
     try {
+      // Only ever true for a lead the admin has been shown is off-filter and
+      // has ticked for. Anything else and the function refuses.
+      const allowMismatch = needsAcknowledgement && acknowledged;
+
+      if (submit) {
+        const result = await submit(chosen.id, allowMismatch);
+        if (!result.ok) {
+          setError(result.error ?? "Could not swap this lead.");
+          return;
+        }
+        if (result.notified === false) {
+          setError(
+            "Swapped, but the customer could not be notified. Let them know by hand."
+          );
+          router.refresh();
+          return;
+        }
+        setOpen(false);
+        router.refresh();
+        return;
+      }
+
       const res = await fetch(`/api/admin/assignments/${assignmentId}/swap`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           new_lead_id: chosen.id,
-          // Only ever sent for a lead the admin has been shown is off-filter
-          // and has ticked for. Anything else and the function refuses.
-          allow_filter_mismatch: needsAcknowledgement && acknowledged,
+          allow_filter_mismatch: allowMismatch,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -235,7 +279,7 @@ export function SwapLeadControl({
         onClick={start}
         className="text-sm font-medium text-[#5D8156] hover:underline"
       >
-        Swap
+        {triggerLabel ?? "Swap"}
       </button>
     );
   }
@@ -272,6 +316,10 @@ export function SwapLeadControl({
         replacement carries the same price. The customer gets the usual new-lead
         email and text for the replacement.
       </p>
+
+      {extraConsequence && (
+        <p className="text-sm font-medium text-[#a8620f]">{extraConsequence}</p>
+      )}
 
       {filter && (
         <p

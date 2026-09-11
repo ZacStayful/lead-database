@@ -11,6 +11,7 @@ import {
   DEAD_LEAD_PROMPT_HEADING,
   DEAD_LEAD_REASON_LABELS,
   DEAD_LEAD_REASONS,
+  REASON_DETAIL_PROMPT,
   MIN_DETAIL_LENGTH,
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadCopy";
@@ -52,12 +53,28 @@ import {
  * ⚠️ The caller renders it in exactly ONE place at a time. Two copies would be
  * §51.6's own warning turned on itself.
  */
+/**
+ * Which reasons this lead can be reported under.
+ *
+ * ⚠️ Declared here rather than imported from `deadLeadPolicy.ts`. This is a
+ * client component and that module reaches `plans.ts` through `products.ts`;
+ * `deadLeadPolicy.test.ts` has a tripwire that fails if this file ever imports
+ * it. A structural type costs nothing and keeps the plan tables out of the
+ * browser bundle (§21.8).
+ */
+export type ReasonVerdicts = Record<
+  string,
+  { available: boolean; because: string | null }
+>;
+
 export function DeadLeadClaimCard({
   assignmentId,
   claimable,
   claimStatus,
   variant = "solo",
   onDismiss,
+  reasons,
+  defaultOpen = false,
 }: {
   assignmentId: string;
   claimable: boolean;
@@ -66,9 +83,16 @@ export function DeadLeadClaimCard({
   variant?: "prominent" | "panel" | "solo";
   /** `prominent` only — moves the option into the panel rather than removing it. */
   onDismiss?: () => void;
+  /** Per-reason availability, so the seven-day rule is visible in the select. */
+  reasons?: ReasonVerdicts;
+  /**
+   * Open the form straight away. Set when the operator arrived from the leads
+   * list, which deep-links here rather than carrying claim state per card.
+   */
+  defaultOpen?: boolean;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [done, setDone] = useState<string | null>(null);
 
   if (claimStatus) {
@@ -116,6 +140,7 @@ export function DeadLeadClaimCard({
         assignmentId={assignmentId}
         onDone={finish}
         onCancel={() => setOpen(false)}
+        reasons={reasons}
       />
     );
     return variant === "prominent" ? (
@@ -189,12 +214,16 @@ function ClaimForm({
   assignmentId,
   onDone,
   onCancel,
+  reasons,
 }: {
   assignmentId: string;
   onDone: (message: string) => void;
   onCancel: () => void;
+  reasons?: ReasonVerdicts;
 }) {
   const [reason, setReason] = useState<DeadLeadReason | "">("");
+  // Why the chosen reason cannot be used, when it cannot.
+  const chosenBecause = reason && reasons ? (reasons[reason]?.because ?? null) : null;
   const [detail, setDetail] = useState("");
   const [contactedOn, setContactedOn] = useState("");
   const [busy, setBusy] = useState(false);
@@ -202,6 +231,10 @@ function ClaimForm({
 
   const ready =
     reason !== "" &&
+    // ⚠️ Not just "a reason is chosen" — one that can actually be used. A
+    // disabled <option> is still selectable by keyboard in some browsers, and
+    // the route would refuse it with a 400 the operator cannot act on.
+    (!reasons || reasons[reason]?.available !== false) &&
     detail.trim().length >= MIN_DETAIL_LENGTH &&
     contactedOn !== "";
 
@@ -245,27 +278,44 @@ function ClaimForm({
       <label className="mb-1 block text-xs font-medium text-[#52514e]">
         What did they say?
       </label>
+      {/*
+        ⚠️ Every reason is LISTED, and the ones that cannot be used are
+        disabled rather than absent. This is where the seven-day rule becomes
+        legible: on a ten-day-old lead the competitor reason is greyed with its
+        explanation, and the other five are live. Dropping it from the list
+        instead would leave an operator who knows it exists hunting for it.
+      */}
       <select
         value={reason}
         onChange={(e) => setReason(e.target.value as DeadLeadReason)}
-        className="mb-3 w-full rounded-lg border border-black/10 px-3 py-2 text-sm"
+        className="mb-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm"
       >
         <option value="">Choose one</option>
         {DEAD_LEAD_REASONS.map((r) => (
-          <option key={r} value={r}>
+          <option key={r} value={r} disabled={reasons ? !reasons[r]?.available : false}>
             {DEAD_LEAD_REASON_LABELS[r]}
           </option>
         ))}
       </select>
+      {chosenBecause ? (
+        <p className="mb-3 text-xs text-[#a8620f]">{chosenBecause}</p>
+      ) : (
+        <div className="mb-3" />
+      )}
 
       <label className="mb-1 block text-xs font-medium text-[#52514e]">
-        In their words
+        {reason ? REASON_DETAIL_PROMPT[reason] : "What happened?"}
       </label>
       {/*
         The detail is the whole basis for tracing a dead lead back to the
         source that produced it, which is the half of this that improves the
-        leads rather than merely crediting them. Hence the floor, and hence
-        asking for what the landlord said rather than for a category.
+        leads rather than merely crediting them. Hence the floor.
+
+        ⚠️ The QUESTION varies by reason and the floor does not. "In their
+        words" is nonsense for `wrong_details` — that reason exists precisely
+        because there was no landlord to quote — and often for `property_sold`
+        too. Asking it anyway produces "n/a" padded to twenty characters, which
+        poisons exactly the dataset the floor exists to protect.
       */}
       <textarea
         value={detail}

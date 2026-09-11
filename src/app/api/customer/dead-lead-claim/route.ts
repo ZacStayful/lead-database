@@ -5,9 +5,14 @@ import { sendDeadLeadReviewEmail } from "@/lib/emails";
 import {
   CLAIM_WINDOW_DAYS,
   DEAD_LEAD_REASON_LABELS,
+  REASON_DETAIL_PROMPT,
+  UNAVAILABLE_COPY,
   decideDeadLeadClaim,
-  type DeadLeadReason,
+  isReason,
+  windowDaysForReason,
+  type ClaimCustomer,
   type PeerAssignment,
+  type DeadLeadReason,
 } from "@/lib/quality/deadLeadPolicy";
 
 export const runtime = "nodejs";
@@ -67,12 +72,51 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /**
+   * ⚠️ THE REASON IS NARROWED BEFORE ANY DATABASE WORK, and the order matters
+   * twice over.
+   *
+   * It decides the WINDOW (0139): already_with_operator reaches back seven days
+   * and everything else a fortnight, so the number sent to both calls below
+   * depends on it. And an absent or unknown reason must return the verdict
+   * without touching the database at all, so an empty submit writes nothing —
+   * `decideDeadLeadClaim` used to run after the eligibility query and would
+   * have cost a round trip to say "pick a reason".
+   */
+  if (!isReason(body?.reason)) {
+    const verdict = decideDeadLeadClaim({
+      customer: customer as ClaimCustomer,
+      reason: body?.reason,
+      detail: body?.detail,
+      contactedOn: body?.contacted_on,
+      peers: [],
+    });
+    return NextResponse.json(
+      { ok: false, code: verdict.code, message: verdict.message },
+      { status: 400 }
+    );
+  }
+  const reason: DeadLeadReason = body.reason;
+
+  /**
+   * ⚠️ This is the ENTIRE enforcement of the seven-day rule, and it is enforced
+   * in SQL rather than here: the same number goes into the eligibility read AND
+   * into `apply_dead_lead_claim`, which re-asserts eligibility under its row
+   * lock. Route and function therefore cannot disagree (§5E's discipline).
+   *
+   * A file-text guard in `deadLeadPolicy.test.ts` pins this call site, because
+   * reverting `windowDaysForReason(reason)` to `CLAIM_WINDOW_DAYS` is a
+   * one-token change that silently restores a fortnight to the one reason that
+   * must not have it, and no behavioural test could see it.
+   */
+  const windowDays = windowDaysForReason(reason);
+
   const admin = createAdminClient();
 
   // 1 — eligibility, from the one predicate that owns it.
   const { data: claimable, error: claimableError } = await admin.rpc(
     "claimable_dead_lead_assignments",
-    { p_customer_id: customer.id, p_window_days: CLAIM_WINDOW_DAYS }
+    { p_customer_id: customer.id, p_window_days: windowDays }
   );
 
   if (claimableError) {
@@ -94,12 +138,20 @@ export async function POST(req: NextRequest) {
     // ⚠️ Why, not just no. The commonest reason by far is that the operator has
     // not opened the lead in this browser yet, and "you cannot report this"
     // with no explanation reads as us refusing to listen.
+    //
+    // ⚠️ And it must say which window it applied. A competitor claim on a
+    // ten-day-old lead is refused by the SEVEN-day window, so repeating the
+    // fortnight here would be a plain lie about a rule the operator can check
+    // — and the remedy is different: that one is a lost deal, and "Didn't work
+    // out" is the control they actually want.
     return NextResponse.json(
       {
         ok: false,
         code: "not_claimable",
         message:
-          `Open the lead and try the landlord first — we can only look into a lead once you have actually worked it, and within ${CLAIM_WINDOW_DAYS} days of it arriving.`,
+          windowDays < CLAIM_WINDOW_DAYS
+            ? UNAVAILABLE_COPY.too_old_for_reason
+            : `Open the lead and try the landlord first — we can only look into a lead once you have actually worked it, and within ${CLAIM_WINDOW_DAYS} days of it arriving.`,
       },
       { status: 400 }
     );
@@ -160,13 +212,17 @@ export async function POST(req: NextRequest) {
     {
       p_assignment_id: assignmentId,
       p_customer_id: customer.id,
-      p_reason: body.reason as string,
+      p_reason: reason,
       p_detail: String(body.detail ?? "").trim(),
       p_contacted_on: String(body.contacted_on ?? "").trim() || null,
       p_decision: verdict.decision,
       p_consumes_allowance: verdict.consumesAllowance,
       p_corroboration: verdict.corroboration,
-      p_window_days: CLAIM_WINDOW_DAYS,
+      // ⚠️ The SAME window the eligibility read used. Sending the fortnight
+      // here would have the row lock re-assert a different rule from the one
+      // this route just applied — and the lock is the authority, so a competitor
+      // claim refused above would be accepted here on a re-submit.
+      p_window_days: windowDays,
     }
   );
 
@@ -252,12 +308,21 @@ export async function POST(req: NextRequest) {
   });
 }
 
-/** The three reasons, for the form. */
+/**
+ * The reasons, for the form.
+ *
+ * Each carries its OWN window since 0139 — already_with_operator reaches back
+ * seven days and the rest a fortnight — so a caller can grey an option without
+ * knowing the rule. `window_days` stays as the widest of them for anything
+ * still reading the old shape.
+ */
 export async function GET() {
   return NextResponse.json({
     reasons: REASONS.map((value) => ({
       value,
       label: DEAD_LEAD_REASON_LABELS[value],
+      detail_prompt: REASON_DETAIL_PROMPT[value],
+      window_days: windowDaysForReason(value),
     })),
     window_days: CLAIM_WINDOW_DAYS,
   });
