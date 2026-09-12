@@ -83,6 +83,7 @@ export const KNOWN_ISSUES: string[] = [
   "Admin shows \"3 / 2 assigned\" on a reclaimed lead. Truthful, looks odd; the Reclaim history block on the lead detail page explains it. A claimed pool lead does the same and can read \"4 / 3\" — claiming…",
   "Stripe's billing cycle keeps running underneath a pause. pause_collection: { behavior: \"void\" } generates invoices and voids them; resuming does not create a charge, it stops voiding future ones. So…",
   "fully_served for a paused customer is a stale reading, in an unverified direction. got counts assignments since coalesce(billing_cycle_anchor, created_at). Both customers paused at the time of writin…",
+  "⚠️ sweep-lead-pool's kill switch fails OPEN. It reads (settingRow?.value ?? \"true\") with the query error discarded, so an unreadable system_settings runs the sweep as though pool_enabled were on. The…",
   "No ESLint config (next lint prompts interactively) and no test suite.",
 ];
 

@@ -107,6 +107,20 @@ async function run(request: Request) {
   // ⚠️ FAILS CLOSED on the switch, like everything else that puts a prompt in
   // front of a customer about approaching a member of the public.
   const settings = await contactPlanSettings(admin);
+
+  // ⚠️ AND A FAILED READ IS NOT A SWITCHED-OFF FEATURE. Falling through would
+  // answer 200 with "contact_plans_disabled" — a cause that is not the cause,
+  // on a job whose entire output is an email that simply never arrives. §18's
+  // escalation cron lost a day of both snapshot series to exactly that
+  // sentence on 2026-09-12. A 500 marks the run failed instead.
+  if (settings.readFailed) {
+    console.error("[contact-followups] run aborted — system_settings unreadable");
+    return NextResponse.json(
+      { ok: false, error: "settings_read_failed" },
+      { status: 500 }
+    );
+  }
+
   if (!settings.enabled) {
     return NextResponse.json({ ok: true, skipped: "contact_plans_disabled" });
   }

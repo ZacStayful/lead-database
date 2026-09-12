@@ -19,17 +19,43 @@ import {
 
 type Admin = SupabaseClient;
 
+import {
+  resolveSettingsGate,
+  type SettingsRow,
+} from "@/lib/cron/settingsGate";
+
 export const STANDARD_PLAN_NAME = "Standard follow-up";
 
 /** Numeric/boolean settings this feature reads, in one query. */
 export async function contactPlanSettings(admin: Admin): Promise<{
+  /**
+   * ⚠️ TRUE WHEN THE READ ITSELF FAILED, which is NOT the same fact as
+   * `enabled: false` and must not be collapsed into it.
+   *
+   * Every field below still falls back to its documented default, so this
+   * function keeps working — but `enabled` then reads false, and a caller
+   * treating that as "the feature is switched off" reports a cause that is not
+   * the cause. That is the defect settingsGate.ts was written for, one file
+   * over: on 2026-09-12 the escalation cron logged a kill switch as off while
+   * the database said otherwise.
+   *
+   * Callers differ deliberately, so the choice is theirs rather than this
+   * function's: the two crons abort loudly, and the customer lead page does
+   * NOT — a transient blip should hide a timeline block, never 500 a page a
+   * customer is reading.
+   *
+   * An EMPTY result is not a failure. This query names five keys, so none of
+   * them being seeded is the ordinary shape of a database that has not
+   * configured the feature, and the defaults below are the answer.
+   */
+  readFailed: boolean;
   enabled: boolean;
   landlordMaxPerDay: number;
   landlordMaxPerWeek: number;
   noticePct: number;
   noticeMinOverdue: number;
 }> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("system_settings")
     .select("key, value")
     .in("key", [
@@ -40,15 +66,15 @@ export async function contactPlanSettings(admin: Admin): Promise<{
       "followup_adherence_notice_min_overdue",
     ]);
 
-  const map = new Map(
-    ((data ?? []) as { key: string; value: string }[]).map((r) => [r.key, r.value])
-  );
+  const gate = resolveSettingsGate(data as SettingsRow[] | null, error);
+  const map = gate.ok ? gate.config : new Map<string, string>();
   const num = (k: string, fallback: number) => {
     const n = Number(map.get(k));
     return Number.isFinite(n) ? n : fallback;
   };
 
   return {
+    readFailed: !gate.ok && gate.reason === "read_failed",
     // ⚠️ Fails CLOSED, the messagingEnabled precedent: an unreadable switch must
     // not start putting approaches in front of members of the public.
     enabled: map.get("contact_plans_enabled") === "true",
