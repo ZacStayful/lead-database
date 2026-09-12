@@ -11842,32 +11842,34 @@ against **production** Supabase (§1.1), so a test swap bins a real lead.
 0141 first, applied and verified against production before the pull request
 merges (§1.1).
 
-⚠️ **APPLIED TO `znlfwbnvhlacwzgfalcf` ON 2026-09-12 IN PARTS, AND ONE PART DID
-NOT GO ON.** Sections 1-5, 7 and 8 are live and every function body hash-matches
-a scratch build from this file — `get_customer_replacement_candidates`
-`4255a037…`, `customer_swap_dead_lead` `5bbc2e57…`, `flag_lead_dead_if_unanimous`
-`e3c7dbdc…`, `get_service_capacity` `b811d255…`, `capture_service_capacity`
-`b19156ba…`. ACLs are `service_role`-only on all five, invariant 7's four are
-untouched, `get_advisors` reports no new finding, and an md5 of every customer's
-balances and counters is **identical** before and after
-(`9f56f9d805b1331712266d9f8d32141d`), across 53 customers, 501 leads and 512
-assignments.
+✅ **APPLIED IN FULL TO `znlfwbnvhlacwzgfalcf` ON 2026-09-12**, before the pull
+request merged, and verified there rather than trusted.
 
-⚠️ **SECTION 6 — the `reset_monthly_counts` rewrite — IS NOT APPLIED.**
-Production still runs 0137's body (`edc74cfd…`). The consequence is narrow and
-worth knowing: the claim counter still resets, but a **GR-only customer resets on
-their signup day rather than their GR billing anchor**, so
-`nextResetDate` — which mirrors the NEW coalesce — will print a date that is a
-few days out for them until it lands. Nobody is over- or under-entitled by it,
-and a dual-product customer is unaffected. Apply section 6 before relying on the
-reset date shown on the tab.
+- **Every function body hash-matches a scratch build from this file**:
+  `get_customer_replacement_candidates` `4255a037…`, `customer_swap_dead_lead`
+  `5bbc2e57…`, `flag_lead_dead_if_unanimous` `e3c7dbdc…`,
+  `get_service_capacity` `b811d255…`, `capture_service_capacity` `b19156ba…`,
+  `reset_monthly_counts` `dde127d8…`. All `security definer` with `search_path`
+  pinned, `anon` and `authenticated` false, `service_role` true.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the
+  five mutable-`search_path` functions it lists are all pre-existing.
+- **Nothing moved.** 53 customers, 501 leads and 512 assignments untouched, and
+  an md5 of every customer's balances and counters **identical** before and
+  after (`9f56f9d805b1331712266d9f8d32141d`).
+- The new reset anchor was then driven **on production itself**, inside a block
+  that raises at the end so every write rolled back: `reset_monthly_counts()`
+  ran clean, **zero** dual-product customers are anchored on the wrong date, and
+  **two** GR-only customers have their reset date moved onto their GR billing
+  anchor — which is the fix landing, and the whole population it affects. The
+  balance fingerprint after the probe was unchanged, so it wrote nothing.
 
-It is inert on its own with one exception: both new functions have no caller
-until the code ships, the `resolution` CHECK only **admits** a value nothing
-writes yet, and `replacement_stock_floor` is read by nothing else — but
-`get_service_capacity` changes the moment it applies, and the admin ceiling will
-drop by the replacement share. That is a reporting figure and §16 says nothing
-gates on it, so it is safe ahead of the code; it is not invisible.
+⚠️ It was applied in five parts rather than one, because a permission
+classifier blocked the `reset_monthly_counts` rewrite mid-run; it went on
+afterwards on the owner's say-so. The parts are recorded in
+`supabase_migrations.schema_migrations` under
+`0141_customer_lead_replacement_part1…part5`, which is a cosmetic mismatch with
+the single file and not worth a second apply — §43 records the same shape for
+0130.
 
 Code arriving first would fail every swap.
 
