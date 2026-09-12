@@ -337,19 +337,38 @@ select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='11111111-1111-1111-1111-111111111111'),
   2, 'a refused swap does not move the counter');
 
--- ⚠️ THE COMPARE-AND-SWAP TESTS THE STREAK TOO. A caller whose entitlement was
--- computed from a streak that has since been spent must be refused, or two
--- concurrent swaps both pass on a budget the first destroyed.
-update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 20
+-- ⚠️ THE COMPARE-AND-SWAP TESTS THE STREAK TOO, AND IN ONE DIRECTION ONLY.
+-- p_entitlement is base + earnedBonus(streak), and earnedBonus only rises with
+-- the streak. So a streak that has SHRUNK since the route read it — a claim
+-- landed and zeroed it — means the figure we were handed may be an
+-- overestimate, and that is the race this guard exists for.
+update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 0
   where id = '11111111-1111-1111-1111-111111111111';
 select test_util.assert_raises($q$
   select public.customer_swap_dead_lead(
     'bbbb0000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111',
     'aaaa0000-0000-0000-0000-000000000007','unreachable',
     'Another one that never answers the phone at all.',
-    current_date - 1, 4, 0, 0, false, 14)
-$q$, 'a stale streak is refused even when the counter still fits');
-update public.customers set clean_leads_streak = 0
+    current_date - 1, 4, 0, 20, false, 14)
+$q$, 'an entitlement computed from a streak that has since been zeroed is refused');
+
+-- ⚠️ And the other direction is ALLOWED, which is what 0142 had to fix. Once
+-- clean_leads_streak counts every delivery, an ordinary lead landing between
+-- the page loading and the button being pressed moves it — and refusing that
+-- would be a refusal the operator caused nothing and could not act on.
+update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 7
+  where id = '11111111-1111-1111-1111-111111111111';
+select public.customer_swap_dead_lead(
+  'bbbb0000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111',
+  'aaaa0000-0000-0000-0000-000000000007','unreachable',
+  'Another one that never answers the phone at all.',
+  current_date - 1, 2, 0, 3, false, 14);
+select test_util.assert_eq(
+  (select count(*)::integer from public.lead_assignments
+    where lead_id = 'aaaa0000-0000-0000-0000-000000000007'
+      and customer_id = '11111111-1111-1111-1111-111111111111'),
+  1, 'a streak that GREW since the read still lets the swap through');
+update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 0
   where id = '11111111-1111-1111-1111-111111111111';
 
 -- ---------------------------------------------------------------------------

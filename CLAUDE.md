@@ -11652,12 +11652,11 @@ Measured against production before anything was built:
   relative-difference expression is null for every row), and the card **omits**
   the gross line rather than printing a blank. A "£— gross" on every GR card
   would read as data we had lost rather than a number that was never ours.
-- ⚠️ **`clean_leads_streak` is never incremented anywhere in the repository.**
-  The only writes are `= 0` in 0137, so `earnedBonus()` is permanently zero and
-  §51.3's "one more per unbroken run of ten" has never fired. Harmless while the
-  number was hidden; **not harmless now it is published**. 0141 does not fix it —
-  that is its own change — so the screen states `round(committed × pct)` and
-  implies no earned half. See Deferred.
+- ⚠️ **`clean_leads_streak` was never incremented anywhere in the repository.**
+  The only writes were `= 0` in 0137, so `earnedBonus()` was permanently zero and
+  §51.3's "one more per unbroken run of ten" had never fired. Harmless while the
+  number was hidden; **not harmless once published**. 0141 shipped without fixing
+  it and stated `round(committed × pct)` only. **0142 fixes it — §53.8.**
 - ⚠️ **`used` can exceed the entitlement.** `resolve_dead_lead_claim` consumes it
   when an admin upholds a reviewed claim, which can land after the customer has
   spent everything. `remainingOf` clamps at zero or the header renders "-1".
@@ -11837,6 +11836,91 @@ real database. ⚠️ A Vercel preview cannot do it — Deployment Protection an
 302 to `vercel.com/sso-api` (§45, §46, §50, §51, §52) — and a preview runs
 against **production** Supabase (§1.1), so a test swap bins a real lead.
 
+### 53.8 — The earned half, made real *(0142)*
+
+§53.2 records that `clean_leads_streak` had never been incremented anywhere:
+0137 created it, documented it in §51.3's table, reset it to 0 on every uphold,
+and nothing ever counted anything into it. So `earnedBonus()` returned zero for
+every customer from the day it shipped, and half of a rule the tab now states
+out loud did not exist.
+
+**Where it counts, and the one delivery path it deliberately skips.** The streak
+means *leads this customer could have reported and did not* — which is the only
+reading under which it measures restraint, and it settles the boundary exactly:
+
+| Path | Counts? | Why |
+|---|---|---|
+| `assign_lead_to_customer` | **yes** | the single money path |
+| `admin_assign_lead` | **yes** | an override still delivers a workable, reportable lead, and §18C records that a force-assign paces identically to an automatic one |
+| `claim_pool_lead` | ⚠️ **no** | a pool-claimed lead can NEVER be reported — `claimable_dead_lead_assignments` bars it on `claimed_from_pool_at`, and §19 is explicit the operator chose it knowing its age. Restraint was never on offer, so it is neither evidence of it nor a broken run. Counting it would also open a farming route: buy pool leads, earn claim headroom |
+
+Two paths need no guard at all, because they call neither function: a customer's
+own uploads go through `create_customer_leads`, and a swap replacement is
+inserted directly by `admin_swap_lead_assignment`. Neither is a new chargeable
+delivery, and both are excluded **by construction** rather than by a clause
+somebody has to remember.
+
+One column, incremented once per delivery whichever product it was, so it goes
+in **both** branches of both functions — one budget spans both products (§51.3).
+
+**⚠️ NO BACKFILL, and the numbers are the argument.** Measured on production
+before deciding: of the 25 active customers with any delivery, **23 would earn at
+least one bonus immediately and 12 would hit the cap of two**, on an average of
+18.9 deliveries each — because nobody has ever claimed, so every customer's
+lifetime history is one unbroken run. Seeding from history would turn the earned
+half into a flat +2 for most of the book on the day it starts working, which is
+the opposite of what it is for, and §53 publishes the number so it would show as
+everyone's entitlement jumping for no reason they caused. Everyone starts at 0
+and accrues forward, as §40.15 does for `whatsapp_click` and §53.4 for the
+snapshot columns. **The first bonus is ten real deliveries away.**
+
+#### ⚠️ The compare-and-swap had to relax with it
+
+0141's `customer_swap_dead_lead` tests `clean_leads_streak = p_streak_seen`, and
+that was safe **only because nothing moved the column**. Once it counts every
+delivery, an ordinary lead landing between the page loading and the operator
+pressing Swap would move it — and `=` would refuse the swap, with a message
+about the lead having gone that is simply untrue and that they could not act on.
+
+0142 relaxes it to `>=`, which closes exactly the same hole. `p_entitlement` is
+`base + earnedBonus(streak)` and `earnedBonus` is monotonic non-decreasing, so a
+streak that has only **grown** means the figure we were handed is a valid lower
+bound and admitting it is safe; a streak that has **shrunk** means a claim landed
+and zeroed it, so the figure may be an overestimate — still refused.
+
+⚠️ 0141's own test asserted this in the **wrong direction** (a high actual
+streak against a low seen one, with a `p_entitlement` that corresponded to
+neither). It now pins both: an entitlement computed from a since-zeroed streak is
+refused, and a streak that grew still lets the swap through.
+
+### Verification
+
+All 138 migrations applied to a scratch Postgres 16 from empty, 0142 re-applied
+twice for idempotency, and **all five SQL suites pass on the same build** —
+0137, 0138, 0139, 0141 and 0142.
+
+`0142_clean_leads_streak_test.sql` — among its assertions: both assign paths
+increment and a pool claim does not; a customer's own uploaded lead does not; a
+GR delivery increments the **same** counter while leaving the management balance
+alone (invariant 6); an upheld claim resets the run and the next delivery starts
+it again. Plus the regression that matters most — **0142 adds one column to the
+single money path and must change nothing else about it**: a credit is still
+spent, the monthly counter still moves, the odometer still moves.
+
+⚠️ **Seven mutations run, all seven caught**: each of the four increments
+dropped in turn, the increment written as `= 1` (which would reset the run on
+every delivery rather than extend it), the money path's credit spend broken, and
+— against the 0141 suite — the streak comparison reverted to `=` or dropped
+outright.
+
+### Deployment order — migration BEFORE code
+
+0142 has no code half at all: `earnedBonus()` already reads the column and is
+unchanged, so there is nothing to deploy alongside it. It is **not inert**,
+though, and that is the point — from the moment it applies, deliveries start
+accruing, and ten deliveries later the first customer's published entitlement
+rises by one.
+
 ### Deployment order — migration BEFORE code
 
 0141 first, applied and verified against production before the pull request
@@ -11875,9 +11959,7 @@ Code arriving first would fail every swap.
 
 ### Deferred
 
-- **`clean_leads_streak` is dead.** Fix the increment in its own change, or drop
-  the column and the earned half of §51.3's rule with it. Publishing the number
-  makes this worth deciding rather than leaving.
+- ~~**`clean_leads_streak` is dead.**~~ **Closed by 0142 (§53.8).**
 - **The withdrawal cost is not modelled.** Each swap also destroys the reported
   lead's remaining free slots, which lands in `inventory_slots_now` rather than
   `slots_per_month`, so the ceiling still understates the cost by the withdrawn
