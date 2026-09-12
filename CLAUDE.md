@@ -12331,13 +12331,208 @@ first would select a `retired_reason` column that does not exist and fail every
 candidate lookup — and `SwapLeadControl` reports that as "Could not load leads",
 so the picker would be dead rather than merely silent.
 
+### 53.11 — What the other half of a swap costs *(0145)*
+
+§53's Deferred list carried this in one sentence: *"Each swap also destroys the
+reported lead's remaining free slots, which lands in `inventory_slots_now`
+rather than `slots_per_month`, so the ceiling still understates the cost by the
+withdrawn half."*
+
+⚠️ **THAT SENTENCE IS WRONG IN BOTH HALVES, AND MEASURING IT IS WHAT SHOWED
+IT.** It is struck through in the list below rather than quietly corrected,
+because the mistaken version is the reading anyone will arrive at again.
+
+- `slots_per_month` is `sum(max_assignments)` over leads created in the last 28
+  days — **a sum of CAPS, not of free slots** — and
+  `admin_swap_lead_assignment` clamps `max_assignments` down to
+  `assignment_count` the instant it withdraws a lead. So the cost lands
+  squarely inside `slots_per_month`, and inside `serviceable_slots_per_month`
+  with it.
+- `inventory_slots_now` is a **live** count of free slots across the whole
+  book, and a withdrawn lead has none left to count. It never carried this.
+
+So the ceiling does not understate the cost. It **LAGS** it: what it reflects
+is the last 28 days of withdrawals, where the exposure is the entitlement every
+customer is holding and has not yet spent. That is a different problem with a
+different fix, and the fix is not arithmetic.
+
+#### ⚠️ THE FIGURE THIS ADDS IS REPORTED AND MUST NEVER BE ADDED
+
+Charging it against `serviceable_slots_per_month`, or folding it into
+`avg_allocation_with_swaps`, double-counts the same leads — once through the
+clamp that already happened and once through the model. §18.1's rule in the
+form that bites here: this is not a second supply term, it is a **label on a
+movement the headline has already made.**
+
+What it is for is legibility. A ceiling that fell because swaps destroyed
+supply looks identical to one that fell because ingest had a bad week, and
+without this line nothing says which. Same argument §21 makes for reporting
+paused demand beside the headline rather than inside it — always two numbers,
+never one.
+
+#### ⚠️ The swap destroys the evidence of what it destroyed
+
+The clamp overwrites `max_assignments` **in place**, so a minute after a swap
+the original cap is gone and the cost is unrecoverable from the row. It has to
+be written at swap time or not at all — the denormalise-to-survive-the-delete
+move 0116 makes for `lead_messages` and 0138 for `lead_outcome_reasons`.
+
+`leads.withdrawn_slots`, written inside the existing withdraw UPDATE:
+
+```
+max_assignments - greatest(assignment_count - 1, 0)   -- outer greatest(…, 0)
+```
+
+Three things about that expression are load-bearing and each has its own test:
+
+- ⚠️ **It reads `v_old_lead`, the locked pre-image**, not the live row. The same
+  statement decrements `assignment_count`, so computing it afterwards reads a
+  count this statement has already changed — and on a co-held lead that is
+  wrong by exactly one.
+- ⚠️ **It is NOT "free slots plus one".** A pool-claimed lead may sit above its
+  own cap (invariant 3), where free-slots-plus-one reports 1 and the true drop
+  is **zero**. The outer `greatest(…, 0)` is what says so.
+- ⚠️ **A row withdrawn before 0145 carries NULL and is INVISIBLE, never zero.**
+  Its cap was clamped away and cannot be recovered, and a zero would read as
+  "that swap cost nothing" — the one misreading this column exists to prevent.
+  Eight such leads existed at apply; the window self-clears 28 days later.
+
+#### `observed` and `estimated`, §18.2's rule applied to a second series
+
+`withdrawn_slots_per_month` reads as an **observation** once something has
+actually been withdrawn inside the window, and as an **estimate** before that —
+`quality_claim_demand_per_month × avg_withdrawal_cost`, each labelled by
+`withdrawal_basis` so the two can never be confused. Identical discipline to
+`recycling_basis` (§18.2), and for the identical reason: an estimate read as a
+count is a number nobody can act on.
+
+⚠️ **`avg_withdrawal_cost` is averaged per ASSIGNMENT, not per lead.** A report
+is made by an assignment, so a lead held by three operators is three chances to
+incur a cost of one each where a lead held by one is a single chance to incur
+three. Per lead over-weights the expensive singly-held ones.
+
+⚠️ **Its population is DELIBERATELY NOT a copy of
+`claimable_dead_lead_assignments`** and must never become one. That predicate
+decides whether money moves; this feeds a figure labelled `estimated`. §34 and
+§35 both record what a hand-written second copy of a live rule costs, so the
+population is defined by the **withdrawal** mechanics instead — an open
+assignment on a lead that can still be withdrawn. The resulting skew is stated
+rather than hidden: it averages over older leads that have since filled up and
+cost less to withdraw, so it reads **low** — 1.17 against 1.53 over the 14-day
+claim window for management at the time of writing.
+
+#### On the TypeScript side
+
+`withdrawalBasisOf()` is exported from `serviceHealth.ts` purely so the
+**direction of its fallback** is unit-testable rather than an inline ternary
+inside a function that reaches the database. ⚠️ It falls back to `estimated`,
+never `observed`: a column we cannot read means we are not measuring, and
+calling that an observation would present a figure of zero as proof that swaps
+have destroyed nothing.
+
+`ProductCapacity`'s docblock for `qualityClaimDemandPerMonth` said the model
+"ignores the second lead each swap destroys". That half is now its own figure —
+kept **separate** rather than folded in, because the two are charged in
+different places: the claim figure inflates the divisor, and the withdrawal is
+already inside `slotsPerMonth`.
+
+#### Verification
+
+All 145 migrations applied to a scratch **Postgres 16.13** from empty, **zero
+failures**, 0145 re-applied twice for idempotency, and **all eight SQL suites
+pass on the same build** — 0137, 0138, 0139, 0141, 0142, 0143, 0144 and 0145.
+
+`0145_withdrawal_cost_test.sql` reads `get_service_capacity()` into a temporary
+table, performs a real swap, and asserts that `withdrawn_slots` **equals the
+actual drop in `slots_per_month`**, scaled to 30 days. Every other assertion
+here is decorative if that one does not hold. Also: the three cost shapes (3, 1
+and 0), the `estimated` → `observed` flip, the estimate equalling entitlement ×
+average cost, `serviceable = slots + recycled` still and nothing else, the
+money and clamp regressions, a same-day `capture_service_capacity` re-run
+refreshing all three columns, and the ACLs the DROP discarded.
+
+**1,812 vitest cases green**, `npx tsc --noEmit` clean, lint clean,
+`npm run build` passes.
+
+⚠️ **Thirteen mutations were run and all thirteen caught** — eight in SQL, five
+across the migration and the TypeScript. Among them: dropping the
+`withdrawn_slots` write; computing it as free-slots-plus-one; computing it
+after the decrement; counting pre-0145 nulls as zero; subtracting the figure
+from the serviceable total; folding it into the swap-inflated divisor;
+averaging per lead; dropping the three names from the `on conflict` list;
+handing `get_service_capacity` back to `authenticated`; flipping the basis
+fallback; and wording the estimate exactly like an observation.
+
+⚠️ **TWO ASSERTIONS WERE WRITTEN WEAK AND THE MUTATION RUN IS WHAT FOUND
+THEM**, which is the fourth and fifth time this repository has recorded that
+shape (§42.8, §50.9 twice, §53 once). Both are worth stating because neither is
+obvious from reading the test:
+
+- *"the average is per assignment"* was seeded with **one assignment per
+  lead**, where the two rules are arithmetically identical. It passes whichever
+  rule the function uses. The seed now gives one lead two holders.
+- *"a null cost is invisible, not zero"* asserted only the **sum**, and a zero
+  contributes zero to a sum — so coalescing the nulls away passes it exactly.
+  What separates the two rules is the COUNT behind the basis, which is what the
+  section now pins.
+
+#### Deployment order — migration BEFORE code
+
+✅ **0145 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-12, before the pull
+request merged** (§1.1), and verified there rather than trusted.
+
+- **No drift before it went on.** All three replaced bodies hash-matched the
+  repo file exactly — `admin_swap_lead_assignment` (3-arg) `3c3440e8…`,
+  `get_service_capacity` `b811d255…`, `capture_service_capacity` `b19156ba…`
+  — and no collision existed on the column, the CHECK, the index or the three
+  snapshot columns.
+- **Applied with comments stripped OUTSIDE function bodies only**, proved
+  schema-identical on scratch first over a 49-line fingerprint of bodies,
+  columns, constraints, indexes and ACLs.
+- **A 49-line fingerprint of production is byte-identical to a scratch build
+  from the repo file** — all three bodies (`a1d3ccd1…`, `603743694…`,
+  `0cb0435e…`), the column, the CHECK, the partial index, every ACL, and the
+  snapshot table's 30 columns.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding**.
+- **Nothing moved.** 501 leads, 514 assignments and 53 customers untouched;
+  an md5 of every customer's balances and counters identical before and after
+  (`3b6a3841…`), and one of every lead's `assignment_count` /
+  `max_assignments` / `withdrawn_at` identical too (`609293046a…`). Every
+  pre-existing capacity figure reads exactly as it did beforehand — management
+  248.6 / 296.8 / 18 / 1, guaranteed rent 77.1 / 90.0 / 8 / 7.
+- The assertion the column exists for was then driven **on production itself**,
+  inside a block that raises at the end so every write rolled back: on a real
+  management assignment the recorded cost matched the formula, `slots_per_month`
+  fell by exactly that scaled to 30 days, and the basis flipped to `observed`.
+  Both fingerprints afterwards confirm it wrote nothing.
+
+⚠️ **It is NOT inert**, unlike most of §53: the moment it applies, the panel
+gains a line and the daily snapshot gains three columns. What it does not do is
+change any existing figure — that is asserted above, not assumed. Code arriving
+first would select three columns that do not exist and fail the whole admin
+capacity panel.
+
+**Opening position on production**, so the first `observed` reading can be
+judged against it: management estimates **29.3 slots a month** at an average
+cost of **1.17**, guaranteed rent **2.5** at **2.46**. Both read `estimated`,
+because the eight leads withdrawn before 0145 carry no cost and are invisible
+by design.
+
 ### Deferred
 
 - ~~**`clean_leads_streak` is dead.**~~ **Closed by 0142 (§53.8).**
-- **The withdrawal cost is not modelled.** Each swap also destroys the reported
-  lead's remaining free slots, which lands in `inventory_slots_now` rather than
-  `slots_per_month`, so the ceiling still understates the cost by the withdrawn
-  half.
+- ~~**The withdrawal cost is not modelled.** Each swap also destroys the
+  reported lead's remaining free slots, which lands in `inventory_slots_now`
+  rather than `slots_per_month`, so the ceiling still understates the cost by
+  the withdrawn half.~~ **Closed by 0145 (§53.11) — and ⚠️ THE STRUCK SENTENCE
+  IS WRONG, which is why it is struck rather than deleted.** `slots_per_month`
+  is a sum of CAPS and the swap's clamp lowers it immediately, so the ceiling
+  already carries the cost and carries it correctly; it LAGS rather than
+  understates. 0145 records and reports it, and never adds it.
+- **The lag itself is still open.** The ceiling reflects the last 28 days of
+  withdrawals where the exposure is the entitlement every customer is holding
+  and has not spent. `withdrawn_slots_per_month` is the number that makes that
+  gap visible; nothing acts on it, and §16 says nothing gates on this panel.
 - **Replacement-of-a-replacement is unbounded except by the counter.** The new
   assignment carries a null `quality_claim_id`, so it can itself be reported.
   Acceptable at two a cycle; worth watching if the entitlement ever rises.

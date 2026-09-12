@@ -118,6 +118,20 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         </p>
       )}
 
+      {/* ⚠️ The OTHER half of what a swap costs, and it must never be read as a
+          second charge against the ceiling. slotsPerMonth is a sum of caps over
+          a trailing window and the swap's clamp lowers it immediately, so this
+          is already inside the figure above — stated here because a ceiling
+          that fell for this reason looks exactly like one that fell because
+          ingest had a bad week, and only this line says which (§53.11). */}
+      {c.withdrawnSlotsPerMonth > 0 && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          {c.withdrawalBasis === "observed"
+            ? `Replacing a lead also withdraws it: ${c.withdrawnSlotsPerMonth} slots a month have gone that way, already counted in the supply above.`
+            : `Nothing has been withdrawn yet. On today's book each replacement would take ${c.avgWithdrawalCost} slots with it, about ${c.withdrawnSlotsPerMonth} a month.`}
+        </p>
+      )}
+
       {/* The split. Never let the combined number stand on its own — the gap is
           exactly how much headroom depends on customers staying inactive. */}
       <p className="mt-1 text-sm text-muted-foreground">
