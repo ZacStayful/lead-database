@@ -113,6 +113,15 @@ export interface Customer {
   gr_billing_cycle_anchor: string | null;
   gr_last_assignment_at: string | null;
   gr_lead_balance: number;
+  /**
+   * Staged release (0148, §54). `'daily'` is the one-lead-a-working-day rule;
+   * `'immediate'` exempts the customer from it entirely. Admin-set only.
+   */
+  release_mode: "daily" | "immediate" | string;
+  /** "Hold my leads until this date" — refuses ordinary routing while today is
+   *  before it. Not a pause: billing and credits are untouched. */
+  release_hold_until: string | null;
+  gr_release_hold_until: string | null;
   // Lead filtering (management product).
   filter_status: FilterStatus | string;
   filter_areas: string[] | null;

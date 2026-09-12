@@ -618,9 +618,22 @@ export async function completeAssignment(
       .single();
     notificationId = notification?.id ?? null;
 
+    // §54: once leads arrive one a working day, the email is "your lead for
+    // today" rather than one of a batch. One indexed read; a failed read
+    // simply keeps the old subject.
+    const { data: releaseRow } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "release_enabled")
+      .maybeSingle();
+    const todaysLead =
+      (releaseRow as { value?: string } | null)?.value?.trim() === "true" &&
+      typedCustomer.release_mode !== "immediate";
+
     const emailRes = await sendNewLeadEmail({
       to: typedCustomer.email,
       lead,
+      todaysLead,
     });
     emailError = emailRes.error;
   }

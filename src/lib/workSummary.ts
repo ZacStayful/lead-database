@@ -46,6 +46,12 @@ export type WorkSummary = {
   overdueCallbacks: number;
   /** Of those, the earliest date still outstanding — null when none. */
   oldestCallbackDate: string | null;
+  /**
+   * Callbacks whose date is TODAY. Kept apart from overdue because the copy
+   * differs ("ring them today" is not "you missed this") — and because until
+   * §54 the strict `<` above meant a callback due today was counted nowhere.
+   */
+  dueTodayCallbacks: number;
   /** Contacted, unsettled, and no status change for STALLED_AFTER_DAYS. */
   stalledLeads: number;
   /** Leads that reached a meeting/viewing stage. */
@@ -78,6 +84,7 @@ export function computeWorkSummary(
 
   let overdueCallbacks = 0;
   let oldestCallbackDate: string | null = null;
+  let dueTodayCallbacks = 0;
   let stalledLeads = 0;
   let meetings = 0;
   let attempted = 0;
@@ -96,6 +103,8 @@ export function computeWorkSummary(
       ) {
         oldestCallbackDate = a.due_to_call_date;
       }
+    } else if (!settled && a.due_to_call_date === today) {
+      dueTodayCallbacks += 1;
     }
 
     // 'in_discussion' counts as well as 'contacted'. isSettled deliberately
@@ -122,6 +131,7 @@ export function computeWorkSummary(
   return {
     overdueCallbacks,
     oldestCallbackDate,
+    dueTodayCallbacks,
     stalledLeads,
     meetings,
     attempted,

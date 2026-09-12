@@ -32,6 +32,7 @@ export async function POST(
     gr_lead_balance?: number;
     quality_allowance_pct?: number;
     quality_review_required?: boolean;
+    release_mode?: string;
   };
   try {
     body = await request.json();
@@ -97,6 +98,20 @@ export async function POST(
   }
   if (typeof body.quality_review_required === "boolean") {
     update.quality_review_required = body.quality_review_required;
+  }
+
+  // Staged release (§54). Admin-only by design: `immediate` exempts a customer
+  // from the one-a-working-day rule, and a customer who could set it would.
+  // The CHECK on the column refuses anything else; the test here is so the
+  // error names the field rather than the constraint.
+  if (body.release_mode !== undefined) {
+    if (body.release_mode !== "daily" && body.release_mode !== "immediate") {
+      return NextResponse.json(
+        { error: "release_mode must be 'daily' or 'immediate'." },
+        { status: 400 }
+      );
+    }
+    update.release_mode = body.release_mode;
   }
 
   const admin = createAdminClient();

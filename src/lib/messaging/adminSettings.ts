@@ -187,6 +187,50 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     min: 1,
     max: 90,
   },
+
+  // -------------------------------------------------------------------------
+  // Staged release — one lead a working day (§54). Read by
+  // public.customer_release_allows() on every ordinary-routing candidate query,
+  // and mirrored by releaseSchedule() in src/lib/pacing.ts for display.
+  //
+  // In THIS list rather than a second one, on §41.5's precedent: one closed
+  // allow-list, and the same route. These are the first keys here that touch
+  // allocation — which is exactly why the list is closed and why
+  // `release_max_per_day` has a floor of 1: a cap of 0 refuses every lead for
+  // every customer on the platform.
+  // -------------------------------------------------------------------------
+  {
+    key: "release_enabled",
+    label: "One lead a working day",
+    kind: "boolean",
+    fallback: "false",
+  },
+  {
+    key: "release_max_per_day",
+    label: "Leads per customer per day",
+    kind: "number",
+    fallback: "2",
+    // Never 0 — that refuses every lead for everyone. 10 is a sanity ceiling.
+    min: 1,
+    max: 10,
+  },
+  {
+    key: "release_cycle_days",
+    label: "Cycle length (days)",
+    kind: "number",
+    fallback: "30",
+    // Mirrors DAYS_IN_CYCLE. A month, not a fortnight or a quarter.
+    min: 28,
+    max: 31,
+  },
+  {
+    key: "release_hold_max_days",
+    label: "Longest hold a customer may set (days)",
+    kind: "number",
+    fallback: "14",
+    min: 1,
+    max: 60,
+  },
 ];
 
 const BY_KEY = new Map(MESSAGING_SETTINGS.map((s) => [s.key, s]));

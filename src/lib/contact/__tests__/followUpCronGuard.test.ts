@@ -22,17 +22,19 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const ROUTE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../../app/api/cron/contact-followups/route.ts"
-);
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROUTE = join(HERE, "../../../app/api/cron/contact-followups/route.ts");
+const SCAN = join(HERE, "../dueAttempts.ts");
 const src = readFileSync(ROUTE, "utf8");
+// §54 moved the scan into a shared helper so the dashboard Today panel reads
+// the same query. The guard follows the QUERY, not the file it used to live in.
+const scanSrc = readFileSync(SCAN, "utf8");
 
 /** The due-attempt scan, isolated so a match elsewhere in the file cannot pass. */
 function scanChain(): string {
-  const start = src.indexOf('.from("message_sequence_drafts")');
+  const start = scanSrc.indexOf('.from("message_sequence_drafts")');
   expect(start).toBeGreaterThan(-1);
-  return src.slice(start, start + 1200);
+  return scanSrc.slice(start, start + 1200);
 }
 
 describe("the due-attempt scan is bounded by the cutoff", () => {
@@ -59,23 +61,41 @@ describe("the due-attempt scan is bounded by the cutoff", () => {
 });
 
 describe("it fails closed rather than prompting about everything", () => {
-  it("returns before the scan when no cutoff is stored", () => {
+  it("the helper returns an empty map, and runs no scan, when no cutoff is stored", () => {
+    expect(scanSrc).toContain('if (!cutoff) return { byCustomer: new Map(), cutoff: null');
+    expect(scanSrc.indexOf("if (!cutoff) return")).toBeLessThan(
+      scanSrc.indexOf('.from("message_sequence_drafts")')
+    );
+  });
+
+  it("the cron bails on the missing cutoff before touching anybody", () => {
     expect(src).toContain('skipped: "no_notify_cutoff"');
-    // The bail must come BEFORE the scan, or the filter has nothing to use.
     expect(src.indexOf('skipped: "no_notify_cutoff"')).toBeLessThan(
-      src.indexOf('.from("message_sequence_drafts")')
+      src.indexOf("sendDailyFollowUpsEmail({")
     );
   });
 
   it("reads the cutoff from the settings key the migration seeds", () => {
-    expect(src).toContain('.eq("key", "contact_notify_from")');
+    expect(scanSrc).toContain('.eq("key", "contact_notify_from")');
   });
 
   it("refuses to run at all while the switch is off", () => {
     expect(src).toContain('skipped: "contact_plans_disabled"');
     expect(src.indexOf('skipped: "contact_plans_disabled"')).toBeLessThan(
-      src.indexOf('.from("message_sequence_drafts")')
+      src.indexOf("fetchDueAttempts(admin)")
     );
+  });
+
+  it("the cron uses the shared scan rather than its own copy", () => {
+    expect(src).toContain("fetchDueAttempts(admin)");
+    expect(src).not.toContain('.from("message_sequence_drafts")');
+  });
+
+  it("§54: the next-lead sentence is never on its own a reason to send", () => {
+    const summary = readFileSync(join(HERE, "../followUpSummary.ts"), "utf8");
+    const fn = summary.slice(summary.indexOf("export function worthSending"));
+    expect(fn).toContain("s.total > 0 || extras.newLeadsToday > 0");
+    expect(fn).not.toContain("nextLead");
   });
 });
 

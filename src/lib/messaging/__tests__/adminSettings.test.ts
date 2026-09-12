@@ -39,6 +39,10 @@ describe("the allow-list is closed", () => {
       "messaging_sequence_review_hours",
       "messaging_sequences_enabled",
       "messaging_whatsapp_ceiling_per_second",
+      "release_cycle_days",
+      "release_enabled",
+      "release_hold_max_days",
+      "release_max_per_day",
     ]);
   });
 
@@ -170,6 +174,12 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     landlord_prefs_nudge_first_hours: "48",
     landlord_prefs_nudge_second_hours: "72",
     landlord_prefs_reask_days: "7",
+    // §54. The SQL reads release_enabled as `= 'true'` (fails to off) and the
+    // two numbers through pool_setting_int with these defaults.
+    release_enabled: "false",
+    release_max_per_day: "2",
+    release_cycle_days: "30",
+    release_hold_max_days: "14",
   };
 
   it("matches DEFAULT_QUIET_*, DEFAULT_LEAD_COOLDOWN_HOURS and sequenceSettings", () => {

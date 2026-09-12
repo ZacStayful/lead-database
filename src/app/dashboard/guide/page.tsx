@@ -1,4 +1,12 @@
 import {
+  RELEASE_CATCH_UP,
+  RELEASE_HEADLINE,
+  RELEASE_HOLD,
+  RELEASE_NOT_A_GUARANTEE,
+  RELEASE_RULE,
+  RELEASE_TEN_PLAN,
+} from "@/lib/releaseCopy";
+import {
   BOOKED_MEETING_RATE_PCT,
   COLD_CALL_ANSWER_PCT,
   CONTACT_ATTEMPTS,
@@ -212,6 +220,22 @@ export default async function GuidePage() {
                 ).
               </li>
             </List>
+          </Section>
+
+          <Section id="arrival" title="How leads arrive">
+            <p>
+              <strong>{RELEASE_HEADLINE}.</strong> {RELEASE_RULE}
+            </p>
+            <List>
+              <li>{RELEASE_TEN_PLAN}</li>
+              <li>{RELEASE_CATCH_UP}</li>
+              <li>{RELEASE_HOLD}</li>
+              <li>{RELEASE_NOT_A_GUARANTEE}</li>
+            </List>
+            <p>
+              The dashboard&apos;s <strong>Today</strong> block says when your next
+              lead is due, and the morning email says when one has landed.
+            </p>
           </Section>
 
           <Section id="lead" title="Working a lead">

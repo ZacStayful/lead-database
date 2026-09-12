@@ -54,7 +54,7 @@ function Count({ n }: { n: number }) {
 const FAQ: { q: string; a: React.ReactNode }[] = [
   {
     q: "Can you guarantee 20 leads a month?",
-    a: "We only take on customers when we know we can fill the demand — Stayful assesses available lead volume before onboarding anyone new, so your monthly allocation is what we're working to deliver. Your subscription buys that many lead credits and they don't expire: if a quiet month delivers fewer, the unused credits carry forward to the next month rather than being lost. If you narrow your leads with a filter, the estimator above shows what that selection is expected to produce, and how likely that is, before you apply it.",
+    a: "We only take on customers when we know we can fill the demand — Stayful assesses available lead volume before onboarding anyone new, so your monthly allocation is what we're working to deliver. Leads arrive one a working day rather than as a batch on your renewal date, so each one is fresh when you ring. Your subscription buys that many lead credits and they don't expire: if a quiet month delivers fewer, the unused credits carry forward to the next month rather than being lost. If you narrow your leads with a filter, the estimator above shows what that selection is expected to produce, and how likely that is, before you apply it.",
   },
   {
     q: "Are these genuinely interested landlords or just anyone who filled in a form?",
@@ -696,11 +696,12 @@ export default function LandingPage() {
               </p>
             </Timeline>
 
-            <Timeline n={3} title="You receive it in real time">
+            <Timeline n={3} title="You receive it, one a working day">
               <p style={timelineBody}>
-                The moment a lead is assigned, your dashboard notifies you and an
-                email lands with full details. Delivery is within minutes of
-                assignment — never batched or delayed.
+                Your month&apos;s leads arrive one per working day rather than as
+                a batch on your renewal date, so each one is fresh when you ring.
+                The moment one is released to you, your dashboard notifies you
+                and an email lands with full details.
               </p>
               <div
                 style={{
@@ -824,8 +825,8 @@ export default function LandingPage() {
                 textAlign: "center",
               }}
             >
-              Delivered to your dashboard and by email within minutes of
-              assignment. Phone and email are visible immediately on subscription.
+              Delivered to your dashboard and by email the moment it is released
+              to you. Phone and email are visible immediately on subscription.
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[

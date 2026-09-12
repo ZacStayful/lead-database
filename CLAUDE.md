@@ -81,6 +81,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/poll-whatsapp-status` | `*/5 * * * *` | WhatsApp delivered/read (no vendor webhook), deferred-event recovery, **and sending due follow-up steps** (§40.9, §40.13) |
 | `/api/cron/draft-sequence-messages` | `0 17 * * *` | Draft tomorrow's follow-up steps into the review queue (§40.13) |
 | `/api/cron/contact-followups` | `15 8 * * *` | Today's follow-up prompt, and the weekly falling-behind notice (§42.8) |
+| `/api/cron/release-leads` | `30 7 * * 1-5` | Weekdays: the morning release — every banked lead re-offered, oldest first, through the one-a-working-day rule (§54). Lands before the 08:15 digest |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
@@ -229,6 +230,15 @@ safe to call repeatedly. This is why leads bank up harmlessly when everyone is
 at quota: each daily sync re-offers them, and they place as cycles reset or new
 customers onboard. **Banked leads are inventory, not a backlog.**
 
+⚠️ **Since 0148 (§54) both candidate functions also assert
+`customer_release_allows()`**: with `release_enabled` on, ordinary routing hands
+a customer one lead per UK working day (a 10-lead plan: one every other), at
+most `release_max_per_day` a day, on this cycle's entitlement (`received +
+balance`). Banking is therefore now by design as well as by circumstance, and
+`/api/cron/release-leads` is the morning pass that drains it. The money path is
+not gated — admin assigns, swaps, replacements and pool claims are never
+rationed.
+
 `assign_lead_to_customer` is the single money path: it locks lead + customer,
 checks capacity, checks the per-product balance gate (and `paused_at` for
 management), inserts, increments `assignment_count`, spends one credit and bumps
@@ -363,6 +373,7 @@ its single reclaim on a day when nobody had credit.
 `/api/leads/[id]/report` (§25 — the stored analysis PDF),
 `/api/customer/presentation/[leadId]` (§26),
 `/api/customer/settings/presentation` (§26),
+`/api/customer/settings/release-hold` (§54 — "hold my leads until"),
 `/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`,
 `/api/customer/my-leads` (+ `/import/preview`, `/import/commit`, and
 `DELETE /[id]`) — customer-owned leads (§30).
@@ -390,6 +401,9 @@ write of free text into a table, which is why its length caps are load-bearing.
 `/api/admin/support-tickets` (+ `/[id]`, `/[id]/status`, `/[id]/notes` — §46),
 `/api/admin/quality-claims/[id]` (§51),
 `/api/admin/customers/[id]/monday-link` (§23.8).
+`/api/admin/leads/assign-pending` is now a thin caller of
+`src/lib/releaseLeads.ts`, shared with `/api/cron/release-leads` (§54), and
+`/admin/allocation` holds the release switch.
 
 **Webhooks / cron:** `/api/webhook/stripe`, `/api/webhook/n8n`,
 `/api/monday/sync`, `/api/monday/sync-gr`, `/api/cron/*` (§2).
@@ -8504,6 +8518,9 @@ against the 91 losses the first six minutes cost.
 ⚠️ **Still not exercised in a browser, and no plan has yet been materialised by
 the real cron** — every plan in production came from the backfill. The daily
 prompt has not sent to anybody, because `contact_plans_enabled` is still false.
+⚠️ **Out of date: production read `contact_plans_enabled = true` on 2026-09-12**,
+so the daily prompt is live. The §54 daily digest extends it rather than adding a
+second morning email.
 
 ### Deployment order — migration BEFORE code
 
@@ -13094,3 +13111,312 @@ what §53.11 records for 0145.
   they cannot act on. 0144 is an ADMIN affordance. Do not port it across.
 - **Nothing tells the reported lead's other holders.** §19.7 forbids saying who;
   whether to say anything at all is open.
+
+---
+
+## 54. One lead a working day *(0148)*
+
+Leads are sold as a monthly allocation, and until this the whole allocation
+landed in one go. Measured on production over the 90 days before it shipped:
+
+| | |
+|---|---|
+| Management leads landing in the first 3 days of a customer's cycle | **69%** (326 of 474) |
+| … in the first week | **81%** |
+| Leads per delivery day, median / max | 8 / 20 |
+| Delivery days per customer per month | **2.0** |
+| Customer active days per month (any operator event) | ~5.5 |
+| Active management customers at zero credit, waiting for renewal | 12 of 17 |
+| Unsold management leads with a free slot on the same day | 67 |
+
+A monthly dump followed by four weeks of silence. §42 already measured what the
+dump costs — 97 of 121 first touches abandoned the same day — and the dashboard
+was something opened on renewal day and then not.
+
+Ordinary routing now hands each customer **one lead per UK working day** (a
+10-lead plan: one every other working day), so each is worked while the
+landlord is still fresh from enquiring, and there is a reason to open the
+dashboard every morning. `/admin/allocation` · `customer_release_allows()` ·
+`releaseSchedule()` · the Today panel · the 08:15 digest.
+
+### 54.1 — The rule, and why it is on the entitlement
+
+`public.customer_release_allows(customer_id, lead_type)`, per product
+(`gr_` columns for GR — invariant 6):
+
+```
+anchor    := coalesce((gr_)billing_cycle_anchor, created_at::date)
+today     := (now() at time zone 'Europe/London')::date
+W         := working days (Mon–Fri) in [anchor, anchor + cycle_days)     -- 22 from a Monday
+k         := working days (Mon–Fri) in [anchor, today]                   -- 0 on a Saturday renewal
+E         := (gr_)leads_received_this_month + (gr_)lead_balance          -- this cycle's entitlement
+allowance := least(E, ceil(k * E / W))                                   -- 20/22 ≈ one a day; 10/22 ≈ one every other
+today_n   := assignments to this customer + product dated today (London)
+allow     := release_enabled is false
+          or release_mode = 'immediate'
+          or (today >= coalesce((gr_)release_hold_until, today)
+              and received_this_month < allowance
+              and today_n < release_max_per_day)
+```
+
+**`E`, not `monthly_allocation`, and that is the decision to understand.**
+Computing the curve on the plan would strand a top-up's credits until month
+end. Computing it on what the customer is actually owed this cycle drips a
+top-up, or credits carried over from a short month, at the daily cap — with no
+new tracking, because both halves of `E` are columns `assign_lead_to_customer`
+already maintains. Pool debit needs no special case: a claim either spends a
+credit (`E` unchanged) or adds debit at zero balance.
+
+Three more things the SQL header states and this section repeats because each
+is easy to "simplify" away:
+
+- **Weekdays only, no bank-holiday table.** `businessTime.ts` reads gov.uk live
+  and cannot be called from SQL. A bank holiday counts as a working day for the
+  schedule; a lead arriving on one simply waits to be opened.
+- **The cap is per LONDON day.** Vercel runs in UTC and Britain is an hour
+  ahead for half the year (§40.12). A cap keyed on the UTC date would let two
+  leads through between 23:00 and 01:00 London time.
+- ⚠️ **A stale anchor saturates `k` and the rule lets everything through.**
+  That is why §11's `invoice.period_start` bug had to be fixed first
+  (PR #113), and why `/admin/allocation` prints anchor age in red past the cycle
+  length.
+
+### 54.2 — Where the predicate is asserted, and where it deliberately is not
+
+| Function | |
+|---|---|
+| `get_filtered_candidates_for_lead`, `get_unfiltered_candidates_for_lead` | **Gated** — 0107's bodies with one clause added to each WHERE. ORDER BY untouched; signatures unchanged, so no overload (§34/§35); ACLs re-asserted (§11) |
+| `get_next_customers_for_lead` | **Untouched.** Not on the ingest path. `inactivity-nudge` reads it for nudge eligibility, and a quota must never suppress a reminder |
+| `assign_lead_to_customer` | **Untouched.** Admin force-assign, swaps, dead-lead replacements and escalation pass through it and must not be rationed. The money path stays the money path — asserted directly: a customer the candidate list refuses is still assigned by a direct call and still spends exactly one credit |
+| `claim_pool_lead`, `admin_assign_lead` | **Untouched.** A claim is the customer's own act; an admin decision is an admin decision |
+
+Escalation (§18) routes through the two gated RPCs and is therefore rationed
+too: an escalated lead competes with a fresh one for the day's slot, and the
+existing deficit / `last_assignment_at` ordering decides. Intended.
+
+**The switch off is byte-identical to before.** `release_enabled` ships
+`false`; a missing row reads as off; and the 0148 test's first assertion is
+that both candidate lists come back unchanged. That is what lets the migration
+be applied ahead of the code, per §1.1.
+
+### 54.3 — Two per-customer columns, and who may set each
+
+- **`customers.release_mode`** — `'daily'` (the rule) or `'immediate'`
+  (exempt). ⚠️ **Admin-set only**, on `AdminCustomerForm`, and never
+  customer-settable: a customer who could pick it would, on day one. It exists
+  so the switch can go on for everyone without a support fight — a
+  call-centre-style operator who genuinely wants the batch, or one an admin is
+  placating, is exempted rather than argued with.
+- **`customers.release_hold_until` / `gr_release_hold_until`** — "I'm away
+  until Monday — hold my leads." **Customer-settable** from Settings
+  (`POST /api/customer/settings/release-hold`), bounded by
+  `release_hold_max_days` (14) at the route. ⚠️ **A hold is NOT a pause.**
+  Billing continues, credits are kept, nothing is voided at Stripe; routing
+  refuses while `today < hold_until` and the entitlement catches up at the cap
+  afterwards. The card says so in words, because a customer who reads "hold" as
+  "pause" and then sees an invoice has a complaint we would deserve. Per
+  product: a management hold never gates GR (asserted).
+
+### 54.4 — The TypeScript mirror is display only
+
+`releaseSchedule()` in `src/lib/pacing.ts` reproduces the rule on London dates
+(`londonDate`, `workingDaysBetween`, `addDays`, `isWorkingDay`) and returns
+`{ workingDaysElapsed, workingDaysInCycle, entitlement, allowance, dueToday,
+exhausted, onHoldUntil, nextReleaseDate }`. It powers every customer-facing
+sentence, the Today panel, the digest, `/admin/allocation`, the customers
+table's "next lead" line and the public API's `next_lead_due`. **It gates
+nothing; the SQL gates.** The two change in one commit — the
+`effectiveAllocation` ↔ `effective_allocation` arrangement.
+
+`releaseSettingsFrom()` reads the three settings and fails towards the defaults;
+`enabled` is only the literal `"true"`, exactly as the SQL reads it.
+
+### 54.5 — The morning release, and the three things that assign
+
+`/api/cron/release-leads`, weekdays at **07:30 UTC** (07:30 GMT / 08:30 BST) —
+so each customer's lead for the day is in their inbox BEFORE the 08:15 UTC
+digest. It is the same pass as the admin "Assign pending" button, extracted
+verbatim into `src/lib/releaseLeads.ts`: every under-assigned lead, **oldest
+first** so stock does not age behind fresh arrivals, through `autoAssignLead`.
+`?dryRun=true` lists what would be offered. With the switch off it is simply a
+scheduled backstop for banked leads, which §30.8 had recorded as wanting one.
+
+⚠️ **Three things assign, not one.** The n8n webhook still assigns a lead the
+moment it arrives (a customer with allowance left gets it at 14:00 rather than
+tomorrow), and both 09:00 Monday syncs still re-offer every banked lead. The
+cron adds the morning pass; it replaces neither. All three go through the same
+two RPCs, which is why the rule lives there and not in a cron.
+
+The sync responses now count top-up assignments too — the duplicate branch is
+most of what an ordinary morning does, and it used to go uncounted.
+
+### 54.6 — The admin page
+
+`/admin/allocation`, on `/admin/messaging`'s pattern (§40.14): the switch with
+an off-warning naming what stops, the three limits as one form through the same
+closed allow-list and the same route, and **readings beside the switch**. The
+headline is **delivery days per customer over the last 30 days** — 2.0 when
+this shipped, and the number this whole change exists to move. Beside it: who
+has a slot open today, who is held at the cap, who is on hold, stock with a
+free slot and its oldest age, and **stale billing anchors** — the one reading
+that can silently break the rule.
+
+The four `release_*` keys join `MESSAGING_SETTINGS` rather than a second list,
+on §41.5's precedent. They are the first keys in that list that touch
+allocation, which is exactly why the list is closed and why
+`release_max_per_day` has a floor of **1**: a cap of 0 refuses every lead for
+every customer on the platform.
+
+### 54.7 — The Today panel, and the digest that says the same thing
+
+`TodayPanel` sits at the top of the dashboard home, above "Picked up and left",
+built from the pure `buildTodayLines()` in `src/lib/todaySummary.ts`. In the
+order the morning goes: new leads today · **your next lead is due
+tomorrow** · follow-ups due today, with the minutes · call-backs due today (and
+past their date) · landlords who have replied · **landlords in the expired pool
+you can ring for free** · a personal working-day streak (from 2 up, never
+compared — §20). It names things, never rates, and renders nothing only on a
+genuinely empty day.
+
+Two of those lines fix things §42.9 and §11 recorded:
+
+- **The due-attempt scan moved into `src/lib/contact/dueAttempts.ts`** so the
+  panel and the 08:15 email run the SAME query. `followUpCronGuard.test.ts`
+  follows the query into the helper — the cutoff, the fail-closed, both
+  `!inner`s — and additionally asserts the cron no longer carries its own copy.
+  §42.8 is why: a hand-written second copy of that query is how 91 sequence
+  runs were destroyed.
+- **`workSummary.dueTodayCallbacks`.** The strict `<` meant a callback due
+  TODAY was counted nowhere; it is now its own figure, kept apart from overdue
+  because "ring them today" is not "you missed this".
+
+The expired-pool line is there for the population the dump left behind: 12 of
+17 management customers had zero credit and no reason to open the dashboard
+until renewal. The pool is the daily activity they can do.
+
+**The digest** (`contact-followups`, unchanged schedule and opt-out key) gains
+`newLeadsToday` and a next-lead sentence. The subject still names the number
+and the time — *"1 new lead and 3 follow-ups today — about 7 minutes"*. ⚠️
+**A new lead is a reason to send; the next-lead sentence is NOT**, and
+`worthSending` is pinned to `s.total > 0 || extras.newLeadsToday > 0` with
+`nextLead` absent from it. A daily email that arrives on every quiet day is
+filtered on the first (§42.9). The new-lead email itself, sent per assignment,
+reads *"Your lead for today — …"* once the switch is on
+(`sendNewLeadEmail({ todaysLead })`), and the digest deliberately does not
+restate the lead's details.
+
+### 54.8 — Copy, in one place
+
+`src/lib/releaseCopy.ts` — **import-free** (§21.8's rule, so the client
+components can use it) — is the one definition the guide's "How leads arrive",
+the packages highlight, the hold card and the email subject all read. The
+landing page's step 3 and its FAQ say "one a working day" instead of "within
+minutes of assignment — never batched or delayed", and `publishedClaims.test.ts`
+pins both directions: the new phrase present, the old promises absent, and the
+copy module never calling a lead "guaranteed". A promise about what £150 buys
+must not read as a guarantee of supply.
+
+`GET /v1/me` gains `next_lead_due` per product — a date or null, a fixed field
+and never a filter (§27.1) — so a customer's own automation can pace itself.
+
+### 54.9 — Switch-on sequence
+
+1. PR #113 merged and the eight stale anchors repaired (§11).
+2. 0148 applied to production **before** PR 2 merges, switch off, and the two
+   candidate functions fingerprinted over the live book before and after —
+   identical.
+3. Merge. The cron registers on the production deploy.
+4. An announcement (§22) a few days ahead: leads now arrive one a day so each
+   gets attention while it is fresh; nothing about allocation or price changes.
+5. Flip `release_enabled` on `/admin/allocation`. Customers mid-cycle at zero
+   balance are unaffected until renewal; a customer with credit whose
+   `received` already exceeds the allowance simply waits for the curve.
+6. Watch delivery days per customer per cycle (2.0 → the working days in a
+   month), stock age, and `worked_rate` / opens within 24h in the engagement
+   snapshots. **Record the switch-on date as a definition change** in those
+   series, as §40.15 does.
+
+### 54.10 — Deferred
+
+- **A reply reaches the bell.** A landlord's WhatsApp or email reply still only
+  appears inside the thread (§40.8). `notification_type: 'landlord_replied'`
+  plus an opt-out key is the strongest pull-back trigger the product has and
+  it is currently silent.
+- **A consistency reward** — a free lead at cycle end for a cycle in which
+  every lead was opened within 24h. Touches invariants 1 and 2, so its own
+  migration, an idempotency claim on `(customer_id, cycle_anchor)`, and a
+  switch shipping off.
+- **`release_snapshots`** — a daily row from the release cron so the KPI has a
+  history and switch-on shows as a step. Cannot be backfilled, like every other
+  snapshot here.
+- **Per-customer release time**, a `uk_bank_holidays` table, a stale-stock
+  bypass (lead older than N days ignores the curve but never the cap), and
+  merging the Monday nudge and Friday report into one weekly plan and recap.
+
+### Verification
+
+**All 148 migrations applied to a scratch Postgres 16 from empty, 0 failures**
+(`pg_cron` lines stripped per the README), 0148 re-applied twice for
+idempotency. `supabase/tests/0148_staged_release_test.sql` — **35 assertions**
+green, among them the one that matters: with the switch OFF both candidate
+functions return exactly what they returned before. Then: working-day
+arithmetic on both sides of a weekend; a 20-lead customer allowed one on day 1
+and refused after; a 10-lead customer allowed on day 1, refused on day 2, due
+on day 3; the daily cap refusing a third and the curve binding once the cap is
+raised; a top-up raising the curve on the same day; a hold refusing and the
+day it names resuming; `immediate` exempt under a hold and over the curve; the
+`release_mode` CHECK; GR reading `gr_` columns only, with a management hold
+leaving GR alone; and **`assign_lead_to_customer` still accepting a direct call
+for a customer the candidate list refuses, spending exactly one credit**.
+Invariant 7 and ACLs asserted.
+
+⚠️ The test's first draft skipped its day-sensitive blocks on weekends, on the
+theory that a Saturday run has `k = 0`. Wrong: `anchor_for_working_day(k)`
+walks back to a weekday, so `[anchor, today]` holds exactly `k` working days
+whatever day it runs — the guards were hiding nothing and were removed, and
+the suite runs in full on a Saturday.
+
+**1,913 vitest cases green** (46 new: `releaseSchedule` 18 incl. BST and a
+Saturday renewal, `releaseStats` 8, `todaySummary` 12, the digest and guard
+additions, `publishedClaims` 2). `npx tsc --noEmit` clean, `npm run lint`
+clean, `npm run build` passes.
+
+**Not yet exercised in a browser or against real traffic:** the Today panel on
+a live customer, a hold set from Settings, the 07:30 cron, and the digest with
+a new-lead line. ⚠️ A preview cannot do any of it — Deployment Protection
+answers 302 to `vercel.com/sso-api` (§45/§46) — and a preview runs against
+production Supabase (§1.1). Test on `leads.stayful.co.uk` after merge, with
+the switch still off first.
+
+### Deployment order — migration BEFORE code
+
+✅ **0148 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-12, before the
+merge** (§1.1), and verified there rather than assumed:
+
+- **Pre-apply, no drift**: production's `get_filtered_candidates_for_lead`
+  (`eb39643d…`, 3086 chars) and `get_unfiltered_candidates_for_lead`
+  (`cfdd26aa…`, 2147) matched the 0107 file bodies byte for byte. Zero
+  collisions on the three columns, the CHECK, the four settings keys and the
+  two functions.
+- **Post-apply, all four bodies hash-match the repo file**:
+  `get_filtered_candidates_for_lead` `07ba9120…`,
+  `get_unfiltered_candidates_for_lead` `4680a634…`,
+  `customer_release_allows` `c6dc8172…`, `working_days_between`
+  `13af2773…`; the three `security definer` ones pin `search_path`.
+- **Inert, proved rather than argued**: both candidate functions fingerprinted
+  over all **334** unsold marketplace leads before and after the apply —
+  `feeb6fe8…` / `9d1040de…` both times, identical. 53 customers, 501 leads,
+  514 assignments untouched; the balance-and-counter fingerprint
+  (`af5707fc…`) identical; 53 of 53 on `release_mode = 'daily'`, 0 holds,
+  `release_enabled = false`, and the predicate returns true for a live
+  customer with the switch off.
+- **ACLs**: `anon`/`authenticated`/`public` hold zero grants on any 0148
+  function, `service_role` executes both; invariant 7's four still
+  `authenticated`-executable. `get_advisors` reports **no new finding**.
+
+0148 first, applied and verified against production before the PR merges
+(§1.1). It is inert: `release_enabled` ships `false`, every column defaults to
+today's meaning, and the two replaced functions return identical lists with
+the switch off. Code arriving first would fail every candidate query on a
+missing function — which is every assignment on the platform — so the order is
+not optional here.

@@ -1,3 +1,4 @@
+import { TODAYS_LEAD_SUBJECT_PREFIX } from "@/lib/releaseCopy";
 import { Resend } from "resend";
 import { APP_URL, LOGIN_URL } from "@/lib/env";
 import {
@@ -354,10 +355,18 @@ export async function sendAccountReadyEmail(params: {
 export async function sendNewLeadEmail(params: {
   to: string;
   lead: Lead;
+  /**
+   * §54 — true once the daily release is on, so the subject reads as the
+   * day's lead rather than one of a batch. Defaults to the old subject.
+   */
+  todaysLead?: boolean;
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to, lead } = params;
+  const { to, lead, todaysLead = false } = params;
   const city = extractCity(lead.address);
-  const subject = `New lead — ${lead.lead_name}${city ? `, ${city}` : ""}`;
+  const who = `${lead.lead_name}${city ? `, ${city}` : ""}`;
+  const subject = todaysLead
+    ? `${TODAYS_LEAD_SUBJECT_PREFIX} — ${who}`
+    : `New lead — ${who}`;
 
   const rows = [
     ["Name", lead.lead_name],
@@ -499,9 +508,14 @@ export async function sendDailyFollowUpsEmail(params: {
   overdue: number;
   leads: { name: string; what: string }[];
   url: string;
+  /** §54 — marketplace leads that arrived since yesterday's email. */
+  newLeadsToday?: number;
+  /** §54 — "Your next lead is due tomorrow." Body only, never the subject. */
+  nextLead?: string | null;
 }): Promise<{ id: string | null; error: unknown }> {
   const {
     to, contactName, subject, total, channels, minutes, overdue, leads, url,
+    newLeadsToday = 0, nextLead = null,
   } = params;
 
   const list = leads
@@ -525,17 +539,35 @@ export async function sendDailyFollowUpsEmail(params: {
         } more on your list.</p>`
       : "";
 
+  // One line and a link, never the lead's details — the new-lead email
+  // already carried those, and this must not restate them.
+  const arrived =
+    newLeadsToday > 0
+      ? `<p style="margin:0 0 12px"><strong>${newLeadsToday} new lead${
+          newLeadsToday === 1 ? "" : "s"
+        }</strong> ${newLeadsToday === 1 ? "has" : "have"} landed since yesterday — the first call is today.</p>`
+      : "";
+  const due =
+    total > 0
+      ? `<p style="margin:0 0 16px"><strong>${total} follow-up${
+          total === 1 ? "" : "s"
+        }</strong> due today — ${esc(channels)}. About ${minutes} minute${
+          minutes === 1 ? "" : "s"
+        }.</p>`
+      : "";
+  const next = nextLead
+    ? `<p style="margin:0 0 16px;color:#55564f;font-size:13px">${esc(nextLead)}</p>`
+    : "";
+
   const inner = `
-      <h1 style="margin:0 0 12px;font-size:20px">Today's follow-ups</h1>
+      <h1 style="margin:0 0 12px;font-size:20px">Today</h1>
       <p style="margin:0 0 8px">Morning ${esc(contactName)},</p>
-      <p style="margin:0 0 16px"><strong>${total} follow-up${
-        total === 1 ? "" : "s"
-      }</strong> due today — ${esc(channels)}. About ${minutes} minute${
-        minutes === 1 ? "" : "s"
-      }.</p>
+      ${arrived}
+      ${due}
       ${arrears}
-      <ul style="margin:0 0 16px;padding-left:18px;color:#1a1a1a;font-size:14px">${list}</ul>
+      ${total > 0 ? `<ul style="margin:0 0 16px;padding-left:18px;color:#1a1a1a;font-size:14px">${list}</ul>` : ""}
       ${more}
+      ${next}
       ${button(url, "Open today's list")}
   `;
   try {

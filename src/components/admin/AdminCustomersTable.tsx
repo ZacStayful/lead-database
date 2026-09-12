@@ -306,6 +306,7 @@ export interface FilterVolumeInfo {
 
 export function AdminCustomersTable({
   customers,
+  nextLead = {},
   lastActive = {},
   pauseDetail = {},
   pauseFacts = {},
@@ -314,6 +315,9 @@ export function AdminCustomersTable({
   declines = {},
 }: {
   customers: Customer[];
+  /** `${customer.id}:${lead_type}` → where they sit on the daily release (§54).
+   *  Empty while the release switch is off. */
+  nextLead?: Record<string, string>;
   /** customer.id → last sign-in timestamp (null = has login, never signed in). */
   lastActive?: Record<string, string | null>;
   /** customer.id → their current pause episode (0077). Paused customers only. */
@@ -769,6 +773,18 @@ export function AdminCustomersTable({
                         <PacingBadge status={computeGrPacing(c).status} />
                       )}
                     </div>
+                    {(nextLead[`${c.id}:management`] || nextLead[`${c.id}:guaranteed_rent`]) && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {[
+                          nextLead[`${c.id}:management`],
+                          nextLead[`${c.id}:guaranteed_rent`]
+                            ? `GR ${nextLead[`${c.id}:guaranteed_rent`]}`
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {c.last_assignment_at ? formatDate(c.last_assignment_at) : "—"}
