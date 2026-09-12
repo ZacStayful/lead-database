@@ -25,17 +25,29 @@ async function isAdminRequest(req: NextRequest): Promise<boolean> {
  * Leads eligible to replace this one.
  *
  * Eligibility is resolved in SQL rather than here, and here rather than in the
- * picker, so the list can never offer something the swap would then refuse:
- * same product, room left, not already held by this customer, not previously
- * withdrawn, not a customer's own lead.
+ * picker, so the list can never offer something the swap would then refuse.
+ * Four rules EXCLUDE a lead outright — wrong product, no room left, already
+ * held by this customer, previously withdrawn — and so does being a customer's
+ * own lead, which the swap refuses in either direction (0107).
  *
- * The customer's lead FILTER is the one rule that is reported rather than
- * applied. get_swap_candidates_for_assignment (0109) flags each candidate with
- * `matches_filter` — from lead_matches_customer_filter, the same predicate
- * allocation and the expired pool use — and a mismatch is still returned. A
- * swap is a support action, and a customer with a narrow filter may have no
- * matching lead in stock at the moment they are owed a replacement. The
- * override is the admin's to take, deliberately and per swap; see the POST.
+ * TWO rules are reported rather than applied, and the picker renders each
+ * differently:
+ *
+ *   - `matches_filter` (0109), from lead_matches_customer_filter — the same
+ *     predicate allocation and the expired pool use. A mismatch is still
+ *     SELECTABLE. A swap is a support action, and a customer with a narrow
+ *     filter may have no matching lead in stock at the moment they are owed a
+ *     replacement, so the override is the admin's to take, deliberately and
+ *     per swap; see the POST.
+ *
+ *   - `retired_reason` (0144), from lead_retirement_reason — invariant 11's
+ *     own arms. A non-null reason is NOT selectable and has no override at all
+ *     (0143): the picker greys the row and prints the basis. It is returned
+ *     rather than dropped because §53.9 recorded what dropping it cost — an
+ *     admin searching for a lead they knew existed was told nothing.
+ *
+ * Both come back verbatim. Nothing here re-derives either, and nothing here
+ * re-sorts: the function returns selectable leads first, then matching ones.
  */
 export async function GET(
   req: NextRequest,

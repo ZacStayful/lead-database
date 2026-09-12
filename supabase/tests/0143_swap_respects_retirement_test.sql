@@ -153,39 +153,50 @@ select test_util.assert_eq(
   'a pool-claimed lead is retired');
 
 -- ---------------------------------------------------------------------------
--- 2 — The picker stops offering them, and keeps offering everything else
+-- 2 — The picker stops OFFERING them, and keeps offering everything else
+--
+-- ⚠️ REWRITTEN BY 0144. This section originally asserted that a retired lead
+-- was absent from the candidate list altogether. 0144 reverses the mechanism
+-- and not the rule: the rows come back last, carrying the basis in
+-- retired_reason, and the picker renders them as disabled options — §52.4's
+-- argument that a control which silently disappears reads as broken and
+-- teaches nobody the rule.
+--
+-- What 0143 is still responsible for is unchanged and is what these assert:
+-- a retired lead is NOT SELECTABLE, and a lead the pool deliberately leaves in
+-- circulation still is. The reason VALUES are 0144's own suite.
 -- ---------------------------------------------------------------------------
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason is not null from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000003'),
-  0, 'the picker no longer offers a quality-blocked lead');
+  true, 'the picker does not offer a quality-blocked lead as selectable');
 
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason is not null from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000004'),
-  0, 'the picker no longer offers a lead pooled as ignored');
+  true, 'the picker does not offer a lead pooled as ignored as selectable');
 
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason is not null from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000006'),
-  0, 'the picker no longer offers a pool-claimed lead');
+  true, 'the picker does not offer a pool-claimed lead as selectable');
 
 -- ⚠️ The regression that matters most. Over-reaching here would take stock the
 -- pool deliberately leaves in circulation out of every replacement dropdown.
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000005'),
-  1, 'a lead pooled as UNASSIGNED is still offered');
+  null::text, 'a lead pooled as UNASSIGNED is still offered, and selectable');
 
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000002'),
-  1, 'a healthy lead is still offered');
+  null::text, 'a healthy lead is still offered, and selectable');
 
 select test_util.assert_eq(
   (select matches_filter from public.get_swap_candidates_for_assignment(
@@ -300,20 +311,20 @@ select test_util.assert_eq(
   public.lead_retired_from_allocation('aaaa0000-0000-0000-0000-000000000003'), false,
   'a quality override un-retires the lead (§36.4)');
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000003'),
-  1, 'and the picker offers it again');
+  null::text, 'and the picker offers it again, selectable');
 
 select public.admin_pool_force_out('aaaa0000-0000-0000-0000-000000000004');
 select test_util.assert_eq(
   public.lead_retired_from_allocation('aaaa0000-0000-0000-0000-000000000004'), false,
   'forcing a lead out of the pool un-retires it (§19.8)');
 select test_util.assert_eq(
-  (select count(*)::integer from public.get_swap_candidates_for_assignment(
+  (select retired_reason from public.get_swap_candidates_for_assignment(
      'bbbb0000-0000-0000-0000-000000000001', null, 50)
    where id = 'aaaa0000-0000-0000-0000-000000000004'),
-  1, 'and the picker offers that one again too');
+  null::text, 'and the picker offers that one again too, selectable');
 
 -- ---------------------------------------------------------------------------
 -- 6 — A retired lead may still be swapped OUT (§2 of the migration)
