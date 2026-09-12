@@ -121,6 +121,11 @@ if (!viaCron) { /* fall back to an admin session check */ }
 `Boolean(cronSecret)` matters: it fails closed when the var is unset.
 Export both `GET` (Vercel Cron issues a GET) and `POST`.
 
+⚠️ **And read `system_settings` through `resolveSettingsGate()`, never
+`const { data } = await …`.** A discarded error yields an empty map, an empty
+map reads as every switch being off, and the job then reports a cause that is
+not the cause — see §18.3 for the day that cost.
+
 ---
 
 ## 3. Core tables
@@ -575,6 +580,12 @@ for being new with no way to earn out of it.
   fires) but `customer.subscription.updated` sets it from `current_period_start`
   and the Stripe period keeps rolling. Neither had reached their next anchor date
   when 0084 shipped. Excluding them from the metric (§21) sidesteps it either way.
+- ⚠️ **`sweep-lead-pool`'s kill switch fails OPEN.** It reads
+  `(settingRow?.value ?? "true")` with the query error discarded, so an
+  unreadable `system_settings` runs the sweep as though `pool_enabled` were on.
+  The mirror of the defect §18.3 fixed, and left alone deliberately: closing it
+  would stop the pool sweep on a transient blip, which is a decision about the
+  pool rather than a tidy-up.
 - No ESLint config (`next lint` prompts interactively) and **no test suite**.
 
 ---
@@ -1340,6 +1351,88 @@ not, `unworked_rate` should fall and recycled supply with it, while
 closing gap means the business is getting healthier. A widening one means
 headroom is increasingly borrowed from customers ignoring their leads, which is
 capacity that evaporates the moment they engage or leave.
+
+### §18.3 — A failed settings read is not a switched-off cron *(no migration)*
+
+On **2026-09-12** the 11:00 escalation run returned **200** and logged
+
+```
+[escalate] run skipped — escalation_enabled is not 'true'
+```
+
+while `system_settings` held `escalation_enabled = 'true'` and had done since
+13 August. The run was not skipped by anybody; the settings read failed, and
+`async function settings()` was `const { data } = await admin.from(…)` with the
+error discarded — so an unreadable table produced an EMPTY MAP, and an empty
+map reads as every switch being off.
+
+**The cost was not the escalation.** That is idempotent and the next morning
+catches up. The cost was the two daily series: this cron captures both
+`service_capacity_snapshots` and `customer_engagement_snapshots` **after**
+escalating, a skipped run captures neither, and §18.2 and 0070 both record that
+neither can be backfilled. Thirteen unbroken days, then a hole with a confident
+wrong explanation sitting over it.
+
+⚠️ **The kill switch's own comment is the argument**: it is logged rather than
+silently skipped because *"the whole point of the switch is being able to tell
+later why a week produced no escalations."* A switch whose `off` also means
+"the database was briefly unreachable" cannot do that job.
+
+`resolveSettingsGate()` in `src/lib/cron/settingsGate.ts` is the fix — **three
+outcomes, never two**:
+
+| | Means | The caller |
+|---|---|---|
+| `ok` | the table was read | consults the keys |
+| `read_failed` | the read errored, or returned nothing at all | ⚠️ **never** reads it as "off" |
+| `not_configured` | the table was read and is empty | decides for itself |
+
+⚠️ **`read_failed` and `not_configured` are separate because the two callers
+need opposite answers.** `escalate-leads` selects the WHOLE table, so empty
+means 0062 was never applied and refusing is right; `contactPlanSettings`
+selects five keys BY NAME, so empty is the ordinary shape of a database that
+has not configured the feature and the documented defaults are right. One
+reason cannot serve both. A populated table merely missing the key is
+deliberately not a failure — that is a key somebody removed, and "not set to
+true" is exactly what it is.
+
+**Escalation now aborts with a 500**, which marks the cron run failed where a
+200 carrying `skipped` is something nobody looks at again. It still fails
+CLOSED on the work — an unreadable config must never be guessed at when the
+work moves leads between operators — it simply now says which of the two
+happened.
+
+**`contact-followups` had the identical defect**, on a job whose entire output
+is an email that would simply never arrive. `contactPlanSettings` gained
+`readFailed` rather than throwing, because its four callers want different
+things: both crons abort loudly, and ⚠️ **the customer lead page deliberately
+does NOT** — a transient blip should hide a timeline block, never 500 a page a
+customer is reading. That asymmetry is pinned by a test.
+
+⚠️ **Two instances are knowingly left alone**, and neither has this symptom:
+
+- **`sweep-lead-pool` fails OPEN** — `(settingRow?.value ?? "true")`, so an
+  unreadable switch runs the sweep as though enabled. A kill switch that does
+  not kill is its own defect, in the other direction, and closing it would stop
+  the pool sweep on a blip. That is a decision about the pool, not a tidy-up.
+- **`reclaim-stale-leads`** discards the error too, then 500s on the absent
+  cutoff — loud already, and §7 records it is not in `vercel.json` at all.
+
+**Still open, and it is the part that cost the day**: a run that aborts or
+skips still captures no snapshot, so a transient failure at 11:00 still puts a
+hole in a series that cannot be backfilled. Capturing before the gate would fix
+that and breaks §18.2's rule that the reading must follow the run it describes.
+Worth a decision rather than a reflex.
+
+**Verification.** 15 vitest cases — the gate over every shape (an error with
+and without rows, a null result, an empty table, a missing key, a blank error
+message), `contactPlanSettings` driven through a fake client, and file-text
+guards on the four real files. ⚠️ **Ten mutations run, all ten caught**:
+discarding the error again, answering 200 instead of 500, consulting the switch
+before the abort, an error resolving to a readable empty config, collapsing the
+two failure reasons in either file, reading a null result as an empty table,
+dropping the follow-up abort, ordering it after the disabled check, and making
+the customer lead page throw. 1,858 cases green, `tsc` clean, lint clean.
 
 ### Churn
 

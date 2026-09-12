@@ -5,6 +5,11 @@ import { isAdminUser } from "@/lib/auth";
 import { leadPriceFor } from "@/lib/plans";
 import { selectCombinedCandidates, completeAssignment } from "@/lib/ingest";
 import type { Lead, LeadType } from "@/lib/types";
+import {
+  resolveSettingsGate,
+  type SettingsGate,
+  type SettingsRow,
+} from "@/lib/cron/settingsGate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,12 +66,18 @@ type Scored = {
   signals: Record<string, boolean>;
 };
 
-async function settings(admin: ReturnType<typeof createAdminClient>) {
-  const { data } = await admin.from("system_settings").select("key, value");
-  const map = new Map(
-    ((data ?? []) as { key: string; value: string }[]).map((r) => [r.key, r.value])
-  );
-  return map;
+/**
+ * ⚠️ THE ERROR IS RETURNED, NOT DISCARDED. This was `const { data } = await …`,
+ * which turned any failed read into an empty map — and an empty map reads as
+ * every switch being off. settingsGate.ts records the morning that cost.
+ */
+async function settings(
+  admin: ReturnType<typeof createAdminClient>
+): Promise<SettingsGate> {
+  const { data, error } = await admin
+    .from("system_settings")
+    .select("key, value");
+  return resolveSettingsGate(data as SettingsRow[] | null, error);
 }
 
 /**
@@ -98,7 +109,27 @@ async function handle(request: NextRequest) {
 
   const dryRun = request.nextUrl.searchParams.get("dryRun") === "true";
   const admin = createAdminClient();
-  const config = await settings(admin);
+  const gate = await settings(admin);
+
+  // ---------------------------------------------------------------------
+  // ⚠️ A FAILED READ IS NOT A SWITCHED-OFF RUN, and must never be reported as
+  // one. Refuse loudly instead: a 500 marks the run failed, where a 200
+  // carrying "skipped" is indistinguishable from the switch genuinely being
+  // off — which is how 2026-09-12 lost a day of both snapshot series under a
+  // log line naming the wrong cause.
+  //
+  // Failing CLOSED on the work itself is deliberate and unchanged: escalation
+  // moves leads between operators, so an unreadable config must never be
+  // guessed at. What changes is that it now says which of the two happened.
+  // ---------------------------------------------------------------------
+  if (!gate.ok) {
+    console.error(`[escalate] run aborted — ${gate.reason}: ${gate.message}`);
+    return NextResponse.json(
+      { status: "error", reason: gate.reason, error: gate.message },
+      { status: 500 }
+    );
+  }
+  const config = gate.config;
 
   // ---------------------------------------------------------------------
   // Kill switch, checked before anything else.
