@@ -12518,6 +12518,208 @@ cost of **1.17**, guaranteed rent **2.5** at **2.46**. Both read `estimated`,
 because the eight leads withdrawn before 0145 carry no cost and are invisible
 by design.
 
+### 53.12 — A replacement for a replacement goes to a person *(0146)*
+
+§53's Deferred list carried this: *"Replacement-of-a-replacement is unbounded
+except by the counter. The new assignment carries a null `quality_claim_id`, so
+it can itself be reported. Acceptable at two a cycle; worth watching if the
+entitlement ever rises."*
+
+§51.11 put `quality_allowance_pct` on `AdminCustomerForm`, so the entitlement
+can now be raised from a form and "worth watching" stopped being good enough.
+
+`lead_assignments.replacement_depth` counts how many replacements deep a slot
+is. Above zero, the report is settled by a person.
+
+#### ⚠️ The answer is REVIEW, never a refusal
+
+Settled rather than new. §51.3 already argues it for the allowance: an operator
+receiving genuinely dead leads is exactly who exceeds a budget, so refusing them
+automatically punishes the customer the feature exists for. It holds here with
+more force. **If we handed somebody a dead replacement they are owed another
+one; what they are not owed is a SECOND one decided by nobody.** Two dead
+landlords on one paid slot is a sourcing failure, and §51.8 says the queue
+exists precisely to find those.
+
+Eligibility is untouched — `claimable_dead_lead_assignments` still returns a
+chained assignment, because it IS claimable. What changes is who settles it, and
+the suite pins that at depth 1 as well as at depth 6 so a reordering cannot lose
+it. A predicate filtering on depth would take the report control away entirely,
+which is the opposite of what §51.3 settles.
+
+#### ⚠️ A STORED DEPTH, BECAUSE THE CHAIN IS NOT DERIVABLE
+
+The obvious alternative is to derive it: `lead_quality_claims` carries
+`replacement_assignment_id` and `origin_assignment_id`, so a recursive join can
+walk a chain, and 0139 guarantees those rows are never deleted.
+
+It does not work, and the reason is specific rather than a preference about
+joins. **THE PLAIN ADMIN SWAP WRITES NO CLAIM AT ALL.**
+`/api/admin/assignments/[id]/swap` calls `admin_swap_lead_assignment` directly
+to replace a lead for any support reason, and only the two claim-settling
+callers (0139, 0141) ever insert a claim row. So a chain passing through one
+plain admin swap is invisible to any claims-based derivation — and that is
+exactly the shape somebody replacing a lead by hand produces. The suite asserts
+it: two chained swaps, depth 2, and **not one `lead_quality_claims` row in the
+database**.
+
+A column on the assignment sees every chain, because there is exactly one insert
+of a replacement assignment in the schema and all three callers go through it —
+the plain admin swap, `resolve_dead_lead_claim_with_swap` (§52) and
+`customer_swap_dead_lead` (§53). Same denormalise-to-survive move 0116 makes for
+`lead_messages`, 0138 for `lead_outcome_reasons` and 0139 for
+`origin_assignment_id`.
+
+⚠️ **It is read from `v_old`, the locked pre-image, and it has to be**: the
+outgoing assignment is DELETED four statements before the insert, so there is
+nothing left to read it from. 0145 states the same rule one migration earlier
+for `withdrawn_slots`, where the row survived and only the value had moved; here
+the row is gone entirely, so it is mandatory rather than merely correct. The
+mutation that reads the table instead returns depth 1 for every link in a chain.
+
+#### ⚠️ NOT NULL DEFAULT 0, which looks inconsistent with 0145 and is not
+
+0145 made `withdrawn_slots` **nullable** and argued at length that a pre-0145
+row must be invisible rather than counted as zero, because a zero there asserts
+*"that swap cost nothing"* — which is false, and is the one misreading the
+column exists to prevent.
+
+This column takes the opposite decision, for a reason that only looks like the
+same question. A zero here asserts *"this assignment did not arrive as a
+replacement"*, which is true of essentially the whole book: production held 514
+assignments, **zero claims of any kind**, and 8 leads ever withdrawn — so at
+most eight assignments are genuinely depth 1 and read 0.
+
+They cannot be identified. The outgoing assignment was deleted, and with no
+claim rows there is nothing naming who held it. So the choice is a default of 0
+or a null every reader must interpret — and interpreting null as "route to
+review" would send EVERY pre-0146 assignment to a person, breaking the feature
+for the entire book to be careful about at most eight rows.
+
+The error is therefore **bounded at 8, permissive** (one more automatic swap
+than intended, on a slot the operator is arguably owed one for anyway) and
+**self-clearing**: the claim window is 14 days, so it is gone in a fortnight.
+
+⚠️ **The same rule governs a null reaching the decision.** The column is NOT
+NULL, so a null in TypeScript is a failed read rather than a fact, and
+`decideDeadLeadClaim` treats it as 0. Reading absence as a chain would route the
+whole book to a person the moment one query failed.
+
+#### ⚠️ The clause sits ABOVE corroboration and BELOW the peer test
+
+`decideDeadLeadClaim`'s order is the rule, and this is the one placement worth
+arguing. A corroborated claim auto-upholds and **spends nothing** (§51.4), so it
+is the single branch the hidden budget does not bound at all — below this
+clause, a chain whose leads happened to be reported by a peer too would settle
+itself indefinitely, which is precisely the unbounded case the Deferred entry
+was about.
+
+Below the peer-contradicts test for the opposite reason: an operator still
+working the same landlord is the stronger signal and is what the admin queue
+most needs to see named on the row.
+
+#### Saying so, and the one review valve that may speak
+
+The row says it before the operator writes anything, and the submit button stops
+promising a swap. The mechanics already worked — a review verdict comes back
+with the neutral sentence and nothing is swapped — but the button read "Swap
+this lead" right up until it did not, which is §52.4's objection to a control
+that behaves differently from how it reads.
+
+⚠️ **It is safe to say out loud ONLY because this is the customer's own
+history.** The other two review valves must stay silent: `quality_review_required`
+is an admin judgement about them, and a peer working the same landlord is §19.7's
+forbidden disclosure. Naming a chain tells them nothing they did not already
+know. The verdict's own message is still the identical neutral sentence every
+review outcome uses, so nothing downstream can vary by branch.
+
+### Verification
+
+All 146 migrations applied to a scratch **Postgres 16.13** from empty, **zero
+failures**, 0146 re-applied twice for idempotency. **All eight existing SQL
+suites pass unchanged** — 0137, 0138, 0139, 0141, 0142, 0143, 0144 and 0145,
+255 assertions — which is the regression check that matters, since 0146 rewrites
+the swap.
+
+`0146_replacement_chain_depth_test.sql` — **28 assertions**. Among them: depth 0
+on an ordinary assignment and on an allocated lead; 1, 2 and 3 down a chain; the
+outgoing row confirmed deleted; **the whole chain invisible to any claims-based
+derivation**; all three swap callers and the two-argument shim stamping it; a
+refused swap creating no assignment and moving no depth; a chained assignment
+still claimable at depth 1 and at depth 6; and the regressions — six swaps
+moving no balance, no monthly counter and no odometer, 0145's withdrawal cost
+still recorded on every swapped-out lead, and ordinary allocation still spending
+exactly one credit.
+
+**1,828 vitest cases green** (23 new), `npx tsc --noEmit` clean, `npm run lint`
+clean, `npm run build` passes.
+
+⚠️ **Fifteen mutations were run and all fifteen caught** — six in SQL, nine in
+TypeScript, each broken deliberately and watched to fail before the assertion
+was kept. §50.9 records two assertions in this repo already written weak enough
+to survive the mutation they existed to catch, and §53's own suite made it three.
+
+| mutation | caught by |
+|---|---|
+| the insert forgets the column | depth 1 |
+| read the depth from the table rather than the pre-image | depth 2 |
+| saturate the depth at 1 | depth 2 |
+| make the column nullable | the NOT NULL assertion |
+| drop the CHECK | the negative-depth refusal |
+| make eligibility filter on depth | **the depth-1 claimable assertion** |
+| delete the decision clause | five cases |
+| read an unreadable depth as a chain | nine cases |
+| word the chain message differently | the identical-message assertion |
+| put a banned word in its code | the unpublished-allowance sweep |
+| move the clause below corroboration | the ordering assertion |
+| either route stops passing the depth | its file-text guard |
+| the list hard-codes the notice, or ignores the depth | the copy guards |
+
+⚠️ **One assertion was written weak and the mutation run is what found it.** The
+eligibility mutation was first caught only by a later abort, several steps down
+the suite — a genuine detection, but one a reordering of the file could lose. It
+is now pinned by its own named assertion at the earliest depth a chain exists,
+and the mutation fails on that line.
+
+**Not yet exercised in a browser.** No chained report has been made against a
+real database. ⚠️ A Vercel preview cannot do it — Deployment Protection answers
+302 to `vercel.com/sso-api` (§45, §46, §50, §51, §52) — and a preview runs
+against **production** Supabase (§1.1), so a test report moves a real credit.
+
+### Deployment order — migration BEFORE code
+
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-12, before the merge** (§1.1),
+and verified there rather than trusted.
+
+- **No drift before it went on.** The 3-argument `admin_swap_lead_assignment`
+  hash-matched 0145's file exactly (`a1d3ccd1…`, 7472 chars), and
+  `replacement_depth` collided with no column or constraint.
+- **Applied with comments stripped OUTSIDE function bodies only**, so the
+  `prosrc` matches the repo file and the next §11 audit is a straight
+  comparison (§48.9, §51.10). That form was proved schema-identical first: both
+  were applied to scratch builds and fingerprints over every function body,
+  `prosecdef`, `search_path` and all three ACLs, over every column, and over
+  every constraint all came back **identical**.
+- **The body hash-matches a scratch build from the repo file** — `95f86594…`,
+  8267 chars, `security definer` with `search_path` pinned, `anon`/`authenticated`
+  false, `service_role` true. The two-argument shim is byte-for-byte unchanged.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the
+  five mutable-`search_path` functions it lists are all pre-existing.
+- **Nothing moved.** 514 assignments, 501 leads and 53 customers untouched, all
+  514 rows at depth 0 and none null, and an md5 of every customer's balances and
+  counters identical before and after (`6db03676…`).
+- The chain was then driven **on production itself**, inside a block that raises
+  at the end so every write rolled back: two real swaps on a real management
+  assignment produced depth 1 then depth 2, the outgoing assignment was gone,
+  and the balance fingerprint was unmoved across both. The row counts afterwards
+  confirm it wrote nothing.
+
+It is **inert until the code ships**: the column is written but nothing reads it,
+and without the TypeScript half every depth reads 0 and behaviour is exactly
+today's. Code arriving first would select a column that does not exist and fail
+every claim read.
+
+
 ### Deferred
 
 - ~~**`clean_leads_streak` is dead.**~~ **Closed by 0142 (§53.8).**
@@ -12533,9 +12735,16 @@ by design.
   withdrawals where the exposure is the entitlement every customer is holding
   and has not spent. `withdrawn_slots_per_month` is the number that makes that
   gap visible; nothing acts on it, and §16 says nothing gates on this panel.
-- **Replacement-of-a-replacement is unbounded except by the counter.** The new
+- ~~**Replacement-of-a-replacement is unbounded except by the counter.** The new
   assignment carries a null `quality_claim_id`, so it can itself be reported.
-  Acceptable at two a cycle; worth watching if the entitlement ever rises.
+  Acceptable at two a cycle; worth watching if the entitlement ever rises.~~
+  **Closed by 0146 (§53.12)** — a chained report is settled by a person. ⚠️ The
+  struck sentence names the wrong marker, which is why it is struck rather than
+  deleted: `quality_claim_id` is still null on a replacement, deliberately, so a
+  replacement that is itself dead can still be reported.
+  `lead_assignments.replacement_depth` is what bounds it, and it had to be a
+  stored column because the PLAIN ADMIN SWAP WRITES NO CLAIM — every
+  claims-based derivation is blind to exactly the chain a support swap produces.
 - ~~**0109's admin picker still offers expired-pool leads** (§53.7).~~
   **Closed by 0143 (§53.9).**
 - ~~**A withheld candidate is withheld silently.**~~ **Closed by 0144 (§53.10).**

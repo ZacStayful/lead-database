@@ -5,6 +5,8 @@ import {
   remainingOf,
   remainingSentence,
   resetSentence,
+  REPLACEMENT_CHAINED_ACTION,
+  REPLACEMENT_CHAINED_NOTICE,
   REPLACEMENT_EMPTY,
   REPLACEMENT_EXHAUSTED,
   REPLACEMENT_NAV_LABEL,
@@ -149,6 +151,8 @@ describe("what the copy may not say", () => {
 
   it("names no mechanism in any customer-facing string", () => {
     const strings = [
+      REPLACEMENT_CHAINED_NOTICE,
+      REPLACEMENT_CHAINED_ACTION,
       REPLACEMENT_EMPTY,
       REPLACEMENT_EXHAUSTED,
       remainingSentence(e({})),
@@ -180,5 +184,54 @@ describe("what the copy may not say", () => {
   it("keeps the nav entry pointing at the page", () => {
     expect(REPLACEMENT_PATH).toBe("/dashboard/replacements");
     expect(REPLACEMENT_NAV_LABEL.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a row whose slot is already a replacement (§53.12)", () => {
+  /**
+   * ⚠️ The mechanics already worked before this: a chained report comes back
+   * with the neutral review sentence and nothing is swapped. What did not work
+   * was the row, whose button said "Swap this lead" right up until it did not
+   * — §52.4's objection to a control that silently behaves differently from
+   * how it reads.
+   */
+  it("promises a look, never a swap", () => {
+    expect(REPLACEMENT_CHAINED_NOTICE.toLowerCase()).not.toContain("swap");
+    expect(REPLACEMENT_CHAINED_ACTION.toLowerCase()).not.toContain("swap");
+  });
+
+  /**
+   * ⚠️ This one is safe to say out loud ONLY because it is the customer's own
+   * history. The other two review valves must stay silent: `quality_review_required`
+   * is an admin judgement about them, and a peer working the same landlord is
+   * §19.7's forbidden disclosure. So the notice must not drift into naming
+   * either.
+   */
+  it("says nothing about anybody else", () => {
+    const text = REPLACEMENT_CHAINED_NOTICE.toLowerCase();
+    // ⚠️ "another" is NOT banned — the sentence is allowed to talk about
+    // another LEAD. What it may never name is another person.
+    for (const word of ["operator", "someone else", "somebody else"]) {
+      expect(text).not.toContain(word);
+    }
+  });
+
+  /**
+   * ⚠️ The list renders both from the shared constants rather than writing its
+   * own strings, or every assertion above is decorative. Anchored on the real
+   * file, comments stripped — §46 records a guard that failed on its own
+   * explanation.
+   */
+  it("is what the list actually renders", () => {
+    const src = readFileSync(
+      "src/components/dashboard/ReplacementList.tsx",
+      "utf8",
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toContain("{REPLACEMENT_CHAINED_NOTICE}");
+    expect(src).toContain("REPLACEMENT_CHAINED_ACTION");
+    // The depth has to reach the row, or nothing can branch on it.
+    expect(src).toContain("item.replacementDepth > 0");
   });
 });

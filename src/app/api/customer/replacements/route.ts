@@ -131,6 +131,22 @@ export async function GET(req: NextRequest) {
     ])
   );
 
+  // Depths, so the shortlist says which of these will be settled by a person
+  // (0146). A missing row is an unreadable depth, not a chain — the column is
+  // NOT NULL and the decision treats absence as 0.
+  const assignmentIds = claimable.map((r) => r.assignment_id);
+  const { data: depthRows } = assignmentIds.length
+    ? await admin
+        .from("lead_assignments")
+        .select("id, replacement_depth")
+        .in("id", assignmentIds)
+    : { data: [] as { id: string; replacement_depth: number }[] };
+  const depths = new Map(
+    ((depthRows ?? []) as { id: string; replacement_depth: number | null }[]).map(
+      (d) => [d.id, d.replacement_depth ?? 0]
+    )
+  );
+
   const items = claimable
     .map((r) => {
       const lead = leads.get(r.lead_id);
@@ -141,6 +157,7 @@ export async function GET(req: NextRequest) {
         lead_id: r.lead_id,
         assigned_at: r.assigned_at,
         age_days: ageDays,
+        replacement_depth: depths.get(r.assignment_id) ?? 0,
         lead_name: lead.lead_name,
         address: lead.address,
         postcode_area: lead.postcode_area,
