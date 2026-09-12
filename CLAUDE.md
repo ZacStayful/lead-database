@@ -12720,6 +12720,212 @@ today's. Code arriving first would select a column that does not exist and fail
 every claim read.
 
 
+
+### 53.13 — How much of that cost is queued up *(0147)*
+
+§53's Deferred list carried this, left open by 0145: *"The lag itself is still
+open. The ceiling reflects the last 28 days of withdrawals where the exposure is
+the entitlement every customer is holding and has not spent."*
+
+0145 settled that the cost of a swap is not missing from the ceiling: the clamp
+lowers `slots_per_month` the instant a lead is withdrawn, and the replacement
+half is already charged into `avg_allocation_with_swaps`. What is missing is
+**timing**. `withdrawn_slots_per_month` reads `observed` once anything has
+actually been withdrawn, and an observation of zero is a perfectly truthful
+statement about a quiet month — while saying nothing about how many replacements
+are sitting there ready to be taken, all of which can land in an afternoon.
+
+`swaps_available_now` and `swap_slots_now` are that standing stock.
+
+#### ⚠️ MEASURING IT FIRST CHANGED THE SHAPE, BY MORE THAN A FACTOR OF TWO
+
+The obvious figure is the unspent entitlement. Publishing it would have been
+wrong, and not marginally:
+
+| | |
+|---|---|
+| Customers holding a product | 23 |
+| Unspent entitlement across the book | **31** |
+| Of those, customers with anything inside the claim window | 11 |
+| Claimable assignments they hold | 72 |
+| **Replacements actually takeable today** | **13** (12 management, 1 GR) |
+
+Eighteen of the thirty-one sits with customers who have nothing in their 14-day
+window. **Entitlement with nothing to spend it on is not exposure**, and neither
+is claimable stock a customer has no entitlement left for. So the figure is the
+per-customer `least(remaining entitlement, claimable assignments of this
+product)`, and both bounds are load-bearing — a guard pinning only one of them
+would pass on a figure wrong by 18.
+
+At today's average withdrawal cost that is about **14.0 management slots** and
+**2.5 GR slots** that could leave supply at any moment, against a management
+inventory of 158 free slots.
+
+#### ⚠️ REPORTED, NEVER ADDED — and this is 0145's rule, restated because it bites twice
+
+Both halves of a swap are already charged somewhere: the withdrawn half inside
+`slots_per_month`, the replacement half inside `avg_allocation_with_swaps`. So
+this figure is a **label on timing**, not a third supply term, and `swap_slots_now`
+deliberately does **not** count the replacement lead itself.
+
+Under §18.1 it is the demand-side mirror of `inventory_slots_now`: standing,
+one-off, live, printed beside the ceiling and never inside it. The SQL suite
+states every ceiling as an identity over the other returned columns, so
+subtracting the exposure from any of them breaks a named test.
+
+⚠️ **IT AND `withdrawn_slots_per_month` WILL OFTEN DISAGREE, AND NEITHER IS
+WRONG.** One is a monthly rate, the other is what is queued right now. Before any
+swap has happened the rate is an **estimate** built from the modelled claim
+demand — 29.3 management slots a month — and reads *above* the standing stock;
+after the first swap it becomes an **observation** and can read far below it.
+**The second case is the lag this exists to make visible.**
+
+#### ⚠️ A second reading of the allowance now lives inside one function
+
+`swap_demand` in the `served` CTE models the recurring monthly **rate** over the
+population the ceiling is about: active, unpaused, per product. The new
+`entitlement` CTE is the standing **stock** over the population that can actually
+claim, and it is the faithful transcription of `claimBudget()` — `holdsProduct`'s
+**OR** on the management side, both allocations under one budget, and 0142's
+earned bonus.
+
+They are deliberately different rather than drifted, and the difference is
+measurable: one customer today is `account_status = 'active'` with an inactive
+subscription, which `holdsProduct` admits and the served CTE refuses. A figure
+built on the served population would miss them. **If the two are ever reconciled,
+the `entitlement` CTE is the one to keep.**
+
+#### ⚠️ A paused management customer is not exposure
+
+`admin_swap_lead_assignment` raises on one, so their entitlement cannot be spent
+on management. They are excluded from the management row and **only** that row:
+§21 excludes paused customers from every allocation metric on exactly this
+reasoning, management branch only (invariant 6), because GR keeps flowing to a
+paused management customer and has no pause of its own.
+
+Archived rows are excluded outright (§18D).
+
+#### The claim rule is delegated, not restated
+
+The window, the owner bar and the worked-evidence requirement are all enforced by
+calling `claimable_dead_lead_assignments(customer_id)` **with its own default
+window**, so the 14 is not written down twice and no arm of that predicate is
+hand-copied — §34 and §35's fifth-copy trap, and the same move 0143 makes with
+`lead_retired_from_allocation`. The window is the longest of the six reasons
+(`already_with_operator` is 7), so the count is an upper bound, which is the safe
+direction for an exposure figure.
+
+A dual-product customer's one budget is counted against both rows, exactly as
+`swap_demand` already does. There are none today, and it overstates rather than
+understates.
+
+#### Nothing gates on it, deliberately
+
+§16 is explicit that no capacity figure refuses anybody and §18.1 that this panel
+is reporting and admin judgement. The real back-pressure already exists
+elsewhere: `replacement_stock_floor` (§53.3) refuses a customer swap when the
+product's unsold pool runs thin, at the moment of the swap and on the product's
+own stock. This is the number that says whether that floor is about to be tested.
+
+### Verification
+
+All 147 migrations applied to a scratch **Postgres 16.13** from empty, **zero
+failures**, 0147 re-applied twice for idempotency, and **all nine existing SQL
+suites pass unchanged** — 0137 through 0146, 283 assertions.
+
+`0147_pending_swap_exposure_test.sql` — **42 assertions**. Among them: both
+bounds exercised in **both** directions (raising an entitlement moves the figure,
+raising a claimable count beyond it does not, and vice versa); 0142's earned
+bonus moving it; a customer pushed past their entitlement by a reviewed uphold
+contributing zero rather than a negative; a lead outside the window, one the
+customer uploaded and one nobody has worked each dropping out, which they can
+only do if the claim predicate is genuinely being called; the paused and archived
+exclusions in both directions; every ceiling stated as an identity; a same-day
+`capture_service_capacity` re-run refreshing both columns; and a real
+`customer_swap_dead_lead` spending the entitlement and removing the exposure with
+it while 0145 still records what the withdrawal cost.
+
+**1,843 vitest cases green** (15 new), `npx tsc --noEmit` clean, `npm run lint`
+clean, `npm run build` passes.
+
+⚠️ **Twenty-three mutations were run and all twenty-three caught** — twelve in
+SQL, eleven against the guard file, each broken deliberately and watched to fail
+before the assertion was kept.
+
+| mutation | caught by |
+|---|---|
+| unbounded by entitlement, or by claimable stock | the seed assertion |
+| paused or archived customers counted | the same |
+| the claim window restated instead of delegated | the out-of-window case |
+| the exposure subtracted from serviceable supply | the ceiling identity |
+| `holdsProduct` tested with AND | the seed assertion |
+| the earned bonus dropped | the bonus case |
+| the zero clamp removed | the pushed-past case |
+| the on-conflict list forgetting a column | the same-day re-run |
+| the replacement lead charged into the slot figure | the slot assertion |
+| the function handed back to `anon` | the ACL |
+| the panel dropping its "not counted above" line, or subtracting from a ceiling | the guard file |
+
+⚠️ **ONE MUTATION WAS NOT CAUGHT AT FIRST, AND THE FIX WAS TO THE CODE RATHER
+THAN THE TEST.** A `where e.remaining > 0` short-circuit in the join made the
+zero clamp above it unobservable — a guard no test could ever fail, which is
+§50.9's shape and the fifth time this repository has recorded it. The
+short-circuit is gone (it saved one lateral call per spent customer) and the
+clamp, which is the rule, stays. `swapExposure.test.ts` now asserts its absence.
+
+⚠️ **Not yet seen in a browser.** Nobody has read the line on `/admin`. A Vercel
+preview cannot show it — Deployment Protection answers 302 to
+`vercel.com/sso-api` (§45, §46, §50, §51, §52).
+
+### Deployment order — migration BEFORE code
+
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-12, before the merge** (§1.1),
+and verified there rather than trusted.
+
+- **No drift before it went on.** Both replaced bodies hash-matched the 0145
+  repo file exactly — `get_service_capacity` `603743694eb9b1e5941d742c255b1bcb`
+  (13,155 chars) and `capture_service_capacity` `0cb0435ef38ea09d8aaab0a97ecd6a31`
+  (3,343).
+- **Applied with comments stripped OUTSIDE function bodies only**, so both
+  `prosrc` values match the repo file and the next §11 audit is a straight
+  comparison (§48.9, §51.10). That form was proved schema-identical first: both
+  were applied to scratch builds and fingerprints over all **163** function
+  bodies, `prosecdef`, `search_path` and every ACL, over all **977** columns and
+  all **354** constraints came back identical.
+- **Both bodies hash-match a scratch build from the repo file** —
+  `get_service_capacity` `0df89253092b0e427fecaa3219770222` (18,317 chars),
+  `capture_service_capacity` `6fedb1d7d1f16d9e246e3b8d3bb60b3b` (3,548) — both
+  `security definer` with `search_path` pinned, `anon` false, `authenticated`
+  false, `service_role` true. **The DROP's ACL was re-asserted correctly**, which
+  is the one thing §11 says a drop silently loses.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the five
+  mutable-`search_path` functions and the fifty deny-all tables it lists are all
+  pre-existing.
+- **Nothing moved.** 53 customers, 501 leads and 514 assignments untouched, and
+  an md5 of every customer's balances, counters, claim count and streak identical
+  before and after (`3b6a3841977b14150217fa1fcc22c4d7`).
+- ⚠️ **And the check this migration is really about**: a fingerprint of all
+  **twenty-six pre-existing capacity figures** across both products is
+  byte-identical before and after (`40d0e3991e8856d5786dc6c7a6172254`). Not one
+  ceiling moved.
+- The figure was then driven **on production itself**, inside a block that raises
+  at the end so every write rolled back: spending one customer's entitlement took
+  the management exposure **12 → 10**, and raising their allowance to 50% took it
+  to **13** — bounded by their claimable count rather than their entitlement,
+  which is the second bound doing its job on live data. The balance and allowance
+  fingerprints afterwards confirm it wrote nothing.
+
+**Opening position on production**, so the first `observed` reading can be judged
+against it: management **12 replacements takeable now, about 14.0 slots** against
+158 free and a modelled rate of 29.3 a month; guaranteed rent **1 and 2.5** against
+542 free and 2.5 a month. Both rates still read `estimated`.
+
+It is **not inert**: the moment it applies the panel query returns two more
+columns and the daily snapshot gains two more. What it does not do is change any
+existing figure — asserted above, not assumed. Code arriving first would select
+two columns that do not exist and fail the whole admin capacity panel, which is
+what §53.11 records for 0145.
+
 ### Deferred
 
 - ~~**`clean_leads_streak` is dead.**~~ **Closed by 0142 (§53.8).**
@@ -12731,10 +12937,16 @@ every claim read.
   is a sum of CAPS and the swap's clamp lowers it immediately, so the ceiling
   already carries the cost and carries it correctly; it LAGS rather than
   understates. 0145 records and reports it, and never adds it.
-- **The lag itself is still open.** The ceiling reflects the last 28 days of
+- ~~**The lag itself is still open.** The ceiling reflects the last 28 days of
   withdrawals where the exposure is the entitlement every customer is holding
-  and has not spent. `withdrawn_slots_per_month` is the number that makes that
-  gap visible; nothing acts on it, and §16 says nothing gates on this panel.
+  and has not spent.~~ **Closed by 0147 (§53.13)** — `swaps_available_now` and
+  `swap_slots_now` are that exposure, live and reported beside the ceiling. ⚠️
+  The struck sentence names the wrong quantity, which is why it is struck rather
+  than deleted: the entitlement a customer is holding read **31** against a true
+  exposure of **13**, because entitlement with nothing inside the claim window
+  to spend it on is not exposure. Still nothing acts on it, and §16 still says
+  nothing gates on this panel — the back-pressure is `replacement_stock_floor`
+  (§53.3), at the swap itself.
 - ~~**Replacement-of-a-replacement is unbounded except by the counter.** The new
   assignment carries a null `quality_claim_id`, so it can itself be reported.
   Acceptable at two a cycle; worth watching if the entitlement ever rises.~~

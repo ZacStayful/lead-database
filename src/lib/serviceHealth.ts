@@ -136,6 +136,26 @@ export interface ProductCapacity {
    * invisible here rather than counted as zero.
    */
   withdrawalBasis: "observed" | "estimated";
+  /**
+   * Replacements customers could take TODAY — the standing stock, where
+   * `withdrawnSlotsPerMonth` is a rate (§53.13).
+   *
+   * ⚠️ REPORTED, NEVER ADDED, for the same reason as the line above: the
+   * withdrawn half is already inside slotsPerMonth and the replacement half is
+   * already inside avgAllocationWithSwaps. This is a label on TIMING.
+   *
+   * Bounded per customer by BOTH the remaining entitlement and the assignments
+   * they actually hold inside the claim window. Entitlement alone read 31 on
+   * production against a true exposure of 13, so the second bound is not a
+   * refinement — it is most of the figure.
+   */
+  swapsAvailableNow: number;
+  /**
+   * What those would take out of supply if every one were taken today, at
+   * today's average withdrawal cost. The replacement lead itself is NOT
+   * counted: that half is already charged into avgAllocationWithSwaps.
+   */
+  swapSlotsNow: number;
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -289,6 +309,8 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       withdrawnSlotsPerMonth: Number(r.withdrawn_slots_per_month ?? 0),
       avgWithdrawalCost: Number(r.avg_withdrawal_cost ?? 0),
       withdrawalBasis: withdrawalBasisOf(r.withdrawal_basis),
+      swapsAvailableNow: Number(r.swaps_available_now ?? 0),
+      swapSlotsNow: Number(r.swap_slots_now ?? 0),
       // Still measured against NEW-lead slots, not serviceable ones. The
       // question this answers is "are we promising more than arrives", and
       // recycled supply is a recovery from what already went out — folding it in

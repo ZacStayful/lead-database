@@ -132,6 +132,24 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         </p>
       )}
 
+      {/* ⚠️ The standing stock, where the line above is a rate — and the gap
+          between them is the lag §53's Deferred list left open. An observed
+          rate of zero is a truthful statement about a quiet month and says
+          nothing about how much is queued up, and queued replacements can all
+          land in an afternoon. Reported, never added: both halves of a swap are
+          already charged elsewhere (§53.13). Nothing gates on it — the real
+          back-pressure is `replacement_stock_floor`, at the swap itself. */}
+      {c.swapsAvailableNow > 0 && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          {c.swapsAvailableNow} replacement
+          {c.swapsAvailableNow === 1 ? "" : "s"} could be taken today, which
+          would withdraw about {c.swapSlotsNow} slot
+          {c.swapSlotsNow === 1 ? "" : "s"} against {c.inventorySlotsNow} free
+          now. Not counted above — the supply figures carry withdrawals that
+          have actually happened.
+        </p>
+      )}
+
       {/* The split. Never let the combined number stand on its own — the gap is
           exactly how much headroom depends on customers staying inactive. */}
       <p className="mt-1 text-sm text-muted-foreground">
