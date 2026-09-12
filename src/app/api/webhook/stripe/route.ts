@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type Stripe from "stripe";
-import { getStripe, subscriptionPeriodEnd } from "@/lib/stripe";
+import {
+  getStripe,
+  subscriptionPeriodEnd,
+  subscriptionPeriodStartFromInvoice,
+} from "@/lib/stripe";
 import {
   notifyCardDeclined,
   resolveCardDeclines,
@@ -973,10 +977,15 @@ export async function POST(request: NextRequest) {
             };
             // Re-anchor the GR billing cycle to this period's start on every
             // renewal, mirroring the management handler so both products pace
-            // consistently.
-            const grAnchor =
-              toDateString(invoice.period_start) ??
-              toDateString(invoice.created);
+            // consistently. Read the SUBSCRIPTION LINE's period, never
+            // `invoice.period_start`: on a renewal that field is the previous
+            // period (see subscriptionPeriodStartFromInvoice), and the old
+            // `invoice.created` fallback would stamp a proration invoice's date
+            // as a cycle start. A null leaves the anchor to
+            // customer.subscription.updated, which reads current_period_start.
+            const grAnchor = toDateString(
+              subscriptionPeriodStartFromInvoice(invoice)
+            );
             if (grAnchor) grUpdate.gr_billing_cycle_anchor = grAnchor;
 
             await admin
@@ -1265,7 +1274,16 @@ export async function POST(request: NextRequest) {
           // never land reads as activating on every renewal, and a deliberate
           // allocation would be re-credited from the price month after month.
           if (subscriptionId) renewalUpdate.stripe_subscription_id = subscriptionId;
-          const renewalAnchor = toDateString(invoice.period_start);
+          // ⚠️ The subscription LINE's period, never `invoice.period_start`. On a
+          // renewal invoice that field is the PREVIOUS period (Stripe's
+          // one-period lookback), and because this event usually lands about an
+          // hour after customer.subscription.updated it overwrote the correct
+          // anchor that event had just written — eight customers sat a month
+          // behind on 2026-09-12. A null (pure-proration invoice) leaves the
+          // anchor alone.
+          const renewalAnchor = toDateString(
+            subscriptionPeriodStartFromInvoice(invoice)
+          );
           if (renewalAnchor) renewalUpdate.billing_cycle_anchor = renewalAnchor;
 
           await admin

@@ -80,6 +80,7 @@ export const KNOWN_ISSUES: string[] = [
   "⚠️ A claim's lead_assignment_id must stay ON DELETE SET NULL. It was not null ... on delete cascade until 0139 (§52), and admin_swap_lead_assignment DELETES the assignment — so settling a claim by sw…",
   "~~Orphaned reject columns, AND the function that reads them.~~ Closed by 0138 (§51.10). rejection_reason, contact_validation_result, claim_denied and apply_lead_rejection(uuid, uuid, lead_type, text,…",
   "supabase/schema.sql is stale. Migrations are the source of truth.",
+  "⚠️ Never anchor a billing cycle on invoice.period_start. On a subscription RENEWAL invoice that field is the start of the PREVIOUS period (Stripe's one-period lookback), and because invoice.paid land…",
   "Admin shows \"3 / 2 assigned\" on a reclaimed lead. Truthful, looks odd; the Reclaim history block on the lead detail page explains it. A claimed pool lead does the same and can read \"4 / 3\" — claiming…",
   "Stripe's billing cycle keeps running underneath a pause. pause_collection: { behavior: \"void\" } generates invoices and voids them; resuming does not create a charge, it stops voiding future ones. So…",
   "fully_served for a paused customer is a stale reading, in an unverified direction. got counts assignments since coalesce(billing_cycle_anchor, created_at). Both customers paused at the time of writin…",
