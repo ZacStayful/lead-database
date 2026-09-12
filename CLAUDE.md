@@ -550,6 +550,19 @@ for being new with no way to earn out of it.
   never anything but its default). **A rebuild from `supabase/migrations/` now
   matches production.**
 - **`supabase/schema.sql`** is stale. Migrations are the source of truth.
+- ⚠️ **Never anchor a billing cycle on `invoice.period_start`.** On a subscription
+  RENEWAL invoice that field is the start of the PREVIOUS period (Stripe's
+  one-period lookback), and because `invoice.paid` lands about an hour after
+  `customer.subscription.updated` it overwrote the correct anchor that event had
+  just written. Found 2026-09-12 with **8 management customers a month behind**:
+  each read as day 30+, so pacing reported a maximal deficit, routing ranked them
+  ahead of everyone (which amplified the renewal-day dump), and the admin
+  supply banner named them. `subscriptionPeriodStartFromInvoice()` in
+  `src/lib/stripe.ts` reads the subscription LINE's period instead, skips
+  prorations, and returns null rather than falling back to `period_start` or
+  `created` — a null leaves the column to the subscription event. Both
+  `invoice.paid` branches use it. The stale rows were repaired by hand from the
+  live `current_period_start`, guarded on the old value.
 - **Admin shows "3 / 2 assigned"** on a reclaimed lead. Truthful, looks odd; the
   Reclaim history block on the lead detail page explains it. A **claimed pool
   lead does the same** and can read "4 / 3" — claiming bypasses the cap by
