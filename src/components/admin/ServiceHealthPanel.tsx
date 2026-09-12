@@ -5,6 +5,7 @@ import type {
   RiskBand,
   ServiceHealth,
 } from "@/lib/serviceHealth";
+import { oversupplyShortfall } from "@/lib/serviceHealth";
 
 /**
  * Service health panel: what the lead supply can carry, and who looks like
@@ -37,7 +38,7 @@ function gbp(n: number): string {
 const THIN_SAMPLE = 30;
 
 function CapacityRow({ c }: { c: ProductCapacity }) {
-  const short = c.demandPerMonth - c.slotsPerMonth;
+  const short = oversupplyShortfall(c);
   const fromRecycling = c.sustainableCustomers - c.sustainableCustomersNewOnly;
   const thinSample = c.recyclingSample < THIN_SAMPLE;
   const estimated = c.recyclingBasis !== "observed";

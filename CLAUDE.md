@@ -12966,9 +12966,29 @@ zero clamp above it unobservable — a guard no test could ever fail, which is
 short-circuit is gone (it saved one lateral call per spent customer) and the
 clamp, which is the rule, stays. `swapExposure.test.ts` now asserts its absence.
 
-⚠️ **Not yet seen in a browser.** Nobody has read the line on `/admin`. A Vercel
-preview cannot show it — Deployment Protection answers 302 to
-`vercel.com/sso-api` (§45, §46, §50, §51, §52).
+⚠️ **Not yet seen in a browser**, and a Vercel preview cannot show it —
+Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51,
+§52). What HAS been checked, on 2026-09-12 after the merge: the real
+`getServiceHealth()` parse and the real `ServiceHealthPanel` were rendered with
+`renderToStaticMarkup` against the exact rows production returned, and both
+lines come out right — *"12 replacements could be taken today, which would
+withdraw about 14 slots against 158 free now"* and the guaranteed-rent mirror,
+singular and plural both correct. That covers everything except an admin
+session and Next's own server render.
+
+⚠️ **It also turned up a float sitting two lines below**, which predates this
+section: `Promising 1.4000000000000057 more leads a month than arrive as new`.
+`short` was `demandPerMonth - slotsPerMonth`, the ONE figure on the panel
+derived in TypeScript rather than rounded by `get_service_capacity` before it
+leaves Postgres — so it is the only place a tail can appear, and the panel
+prints every other number raw precisely because SQL has already rounded it.
+`oversupplyShortfall()` in `serviceHealth.ts` rounds it to 1dp, which is
+lossless (`demand_per_month` is a sum of whole allocations and
+`slots_per_month` is already 1dp) and cannot yield a bare `0`, because
+`borrowingFromInventory` is `demand > slots` so the smallest difference that
+reaches the sentence is 0.1. Exported for the same reason `withdrawalBasisOf`
+is: `vitest.config.mts` is pure units with no React, so an expression inside a
+component is an expression no test can reach.
 
 ### Deployment order — migration BEFORE code
 

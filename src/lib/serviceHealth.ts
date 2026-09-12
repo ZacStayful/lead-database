@@ -230,6 +230,31 @@ function monthlyValue(
 }
 
 /**
+ * How far a product's promised volume runs ahead of the new leads arriving.
+ *
+ * ⚠️ ROUNDED HERE BECAUSE IT IS THE ONE FIGURE ON THE CAPACITY PANEL DERIVED IN
+ * TYPESCRIPT. Every other number there is rounded by `get_service_capacity`
+ * before it leaves Postgres, so the panel prints them raw; this one is a
+ * subtraction done afterwards, and IEEE754 renders `250 - 248.6` as
+ * `1.4000000000000057`. That was live on /admin, in a sentence an admin reads
+ * to decide whether to sell another subscription.
+ *
+ * One decimal place is lossless rather than a tidy-up: `demand_per_month` is a
+ * sum of whole allocations and `slots_per_month` is already rounded to 1dp, so
+ * the true difference is always a multiple of 0.1. And it cannot round to
+ * zero — `borrowingFromInventory` is `demand > slots`, so the smallest
+ * difference that reaches this sentence is 0.1.
+ *
+ * Exported so the arithmetic is unit-testable rather than an inline expression
+ * inside a React component, which this repo's test config cannot import
+ * (`vitest.config.mts`: pure units, no React). Same reasoning as
+ * `withdrawalBasisOf` below.
+ */
+export function oversupplyShortfall(capacity: ProductCapacity): number {
+  return Math.round((capacity.demandPerMonth - capacity.slotsPerMonth) * 10) / 10;
+}
+
+/**
  * Which reading `withdrawnSlotsPerMonth` is — an observation or an estimate.
  *
  * ⚠️ IT FALLS BACK TO `estimated`, NEVER `observed`, and the direction is the
