@@ -28,10 +28,13 @@ export const dynamic = "force-dynamic";
  * (§52.1) and the number is on screen, so a refusal is a fact the operator can
  * read rather than a silence they have to interpret.
  *
- * ⚠️ TWO SAFETY VALVES SURVIVE THAT HARD STOP, both silent and neither
+ * ⚠️ THREE SAFETY VALVES SURVIVE THAT HARD STOP, both silent and neither
  * spending anything:
  *
  *   * `quality_review_required` — the per-customer switch has to keep working.
+ *   * A slot that is ALREADY a replacement (0146). Two dead landlords on one
+ *     paid slot is a sourcing failure, and §51.8 says the queue exists to find
+ *     those — so the second one is settled by a person rather than by nobody.
  *   * A peer visibly working the same lead. Withdrawing a lead another operator
  *     is building on, on one customer's say-so, is the one real harm this
  *     screen can do. ⚠️ It must NEVER say why — §19.7 forbids a refusal that
@@ -148,16 +151,33 @@ export async function POST(req: NextRequest) {
     pipeline_stage: string | null;
   }[]).map((p) => ({ status: p.status, pipeline_stage: p.pipeline_stage }));
 
+  /**
+   * How many replacements deep this slot already is (0146). A chained report
+   * goes to a person, and the customer is told the same neutral sentence every
+   * other review outcome uses.
+   *
+   * ⚠️ A FAILED READ IS NOT A CHAIN — the column is NOT NULL, so null means the
+   * query did not come back, and the decision treats it as 0.
+   */
+  const { data: depthRow } = await admin
+    .from("lead_assignments")
+    .select("replacement_depth")
+    .eq("id", assignmentId)
+    .maybeSingle();
+  const replacementDepth =
+    (depthRow as { replacement_depth?: number | null } | null)?.replacement_depth ?? null;
+
   const verdict = decideDeadLeadClaim({
     customer: customer as unknown as ClaimCustomer,
     peers,
     reason,
     detail,
     contactedOn,
+    replacementDepth,
   });
 
-  // ⚠️ The two valves. `review` here means a person decides, and the customer is
-  // told the same neutral sentence whichever of the two fired — a message that
+  // ⚠️ The three valves. `review` here means a person decides, and the customer
+  // is told the same neutral sentence whichever of them fired — a message that
   // varied would tell them a peer is working their landlord.
   if (verdict.decision === "review") {
     const { data: applied, error: applyError } = await admin.rpc(

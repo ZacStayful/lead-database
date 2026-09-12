@@ -190,12 +190,34 @@ export async function POST(req: NextRequest) {
     claim_status: claimByAssignment.get(p.id) ?? null,
   }));
 
+  /**
+   * 3 — how many replacements deep this slot already is (0146).
+   *
+   * ⚠️ Its own read rather than a column on `claimable_dead_lead_assignments`.
+   * Widening that function's RETURNS TABLE is a DROP and CREATE, which discards
+   * its ACL (§11) and touches the one predicate three separate paths agree
+   * about — a round trip is the cheaper side of that trade.
+   *
+   * ⚠️ A FAILED READ IS NOT A CHAIN. The column is NOT NULL, so null here means
+   * the query did not come back, and `decideDeadLeadClaim` treats it as 0 —
+   * reading absence as a chain would send the whole book to a person the moment
+   * one query failed.
+   */
+  const { data: depthRow } = await admin
+    .from("lead_assignments")
+    .select("replacement_depth")
+    .eq("id", assignmentId)
+    .maybeSingle();
+  const replacementDepth =
+    (depthRow as { replacement_depth?: number | null } | null)?.replacement_depth ?? null;
+
   const verdict = decideDeadLeadClaim({
     customer,
     peers,
     reason: body?.reason,
     detail: body?.detail,
     contactedOn: body?.contacted_on,
+    replacementDepth,
   });
 
   if (verdict.decision === "ineligible") {

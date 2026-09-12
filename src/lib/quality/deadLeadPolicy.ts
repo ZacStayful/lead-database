@@ -152,6 +152,23 @@ export const STREAK_LEADS_PER_BONUS = 10;
 /** Ceiling on the earned half, so a long-standing account cannot bank a year of claims. */
 export const MAX_EARNED_BONUS = 2;
 
+/**
+ * The deepest a slot may be and still have its report settled automatically.
+ *
+ * Zero: a lead delivered by ordinary routing, an admin force-assign or a pool
+ * claim. Report the replacement for a lead you already reported and a person
+ * reads it (§53.12).
+ *
+ * ⚠️ THAT IS REVIEW, NEVER A REFUSAL, and the argument is §51.3's rather than a
+ * new one. An operator receiving genuinely dead leads is exactly who exceeds a
+ * budget, so refusing them automatically punishes the customer the feature
+ * exists for — and it holds with more force here. If we handed somebody a dead
+ * replacement they are owed another one; what they are not owed is a SECOND one
+ * decided by nobody. Two dead landlords on one paid slot is a sourcing failure,
+ * and §51.8 says the queue exists precisely to find those.
+ */
+export const REPLACEMENT_AUTO_DEPTH = 0;
+
 export type ClaimDecision = "auto_uphold" | "review" | "ineligible";
 export type Corroboration = "none" | "peer_agrees" | "peer_contradicts";
 
@@ -181,6 +198,20 @@ export interface DeadLeadClaimInputs {
   reason: unknown;
   detail: unknown;
   contactedOn: unknown;
+  /**
+   * `lead_assignments.replacement_depth` for the assignment being reported —
+   * 0 for a lead delivered normally, 1 for the replacement for a reported
+   * lead, and so on (0146).
+   *
+   * ⚠️ NULL MEANS UNREADABLE, NOT CHAINED, and it is treated as 0. The column
+   * is NOT NULL, so a null here is a failed read rather than a fact — and
+   * reading absence as a chain would route the ENTIRE book to a person the
+   * moment one query failed. 0146's §3 takes the same permissive line for the
+   * eight pre-migration rows it cannot identify: the error is bounded, it is
+   * one automatic swap on a slot the operator is arguably owed one for anyway,
+   * and the fourteen-day claim window clears it.
+   */
+  replacementDepth?: number | null;
 }
 
 export interface DeadLeadClaimVerdict {
@@ -297,13 +328,17 @@ function peerAgrees(peer: PeerAssignment): boolean {
  *      evidence it was not dead on arrival, so a person decides — this is never
  *      an automatic refusal, because two operators can honestly disagree about
  *      one landlord.
- *   4. A peer's own claim was already upheld. Agreeing with a settled claim is
+ *   4. The slot is already a replacement. Report the replacement for a lead
+ *      you reported and a person settles it — see REPLACEMENT_AUTO_DEPTH, and
+ *      note it sits ABOVE corroboration because that branch spends nothing and
+ *      is therefore the one the budget cannot bound.
+ *   5. A peer's own claim was already upheld. Agreeing with a settled claim is
  *      free: it costs no budget, so telling the truth about a lead somebody
  *      else has already proved dead is cheaper than fishing. ⚠️ Only SETTLED
  *      claims corroborate. An `under_review` peer claim must not, or two
  *      customers holding one lead could agree their way to unlimited free
  *      credits without a person ever seeing either claim.
- *   5. Inside the budget, uphold and spend one. Beyond it, review.
+ *   6. Inside the budget, uphold and spend one. Beyond it, review.
  *
  * ⚠️ Contradiction is tested BEFORE corroboration. When one peer has the lead
  * live and another has written it off, the live one is the stronger signal and
@@ -363,6 +398,27 @@ export function decideDeadLeadClaim(
       consumesAllowance: false,
       corroboration: "peer_contradicts",
       code: "peer_contradicts",
+      message:
+        "Thanks — we are looking into this one and will come back to you.",
+    };
+  }
+
+  /**
+   * ⚠️ ABOVE CORROBORATION, AND THAT PLACEMENT IS THE RULE RATHER THAN A
+   * PREFERENCE. A corroborated claim auto-upholds and spends NOTHING, so it is
+   * the one branch the hidden budget does not bound at all — below this clause,
+   * a chain whose leads happened to be reported by a peer too would settle
+   * itself indefinitely. Below the peer-contradicts test for the opposite
+   * reason: an operator still working the same landlord is the stronger signal
+   * and is what the admin queue most needs to see named.
+   */
+  const depth = Math.max(0, Math.trunc(input.replacementDepth ?? 0));
+  if (depth > REPLACEMENT_AUTO_DEPTH) {
+    return {
+      decision: "review",
+      consumesAllowance: false,
+      corroboration: "none",
+      code: "replacement_chain",
       message:
         "Thanks — we are looking into this one and will come back to you.",
     };

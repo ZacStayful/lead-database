@@ -10,6 +10,8 @@ import {
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadCopy";
 import {
+  REPLACEMENT_CHAINED_ACTION,
+  REPLACEMENT_CHAINED_NOTICE,
   REPLACEMENT_EMPTY,
   REPLACEMENT_EXHAUSTED,
   remainingSentence,
@@ -36,6 +38,12 @@ export interface ReplacementItem {
   leadType: LeadType;
   grossAnnualIncome: number | null;
   ageDays: number;
+  /**
+   * How many replacements deep this slot is (0146). Above zero and the report
+   * is settled by a person rather than swapped on the spot, so the row says so
+   * before the operator writes anything.
+   */
+  replacementDepth: number;
   reasons: Record<string, { available: boolean; because: string | null }>;
 }
 
@@ -154,6 +162,10 @@ function ReplacementRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 0146. Zero is an ordinary delivery; anything above it is a slot that has
+  // already been replaced once, and the server sends those to a person.
+  const chained = item.replacementDepth > 0;
+
   const answered =
     reason !== "" &&
     item.reasons[reason]?.available !== false &&
@@ -261,6 +273,11 @@ function ReplacementRow({
 
       {open ? (
         <div className="mt-4 space-y-3 border-t border-[#eceee8] pt-4">
+          {chained ? (
+            <p className="rounded-lg border border-[#e8d9bc] bg-[#fdf8ee] px-3 py-2 text-xs text-[#6b5220]">
+              {REPLACEMENT_CHAINED_NOTICE}
+            </p>
+          ) : null}
           <div>
             <label className="mb-1 block text-xs font-medium text-[#52514e]">
               What did they say?
@@ -398,7 +415,11 @@ function ReplacementRow({
             onClick={submit}
             className="rounded-lg bg-[#2f7d4f] px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
           >
-            {busy ? "Swapping…" : "Swap this lead"}
+            {busy
+              ? "Sending…"
+              : chained
+                ? REPLACEMENT_CHAINED_ACTION
+                : "Swap this lead"}
           </button>
           {exhausted ? (
             <p className="text-xs text-[#8a8b84]">{REPLACEMENT_EXHAUSTED}</p>

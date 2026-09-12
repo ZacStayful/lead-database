@@ -302,6 +302,137 @@ describe("decideDeadLeadClaim — the hidden budget", () => {
   });
 });
 
+describe("a replacement for a replacement (§53.12)", () => {
+  /**
+   * Report lead A, take replacement B, report B. Each step spends one
+   * entitlement, so it was bounded — but every step costs TWO leads of stock
+   * (§52.1: the replacement handed over, and the reported lead withdrawn by
+   * the clamp), and §51.11 put `quality_allowance_pct` on an admin form, so
+   * "bounded at two a cycle" stopped being a fixed number.
+   *
+   * ⚠️ THE ANSWER IS REVIEW, NEVER A REFUSAL. §51.3 settles that for the
+   * allowance and it holds here with more force: if we handed somebody a dead
+   * replacement they are owed another one, and what they are not owed is a
+   * SECOND one decided by nobody.
+   */
+  it("settles an ordinary slot automatically, exactly as before", () => {
+    const v = decideDeadLeadClaim({ ...input, replacementDepth: 0 });
+    expect(v.decision).toBe("auto_uphold");
+    expect(v.code).toBe("upheld");
+  });
+
+  it("sends a slot that is already a replacement to a person", () => {
+    const v = decideDeadLeadClaim({ ...input, replacementDepth: 1 });
+    expect(v.decision).toBe("review");
+    expect(v.code).toBe("replacement_chain");
+  });
+
+  it("spends nothing doing it, because nobody has decided yet", () => {
+    const v = decideDeadLeadClaim({ ...input, replacementDepth: 1 });
+    expect(v.consumesAllowance).toBe(false);
+    expect(v.corroboration).toBe("none");
+  });
+
+  it("keeps sending deeper chains to a person", () => {
+    expect(
+      decideDeadLeadClaim({ ...input, replacementDepth: 4 }).code,
+    ).toBe("replacement_chain");
+  });
+
+  /**
+   * ⚠️ THE ORDERING ASSERTION, AND THE REASON THE CLAUSE SITS WHERE IT DOES.
+   *
+   * Corroboration auto-upholds and spends NOTHING, so it is the one branch the
+   * hidden budget does not bound at all. Below it, a chain whose leads happened
+   * to be reported by a peer too would settle itself indefinitely — which is
+   * precisely the unbounded case §53's Deferred entry was about.
+   */
+  it("outranks corroboration, which is the branch nothing else bounds", () => {
+    const v = decideDeadLeadClaim({
+      ...input,
+      replacementDepth: 1,
+      peers: [{ claim_status: "upheld" }],
+    });
+    expect(v.decision).toBe("review");
+    expect(v.code).toBe("replacement_chain");
+  });
+
+  /**
+   * And it stays BELOW the peer test, for the opposite reason: an operator
+   * still working the same landlord is the stronger signal, and it is what the
+   * admin queue most needs to see named on the row.
+   */
+  it("does not outrank a peer who still has the lead live", () => {
+    const v = decideDeadLeadClaim({
+      ...input,
+      replacementDepth: 1,
+      peers: [{ status: "won" }],
+    });
+    expect(v.code).toBe("peer_contradicts");
+  });
+
+  /**
+   * ⚠️ AN UNREADABLE DEPTH IS NOT A CHAIN. `lead_assignments.replacement_depth`
+   * is NOT NULL, so a null reaching here is a failed query rather than a fact —
+   * and reading absence as a chain would route the entire book to a person the
+   * moment one read failed. 0146's §3 takes the same permissive line for the
+   * eight pre-migration rows it cannot identify.
+   */
+  it.each<[string, unknown]>([
+    ["null", null],
+    ["undefined", undefined],
+    ["a negative number", -3],
+    ["a fraction below one", 0.4],
+  ])("treats %s as an ordinary slot rather than a chain", (_label, value) => {
+    const v = decideDeadLeadClaim({
+      ...input,
+      replacementDepth: value as number | null,
+    });
+    expect(v.decision).toBe("auto_uphold");
+  });
+
+  // The customer is told the same thing they would be told by any other review
+  // outcome. A message that varied would publish the rule alongside it.
+  it("says exactly what every other review outcome says", () => {
+    const chained = decideDeadLeadClaim({ ...input, replacementDepth: 1 });
+    const flagged = decideDeadLeadClaim({
+      ...input,
+      customer: { ...customer, quality_review_required: true },
+    });
+    expect(chained.message).toBe(flagged.message);
+  });
+});
+
+describe("both claim routes actually read the depth", () => {
+  /**
+   * ⚠️ FILE-TEXT GUARDS, anchored on the real routes, because
+   * `vitest.config.mts` is pure units only — no network, no database, no React
+   * — and that constraint is what makes the suite safe to gate `next build` on.
+   *
+   * Dropping `replacementDepth` from either call is a one-token change that no
+   * behavioural test here can see: `decideDeadLeadClaim` would go on returning
+   * the right answer for the input it was given, and the input would simply
+   * stop carrying the fact. §42.8 records ninety-one follow-up runs destroyed
+   * by a boundary asserted in a pull request and never actually written.
+   */
+  const routes = [
+    "app/api/customer/dead-lead-claim/route.ts",
+    "app/api/customer/replacements/swap/route.ts",
+  ];
+
+  for (const file of routes) {
+    it(`${file} selects the column and passes it to the decision`, () => {
+      // Comments stripped: both files explain the rule, and explaining it means
+      // naming the identifier (§46's trap).
+      const src = readFileSync(resolve(__dirname, "..", "..", file), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      expect(src).toContain('.select("replacement_depth")');
+      expect(src).toContain("replacementDepth,");
+    });
+  }
+});
+
 describe("the allowance stays unpublished", () => {
   /**
    * ⚠️ The mechanism only works while the number is discovered rather than
@@ -326,6 +457,7 @@ describe("the allowance stays unpublished", () => {
     }),
     decideDeadLeadClaim({ ...input, peers: [{ claim_status: "upheld" }] }),
     decideDeadLeadClaim({ ...input, peers: [{ status: "won" }] }),
+    decideDeadLeadClaim({ ...input, replacementDepth: 2 }),
   ];
 
   it("never names it in any message", () => {

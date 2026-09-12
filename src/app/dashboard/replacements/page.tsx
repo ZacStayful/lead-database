@@ -61,6 +61,28 @@ export default async function ReplacementsPage() {
     ((leadRows ?? []) as Lead[]).map((l) => [l.id, viewerScopedLead(l, customer.id)])
   );
 
+  /**
+   * How many replacements deep each slot is (0146). Reporting the replacement
+   * for a lead you already reported is settled by a person, so the row says so
+   * BEFORE the operator writes three hundred characters — §52.4's rule that a
+   * control which silently behaves differently reads as broken.
+   *
+   * ⚠️ A missing row means UNREADABLE, not chained: the column is NOT NULL, and
+   * the decision treats absence as depth 0.
+   */
+  const assignmentIds = claimable.map((r) => r.assignment_id);
+  const { data: depthRows } = assignmentIds.length
+    ? await admin
+        .from("lead_assignments")
+        .select("id, replacement_depth")
+        .in("id", assignmentIds)
+    : { data: [] as { id: string; replacement_depth: number }[] };
+  const depths = new Map(
+    ((depthRows ?? []) as { id: string; replacement_depth: number | null }[]).map(
+      (d) => [d.id, d.replacement_depth ?? 0]
+    )
+  );
+
   const items: ReplacementItem[] = claimable
     .map((r) => {
       const lead = leads.get(r.lead_id);
@@ -77,6 +99,7 @@ export default async function ReplacementsPage() {
         leadType: lead.lead_type,
         grossAnnualIncome: lead.gross_annual_income,
         ageDays,
+        replacementDepth: depths.get(r.assignment_id) ?? 0,
         reasons: reasonAvailability({ claimable: true, claimStatus: null, ageDays }),
       };
     })

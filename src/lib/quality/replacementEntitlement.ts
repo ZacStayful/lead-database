@@ -170,3 +170,25 @@ export const REPLACEMENT_EMPTY =
 export const REPLACEMENT_EXHAUSTED =
   "You can still report these, and we will look into them — but the swap is " +
   "back next month.";
+
+/**
+ * Shown on a row whose slot is ALREADY a replacement (0146).
+ *
+ * ⚠️ It says a person will look at it, and it does NOT promise a swap. The
+ * mechanics already worked — a review verdict comes back with the neutral
+ * sentence and nothing is swapped — but the row's button said "Swap this lead"
+ * right up until it did not, which is §52.4's objection to a control that
+ * silently behaves differently from how it reads.
+ *
+ * ⚠️ It is safe to say out loud only because this is the customer's OWN
+ * history. The other two review valves must stay silent: `quality_review_required`
+ * is an admin judgement about them, and a peer working the same landlord is
+ * §19.7's forbidden disclosure. Naming a chain tells them nothing they did not
+ * already know.
+ */
+export const REPLACEMENT_CHAINED_NOTICE =
+  "This lead was itself a replacement. We will look at this one ourselves and come back to you, rather than sending a new lead out straight away.";
+
+/** The submit label for a chained row, so nothing promises a swap that is not coming. */
+export const REPLACEMENT_CHAINED_ACTION = "Send this to us";
+
