@@ -98,15 +98,44 @@ export interface ProductCapacity {
   /**
    * Replacement demand folded into the ceiling (§53).
    *
-   * ⚠️ An UPPER BOUND ON CLAIMS and a LOWER BOUND ON SLOT COST, which is why
-   * the SQL column is named for claims rather than swaps. It counts what every
-   * customer could claim, of which only some become swaps — and it ignores the
-   * second lead each swap destroys when the reported lead is withdrawn.
+   * ⚠️ An UPPER BOUND ON CLAIMS, which is why the SQL column is named for
+   * claims rather than swaps: it counts what every customer could claim, of
+   * which only some become swaps at all.
+   *
+   * It is deliberately NOT a bound on slot cost, and this sentence used to say
+   * it was a lower one because the second lead each swap destroys went
+   * unmeasured. That half is now its own figure below (§53.11) — separate
+   * rather than folded in here, because the two are charged in different
+   * places: this one inflates the divisor, and the withdrawal is already
+   * inside slotsPerMonth.
    */
   qualityClaimDemandPerMonth: number;
   avgAllocationWithSwaps: number;
   /** The headline ceiling before replacement demand. Always shown beside it. */
   sustainableCustomersBeforeSwaps: number;
+  /**
+   * What swapping destroys on the OTHER side — the reported lead's remaining
+   * reach, clamped away by admin_swap_lead_assignment (§53.11).
+   *
+   * ⚠️ REPORTED, NEVER ADDED. slotsPerMonth is a sum of caps over a trailing
+   * window, and the clamp lowers it the instant a swap runs, so this cost is
+   * ALREADY inside serviceableSlotsPerMonth. Subtracting it, or folding it
+   * into avgAllocationWithSwaps, charges the same leads twice.
+   *
+   * What it is for is legibility: a ceiling that fell for this reason looks
+   * identical to one that fell because ingest had a bad week, and only this
+   * says which.
+   */
+  withdrawnSlotsPerMonth: number;
+  /** Average slots one swap would destroy today, per HELD ASSIGNMENT. */
+  avgWithdrawalCost: number;
+  /**
+   * `observed` once something has actually been withdrawn in the window,
+   * `estimated` before that — §18.2's rule, that an estimate must never be
+   * read as a count. Rows withdrawn before 0145 carry no cost and are
+   * invisible here rather than counted as zero.
+   */
+  withdrawalBasis: "observed" | "estimated";
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -180,6 +209,22 @@ function monthlyValue(
   return total;
 }
 
+/**
+ * Which reading `withdrawnSlotsPerMonth` is — an observation or an estimate.
+ *
+ * ⚠️ IT FALLS BACK TO `estimated`, NEVER `observed`, and the direction is the
+ * whole point. §18.2's rule is that an estimate must never be read as a count;
+ * a column we cannot read means we are not measuring, and calling that an
+ * observation would present a figure of zero as proof that swaps have
+ * destroyed nothing. The safe failure is to look less certain than we are.
+ *
+ * Exported so the direction is unit-testable rather than an inline ternary
+ * inside a function that reaches the database.
+ */
+export function withdrawalBasisOf(value: unknown): "observed" | "estimated" {
+  return value === "observed" ? "observed" : "estimated";
+}
+
 export async function getServiceHealth(): Promise<ServiceHealth> {
   const admin = createAdminClient();
 
@@ -241,6 +286,9 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       sustainableCustomersBeforeSwaps: Number(
         r.sustainable_customers_before_swaps ?? r.sustainable_customers ?? 0,
       ),
+      withdrawnSlotsPerMonth: Number(r.withdrawn_slots_per_month ?? 0),
+      avgWithdrawalCost: Number(r.avg_withdrawal_cost ?? 0),
+      withdrawalBasis: withdrawalBasisOf(r.withdrawal_basis),
       // Still measured against NEW-lead slots, not serviceable ones. The
       // question this answers is "are we promising more than arrives", and
       // recycled supply is a recovery from what already went out — folding it in

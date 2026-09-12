@@ -102,7 +102,7 @@ export const DEFERRED: string[] = [
 ];
 
 /** Highest committed migration, from the directory rather than the prose. */
-export const LATEST_MIGRATION = 144;
+export const LATEST_MIGRATION = 145;
 
 /** The number a new migration must take. Migrations deploy BEFORE the code that reads them. */
-export const NEXT_MIGRATION = "0145";
+export const NEXT_MIGRATION = "0146";
