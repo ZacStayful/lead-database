@@ -5218,6 +5218,15 @@ with an explicit boolean, and the strict `=== true` on the override. The picker
 was extended with three optional props rather than copied, so the matching-first
 ordering and the named acknowledgement cannot drift between the two screens.
 
+⚠️ **AND SINCE 0143 (§53.9) BOTH FUNCTIONS ALSO ASSERT INVARIANT 11.** 0109
+built its eligibility list out of the rules that existed when it was written;
+0111's quality gate and 0073's pool retirement landed either side of it and
+nothing joined them up, so the picker went on offering leads ordinary routing
+had already refused to sell. `lead_retired_from_allocation` is now tested in
+the picker and again inside `admin_swap_lead_assignment` under its row lock.
+⚠️ It has **no override** — `p_allow_filter_mismatch` means "bypass what the
+customer asked for" and has never meant "bypass invariant 11".
+
 
 `/admin/customers/[id]` lets an admin replace one assigned lead with another —
 `SwapLeadControl` → `GET/POST /api/admin/assignments/[id]/swap` →
@@ -11781,10 +11790,13 @@ for the rule (§51.7), and the race still closed.
 ⚠️ **Excluded with `not lead_retired_from_allocation(l.id)`, never a
 hand-written quality clause.** Invariant 11 names that function as the single
 expression of what retires a lead, and writing one arm by hand is the fifth-copy
-trap §34 and §35 exist to avoid. It also closes a latent hole 0109 still has:
-**the admin picker will happily offer an expired-pool lead as a replacement
-today.** Not theoretical — 6 management and 23 GR leads in stock are
-quality-blocked right now.
+trap §34 and §35 exist to avoid. It also closed a latent hole 0109 still had at
+the time: **the admin picker would happily offer an expired-pool lead as a
+replacement.** Not theoretical — 6 management and 23 GR leads in stock were
+quality-blocked the day this was written. ⚠️ **0143 (§53.9) closes the admin
+half**, and found the count was larger than this line says: 42 of 335, because
+13 leads pooled on the `ignored` basis are retired too and were never counted
+here.
 
 ⚠️ **`p_limit` is capped in SQL and no total count is returned anywhere.** Even
 redacted, this is a readout of unsold stock by area, size, value and age. 0140
@@ -11921,6 +11933,165 @@ though, and that is the point — from the moment it applies, deliveries start
 accruing, and ten deliveries later the first customer's published entitlement
 rises by one.
 
+### 53.9 — The admin picker stops offering retired leads *(0143)*
+
+§53.7 recorded a latent hole and left it: 0109's admin swap built its candidate
+list out of the rules that existed when it was written, and 0111's quality gate
+and 0073's pool retirement both landed without anybody joining them up. So the
+one route a lead can reach a customer by that never consulted invariant 11 was
+the admin replacement picker.
+
+Measured on production before the fix, over the leads the picker would offer
+(its own `WHERE`, minus the per-assignment clauses):
+
+| | offerable | retired | pooled `ignored` | quality-blocked |
+|---|---|---|---|---|
+| Management | 77 | **11** | 5 | 6 |
+| Guaranteed Rent | 258 | **31** | 8 | 23 |
+
+⚠️ **42 of 335, not the 29 §53.7 names.** That line counted the quality-blocked
+only; the 13 pooled on the `ignored` basis are retired by the same predicate and
+were never in the figure. Measure with the helper, not with the arm you happen
+to be thinking about.
+
+`lead_retired_from_allocation` is now tested in **both** halves: excluded from
+`get_swap_candidates_for_assignment`, and asserted again inside
+`admin_swap_lead_assignment` under its row lock. Both bodies are 0109's verbatim
+plus that one clause.
+
+#### ⚠️ No override, unlike 0109's filter guard
+
+0109 gave the filter an explicit `p_allow_filter_mismatch` because a narrow
+filter may have **nothing** matching in stock at the moment a customer is owed a
+replacement, and a hard refusal would leave the admin unable to make them whole.
+Neither half of that carries here.
+
+The stock does not: 66 management and 227 GR leads remain offerable, so refusing
+42 is not an empty dropdown. And a per-swap flag would be a **fourth** way to
+hand out a retired lead, where invariant 11 says there is exactly one expression
+of that rule. The escape hatches already exist, are per **lead** rather than per
+swap, and each leaves a record:
+
+| Basis | Hatch |
+|---|---|
+| quality-blocked | `POST /api/admin/leads/[id]/quality` with `override`, which stamps `lead_quality_override_at` (§36.4) |
+| pooled `ignored` | `POST /api/admin/pool` with `action: "out"` → `admin_pool_force_out`, which nulls `pool_entered_at` **and** `pool_entry_basis` and stamps `pool_excluded_at` so the next sweep cannot undo it (§19.8) |
+| pool **claim** | ⚠️ **None, deliberately.** That lead belongs to whoever claimed it and §19.6 is explicit the slot never reopens |
+
+Both hatches un-retire the lead **everywhere** rather than for one swap, which
+is the better shape: the admin is asserting something about the lead, and every
+other path then agrees.
+
+#### Two placements that are not interchangeable
+
+⚠️ **The guard sits below the `for update` on the incoming lead.** It reads that
+lead's pool and quality columns, and holding its row lock is what stops the
+verdict changing between the test and the insert — the same reason invariant 11
+names `assign_lead_to_customer`'s locked section rather than anywhere earlier.
+
+⚠️ **Below the owner check is a weaker claim, and the first draft of this
+section got it wrong.** The migration comment originally said the ordering was
+what kept §32.6 true — that a resale-qualified owned lead would otherwise sail
+through. It would not: 0108 took qualified owned leads **out** of this
+predicate, so the owner check refuses them whichever order the two sit in. The
+mutation run is what caught it, by hoisting the guard and watching the suite
+pass. What the ordering actually protects is the **message**: an unqualified
+owned lead satisfies both tests, and the owner one says something specific
+where this one says only "retired".
+
+#### The outgoing lead is deliberately not tested
+
+Only the incoming lead is guarded. A quality-blocked lead sitting in a
+customer's pipeline is precisely what an admin reaches for this control to
+remove, and refusing to swap it **out** would block the case the feature exists
+for.
+
+#### It also closes a race in the customer's own path
+
+`customer_swap_dead_lead` (§53) already filtered its candidate list on this
+predicate but never re-asserted it at the commit, so a lead the nightly pool
+sweep retired between the page loading and the operator pressing Swap would have
+gone through. It calls `admin_swap_lead_assignment`, so the guard now covers it
+— the §5E discipline of eligibility living in one place.
+`resolve_dead_lead_claim_with_swap` (§52) inherits it for the same reason.
+
+#### The message names no basis, on purpose
+
+The exception says the lead is retired and stops there. Listing the reasons in
+prose would be a second, unmaintained copy of the predicate — the trap §11
+records — and it would go stale the first time an arm is added. The picker no
+longer offers these at all, so the only way to see the message is to hand-pick
+an id, at which point `/admin/leads` and `/admin/pool` say why.
+
+### Verification
+
+**All 139 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0143 re-applied twice for idempotency, and **all six SQL suites pass
+on the same build** — 0137, 0138, 0139, 0141, 0142 and 0143, 194 assertions.
+
+`0143_swap_respects_retirement_test.sql` — **39 assertions**. Among them: the
+picker drops a quality-blocked lead, a lead pooled as `ignored` and a
+pool-claimed one; the swap refuses each **and refuses them with the filter
+override set**; a refusal writes nothing (assignment standing, outgoing lead not
+withdrawn, balance unmoved); both escape hatches put a lead back in the picker;
+a retired lead can still be swapped **out**; the two-argument shim inherits the
+guard; and the regression — an ordinary swap still moves no credit, no monthly
+counter, no odometer and no 0142 streak.
+
+⚠️ **The one that guards against over-reach**: a lead pooled on the
+**`unassigned`** basis is still offered. §19.1 keeps those in stock on purpose,
+and a hand-written `pool_entered_at is null` would have taken every one of them
+out of every replacement dropdown. That is exactly the mutation that proves it.
+
+**Six mutations run, all six caught**: the swap guard removed, the picker clause
+removed, the guard hoisted above the owner check, the picker hand-writing the
+pool arm, the filter override made to bypass retirement, and the guard applied
+to the outgoing lead as well.
+
+**1,789 vitest cases green**, `npx tsc --noEmit` clean, lint clean. No TypeScript
+changed: the route already passes `error.message` through verbatim for an admin,
+so the new refusal reaches the screen with no edit. ⚠️ `sectionIndex.ts` is
+regenerated because `scripts/generate-section-index.mjs` reads the migrations
+directory — adding a file makes it stale, and the §50.5 guard catches that.
+
+**Not yet exercised in a browser.** No swap has been refused through
+`/admin/customers/[id]` or `/admin/quality` against a real database.
+
+### Deployment order — migration BEFORE code
+
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-12, before the pull request
+merged**, and verified there rather than trusted.
+
+⚠️ **It is NOT inert** — 42 leads leave the picker the moment it applies, which
+is the point. There is no code half to wait for.
+
+- **Pre-apply, no drift.** Both function bodies hash-matched the 0109 file
+  exactly (`8a40efe8…` and `3983323d…`), so nothing uncommitted was being
+  clobbered — the check §11 says not to assume.
+- **Post-apply, both bodies hash-match a scratch build from the repo file** —
+  `admin_swap_lead_assignment` (3-arg) `3c3440e8…`, `get_swap_candidates_for_assignment`
+  `b8d72601…` — and the **two-argument shim is byte-for-byte unchanged**
+  (`6fe36f58…`). Both `security definer` with `search_path` pinned,
+  `anon`/`authenticated` false, `service_role` true.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the five
+  mutable-`search_path` functions it lists are all pre-existing.
+- **The drop is measured, not predicted.** On a real management assignment the
+  picker went **71 → 60**, and **zero** retired leads remain offered on it.
+- **Nothing moved.** 53 customers, 501 leads and 512 assignments untouched; an
+  md5 of every customer's balances and counters identical before and after
+  (`9850afca…`), and one of every lead's `assignment_count` / `max_assignments`
+  / `withdrawn_at` identical too (`66cf3f0d…`).
+- The refusal was then driven **on production**, inside a block that raises at
+  the end so every write rolled back: a real quality-blocked lead refused with
+  the retirement message **even with the filter override**, the assignment
+  untouched by the refusal, and a lead the picker still offers swapping in
+  normally. Both fingerprints afterwards confirm it wrote nothing.
+
+Applied with the file's leading header comment block stripped and everything
+else verbatim, so both `prosrc` values match the repo file exactly (§51.10's
+practice). The stripped form was proved to produce identical bodies, lengths and
+ACLs on a scratch build first.
+
 ### Deployment order — migration BEFORE code
 
 0141 first, applied and verified against production before the pull request
@@ -11967,7 +12138,13 @@ Code arriving first would fail every swap.
 - **Replacement-of-a-replacement is unbounded except by the counter.** The new
   assignment carries a null `quality_claim_id`, so it can itself be reported.
   Acceptable at two a cycle; worth watching if the entitlement ever rises.
-- **0109's admin picker still offers expired-pool leads** (§53.7). 0141 fixes the
-  customer path only; the admin one wants the same predicate.
+- ~~**0109's admin picker still offers expired-pool leads** (§53.7).~~
+  **Closed by 0143 (§53.9).**
+- **A withheld candidate is withheld silently.** The picker simply returns fewer
+  rows, so an admin searching for a lead they know exists is not told why it is
+  missing — §52.4's argument for greying a control rather than hiding it, which
+  0143 did not follow. Saying so needs a column on the return type, which is a
+  DROP and CREATE (the §11 ACL trap) and a change to `SwapLeadControl`, shared
+  with `/admin/quality`. Worth doing if an admin ever asks.
 - **Nothing tells the reported lead's other holders.** §19.7 forbids saying who;
   whether to say anything at all is open.
