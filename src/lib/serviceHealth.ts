@@ -95,6 +95,18 @@ export interface ProductCapacity {
    */
   pausedCustomers: number;
   pausedDemand: number;
+  /**
+   * Replacement demand folded into the ceiling (§53).
+   *
+   * ⚠️ An UPPER BOUND ON CLAIMS and a LOWER BOUND ON SLOT COST, which is why
+   * the SQL column is named for claims rather than swaps. It counts what every
+   * customer could claim, of which only some become swaps — and it ignores the
+   * second lead each swap destroys when the reported lead is withdrawn.
+   */
+  qualityClaimDemandPerMonth: number;
+  avgAllocationWithSwaps: number;
+  /** The headline ceiling before replacement demand. Always shown beside it. */
+  sustainableCustomersBeforeSwaps: number;
 }
 
 export type RiskBand = "critical" | "high" | "medium" | "watch" | "ok";
@@ -222,6 +234,13 @@ export async function getServiceHealth(): Promise<ServiceHealth> {
       roomForCustomers: Number(r.room_for_customers ?? 0),
       pausedCustomers: Number(r.paused_customers ?? 0),
       pausedDemand: Number(r.paused_demand ?? 0),
+      qualityClaimDemandPerMonth: Number(r.quality_claim_demand_per_month ?? 0),
+      avgAllocationWithSwaps: Number(
+        r.avg_allocation_with_swaps ?? r.avg_allocation ?? 0,
+      ),
+      sustainableCustomersBeforeSwaps: Number(
+        r.sustainable_customers_before_swaps ?? r.sustainable_customers ?? 0,
+      ),
       // Still measured against NEW-lead slots, not serviceable ones. The
       // question this answers is "are we promising more than arrives", and
       // recycled supply is a recovery from what already went out — folding it in

@@ -103,6 +103,21 @@ function CapacityRow({ c }: { c: ProductCapacity }) {
         </p>
       )}
 
+      {/* ⚠️ Replacement demand, stated BESIDE the ceiling rather than folded
+          into it silently — §21's "always two numbers, never one", the same
+          rule the paused line above and the recycling split below obey. The
+          headline already divides by the inflated allocation, so without this
+          line the ceiling would appear to have fallen for no visible reason. */}
+      {c.qualityClaimDemandPerMonth > 0 && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          Assumes every customer replaces up to {c.qualityClaimDemandPerMonth}{" "}
+          lead{c.qualityClaimDemandPerMonth === 1 ? "" : "s"} a month, so each
+          one is costed at {c.avgAllocationWithSwaps} rather than{" "}
+          {c.avgAllocation}. Without replacements the ceiling would be{" "}
+          {c.sustainableCustomersBeforeSwaps}.
+        </p>
+      )}
+
       {/* The split. Never let the combined number stand on its own — the gap is
           exactly how much headroom depends on customers staying inactive. */}
       <p className="mt-1 text-sm text-muted-foreground">

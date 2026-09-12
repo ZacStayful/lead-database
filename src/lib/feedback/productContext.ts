@@ -111,6 +111,25 @@ export const ROUTES: RouteEntry[] = [
     section: 19,
   },
   {
+    path: "/dashboard/replacements",
+    purpose:
+      "Leads the operator rang where the landlord had already gone, with a " +
+      "self-serve swap for each and a published count of how many they may " +
+      "replace this month.",
+    files: [
+      "src/app/dashboard/replacements/page.tsx",
+      "src/components/dashboard/ReplacementList.tsx",
+      "src/app/api/customer/replacements/route.ts",
+      "src/app/api/customer/replacements/swap/route.ts",
+      "src/lib/quality/replacementEntitlement.ts",
+    ],
+    tests: [
+      "src/lib/__tests__/replacementEntitlement.test.ts",
+      "src/lib/__tests__/replacementRouteGuards.test.ts",
+    ],
+    section: 53,
+  },
+  {
     path: "/dashboard/follow-ups",
     purpose: "Leads due a chase, from the per-lead contact plan.",
     files: [

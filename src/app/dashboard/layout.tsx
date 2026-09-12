@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
+  REPLACEMENT_NAV_LABEL,
+  REPLACEMENT_PATH,
+} from "@/lib/quality/replacementEntitlement";
+import {
   FEATURE_REQUEST_HEADER_PATH,
   FEATURE_REQUEST_LABEL,
 } from "@/lib/featureRequest";
@@ -86,6 +90,13 @@ export default async function DashboardLayout({
         // product: the page resolves which pools the customer can see and
         // renders its own explanation when the answer is none.
         { href: "/dashboard/leads/expired", label: "Expired leads" },
+        // Under Leads for the same reason Expired leads is: it is a way of
+        // WORKING leads, and the operator reaches it from where they were
+        // already looking at them. ⚠️ Deliberately NOT a seventh top-level
+        // entry — the comment above records this row colliding with the
+        // notification bell the one time it overflowed, and §42.7 records the
+        // same thing happening on the admin header.
+        { href: REPLACEMENT_PATH, label: REPLACEMENT_NAV_LABEL },
         // Under Leads rather than Account: it is a way of WORKING leads, and
         // the operator reaches it from the same place they were looking at
         // them. Its own bulk entry point lives on the leads list itself.
