@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  LEAD_RETIREMENT_EXPLAINER,
+  leadRetirementLabel,
+} from "@/lib/leadRetirement";
+
 type Candidate = {
   id: string;
   lead_name: string | null;
@@ -12,6 +17,13 @@ type Candidate = {
   max_assignments: number;
   created_at: string;
   matches_filter: boolean;
+  /**
+   * Why ordinary routing has retired this lead, or null if it is selectable
+   * (0144). Non-null means the swap WILL refuse it — the row is here so an
+   * admin looking for a lead they know exists is told why it cannot be used,
+   * instead of finding it silently absent.
+   */
+  retired_reason: string | null;
 };
 
 /** The customer's active filter for this product, or null if they have none. */
@@ -28,8 +40,13 @@ type FilterView = {
  *
  * Four deliberate frictions, because this is destructive and irreversible:
  *
- *   1. The picker only lists leads the swap would actually accept, so a
- *      selection cannot fail on eligibility after the fact.
+ *   1. A selection cannot fail on eligibility after the fact. Leads the swap
+ *      would accept are selectable; leads it has retired (0144) are listed
+ *      last, greyed, with the basis beside them, and cannot be picked at all.
+ *      0143 dropped those rows entirely and §53.9 recorded the cost — an admin
+ *      searching for a lead they knew existed was told nothing. §52.4 already
+ *      settled the argument for the customer's own claim control: grey it with
+ *      its reason, never hide it.
  *   2. Where the customer has a lead filter, the picker LEADS WITH the leads
  *      that match it and hides the rest behind a toggle, and placing one of
  *      the rest takes a second, named acknowledgement — a replacement reaches
@@ -101,8 +118,15 @@ export function SwapLeadControl({
   // button, so the refusal is visible before it is pressed.
   const isWon = status === "won";
 
-  const matching = candidates.filter((c) => c.matches_filter);
-  const outside = candidates.filter((c) => !c.matches_filter);
+  // ⚠️ EVERY COUNT AND EVERY GROUP IS OVER THE SELECTABLE ROWS. The list now
+  // carries leads the swap refuses, so counting `candidates` would tell the
+  // admin there are more replacements available than there are — and putting a
+  // greyed row inside "Matches their filter" would make the toggle that
+  // reveals off-filter stock fire on a lead nobody can pick.
+  const selectable = candidates.filter((c) => !c.retired_reason);
+  const unavailable = candidates.filter((c) => c.retired_reason);
+  const matching = selectable.filter((c) => c.matches_filter);
+  const outside = selectable.filter((c) => !c.matches_filter);
 
   // Only meaningful when the customer actually has a filter. Without one every
   // candidate comes back matching, so this is false throughout and the whole
@@ -194,7 +218,11 @@ export function SwapLeadControl({
   }
 
   function choose(id: string) {
-    setChosen(candidates.find((c) => c.id === id) ?? null);
+    // A disabled <option> cannot be selected, so this is belt and braces —
+    // kept because the alternative failure is a confirm button offering a lead
+    // the database will refuse, and every guard in this feature fails closed.
+    const picked = candidates.find((c) => c.id === id) ?? null;
+    setChosen(picked && !picked.retired_reason ? picked : null);
     // Never carried from one lead to the next: the tick names a specific lead
     // and a specific filter it misses.
     setAcknowledged(false);
@@ -289,7 +317,12 @@ export function SwapLeadControl({
       c.lead_name ?? "Unnamed lead",
       c.postcode ?? null,
       c.bedrooms ? `${c.bedrooms} bed` : null,
-      `${c.assignment_count}/${c.max_assignments} assigned`,
+      // The basis replaces the assignment count on an unavailable lead. How
+      // much room it has left is the one fact that cannot matter about a lead
+      // nobody can pick, and the reason is the only fact that can.
+      c.retired_reason
+        ? `unavailable — ${leadRetirementLabel(c.retired_reason)}`
+        : `${c.assignment_count}/${c.max_assignments} assigned`,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -370,11 +403,11 @@ export function SwapLeadControl({
               ? "Loading leads…"
               : error
                 ? "Could not load leads — see below"
-                : candidates.length === 0
+                : selectable.length === 0
                   ? "No eligible leads"
                   : filter && !outsideVisible
                     ? `Choose a replacement (${matching.length} match their filter)`
-                    : `Choose a replacement (${candidates.length} available)`}
+                    : `Choose a replacement (${selectable.length} available)`}
           </option>
 
           {/* Grouped only when there is a filter to group against. An
@@ -401,11 +434,27 @@ export function SwapLeadControl({
               )}
             </>
           ) : (
-            candidates.map((c) => (
+            selectable.map((c) => (
               <option key={c.id} value={c.id}>
                 {optionLabel(c)}
               </option>
             ))
+          )}
+
+          {/* Always shown, always last, always disabled. Never behind a toggle:
+              these are exactly the leads an admin goes looking for and cannot
+              find, which is the whole reason they are here. The SQL sorts them
+              after every selectable row, so they bury nothing — and when
+              selectable stock exceeds the row cap they simply do not appear,
+              and the search box is what narrows to them. */}
+          {unavailable.length > 0 && (
+            <optgroup label={`Not available (${unavailable.length})`}>
+              {unavailable.map((c) => (
+                <option key={c.id} value={c.id} disabled>
+                  {optionLabel(c)}
+                </option>
+              ))}
+            </optgroup>
           )}
         </select>
         {/* The escape hatch. Deliberately a quiet text button rather than
@@ -424,14 +473,20 @@ export function SwapLeadControl({
           </button>
         )}
 
-        {!loading && candidates.length === 0 && !error && (
+        {!loading && unavailable.length > 0 && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            {LEAD_RETIREMENT_EXPLAINER}
+          </p>
+        )}
+
+        {!loading && selectable.length === 0 && !error && (
           <p className="mt-1 text-sm text-muted-foreground">
             {query.trim()
               ? "No leads match that search. Clear it to see everything eligible."
               : "A replacement must be the same product, have room left, and not already be with this customer."}
           </p>
         )}
-        {!loading && filter && matching.length === 0 && candidates.length > 0 && (
+        {!loading && filter && matching.length === 0 && selectable.length > 0 && (
           <p className="mt-1 text-sm text-muted-foreground">
             Nothing in stock matches their filter right now. Anything you pick
             is a lead they asked not to receive.

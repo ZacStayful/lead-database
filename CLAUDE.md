@@ -12128,6 +12128,209 @@ the single file and not worth a second apply — §43 records the same shape for
 
 Code arriving first would fail every swap.
 
+### 53.10 — And now it says WHY *(0144)*
+
+§53.9's own Deferred entry recorded what it cost: **a withheld candidate was
+withheld silently.** The picker simply returned fewer rows, so an admin
+searching for a lead they knew existed was told nothing — not that it was
+blocked, not why, and not whether anything could be done about it. §52.4 had
+already settled that argument one level down, for the customer's own claim
+control: grey it with its reason, never hide it.
+
+The rows come back, last, carrying the basis, rendered as disabled `<option>`s.
+**Nothing about the refusal changes** — `admin_swap_lead_assignment` still
+raises on a retired lead, still with no override. What changed is that the
+picker stops pretending those leads do not exist.
+
+Live on production the day it applied, over the 55 retired leads:
+
+| basis | management | guaranteed rent |
+|---|---|---|
+| `quality_failed` | 6 | 23 |
+| `pooled_ignored` | 9 | 8 |
+| `owner_unqualified` | 8 | 0 |
+| `claimed_from_pool` | 1 | 0 |
+| `pool_expired` | 0 | 0 |
+
+Two of those never reach the picker and are worth knowing about anyway.
+`owner_unqualified` cannot: owned leads are excluded outright (below). And
+**`pool_expired` has never once fired** — the 90-day life cap (§19.2) has not
+yet caught a lead that was still in stock.
+
+#### ⚠️ THE REASON IS THE DEFINITION NOW, AND THE BOOLEAN DELEGATES TO IT
+
+The obvious shape is a `lead_retirement_reason()` written beside
+`lead_retired_from_allocation()`. That is exactly the second, unmaintained copy
+of the arms §11 and §34 exist to prevent — of the one predicate invariant 11
+says has a single expression, in the place where drift means a lead sold to
+somebody it should never have reached.
+
+So it is not beside it. **The reason function carries the arms and the boolean
+is `lead_retirement_reason(id) is not null`.** There is still one place that
+decides whether a lead may be handed out; it now also says why, and a sixth
+basis added to it reaches every candidate function, `get_escalation_candidates`
+and the money path's locked section for free.
+
+That makes 0144 a rewrite of the most load-bearing predicate in the schema, so
+the equivalence is **verified rather than argued**, three ways:
+
+- `0144_lead_retirement_reason_test.sql` pins 0111's body under a second name in
+  `test_util` and compares the two over **every combination of every basis** —
+  32 generated shapes plus two pool claims. A test deriving its expectation from
+  the new function would pass whatever the rewrite got wrong; the duplication is
+  the point, as §27.2 records for the API field list.
+- The 0137, 0138, 0139, 0141, 0142 and 0143 suites all pass **unmodified**,
+  which is the predicate exercised through the money path, the pool, escalation
+  and both swap paths.
+- On production, an md5 of the verdict over all 501 leads taken immediately
+  before and immediately after the apply: `eb35c52fc83e5487e7dc3d55cd0dbcb2`
+  both times, 55 retired both times.
+
+⚠️ **A LEAD THAT DOES NOT EXIST STAYS FALSE.** 0111 answered
+`exists(…) or exists(…)`, which is false for an unknown id. The new body selects
+`from leads where id = p_lead_id`, gets no row, and a scalar SQL function with
+no row yields NULL — so `is not null` is false. Same answer by a different
+route, and it has its own assertion because nothing else would notice it
+changing.
+
+⚠️ **Neither body is inlined, before or after.** Postgres refuses to inline a
+`security definer` SQL function, so `explain` shows the same
+`Filter: (NOT lead_retired_from_allocation(id))` on a pre-0144 build and a
+post-0144 one. The nesting costs one extra call per row and changes no plan.
+
+#### Retired candidates sort last, and that is not cosmetic
+
+The list is capped (`p_limit`, 50 from the route). Letting a retired lead sort
+by `created_at` alongside the rest would let it consume a slot a selectable lead
+needed, so the picker would show **fewer usable options than before 0144** — a
+worse outcome than the silence this is fixing. `order by (retired_reason is not
+null)` first is what stops it.
+
+The consequence, stated so it is not mistaken for a bug: where selectable stock
+exceeds the cap, no greyed rows are shown at all, and the search box is what
+narrows to them. Both halves have their own assertion.
+
+#### ⚠️ Owned leads stay EXCLUDED, not greyed
+
+Two different rules, and only one of them is what `retired_reason` reports. An
+**unqualified** owned lead carries `owner_unqualified` and would read correctly.
+A **resale-qualified** one carries no reason at all — 0108 deliberately took
+those out of the predicate (§32.6) — and would therefore read as *selectable*
+while `admin_swap_lead_assignment` refuses it on its own owner rule. Greying one
+and not the other is worse than withholding both.
+
+#### The vocabulary is a contract, in two directions
+
+`src/lib/leadRetirement.ts` maps the keys onto what an admin reads. ⚠️ **It must
+stay import-free** — `SwapLeadControl` is a `"use client"` component, the same
+split `featureRequest.ts` makes from `announcements.ts` (§21.8) and
+`deadLeadCopy.ts` from `deadLeadPolicy.ts` (§51.6).
+
+`leadRetirement.test.ts` reads the migration and asserts the two vocabularies
+are the same **set**, the arrangement §29 uses for `cancelOptions.ts`. A basis
+added in SQL and not there renders as its raw key; one renamed there and not in
+SQL renders as nothing. It scans the function body rather than the whole file,
+because the migration's header quotes several of these keys in prose and a
+whole-file scan would pass on the explanation instead of the code.
+
+⚠️ **Every count and every group in the picker is over the SELECTABLE rows.**
+Counting `candidates` would tell the admin there are more replacements available
+than there are, and a greyed row inside "Matches their filter" would make the
+toggle that reveals off-filter stock fire on a lead nobody can pick. The
+component is a client file and `vitest.config.mts` is pure units only, so those
+are pinned on its own text (§42.8) rather than behaviourally.
+
+The explainer under the picker names both escape hatches and admits the one that
+has none — the useful half of telling somebody why a lead is unavailable is
+telling them whether they can do anything about it. Neither hatch is a per-swap
+override: each un-retires the lead everywhere, which is why 0143 gave the swap
+no flag of its own.
+
+### Verification
+
+All 144 migrations applied to a scratch **Postgres 16.13** from empty, **zero
+failures**, 0144 re-applied twice for idempotency. All seven SQL suites pass on
+that build — 0137, 0138, 0139, 0141, 0142, 0143 and the new one — and six of the
+seven are **unchanged**, which is the equivalence check that matters most.
+
+0143's §2 is the exception and was **rewritten, not deleted**: it asserted that a
+retired lead was absent from the list, and 0144 reverses the mechanism without
+touching the rule, so it now asserts the lead is not *selectable*. Its §5 moved
+onto the same column. Everything 0143 is actually responsible for — the refusal,
+the override not opening it, the unassigned-basis lead staying in circulation —
+is untouched.
+
+**1,800 vitest cases green** (11 new), `npx tsc --noEmit` clean, `npm run lint`
+clean, `npm run build` passes.
+
+⚠️ **Sixteen mutations were run and all sixteen caught** — nine in SQL, seven in
+TypeScript, each broken deliberately and watched to fail before the assertion
+was kept. §50.9 records two assertions in this repo already written weak enough
+to survive the mutation they existed to catch, and §53's own suite made it three.
+
+| mutation | caught by |
+|---|---|
+| drop an arm from the reason function | the equivalence matrix |
+| hoist `quality_failed` above `claimed_from_pool` | arm precedence |
+| drop the retired-last ordering | the ordering assertion |
+| put 0143's exclusion back | the picker returns it with a reason |
+| rename a reason string | the reason values, and the TS vocabulary |
+| strip 0143's guard from the swap | the refusal is unchanged |
+| give the boolean its own copy of the arms | the delegation guard |
+| hand the picker back to `authenticated` after the DROP | the ACL |
+| grey owned leads instead of withholding them | the owned-lead assertions |
+| rename or drop a key in `leadRetirement.ts` | the SQL-vs-lib set equality |
+| group over `candidates` instead of `selectable` | the component text guard |
+| un-`disabled` the greyed options | the same |
+| count rows instead of selectable rows | the same |
+| drop the `choose()` guard | the same |
+| have the explainer offer an override | the explainer wording |
+
+**Not yet exercised in a browser.** No admin has seen a greyed option. After
+merging, open a swap on a customer with quality-blocked stock in their product
+and confirm the greyed group appears at the bottom, cannot be selected, and
+names the basis. ⚠️ A Vercel preview cannot do it — Deployment Protection
+answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51, §52) — and a preview
+runs against **production** Supabase (§1.1), so a real swap bins a real lead.
+
+### Deployment order — migration BEFORE code
+
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-12, before the merge** (§1.1),
+and verified there rather than trusted.
+
+- **No drift before it went on.** Both replaced bodies hash-matched a scratch
+  build from the repo files exactly — `lead_retired_from_allocation`
+  `33268f5b…` (1455 chars) and `get_swap_candidates_for_assignment`
+  `b8d72601…` (1528) — and `lead_retirement_reason` did not exist.
+- **Applied with comments stripped OUTSIDE function bodies only**, so every
+  `prosrc` matches the repo file and the next §11 audit is a straight
+  comparison. That form was proved schema-identical first: both were applied to
+  scratch builds and a **163-function fingerprint** of bodies, `prosecdef`,
+  `search_path` and all three ACLs came back identical. §48.9 records what
+  stripping in-body comments too would cost.
+- **All three bodies hash-match the scratch build** — `lead_retirement_reason`
+  `b093c50d…`, `lead_retired_from_allocation` `baa64531…`,
+  `get_swap_candidates_for_assignment` `d1819a5d…` — all `security definer`,
+  all with `search_path` pinned, all `anon=false authenticated=false
+  service_role=true`. The DROP's ACL was re-asserted correctly.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the
+  five mutable-`search_path` functions it lists are all pre-existing.
+- **Nothing moved.** 501 leads, 53 customers and 514 assignments untouched, and
+  an md5 of every customer's balances and monthly counters identical before and
+  after (`5e6b83151fafcd0e2c476be1407d9135`).
+- ⚠️ **And the check this migration is really about**: on a real management
+  assignment the picker returned **64 selectable candidates whose id md5 is
+  byte-identical to the 64 it returned before 0144**
+  (`1966bca1f9dd3261980205dac2b16925`), with 11 greyed rows added beneath them.
+  Not one lead lost its selectability; the change is purely additive to what an
+  admin can see.
+
+The migration is otherwise inert: it adds a function nothing called until the
+code shipped, and rewrites two whose answers are proven unchanged. Code arriving
+first would select a `retired_reason` column that does not exist and fail every
+candidate lookup — and `SwapLeadControl` reports that as "Could not load leads",
+so the picker would be dead rather than merely silent.
+
 ### Deferred
 
 - ~~**`clean_leads_streak` is dead.**~~ **Closed by 0142 (§53.8).**
@@ -12140,11 +12343,12 @@ Code arriving first would fail every swap.
   Acceptable at two a cycle; worth watching if the entitlement ever rises.
 - ~~**0109's admin picker still offers expired-pool leads** (§53.7).~~
   **Closed by 0143 (§53.9).**
-- **A withheld candidate is withheld silently.** The picker simply returns fewer
-  rows, so an admin searching for a lead they know exists is not told why it is
-  missing — §52.4's argument for greying a control rather than hiding it, which
-  0143 did not follow. Saying so needs a column on the return type, which is a
-  DROP and CREATE (the §11 ACL trap) and a change to `SwapLeadControl`, shared
-  with `/admin/quality`. Worth doing if an admin ever asks.
+- ~~**A withheld candidate is withheld silently.**~~ **Closed by 0144 (§53.10).**
+- **The customer's own replacement picker still withholds silently.**
+  `get_customer_replacement_candidates` (0141) filters on
+  `lead_retired_from_allocation` and returns no reason, which is the right call
+  there and worth saying out loud: an operator is not owed our supply position
+  (§53.7, §19.7), and "that one is in the expired pool" is a fact about stock
+  they cannot act on. 0144 is an ADMIN affordance. Do not port it across.
 - **Nothing tells the reported lead's other holders.** §19.7 forbids saying who;
   whether to say anything at all is open.
