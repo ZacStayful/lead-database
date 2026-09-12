@@ -10610,7 +10610,16 @@ fresh ones. What bounds it is a per-cycle budget the customer never sees.
 
 ⚠️ **IT IS NEVER SHOWN, AND NO COPY MAY EVER NAME IT.** An operator told they
 have two claims a month has been handed the exact number of leads it is safe to
-write off without evidence. The mechanism only works while the number is
+write off without evidence.
+
+⚠️ **PARTLY REVERSED BY §53.** The COUNT is now published on
+`/dashboard/replacements`, where the entitlement is a hard stop and a refusal
+with no number attached would read as the product being broken. Everything on
+this page still governs the CREDIT path, which is unchanged: over the
+entitlement a credit claim still routes to review, still with wording
+indistinguishable from any other review outcome, and the six files
+`deadLeadPolicy.test.ts` guards still may not name the mechanism. One surface
+states the number. The rest of the argument below stands. The mechanism only works while the number is
 discovered rather than announced, so `deadLeadPolicy.test.ts` asserts
 mechanically that no message and no code contains "allowance", "quota",
 "budget", "limit" or "remaining" — **and that a customer over the line reads
@@ -11330,7 +11339,14 @@ apart with opposite money outcomes is the failure §51.10 found and had to fix,
 and `src/lib/leadOutcomes.ts` carries the warning as a load-bearing comment.
 
 ⚠️ **A SWAP IS ALWAYS MANUAL.** The hidden per-customer allowance still
-auto-upholds credits; nothing auto-upholds into a swap. It costs **two leads**
+auto-upholds credits; nothing auto-upholds into a swap.
+
+⚠️ **REVERSED FOR THE CUSTOMER'S OWN SWAPS BY §53**, which makes
+`/dashboard/replacements` self-serve. The arithmetic below did not change and is
+still why an ADMIN swap needs a person: what §53 adds instead is a published
+entitlement that hard-stops and a `replacement_stock_floor` that refuses when
+the product's unsold pool runs thin, because the capacity panel is reporting
+only and §16 says nothing gates on it. It costs **two leads**
 rather than one — `admin_swap_lead_assignment` withdraws the reported lead from
 circulation as well as handing over a replacement — against a management pool of
 about 70 leads with a free slot. That arithmetic, not caution, is why a person
@@ -11559,3 +11575,317 @@ would flag leads `dead` that are not.
 
 Code arriving first would fail every claim insert on a new reason and every
 `uphold_swap`.
+
+---
+
+## 53. Replacing a lead without asking us *(0141)*
+
+§51 gave an operator a way to report a lead that was already gone. §52 let an
+**admin** settle that report with a replacement. Neither reached anybody:
+production held **zero claims** against **93 eligible assignments across 13
+customer books** the morning this was written, while customers asked for
+replacements by email. That is the same "nobody could find it" failure §51.10
+already had to fix once, one level up.
+
+`/dashboard/replacements` · `GET /api/customer/replacements` ·
+`POST /api/customer/replacements/swap` · `customer_swap_dead_lead`.
+
+The operator opens one screen, sees every lead they may replace and how many
+replacements they have left this month, answers the same three questions §51
+asks, picks a replacement and swaps. No person in the loop.
+
+### 53.1 — ⚠️ THIS REVERSES TWO THINGS THIS FILE ARGUED FOR AT LENGTH
+
+Both reversals are product decisions taken by the owner, not oversights, and
+both earlier arguments are preserved rather than deleted — the same treatment
+§25 gives 0092 reversing "the report is not part of the product".
+
+**§51.3's hidden entitlement is now published.** The argument for hiding it was
+sound: an operator told they have two claims a month has been handed the exact
+number of leads it is safe to write off without evidence, so the mechanism only
+worked while the number was discovered rather than announced. What changed is
+that §53 makes the entitlement a **hard stop** on a self-serve screen, and a
+refusal with no number attached reads as the product being broken — which is
+precisely the lesson §52.4 had to learn when an ineligible lead silently hid its
+own control.
+
+⚠️ **The CREDIT path is untouched and still says nothing.**
+`decideDeadLeadClaim`, `claimBudget` and the six files `deadLeadPolicy.test.ts`
+guards all behave exactly as before: over the entitlement, a credit claim still
+routes to review with wording indistinguishable from any other review outcome.
+**One surface states the number; nothing else restates it**, and
+`replacementEntitlement.test.ts` bans the mechanism's vocabulary from the new
+copy even though the count itself is now on screen.
+
+**§52.1's "A SWAP IS ALWAYS MANUAL" is reversed for the customer's own swaps.**
+That section's argument is arithmetic, not caution: a swap costs **two** leads —
+the replacement handed over, and the reported lead withdrawn when
+`admin_swap_lead_assignment` clamps `max_assignments` down to
+`assignment_count` — against roughly 70 management leads carrying a free slot.
+**The arithmetic has not changed**, and it is not answered by §53.4's capacity
+figure, because §16 says nothing gates on that panel. So the reversal ships with
+a real floor as well as a meter — see §53.3.
+
+### 53.2 — What the customer sees, and the five findings that shaped it
+
+Measured against production before anything was built:
+
+| | |
+|---|---|
+| Customers holding a product | 23 |
+| Committed leads a month | 310 |
+| Replacements a month if every one is used | **31** |
+| Management leads with a free slot | 77 |
+| Guaranteed rent | 258 |
+
+- ⚠️ **Three of the five filtered customers have NO matching replacement in
+  stock.** Michael Vassilounis has 3 eligible leads and 0 candidates, Myles
+  Denton 1 and 0, HHE Property Investments 2 and 1. Offering only
+  filter-matching leads would show an empty picker to exactly the operators who
+  were most careful about what they asked for. So mismatches are **ranked last
+  and offered behind an explicit tick**, never excluded — §34's argument for the
+  admin override, with the difference that the customer is the right person to
+  consent to departing from their own filter.
+- ⚠️ **Not one of 258 guaranteed-rent leads carries a gross figure.** §25's
+  analysis is management-only, so "as close as possible in gross revenue" cannot
+  work for GR today: the ordering falls back to newest-first for free (the
+  relative-difference expression is null for every row), and the card **omits**
+  the gross line rather than printing a blank. A "£— gross" on every GR card
+  would read as data we had lost rather than a number that was never ours.
+- ⚠️ **`clean_leads_streak` is never incremented anywhere in the repository.**
+  The only writes are `= 0` in 0137, so `earnedBonus()` is permanently zero and
+  §51.3's "one more per unbroken run of ten" has never fired. Harmless while the
+  number was hidden; **not harmless now it is published**. 0141 does not fix it —
+  that is its own change — so the screen states `round(committed × pct)` and
+  implies no earned half. See Deferred.
+- ⚠️ **`used` can exceed the entitlement.** `resolve_dead_lead_claim` consumes it
+  when an admin upholds a reviewed claim, which can land after the customer has
+  spent everything. `remainingOf` clamps at zero or the header renders "-1".
+- Candidates are **redacted**: postcode area, bedrooms, projected gross, age.
+  No landlord name, no full postcode, no contact details.
+
+### 53.3 — ⚠️ The floor, because the capacity panel cannot throttle anything
+
+§18.1 ends "Nothing gates on any of this (§16) — it is reporting and admin
+judgement." Measuring replacement drain after the fact is not back-pressure, and
+with management stock this thin one bad ingest week would empty the pool with
+nobody in the loop.
+
+`customer_swap_dead_lead` therefore refuses when the product's unsold,
+non-retired stock falls below `replacement_stock_floor` (`system_settings`,
+seeded 10), and the claim goes to review instead.
+
+⚠️ **The floor is measured on the PRODUCT's whole pool, not the customer's
+filtered subset.** The risk being managed is the pool emptying: a filtered
+customer with one matching lead costs the pool one lead, which is fine while
+there are seventy. Measuring their subset would block precisely the customers
+§53.2's first finding is about.
+
+Two further valves survive the hard stop, both silent and neither spending
+anything: `quality_review_required`, and a peer visibly working the same lead.
+⚠️ **Neither may explain itself** — §19.7 forbids a refusal that tells operator A
+what operator B is doing, so both produce the same neutral review sentence the
+credit path already uses.
+
+### 53.4 — Replacement demand enters the ceiling
+
+`get_service_capacity` gains `quality_claim_demand_per_month`,
+`avg_allocation_with_swaps` and `sustainable_customers_before_swaps`, and the
+three ceiling expressions divide by the inflated allocation.
+
+⚠️ **A DROP AND CREATE, not a `create or replace`** — the signature gains
+columns and Postgres refuses a replace that changes `RETURNS TABLE`. **The drop
+discards the ACL**, so the grants are re-asserted, and ⚠️ **the `anon` grant must
+not come back**: 0140 dropped an entire function for exposing exactly these
+figures to anon.
+
+⚠️ **All three ceilings move onto the new divisor, `sustainable_customers_new_only`
+included.** §18.1 says the gap between the headline and the new-leads-only figure
+"is exactly how much headroom depends on customers continuing to ignore leads" —
+which is only true while the **numerator** is the sole difference between them.
+Inflating one divisor and not the other conflates a supply change with a demand
+change and makes that sentence false. `sustainable_customers_before_swaps` keeps
+the old divisor, so `before_swaps → sustainable` isolates the replacement drain
+exactly as `sustainable → new_only` isolates the recycling dependency.
+
+⚠️ **It is named for CLAIMS, not swaps, and the name is the honest one.** It
+counts what every customer could claim, of which only some become swaps — the
+rest auto-uphold as credits and spend no stock — and it ignores the second lead
+each swap destroys. **An upper bound on claims and a lower bound on slot cost.**
+Do not present it as a measured swap rate.
+
+Two more traps in the same change. The `served` CTE is two hand-written
+`union all` branches rather than a `group by`, and the GR branch carries **no
+column aliases**, so a column added to one must go in the **same position** in
+the other. And the swap figure is **rounded once at the end**: per-branch
+rounding turns `round(10 × 0.1) = 1` into `1 + 1 = 2` for a customer holding
+both products.
+
+`service_capacity_snapshots` gains the three, nullable and **not backfilled**
+(0084's rule, and §18.2 records that these rows cannot be recomputed). ⚠️
+`capture_service_capacity` has **three** lists — insert, select, and
+`on conflict … do update`. Miss the third and the day's first capture writes the
+new columns while every same-day re-run leaves them stale, with no error. The
+escalation cron does re-run.
+
+### 53.5 — `resolution` gains `'self_swap'`, and the counter gains an anchor
+
+⚠️ **Not reusing `'swap'`.** 0139 states that `resolution = 'swap'` credits
+nothing and consumes no entitlement, and `flag_lead_dead_if_unanimous` filters on
+it. A customer swap **does** consume one, because the entitlement is the only
+thing bounding how many they take where an admin swap is bounded by a person.
+Reusing the value would make 0139's documented invariant false for half its rows.
+
+⚠️ **A GR-only customer's claim counter was never stuck.** 0137's management
+branch coalesces a missing `billing_cycle_anchor` to `created_at`, so it did
+reset — on their signup day. The defect was precision: their budget window was
+anchored to when they signed up while their money bills on
+`gr_billing_cycle_anchor`.
+
+⚠️ **Adding the counter to the GR branch would DOUBLE a dual-product customer's
+entitlement** — two resets a month, one per anchor. One budget spans both
+products (§51.3), so it needs **one** anchor. 0141 moves it into a **third**
+statement keyed on `coalesce(billing_cycle_anchor, gr_billing_cycle_anchor,
+created_at::date)`, leaving the two per-product counters resetting exactly as
+they always have. `nextResetDate` mirrors that expression exactly, or the screen
+prints a day on which nothing happens.
+
+### 53.6 — ⚠️ No customer row lock, and that is the ordering
+
+`admin_swap_lead_assignment` takes its row locks in the order assignment → old
+lead → new lead → **customer**, customer last — which is what keeps every
+existing swap path deadlock-free among themselves: nothing holds `customers` and
+then reaches for a lead.
+
+Pre-locking the customer row to check the entitlement would make
+`customer_swap_dead_lead` the first function that does, and gives a real ABBA
+cycle against a concurrent `resolve_dead_lead_claim_with_swap` on the same
+customer — an admin working `/admin/quality` while the customer clicks the tab.
+
+So the entitlement is spent as a **compare-and-swap after the swap returns**, by
+which point `admin_swap_lead_assignment` already holds the customer row and
+holds it until commit. It takes no lock out of order, and a refusal rolls the
+whole swap back with it.
+
+⚠️ **It compares the STREAK as well as the counter.** `claimBudget()` derives the
+entitlement from `clean_leads_streak`, which the same statement zeroes — so
+testing the counter alone would admit a second concurrent swap on an entitlement
+the first had just destroyed. Moot while the streak is dead (§53.2) and wrong the
+day that is fixed.
+
+The arithmetic itself stays in TypeScript: the route computes `claimBudget()` and
+passes the result as `p_entitlement`, and SQL re-reads only the counter. One home
+for the rule (§51.7), and the race still closed.
+
+### 53.7 — The candidate list
+
+⚠️ **Excluded with `not lead_retired_from_allocation(l.id)`, never a
+hand-written quality clause.** Invariant 11 names that function as the single
+expression of what retires a lead, and writing one arm by hand is the fifth-copy
+trap §34 and §35 exist to avoid. It also closes a latent hole 0109 still has:
+**the admin picker will happily offer an expired-pool lead as a replacement
+today.** Not theoretical — 6 management and 23 GR leads in stock are
+quality-blocked right now.
+
+⚠️ **`p_limit` is capped in SQL and no total count is returned anywhere.** Even
+redacted, this is a readout of unsold stock by area, size, value and age. 0140
+dropped a function for exposing `unsold_leads_now` to anon, and a signed-in
+operator is a nearer competitor than anon. Candidates are also fetched only once
+the questions are answered, so the readout sits behind an actual intent to
+replace rather than a page load.
+
+### Verification
+
+**All 137 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0141 re-applied twice for idempotency. The 0137, 0138 and 0139 suites
+all still pass on the same build.
+
+`0141_customer_lead_replacement_test.sql` — **44 assertions**, among them: a swap
+moves no balance, no monthly counter, no odometer and no pool debit; it spends
+exactly one of the entitlement; at the entitlement it raises and leaves the
+assignment standing, the counter unmoved and no claim written; a **stale streak**
+is refused even when the counter still fits; the claim **survives the swap** with
+the landlord's own words intact, its pointer nulled and `origin_assignment_id`
+still naming the original; the reported lead is withdrawn; an off-filter
+replacement is refused without the flag and lands with it; a GR swap reads `gr_`
+and only `gr_`; a dual-product customer's claim counter resets **once** a month
+and not twice; the three capacity figures are present and the inflated divisor
+can only lower the ceiling; a same-day `capture_service_capacity` re-run
+refreshes the new columns; and ordinary allocation still spends exactly one
+credit.
+
+**1,806 vitest cases green**, `npx tsc --noEmit` clean.
+
+⚠️ **Eighteen mutations were run and all eighteen caught** — nine in SQL, nine in
+TypeScript. Among them: defaulting the filter flag to allowed, dropping either
+compare-and-swap predicate, honouring a caller's `p_limit` of 500, dropping the
+retirement predicate, removing the stock floor, crediting a balance on a swap,
+reverting `sustainable_customers_new_only` to the plain divisor, leaking a raw
+database message to the customer, re-enabling threshold warnings on a swap,
+importing the policy module into the client component, removing the published
+count, and un-clamping `remainingOf`.
+
+⚠️ **One guard was written weak and the mutation run is what found it.** The
+candidate-shape test read output column NAMES, so `l.lead_name as postcode_area`
+sailed straight past it. §50.9 records two assertions in this repo already
+written weak enough to survive the mutation they existed to catch, and this is
+the third. It now reads the function **body** as well, on whole column names so
+`postcode_area` does not trip the `postcode` check.
+
+**Not yet exercised in a browser.** No replacement has been swapped against a
+real database. ⚠️ A Vercel preview cannot do it — Deployment Protection answers
+302 to `vercel.com/sso-api` (§45, §46, §50, §51, §52) — and a preview runs
+against **production** Supabase (§1.1), so a test swap bins a real lead.
+
+### Deployment order — migration BEFORE code
+
+0141 first, applied and verified against production before the pull request
+merges (§1.1).
+
+✅ **APPLIED IN FULL TO `znlfwbnvhlacwzgfalcf` ON 2026-09-12**, before the pull
+request merged, and verified there rather than trusted.
+
+- **Every function body hash-matches a scratch build from this file**:
+  `get_customer_replacement_candidates` `4255a037…`, `customer_swap_dead_lead`
+  `5bbc2e57…`, `flag_lead_dead_if_unanimous` `e3c7dbdc…`,
+  `get_service_capacity` `b811d255…`, `capture_service_capacity` `b19156ba…`,
+  `reset_monthly_counts` `dde127d8…`. All `security definer` with `search_path`
+  pinned, `anon` and `authenticated` false, `service_role` true.
+- **Invariant 7 holds**, and `get_advisors` reports **no new finding** — the
+  five mutable-`search_path` functions it lists are all pre-existing.
+- **Nothing moved.** 53 customers, 501 leads and 512 assignments untouched, and
+  an md5 of every customer's balances and counters **identical** before and
+  after (`9f56f9d805b1331712266d9f8d32141d`).
+- The new reset anchor was then driven **on production itself**, inside a block
+  that raises at the end so every write rolled back: `reset_monthly_counts()`
+  ran clean, **zero** dual-product customers are anchored on the wrong date, and
+  **two** GR-only customers have their reset date moved onto their GR billing
+  anchor — which is the fix landing, and the whole population it affects. The
+  balance fingerprint after the probe was unchanged, so it wrote nothing.
+
+⚠️ It was applied in five parts rather than one, because a permission
+classifier blocked the `reset_monthly_counts` rewrite mid-run; it went on
+afterwards on the owner's say-so. The parts are recorded in
+`supabase_migrations.schema_migrations` under
+`0141_customer_lead_replacement_part1…part5`, which is a cosmetic mismatch with
+the single file and not worth a second apply — §43 records the same shape for
+0130.
+
+Code arriving first would fail every swap.
+
+### Deferred
+
+- **`clean_leads_streak` is dead.** Fix the increment in its own change, or drop
+  the column and the earned half of §51.3's rule with it. Publishing the number
+  makes this worth deciding rather than leaving.
+- **The withdrawal cost is not modelled.** Each swap also destroys the reported
+  lead's remaining free slots, which lands in `inventory_slots_now` rather than
+  `slots_per_month`, so the ceiling still understates the cost by the withdrawn
+  half.
+- **Replacement-of-a-replacement is unbounded except by the counter.** The new
+  assignment carries a null `quality_claim_id`, so it can itself be reported.
+  Acceptable at two a cycle; worth watching if the entitlement ever rises.
+- **0109's admin picker still offers expired-pool leads** (§53.7). 0141 fixes the
+  customer path only; the admin one wants the same predicate.
+- **Nothing tells the reported lead's other holders.** §19.7 forbids saying who;
+  whether to say anything at all is open.
