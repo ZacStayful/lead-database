@@ -31,7 +31,16 @@ import {
   summarySubject,
   worthSending,
   type DueAttempt,
+  type DigestExtras,
 } from "@/lib/contact/followUpSummary";
+import { fetchDueAttempts } from "@/lib/contact/dueAttempts";
+import {
+  RELEASE_SETTING_KEYS,
+  londonDate,
+  releaseSchedule,
+  releaseSettingsFrom,
+} from "@/lib/pacing";
+import { nextLeadLine } from "@/lib/todaySummary";
 import {
   BOOKED_MEETING_RATE_PCT,
   channelLabel,
@@ -50,21 +59,6 @@ const MAX_LEADS_LISTED = 8;
 const SEND_GAP_MS = 600;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-interface AttemptRow {
-  step_number: number;
-  channel: string;
-  send_after: string;
-  message_sequence_runs: {
-    customer_id: string;
-    assignment_id: string;
-    lead_id: string;
-    lead_assignments: {
-      assigned_at: string;
-      lead: { lead_name: string | null } | null;
-    } | null;
-  } | null;
-}
 
 /**
  * Opt-out only — a missing key reads as true (§21.7). Local rather than shared
@@ -136,65 +130,52 @@ async function run(request: Request) {
     /* fail open */
   }
 
-  // ⚠️ NEWLY ASSIGNED LEADS ONLY, FROM THE CUTOFF FORWARD.
-  //
-  // The backfill (2026-09-01) gave every lead in the book a plan so the
-  // timeline reads the same everywhere. It must NOT follow that 342 landlords
-  // who enquired months ago are now chased: the plan is there to be worked if
-  // the operator chooses, and the daily prompt covers leads assigned from the
-  // cutoff onward. Without this the first send would be a wall of 326 across
-  // 23 customers, which is how a daily email gets filtered to trash on day one.
-  //
-  // Fails CLOSED: an unreadable cutoff prompts nobody rather than prompting
-  // about everything.
-  const { data: cutoffRow } = await admin
-    .from("system_settings")
-    .select("value")
-    .eq("key", "contact_notify_from")
-    .maybeSingle();
-  const cutoff = (cutoffRow as { value: string } | null)?.value;
-  if (!cutoff) {
+  // ⚠️ NEWLY ASSIGNED LEADS ONLY, FROM THE CUTOFF FORWARD — and the scan
+  // itself lives in src/lib/contact/dueAttempts.ts, shared with the dashboard
+  // Today panel so the two cannot disagree about what is due. It fails CLOSED
+  // on an unreadable cutoff: nobody is prompted rather than everybody.
+  const scan = await fetchDueAttempts(admin);
+  if (!scan.cutoff) {
     return NextResponse.json({ ok: true, skipped: "no_notify_cutoff" });
   }
-
-  const { data: rows, error } = await admin
-    .from("message_sequence_drafts")
-    .select(
-      "step_number, channel, send_after, " +
-        "message_sequence_runs!inner(customer_id, assignment_id, lead_id, " +
-        "lead_assignments!inner(assigned_at, lead:leads(lead_name)))"
-    )
-    .eq("state", "pending")
-    .eq("message_sequence_runs.status", "active")
-    .lte("send_after", new Date().toISOString())
-    .gte("message_sequence_runs.lead_assignments.assigned_at", cutoff)
-    .limit(2000);
-
-  if (error) {
-    console.error("[contact-followups] scan failed", error);
+  if (scan.error) {
+    console.error("[contact-followups] scan failed", scan.error);
     return NextResponse.json({ ok: false, error: "scan_failed" }, { status: 500 });
   }
+  const byCustomer = scan.byCustomer;
 
-  const byCustomer = new Map<string, DueAttempt[]>();
-  for (const r of (rows ?? []) as unknown as AttemptRow[]) {
-    const run = r.message_sequence_runs;
-    if (!run) continue;
-    const assignedAt = run.lead_assignments?.assigned_at;
-    if (!assignedAt) continue;
-    const overdueDays = Math.max(
-      0,
-      Math.floor((Date.now() - new Date(r.send_after).getTime()) / 86_400_000)
-    );
-    const list = byCustomer.get(run.customer_id) ?? [];
-    list.push({
-      assignmentId: run.assignment_id,
-      leadId: run.lead_id,
-      leadName: run.lead_assignments?.lead?.lead_name ?? null,
-      channel: r.channel as ContactChannel,
-      stepNumber: r.step_number,
-      overdueDays,
-    });
-    byCustomer.set(run.customer_id, list);
+  // §54 — what arrived since yesterday's email, and where each customer sits
+  // on the daily release. One query for everybody; a lead assigned this
+  // morning by the 07:30 release is the reason the email says "your lead for
+  // today is in" rather than the customer finding out by accident.
+  const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const [releaseSettingRows, recentAssignments] = await Promise.all([
+    admin
+      .from("system_settings")
+      .select("key, value")
+      .in("key", [...RELEASE_SETTING_KEYS]),
+    admin
+      .from("lead_assignments")
+      .select("customer_id, assigned_at, lead:leads!inner(lead_type, owner_customer_id)")
+      .gte("assigned_at", dayAgoIso),
+  ]);
+  const releaseSettings = releaseSettingsFrom(
+    (releaseSettingRows.data ?? []) as { key: string; value: string }[]
+  );
+  const todayLondon = londonDate(new Date());
+  const newSinceYesterday = new Map<string, number>();
+  const todayCounts = new Map<string, number>();
+  for (const row of (recentAssignments.data ?? []) as unknown as {
+    customer_id: string;
+    assigned_at: string;
+    lead: { lead_type: string; owner_customer_id: string | null } | null;
+  }[]) {
+    if (row.lead?.owner_customer_id) continue; // their own upload is not a delivery
+    newSinceYesterday.set(row.customer_id, (newSinceYesterday.get(row.customer_id) ?? 0) + 1);
+    if (londonDate(new Date(row.assigned_at)) === todayLondon) {
+      const key = `${row.customer_id}:${row.lead?.lead_type ?? "management"}`;
+      todayCounts.set(key, (todayCounts.get(key) ?? 0) + 1);
+    }
   }
 
   // Adherence for the weekly notice, read once for everybody.
@@ -203,7 +184,8 @@ async function run(request: Request) {
 
   const ids = Array.from(byCustomer.keys());
   const noticeIds = adherence.rows.map((r) => r.customer_id);
-  const allIds = Array.from(new Set([...ids, ...noticeIds]));
+  const newLeadIds = Array.from(newSinceYesterday.keys());
+  const allIds = Array.from(new Set([...ids, ...noticeIds, ...newLeadIds]));
   if (allIds.length === 0) {
     return NextResponse.json({ ok: true, customers: 0, sent: 0 });
   }
@@ -230,7 +212,26 @@ async function run(request: Request) {
     const adh = adherenceBy.get(c.id);
     const notify = adh ? shouldNotify(adh, settings) : false;
 
-    if (!worthSending(summary) && !notify) {
+    // §54. The next-lead line goes in the BODY, never the subject, and is
+    // never on its own a reason to send (worthSending ignores it).
+    const extras: DigestExtras = {
+      newLeadsToday: newSinceYesterday.get(c.id) ?? 0,
+      nextLead: releaseSettings.enabled
+        ? nextLeadLine(
+            releaseSchedule(
+              c,
+              c.subscription_status === "active" ? "management" : "guaranteed_rent",
+              todayCounts.get(
+                `${c.id}:${c.subscription_status === "active" ? "management" : "guaranteed_rent"}`
+              ) ?? 0,
+              releaseSettings
+            ),
+            todayLondon
+          )
+        : null,
+    };
+
+    if (!worthSending(summary, extras) && !notify) {
       stats.skippedNoWork += 1;
       continue;
     }
@@ -239,6 +240,8 @@ async function run(request: Request) {
     if (dryRun) {
       preview.push({
         customer: c.business_name,
+        new_leads: extras.newLeadsToday,
+        next_lead: extras.nextLead,
         due: summary.total,
         channels: describeChannels(summary),
         minutes: summary.minutes,
@@ -254,7 +257,7 @@ async function run(request: Request) {
       continue;
     }
 
-    if (worthSending(summary)) {
+    if (worthSending(summary, extras)) {
       const named = attempts
         .slice()
         .sort((a, b) => b.overdueDays - a.overdueDays || a.stepNumber - b.stepNumber)
@@ -269,20 +272,22 @@ async function run(request: Request) {
       const { error: mailErr } = await sendDailyFollowUpsEmail({
         to: c.email,
         contactName: c.contact_name ?? c.business_name ?? "there",
-        subject: summarySubject(summary),
+        subject: summarySubject(summary, extras),
         total: summary.total,
         channels: describeChannels(summary),
         minutes: summary.minutes,
         overdue: summary.overdue,
         leads: named,
         url: LIST_URL,
+        newLeadsToday: extras.newLeadsToday,
+        nextLead: extras.nextLead,
       });
       if (!mailErr) stats.emails += 1;
 
       // A SEPARATE stream with its own toggle, exactly as completeAssignment
       // treats the new-lead SMS. Only an explicit false opts out (§40.9A).
       if (c.sms_alerts_enabled !== false && c.phone) {
-        const sms = await sendSms(c.phone, summarySms(summary, LIST_URL));
+        const sms = await sendSms(c.phone, summarySms(summary, LIST_URL, extras));
         if (sms.ok) stats.texts += 1;
       }
       await sleep(SEND_GAP_MS);

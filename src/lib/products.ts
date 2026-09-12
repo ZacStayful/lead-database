@@ -1,3 +1,4 @@
+import { RELEASE_HIGHLIGHT } from "@/lib/releaseCopy";
 import { GR_PLANS, PLANS, type PlanKey } from "@/lib/plans";
 import type { Customer, LeadType } from "@/lib/types";
 
@@ -57,6 +58,7 @@ export const PRODUCT_COPY: Record<LeadType, ProductCopy> = {
       "Organic Google intent — not a bought list or a cold database",
       "Financially modelled against live Airbnb data before you get it",
       "Landlord pre-warned that an operator will call",
+      RELEASE_HIGHLIGHT,
       "Shared with at most two other operators",
     ],
     plans: [

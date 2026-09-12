@@ -48,6 +48,10 @@ async function handle(request: NextRequest) {
       assignments += result.assignments_made;
     } else if (result.status === "duplicate") {
       duplicates += 1;
+      // The duplicate branch is the daily top-up path — it re-offers every
+      // banked lead — so its assignments are most of what this run does on an
+      // ordinary morning. They used to go uncounted here.
+      assignments += result.assignments_made ?? 0;
     } else if (result.error) {
       errors.push(`${lead.lead_name}: ${result.error}`);
     }

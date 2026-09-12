@@ -8,6 +8,7 @@ import type { Customer, LeadType, NotificationPreferences } from "@/lib/types";
 import { planForAllocation } from "@/lib/plans";
 import { PRODUCT_COPY, holdsProduct } from "@/lib/products";
 import { PlanChangeCard } from "@/components/dashboard/PlanChangeCard";
+import { ReleaseHoldCard } from "@/components/dashboard/ReleaseHoldCard";
 import {
   CancelSubscriptionCard,
   type CancelProductState,
@@ -623,6 +624,13 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
         products={cancelProducts}
         onPauseInstead={pauseInstead}
       />
+
+      {/* §54 — "hold my leads until". Not a pause; billing and credits are
+          untouched. Per product, so a management hold never gates GR. */}
+      {(customer.subscription_status === "active" ||
+        customer.gr_subscription_status === "active") && (
+        <ReleaseHoldCard customer={customer} />
+      )}
 
       <Card>
         <CardHeader>

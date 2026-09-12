@@ -128,3 +128,29 @@ describe("the lead-quality page still states the recourse that does exist", () =
     );
   });
 });
+
+describe("§54: what the public pages say about how leads arrive", () => {
+  /**
+   * The daily release replaced the renewal-day batch. Copy that still promises
+   * "never batched or delayed" or "within minutes of assignment" describes the
+   * old behaviour, and a customer who reads it and then gets one lead a day
+   * has been misled about the thing they are paying for.
+   */
+  it("the landing page says one a working day and no longer promises instant batches", () => {
+    const src = prose(PAGES["the landing page"]);
+    expect(src).toMatch(/one (a|per) working day/i);
+    expect(src).not.toMatch(/never batched/i);
+    expect(src).not.toMatch(/within minutes of assignment/i);
+  });
+
+  it("the packages copy carries the same line, from the one constants module", () => {
+    const products = readFileSync(resolve(__dirname, "..", "products.ts"), "utf8");
+    expect(products).toContain('from "@/lib/releaseCopy"');
+    expect(products).toContain("RELEASE_HIGHLIGHT");
+    const copy = readFileSync(resolve(__dirname, "..", "releaseCopy.ts"), "utf8");
+    // Import-free, so client components can use it (§21.8's rule).
+    expect(copy).not.toMatch(/^import /m);
+    // A promise about money must not read as a guarantee of supply.
+    expect(copy).not.toMatch(/guarantee[ds]? (a|one) lead/i);
+  });
+});

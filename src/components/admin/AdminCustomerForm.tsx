@@ -32,6 +32,10 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
   const [reviewRequired, setReviewRequired] = useState(
     customer.quality_review_required === true
   );
+  // Staged release (§54). 'daily' is the rule; 'immediate' exempts them.
+  const [releaseMode, setReleaseMode] = useState<"daily" | "immediate">(
+    customer.release_mode === "immediate" ? "immediate" : "daily"
+  );
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -71,6 +75,7 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             gr_lead_balance: Number(grBalance),
             quality_allowance_pct: pct,
             quality_review_required: reviewRequired,
+            release_mode: releaseMode,
           }),
         }
       );
@@ -246,6 +251,49 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             </p>
           </div>
           <Switch checked={reviewRequired} onCheckedChange={setReviewRequired} />
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-md border-[0.5px] border-border p-4">
+        <div>
+          <p className="text-sm font-medium">How their leads arrive</p>
+          <p className="text-xs text-muted-foreground">
+            One a working day is the rule for everyone while the switch on
+            Allocation is on. Exempt an operator only when they have asked for
+            the whole batch on renewal day and understand what that costs them —
+            this is admin-only precisely so nobody can pick it for themselves.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="release_mode">Release</Label>
+            <select
+              id="release_mode"
+              value={releaseMode}
+              onChange={(e) =>
+                setReleaseMode(e.target.value === "immediate" ? "immediate" : "daily")
+              }
+              className="flex h-9 w-full rounded-md border-[0.5px] border-border bg-background px-3 text-sm"
+            >
+              <option value="daily">One a working day (the rule)</option>
+              <option value="immediate">Immediate — exempt from the rule</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label>Holds</Label>
+            <p className="text-sm">
+              {customer.release_hold_until
+                ? `Management held until ${customer.release_hold_until}`
+                : "No management hold"}
+              {customer.gr_release_hold_until
+                ? ` · GR held until ${customer.gr_release_hold_until}`
+                : ""}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Set by the customer from Settings. Not a pause: billing and
+              credits are untouched and delivery catches up when it ends.
+            </p>
+          </div>
         </div>
       </div>
 

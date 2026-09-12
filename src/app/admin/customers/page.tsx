@@ -20,6 +20,8 @@ import type {
 import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
 import { LeadInterestBackfillButton } from "@/components/admin/LeadInterestBackfillButton";
+import { RELEASE_SETTING_KEYS, londonDate, releaseSettingsFrom } from "@/lib/pacing";
+import { releaseOverview } from "@/lib/releaseStats";
 
 export const dynamic = "force-dynamic";
 
@@ -267,6 +269,53 @@ export default async function AdminCustomersPage() {
   //
   // Pacing is per product, so a customer holding both is judged on each
   // separately and can appear once per product.
+  // §54 — where each customer sits on the daily release, for the pacing cell.
+  // Read once here rather than per row: the settings are three rows and
+  // today's assignments a handful.
+  const nowForRelease = new Date();
+  const todayLondon = londonDate(nowForRelease);
+  const [releaseSettingRows, todayAssignments] = await Promise.all([
+    admin
+      .from("system_settings")
+      .select("key, value")
+      .in("key", [...RELEASE_SETTING_KEYS]),
+    admin
+      .from("lead_assignments")
+      .select("customer_id, assigned_at, lead:leads!inner(lead_type)")
+      .gte("assigned_at", new Date(nowForRelease.getTime() - 36 * 3_600_000).toISOString()),
+  ]);
+  const releaseSettings = releaseSettingsFrom(
+    (releaseSettingRows.data ?? []) as { key: string; value: string }[]
+  );
+  const todayCounts = new Map<string, number>();
+  for (const row of (todayAssignments.data ?? []) as unknown as {
+    customer_id: string;
+    assigned_at: string;
+    lead: { lead_type: string } | null;
+  }[]) {
+    if (londonDate(new Date(row.assigned_at)) !== todayLondon) continue;
+    const key = `${row.customer_id}:${row.lead?.lead_type ?? "management"}`;
+    todayCounts.set(key, (todayCounts.get(key) ?? 0) + 1);
+  }
+  const nextLead: Record<string, string> = {};
+  if (releaseSettings.enabled) {
+    for (const r of releaseOverview(customers, todayCounts, releaseSettings, nowForRelease).rows) {
+      const sch = r.schedule;
+      nextLead[`${r.customerId}:${r.leadType}`] =
+        sch.mode === "immediate"
+          ? "exempt from daily release"
+          : sch.onHoldUntil
+            ? `held until ${sch.onHoldUntil}`
+            : sch.exhausted
+              ? "all delivered this cycle"
+              : sch.dueToday
+                ? "next lead: today"
+                : sch.nextReleaseDate
+                  ? `next lead: ${sch.nextReleaseDate}`
+                  : "";
+    }
+  }
+
   const alerts = customers.flatMap((customer) => {
     if (!customer.is_active) return [];
     const rows: {
@@ -341,6 +390,7 @@ export default async function AdminCustomersPage() {
 
       <AdminCustomersTable
         customers={customers}
+        nextLead={nextLead}
         lastActive={lastActive}
         pauseDetail={pauseDetail}
         pauseFacts={pauseFacts}

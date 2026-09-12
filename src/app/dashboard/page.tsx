@@ -8,7 +8,12 @@ import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
 import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
 import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
+import { TodayPanel } from "@/components/dashboard/TodayPanel";
 import { computeWorkSummary } from "@/lib/workSummary";
+import { buildTodayLines, workingDayStreak } from "@/lib/todaySummary";
+import { fetchDueAttempts } from "@/lib/contact/dueAttempts";
+import { summariseDay } from "@/lib/contact/followUpSummary";
+import { ENGAGEMENT_EVENT_TYPES } from "@/lib/types";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { AddLeadsButton } from "@/components/dashboard/AddLeadsButton";
 import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
@@ -17,10 +22,14 @@ import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement"
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import {
+  RELEASE_SETTING_KEYS,
   computeGrPacing,
   computePacing,
+  londonDate,
   pacingMessage,
   poolDebitExplanation,
+  releaseSchedule,
+  releaseSettingsFrom,
 } from "@/lib/pacing";
 import type { AssignmentWithLead, Customer } from "@/lib/types";
 
@@ -129,6 +138,79 @@ export default async function DashboardPage() {
   // Unfinished work: overdue callbacks and leads that stalled after contact.
   // Pure arithmetic on the assignments already loaded above — no extra query.
   const workSummary = computeWorkSummary(assignments);
+
+  // §54 — the Today panel. Five small reads, in parallel, all scoped to this
+  // customer. The due-attempt scan is the SAME query the 08:15 email runs
+  // (fetchDueAttempts), so the panel and the inbox never disagree.
+  const now = new Date();
+  const today = londonDate(now);
+  const sixtyDaysAgo = new Date(now.getTime() - 60 * 86_400_000).toISOString();
+  const [releaseRows, dueScan, threadRows, poolMgmt, poolGr, eventRows] = await Promise.all([
+    admin.from("system_settings").select("key, value").in("key", [...RELEASE_SETTING_KEYS]),
+    fetchDueAttempts(admin, { customerId: customer.id, now }),
+    admin
+      .from("lead_message_threads")
+      .select("unread_inbound_count")
+      .eq("customer_id", customer.id)
+      .gt("unread_inbound_count", 0),
+    isActive
+      ? admin.rpc("get_customer_pool_leads", { p_customer_id: customer.id, p_lead_type: "management" })
+      : Promise.resolve({ data: [] as unknown[] }),
+    hasGuaranteedRent
+      ? admin.rpc("get_customer_pool_leads", { p_customer_id: customer.id, p_lead_type: "guaranteed_rent" })
+      : Promise.resolve({ data: [] as unknown[] }),
+    admin
+      .from("lead_events")
+      .select("created_at, lead_assignments!inner(customer_id)")
+      .eq("lead_assignments.customer_id", customer.id)
+      .in("event_type", [...ENGAGEMENT_EVENT_TYPES])
+      .gte("created_at", sixtyDaysAgo)
+      .limit(5000),
+  ]);
+  const releaseSettings = releaseSettingsFrom(
+    (releaseRows.data ?? []) as { key: string; value: string }[]
+  );
+  const marketplaceToday = assignments.filter(
+    (a) => !a.lead?.owner_customer_id && londonDate(new Date(a.assigned_at)) === today
+  );
+  const receivedTodayFor = (lt: "management" | "guaranteed_rent") =>
+    assignments.filter(
+      (a) =>
+        (a.lead?.lead_type ?? "management") === lt &&
+        londonDate(new Date(a.assigned_at)) === today
+    ).length;
+  const schedules = [
+    ...(isActive
+      ? [{
+          label: hasGuaranteedRent ? "Management" : null,
+          schedule: releaseSchedule(customer, "management", receivedTodayFor("management"), releaseSettings, now),
+        }]
+      : []),
+    ...(hasGuaranteedRent
+      ? [{
+          label: isActive ? "Guaranteed Rent" : null,
+          schedule: releaseSchedule(customer, "guaranteed_rent", receivedTodayFor("guaranteed_rent"), releaseSettings, now),
+        }]
+      : []),
+  ];
+  const unreadReplies = ((threadRows.data ?? []) as { unread_inbound_count: number | null }[]).reduce(
+    (n, t) => n + (t.unread_inbound_count ?? 0),
+    0
+  );
+  const activeDays = ((eventRows.data ?? []) as unknown as { created_at: string }[]).map((e) =>
+    londonDate(new Date(e.created_at))
+  );
+  const todayLines = buildTodayLines({
+    today,
+    newLeadsToday: marketplaceToday.length,
+    schedules,
+    dueFollowUps: summariseDay(dueScan.byCustomer.get(customer.id) ?? []),
+    dueTodayCallbacks: workSummary.dueTodayCallbacks,
+    overdueCallbacks: workSummary.overdueCallbacks,
+    unreadReplies,
+    poolLeads: ((poolMgmt.data ?? []) as unknown[]).length + ((poolGr.data ?? []) as unknown[]).length,
+    streakDays: workingDayStreak(activeDays, today),
+  });
 
   // Which products this customer actually holds (active sub or leads received).
   const hasManagement = isActive || managementReceived > 0;
@@ -286,7 +368,11 @@ export default async function DashboardPage() {
         medianResponseMinutes={medianResponseMinutes}
       />
 
-      {/* Unfinished work first: it names specific leads to pick up, so it
+      {/* Today first (§54): new work outranks loose ends, and the next-lead
+          line is the reason to come back tomorrow. */}
+      <TodayPanel lines={todayLines} />
+
+      {/* Unfinished work next: it names specific leads to pick up, so it
           outranks any comparative block. Renders nothing when nothing is
           outstanding. */}
       <NeedsAttention summary={workSummary} />

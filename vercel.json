@@ -12,6 +12,10 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/cron/release-leads",
+      "schedule": "30 7 * * 1-5"
+    },
+    {
       "path": "/api/cron/generate-public-stats",
       "schedule": "0 3 * * *"
     },

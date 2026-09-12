@@ -7,7 +7,16 @@
  * columns, which is why a Guaranteed Rent subscriber sitting at
  * `account_status = 'waitlisted'` for management still reports correctly.
  */
-import { computeGrPacing, computePacing } from "@/lib/pacing";
+import {
+  RELEASE_SETTING_KEYS,
+  computeGrPacing,
+  computePacing,
+  londonDate,
+  releaseSchedule,
+  releaseSettingsFrom,
+  type ReleaseSettings,
+} from "@/lib/pacing";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { holdsProduct } from "@/lib/products";
 import { ok, type ApiResult } from "@/lib/api/errors";
 import type { Caller } from "@/lib/api/caller";
@@ -39,9 +48,19 @@ function filterBlock(customer: Customer, leadType: LeadType) {
   };
 }
 
-function productBlock(customer: Customer, leadType: LeadType) {
+function productBlock(
+  customer: Customer,
+  leadType: LeadType,
+  release: { settings: ReleaseSettings; receivedToday: number; now: Date }
+) {
   const gr = leadType === "guaranteed_rent";
   const pacing = gr ? computeGrPacing(customer) : computePacing(customer);
+  // §54. A date or null — a FIXED field, never a filter (§27.1). Null while
+  // the daily release is off, for an exempt customer, or when everything this
+  // cycle owes has been delivered.
+  const schedule = releaseSchedule(customer, leadType, release.receivedToday, release.settings, release.now);
+  const nextLeadDue =
+    schedule.enabled && schedule.mode === "daily" ? schedule.nextReleaseDate : null;
 
   const block: Record<string, unknown> = {
     product: leadType,
@@ -57,6 +76,7 @@ function productBlock(customer: Customer, leadType: LeadType) {
     // settled against future renewals. Returned because it is the only thing
     // that explains a deficit the customer did not cause.
     pool_debit: gr ? customer.gr_pool_debit : customer.pool_debit,
+    next_lead_due: nextLeadDue,
     pacing: {
       expected: pacing.expected,
       deficit: pacing.deficit,
@@ -80,13 +100,39 @@ function productBlock(customer: Customer, leadType: LeadType) {
   return block;
 }
 
-export function getAccount(caller: Caller): ApiResult<Record<string, unknown>> {
+export async function getAccount(
+  caller: Caller,
+  admin = createAdminClient()
+): Promise<ApiResult<Record<string, unknown>>> {
   const customer = caller.customer;
   const products: Record<string, unknown>[] = [];
 
+  // Two small reads for next_lead_due: the release settings, and this
+  // customer's assignments dated today in London (what the daily cap counts).
+  // Both scoped by caller.customerId, like every query on this surface.
+  const now = new Date();
+  const today = londonDate(now);
+  const [settingRows, todayRows] = await Promise.all([
+    admin.from("system_settings").select("key, value").in("key", [...RELEASE_SETTING_KEYS]),
+    admin
+      .from("lead_assignments")
+      .select("assigned_at, lead:leads!inner(lead_type)")
+      .eq("customer_id", caller.customerId)
+      .gte("assigned_at", new Date(now.getTime() - 36 * 3_600_000).toISOString()),
+  ]);
+  const settings = releaseSettingsFrom(
+    (settingRows.data ?? []) as { key: string; value: string }[]
+  );
+  const receivedToday = (lt: LeadType) =>
+    ((todayRows.data ?? []) as unknown as { assigned_at: string; lead: { lead_type: string } | null }[])
+      .filter((r) => (r.lead?.lead_type ?? "management") === lt && londonDate(new Date(r.assigned_at)) === today)
+      .length;
+
   for (const leadType of ["management", "guaranteed_rent"] as LeadType[]) {
     if (holdsProduct(customer, leadType)) {
-      products.push(productBlock(customer, leadType));
+      products.push(
+        productBlock(customer, leadType, { settings, receivedToday: receivedToday(leadType), now })
+      );
     }
   }
 
