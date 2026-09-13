@@ -223,7 +223,45 @@ export async function POST(request: NextRequest) {
     console.error("Enquiry account creation error", err);
   }
 
-  // 3. Capacity no longer gates the public form — every prospect books a call.
+  // 3. Start the booking chase (§55).
+  //
+  //    They are about to be redirected to Calendly, and most of them will not
+  //    book. This row is the ladder that chases them: WhatsApp and email about
+  //    two minutes from now, another at 24 hours, a third at 48, stopping the
+  //    moment Calendly says they booked.
+  //
+  //    ⚠️ THIS INSERT IS WHAT MAKES "NEW ENQUIRIES ONLY" STRUCTURAL. There is
+  //    no backfill and no cutoff setting anywhere: a prospect with no ladder
+  //    row can never be chased, and this is the only thing in the codebase that
+  //    creates one. §32.4's argument for a per-row flag over a global — a
+  //    cutoff is one bad read away from enrolling the whole back catalogue.
+  //
+  //    ⚠️ NON-FATAL, exactly like the Monday push above. A failed ladder must
+  //    never cost us the enquiry itself, which is the thing we actually cannot
+  //    recreate. The unique partial index does the rest: a prospect who
+  //    enquires twice while still waitlisted collides on 23505 and keeps the
+  //    ladder they already have, rather than being chased twice over.
+  try {
+    const { data: prospect } = await admin
+      .from("customers")
+      .select("id, account_status")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (prospect && prospect.account_status === "waitlisted") {
+      const { error: ladderError } = await admin
+        .from("prospect_booking_nudges")
+        .insert({ customer_id: prospect.id });
+      // 23505 is the ordinary case — they already have a live ladder.
+      if (ladderError && ladderError.code !== "23505") {
+        console.error("Enquiry booking-chase insert failed", ladderError);
+      }
+    }
+  } catch (err) {
+    console.error("Enquiry booking-chase error", err);
+  }
+
+  // 4. Capacity no longer gates the public form — every prospect books a call.
   //    The field is kept `true` for a stable response shape.
   return NextResponse.json({ ok: true, hasCapacity: true });
 }

@@ -39,6 +39,8 @@ describe("the allow-list is closed", () => {
       "messaging_sequence_review_hours",
       "messaging_sequences_enabled",
       "messaging_whatsapp_ceiling_per_second",
+      "prospect_nudge_daily_cap",
+      "prospect_nudge_enabled",
       "release_cycle_days",
       "release_enabled",
       "release_hold_max_days",
@@ -180,6 +182,11 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     release_max_per_day: "2",
     release_cycle_days: "30",
     release_hold_max_days: "14",
+    // §55. The cron reads the switch as `!== "true"` (fails to off) and the cap
+    // through `Number(config.get(...) ?? "30")`, so both must match here or the
+    // admin page shows a limit the chase is not actually using.
+    prospect_nudge_enabled: "false",
+    prospect_nudge_daily_cap: "30",
   };
 
   it("matches DEFAULT_QUIET_*, DEFAULT_LEAD_COOLDOWN_HOURS and sequenceSettings", () => {

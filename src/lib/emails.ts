@@ -80,6 +80,37 @@ function landlordShell(inner: string): string {
 </body></html>`;
 }
 
+/**
+ * The shell for a PROSPECT — somebody who enquired and has not bought anything.
+ *
+ * ⚠️ NEITHER EXISTING SHELL IS TRUE FOR THEM. shell() footers with "you have an
+ * active subscription", which is plainly false and would be the first thing we
+ * ever tell them. landlordShell() says "you submitted a property enquiry",
+ * which is the wrong enquiry entirely — these are operators asking about buying
+ * leads, not landlords offering a property.
+ *
+ * It carries a real unsubscribe link rather than "reply and we will stop",
+ * because this is the only shell attached to an automated sequence: a reply
+ * reaches an inbox somebody has to read, where a link stops the ladder itself.
+ */
+function prospectShell(inner: string, optOutUrl?: string): string {
+  const optOut = optOutUrl
+    ? `<a href="${optOutUrl}" style="color:#8a8f88">Stop these emails</a>.`
+    : `Reply to this email and we will stop.`;
+  return `<!doctype html><html><body style="margin:0;background:#f5f6f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a">
+  <div style="max-width:560px;margin:0 auto;padding:32px 16px">
+    <div style="font-weight:700;font-size:20px;color:${BRAND};margin-bottom:16px">Stayful</div>
+    <div style="background:#ffffff;border:0.5px solid #d9dbd8;border-radius:10px;padding:28px">
+      ${inner}
+    </div>
+    <div style="color:#8a8f88;font-size:12px;margin-top:20px;line-height:1.6">
+      You are receiving this because you enquired about the Stayful lead database.
+      ${optOut}
+    </div>
+  </div>
+</body></html>`;
+}
+
 /** Where feature requests / bug reports are delivered. */
 function feedbackTo(): string {
   return process.env.FEEDBACK_EMAIL ?? "zac@stayful.co.uk";
@@ -1674,6 +1705,51 @@ export async function sendDeadLeadUpheldEmail(params: {
         ? `We've replaced ${params.leadName}`
         : `Credit back for ${params.leadName}`,
       html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+
+/**
+ * A booking-chase email to an enquirer who has not booked a web meeting (§55).
+ *
+ * Takes the already-composed copy from src/lib/prospect/copy.ts rather than
+ * writing any of its own, so the wording lives in one import-free module the
+ * admin preview can also read. This function's whole job is the transport and
+ * the shell.
+ *
+ * ⚠️ NOT gated on notification_preferences. Every key in that jsonb is a
+ * preference a CUSTOMER set about lead activity; a prospect has never seen that
+ * screen and has no row in it to speak of. The opt-out here is the link in the
+ * footer, which stops the ladder rather than muting one stream.
+ */
+export async function sendProspectBookingNudgeEmail(params: {
+  to: string;
+  subject: string;
+  paragraphs: string[];
+  cta: { url: string; label: string };
+  optOutUrl?: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, subject, paragraphs, cta, optOutUrl } = params;
+
+  // esc() on every paragraph: the name is interpolated into the first one and
+  // comes off a public form (§22.5 makes escaping load-bearing).
+  const body = paragraphs
+    .map(
+      (t) =>
+        `<p style="margin:0 0 14px;font-size:15px;line-height:1.6">${esc(t)}</p>`
+    )
+    .join("");
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: prospectShell(`${body}${button(cta.url, cta.label)}`, optOutUrl),
     });
     return { id: data?.id ?? null, error };
   } catch (error) {

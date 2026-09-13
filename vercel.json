@@ -70,6 +70,10 @@
     {
       "path": "/api/cron/ticket-synthesis",
       "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/prospect-nudges",
+      "schedule": "* * * * *"
     }
   ]
 }

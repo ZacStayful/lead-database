@@ -231,6 +231,34 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     min: 1,
     max: 60,
   },
+
+  // -------------------------------------------------------------------------
+  // Chasing an enquirer who never books a web meeting (§55). In THIS list for
+  // the reason at the top of the file — one closed allow-list, one panel, and
+  // a route that can never name a key the reader does not know.
+  //
+  // ⚠️ `prospect_nudge_sender_customer_id` is deliberately NOT here. It is a
+  // UUID, and this list has exactly two field kinds; adding a third for a value
+  // set once at go-live is the position `landlord_nudge_from` and
+  // `contact_notify_from` are already in. Moving it is a SQL edit.
+  // -------------------------------------------------------------------------
+  {
+    key: "prospect_nudge_enabled",
+    label: "Chase enquirers to book",
+    kind: "boolean",
+    fallback: "false",
+  },
+  {
+    key: "prospect_nudge_daily_cap",
+    label: "Chase messages a day (all prospects)",
+    kind: "number",
+    fallback: "30",
+    // ⚠️ Never 0 — that silently stops the feature while the switch still reads
+    // on, which is the worst of both states. Turning it off is the switch's job.
+    // The ceiling is the WhatsApp number's reputation, not a technical limit.
+    min: 1,
+    max: 200,
+  },
 ];
 
 const BY_KEY = new Map(MESSAGING_SETTINGS.map((s) => [s.key, s]));
