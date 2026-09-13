@@ -1,14 +1,45 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { hasBookedWebMeeting } from "@/lib/calendly";
 
 const SINCE = new Date("2026-09-13T10:00:00.000Z");
 const ORIGINAL = globalThis.fetch;
 
+/**
+ * ⚠️ THIS FILE BROKE A PRODUCTION DEPLOY, AND BOTH CAUSES ARE GUARDED HERE.
+ *
+ * The "no API token is configured" case used to assert its branch by relying
+ * on CALENDLY_API_TOKEN being ABSENT from the ambient environment. That held
+ * locally and stopped holding the moment the variable was set in Vercel: the
+ * test then ran with a real token, sailed straight past the check it exists to
+ * test, and the build failed on an unrelated-looking assertion.
+ *
+ * Worse, it did so by making a LIVE CALL TO CALENDLY during the build — with
+ * the real credential — because that test never stubbed fetch. vitest.config.mts
+ * says this suite is "PURE UNITS ONLY — no network, no database, no React", and
+ * that is the constraint which makes it safe to gate `next build` on.
+ *
+ * So two guards, not one:
+ *   1. beforeEach CLEARS both variables, so what the environment happens to
+ *      hold can never decide what these tests assert.
+ *   2. fetch is stubbed for EVERY test with a version that throws. A test that
+ *      reaches the network now fails loudly and by name, instead of quietly
+ *      succeeding against the real API on whoever's machine has credentials.
+ */
 function stub(impl: (url: string, init?: RequestInit) => unknown) {
   globalThis.fetch = vi.fn(async (input: unknown, init?: unknown) =>
     impl(String(input), init as RequestInit)
   ) as unknown as typeof fetch;
 }
+
+beforeEach(() => {
+  delete process.env.CALENDLY_API_TOKEN;
+  delete process.env.CALENDLY_USER_URI;
+  stub((url) => {
+    throw new Error(
+      `A pure unit test tried to reach the network: ${url}. Stub fetch in the test.`
+    );
+  });
+});
 
 afterEach(() => {
   globalThis.fetch = ORIGINAL;
