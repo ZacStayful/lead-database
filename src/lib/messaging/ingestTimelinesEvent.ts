@@ -50,7 +50,7 @@ export type IngestOutcome =
   /** Written, or already present from our own send. */
   | { outcome: "stored"; direction: "inbound" | "outbound" }
   /** Deliberately not ours to keep. Terminal — never retried. */
-  | { outcome: "dropped"; reason: "not_dialable" | "no_matching_lead" }
+  | { outcome: "dropped"; reason: "not_dialable" | "no_matching_lead" | "prospect_reply" }
   /** OUR failure, not a verdict about the event. Retryable. */
   | { outcome: "deferred"; reason: string };
 
@@ -143,6 +143,31 @@ export async function ingestTimelinesEvent(
   // the reason capturing phone-sent messages is safe to do at all. Terminal:
   // retrying would not change the answer.
   if (!hit) {
+    // ⚠️ BEFORE DROPPING IT: is this an ENQUIRER replying to a booking chase
+    // (§55)? They are not a lead and never will be one, so there is no
+    // assignment to match and this branch is where their reply lands.
+    //
+    // Chasing somebody who has just written back "yes, let's talk" is the most
+    // embarrassing failure this feature can produce, so the ladder stops here.
+    //
+    // ⚠️ INBOUND ONLY, AND THAT IS NOT CAUTION — IT IS THE SELF-STOP TRAP.
+    // Our own chase messages go out through this same workspace and come back
+    // as `message:sent:new`, i.e. OUTBOUND. Stopping on either direction would
+    // have step 1 cancel the ladder it had just started, every single time, and
+    // the symptom would be a feature that appears to send one message and then
+    // give up. The cost is the accepted gap: a reply Zac types from his own
+    // phone does not stop the chase, because it is indistinguishable here from
+    // the message the cron just sent.
+    if (direction === "inbound") {
+      const stopped = await stopProspectLadderByPhone(admin, key);
+      if (stopped) {
+        console.warn("[timelines/ingest] dropped: prospect_reply", {
+          claimId: p.claimId,
+        });
+        return { outcome: "dropped", reason: "prospect_reply" };
+      }
+    }
+
     console.warn("[timelines/ingest] dropped: no_matching_lead", { claimId: p.claimId });
     return { outcome: "dropped", reason: "no_matching_lead" };
   }
@@ -259,4 +284,51 @@ export async function ingestTimelinesEvent(
   }
 
   return { outcome: "stored", direction };
+}
+
+
+/**
+ * Stop an active booking-chase ladder whose prospect owns this number (§55).
+ *
+ * PostgREST cannot call normalised_phone in a filter, so the comparison is done
+ * here — the same shape the lead match above uses, and for the same reason. The
+ * candidate set is small by construction: only prospects with a LIVE ladder,
+ * which at ~15 enquiries a month is a handful of rows.
+ *
+ * Returns whether anything was stopped, so the caller can log the real reason
+ * rather than filing a prospect's reply under "no matching lead".
+ */
+async function stopProspectLadderByPhone(
+  admin: SupabaseClient,
+  phoneKey: string
+): Promise<boolean> {
+  const { data, error } = await admin
+    .from("prospect_booking_nudges")
+    .select("id, customers!inner ( phone )")
+    .eq("status", "active")
+    .limit(200);
+
+  if (error || !data) return false;
+
+  type Row = {
+    id: string;
+    customers: { phone: string | null }[] | { phone: string | null } | null;
+  };
+  const hit = (data as unknown as Row[]).find((r) => {
+    const c = Array.isArray(r.customers) ? r.customers[0] : r.customers;
+    return normalisePhone(c?.phone ?? null) === phoneKey;
+  });
+  if (!hit) return false;
+
+  await admin
+    .from("prospect_booking_nudges")
+    .update({
+      status: "stopped",
+      stopped_reason: "replied",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", hit.id)
+    .eq("status", "active");
+
+  return true;
 }

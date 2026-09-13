@@ -226,6 +226,66 @@ export type EnquiryStatusLabel =
   (typeof ENQUIRY_STATUS)[keyof typeof ENQUIRY_STATUS];
 
 /**
+ * The two Status labels the BOOKING CHASE owns (§55).
+ *
+ * ⚠️ A SEPARATE CONST FROM ENQUIRY_STATUS ON PURPOSE. That one is the
+ * subscription state and is what mondayStatusLabelFor() returns; widening its
+ * type would let a chase label leak into a function whose whole job is to be a
+ * pure read of the customer row. These are a different vocabulary written by a
+ * different job, and the types say so.
+ *
+ * ⚠️ NO PUNCTUATION IN EITHER LABEL, DELIBERATELY. These have to be typed by
+ * hand into the board before the code ships, and setEnquiryStatus writes with
+ * create_labels_if_missing: false — so a label that differs by one character
+ * fails EVERY push, loudly, and an en dash typed where an em dash was meant is
+ * invisible in the Monday UI. Plain words cannot be got subtly wrong.
+ */
+export const ENQUIRY_CHASE_STATUS = {
+  chasing: "Chasing to book",
+  chased_no_booking: "Chased no booking",
+} as const;
+
+export type EnquiryChaseLabel =
+  (typeof ENQUIRY_CHASE_STATUS)[keyof typeof ENQUIRY_CHASE_STATUS];
+
+/**
+ * "New Enquiries" — label id 5, where a fresh enquirer sits.
+ *
+ * ⚠️ CLAUDE.md §23.1 SAYS THIS LABEL DOES NOT EXIST. Read live off board
+ * 18420649520 on 2026-09-13 it does: id 5, "New Enquiries", and the column
+ * carries FOURTEEN labels rather than the thirteen that section claims. It has
+ * no `index`, so it is absent from the display order, which is most likely how
+ * it came to be described as deleted. Do not restore that claim.
+ */
+export const ENQUIRY_NEW_LABEL = "New Enquiries";
+
+/**
+ * ⚠️ MAY THE CHASE WRITE OVER WHAT IS IN THE STATUS CELL RIGHT NOW?
+ *
+ * This column has TWO owners already and the chase is the third: code owns six
+ * subscription labels, sales owns seven set by hand (§23.1). So this is the one
+ * Monday write in the codebase that reads the cell before writing it — a
+ * deliberate departure from §23.4, which says we never do that because it costs
+ * round trips and makes our write conditional on somebody else's edit. Here
+ * that conditionality is exactly the point: a human judgement outranks an
+ * automated chase, every time.
+ *
+ * Allowed: an empty cell, "New Enquiries", or a chase label we wrote ourselves.
+ * Everything else — "Web meeting booked", "In the future", "Abandoned", any
+ * subscription label — means somebody or something else has said something
+ * about this person, and the chase stays quiet. It still SENDS; it just does
+ * not touch the cell.
+ *
+ * Pure, so the allow-list is testable without a board.
+ */
+export function mayWriteChaseLabel(current: string | null | undefined): boolean {
+  const value = (current ?? "").trim();
+  if (!value) return true;
+  if (value === ENQUIRY_NEW_LABEL) return true;
+  return (Object.values(ENQUIRY_CHASE_STATUS) as string[]).includes(value);
+}
+
+/**
  * The three values the "What kind of leads" cell may hold.
  *
  * ONE DEFINITION, FOUR WRITERS — the enquiry form, the enquiry route, the
@@ -363,7 +423,7 @@ export interface MondayStatusWriteResult {
  */
 export async function setEnquiryStatus(params: {
   itemId: string;
-  label: EnquiryStatusLabel;
+  label: EnquiryStatusLabel | EnquiryChaseLabel;
   boardId?: string | null;
   /** Only pass when the item's cell is empty — first write wins. */
   startDate?: string | null;
@@ -430,6 +490,49 @@ export async function setEnquiryStatus(params: {
         values: JSON.stringify(values),
       }
     );
+    return { written: true };
+  } catch (err) {
+    return {
+      written: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Post an update (a comment) on one enquiries-board item.
+ *
+ * The "what was actually said" record for the booking chase (§55): the column
+ * tells you the state, this tells you which message went out, on which channel,
+ * and whether it landed. Monday shows an update badge on the item, which is the
+ * at-a-glance signal that something happened.
+ *
+ * NEVER THROWS — same contract as setEnquiryStatus above, and for the same
+ * reason: every caller is a side effect running beside work that must not be
+ * repeated. An exception escaping here would, in the chase's case, abort a run
+ * AFTER the message had already gone out.
+ *
+ * ⚠️ `body` is sent as TEXT, not HTML. Monday renders updates as rich text and
+ * will interpret markup, so anything interpolated in here is escaped by the
+ * caller or, better, is not user-supplied at all. The chase passes its own
+ * copy plus a provider id.
+ */
+export async function createEnquiryUpdate(
+  itemId: string,
+  body: string
+): Promise<MondayStatusWriteResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { written: false, skipped: "not_configured" };
+
+  const query = `mutation ($itemId: ID!, $body: String!) {
+    create_update(item_id: $itemId, body: $body) { id }
+  }`;
+
+  try {
+    await mondayGraphql<{ create_update?: { id: string } }>(token, query, {
+      itemId,
+      body,
+    });
     return { written: true };
   } catch (err) {
     return {

@@ -2200,7 +2200,7 @@ reads these tables, so a lagging migration cannot affect lead allocation.
 ## 23. Monday subscription-status sync *(0086)*
 
 Board **18420649520** ("Stayful Lead database enquiries") is the sales board for
-operator prospects. Its Status column **`color_mm5eda07`** carries ten labels;
+operator prospects. Its Status column **`color_mm5eda07`** carries fourteen labels;
 five of them describe a subscription, and until now every one was set by hand, so
 the board was only as current as the last time somebody remembered. The Stripe
 events that already move a customer's status in Postgres now move the label too.
@@ -2235,20 +2235,30 @@ code that writes it ships**, or every push for that state fails.
 `Management Customer` (capital C) but `Guaranteed rent customer` (lower r, lower
 c). `ENQUIRY_STATUS` in `monday.ts` is the only place these strings should live.
 
-⚠️ **Never derive a label value by position.** The column carries **thirteen**
-labels and their ids do not match their display order: label **id 5 is deleted**
-(so id 5 does not exist, while display position 5 does), and `Cancelling` is
-**id 19** at position 13. `labels_positions_v2` is the id→position map, and
-`color_mapping` remaps two colours (label 9 → colour 15, label 10 → colour 14) —
-which matters only if the column settings are ever rewritten, because the colour
-enum is numeric and the rest of this column pairs colour-int to label-id.
+⚠️ **Never derive a label value by position.** The column carries **fourteen**
+labels and their ids do not match their display order: `Cancelling` is **id 19**
+at position 13. `labels_positions_v2` is the id→position map, and `color_mapping`
+remaps two colours (label 9 → colour 15, label 10 → colour 14) — which matters
+only if the column settings are ever rewritten, because the colour enum is
+numeric and the rest of this column pairs colour-int to label-id.
 
-⚠️ **This section previously said the column had ten labels and that "index 5 does
-not exist".** Both were out of date: sales added `Abandoned` and `Cancelled due to
-contact` on 17–21 Aug 2026, and this feature added `Cancelling`. There are also
-now **two columns titled "Customer start date"** — `date_mm5ft19y`, the one the app
-writes, and `date_mm6fhgrn`, added 17 Aug and empty on every item — plus an unused
-`Customer cancelled date` (`date_mm6f8wy`). Do not write to the latter two.
+⚠️ **THIS PARAGRAPH SAID "THIRTEEN" AND THAT "label id 5 is deleted, so id 5
+does not exist". BOTH WERE WRONG**, and were corrected by reading the live
+column on 2026-09-13 while building §55. Id 5 exists and is **`New Enquiries`**
+— the label a fresh enquirer sits on. What is true of it is narrower: it carries
+no `index`, so it is absent from the display order, which is almost certainly
+how it came to be described as deleted. The count is now fourteen because §55
+adds `Chasing to book` and `Chased no booking`.
+
+This is the third time this section's own label census has gone stale (ten →
+thirteen → fourteen), which is worth more than the individual corrections:
+**the board is edited by people, so count the labels rather than trusting this
+paragraph.** `get_board_info` on 18420649520 answers it in one call.
+
+There are also **two columns titled "Customer start date"** — `date_mm5ft19y`,
+the one the app writes, and `date_mm6fhgrn`, added 17 Aug and empty on every
+item — plus an unused `Customer cancelled date` (`date_mm6f8wy`) and a
+`Cancel Follow up` (`date_mm6wnr65`). Do not write to any of those three.
 
 ### 23.2 — The label rule
 
@@ -13420,3 +13430,288 @@ today's meaning, and the two replaced functions return identical lists with
 the switch off. Code arriving first would fail every candidate query on a
 missing function — which is every assignment on the platform — so the order is
 not optional here.
+
+---
+
+## 55. Chasing an enquirer who never books *(0149)*
+
+`/enquiry` redirects every prospect straight to the Calendly booking link
+(`src/app/enquiry/page.tsx:150`), and **nothing followed up the ones who did not
+book**. They became a `waitlisted` row and were never contacted again unless Zac
+happened to notice them.
+
+Measured on production before it was built, 2026-09-13:
+
+| | |
+|---|---|
+| `waitlisted` prospects, i.e. enquirers | **29** |
+| Enquired in the last 30 days | **15** — about one every two days |
+| Carrying a usable phone number | **28 of 29** |
+| On the Monday enquiries board | 25 of 29 |
+| "Stayful Lead Database" Calendly bookings in the sampled window | 35 |
+
+Bookings happen, so this is not a broken funnel — it is an unworked gap at the
+end of one. A prospect who has not booked now gets a WhatsApp **and** an email
+about two minutes after enquiring, another at 24 hours and a third at 48, sent
+automatically, stopping the instant Calendly says they booked.
+
+`/api/cron/prospect-nudges` (every minute) · `src/lib/prospect/*` ·
+`src/lib/calendly.ts` · `/api/prospect/opt-out`.
+
+### 55.1 — Two tables, and the one index that matters
+
+`prospect_booking_nudges` is the ladder, one row per prospect.
+`prospect_nudge_sends` is the ledger, one row per (ladder, step, channel).
+
+⚠️ **`prospect_nudge_sends` is UNIQUE on `(nudge_id, step, channel)` and the row
+is CLAIMED BEFORE THE PROVIDER IS CALLED.** The cron runs every minute, so one
+step being considered twice is the ordinary case rather than a rare one.
+Checking "have we already sent?" and then sending leaves a window this job will
+certainly find; claiming by write does not — a second attempt collides on 23505
+and sends nothing. The `credit_invoice()` discipline against Stripe redelivery
+(§19.5) and the announcement send's against a double click (§21.2).
+
+Both key columns are NOT NULL, because a unique index treats NULLs as distinct
+and a nullable half would silently disable the whole guard (0125's trap).
+
+⚠️ **A partial unique index gives one ACTIVE ladder per prospect.** Two ladders
+on one person is two of every message, from a real person's number, to a member
+of the public. Partial rather than plain so a finished ladder does not bar a
+later one — somebody who was chased, stopped, and enquires again months later is
+a new prospect.
+
+### 55.2 — "New enquiries only" is structural, not a setting
+
+There is **no backfill and no cutoff row**. A prospect with no ladder can never
+be chased, and `POST /api/enquiry` is the only thing in the codebase that
+creates one — so the 29 who enquired before this shipped are never contacted,
+and that is a property of the schema rather than a rule somebody has to
+remember.
+
+§32.4 made this argument for a per-row flag over a global timestamp: a cutoff is
+one bad read away from enrolling the entire back catalogue, and it does not
+survive a restore into a different timeline. §41.4's `landlord_nudge_from` is
+the other shape, and it is the one that accidentally excluded its own first
+cohort.
+
+### 55.3 — ⚠️ Calendly fails CLOSED
+
+`hasBookedWebMeeting(email, since)` asks Calendly directly, by invitee email,
+**immediately before every send**. An unreadable Calendly — no token, a 5xx, a
+timeout — returns `ok: false`, and every caller treats that as **do not send**.
+
+Messaging somebody who has already booked is the worst outcome available here:
+it reads as the product being broken, to exactly the person who was about to
+buy. Deferring costs a minute and the next tick retries. A long outage therefore
+degrades the two-minute step into a later one, which is visible in the run
+report. The same direction §40.9's status poller takes when it refuses to mark
+anything failed on OUR error.
+
+Two details of the query are load-bearing: `status=active`, because a cancelled
+meeting is not a booking and somebody who cancels is genuinely back in play; and
+`min_start_time = enquired_at`, so a meeting they sat months ago on a different
+enquiry does not read as "already booked" today. And `cache: "no-store"`, for
+§27.4's reason — the App Router patches `fetch`, and a cached booking check is a
+booking check that cannot see today's booking.
+
+### 55.4 — It is not `sendOneMessage`, and it writes to no lead-shaped table
+
+`sendOneMessage` is assignment-shaped: it takes a `SendableAssignment`, calls
+`assignmentSendable`, and keys its idempotency and threads on a lead. **A
+prospect has no lead and no assignment.** What is reused is every primitive
+underneath it — the TimelinesAI client, `decryptSecret` + `timelinesTokenAad`,
+§36.2's strict phone rule — so there is still one implementation of each.
+
+⚠️ **NOTHING HERE WRITES TO `lead_messages`, `lead_message_threads` OR
+`lead_notes`.** §40.6: about twenty-five predicates read `lead_notes`, and a row
+there is a claim that an operator did work — it bars the lead from the expired
+pool, exempts it from escalation, blocks discard and blocks the filter refund. A
+`lead_messages` row is a delivery claim tied to a lead that does not exist here.
+`prospect_nudge_sends` is the record, and a test reads the real files to keep it
+that way.
+
+⚠️ **The phone uses `normaliseUkMobile`, not `toE164`.** §40.9A's lesson, which
+cost a live send: `toE164` is built on the 0070 IDENTITY rule (seven digits, not
+all zeros), whose job is deciding whether two records describe the same person,
+and a number one digit short sails straight through it to a bare `http_400`. A
+genuinely foreign number is a fact rather than an error (§36.2) and goes to the
+provider as-is.
+
+### 55.5 — ⚠️ Quiet hours are bypassed, deliberately
+
+§40.12 holds every landlord message to 09:00–20:00 London. This feature does
+not: the decision taken is that a prospect hears back within two minutes
+whatever the hour, because they are still at the screen they just filled the
+form in on. About **1 in 7 enquiries lands outside that window**.
+
+It is implemented as an explicit override with a comment naming the decision,
+never by omitting the check, so the next reader sees a choice rather than a bug.
+`sendProspectWhatsapp` is the only call site to change if it is ever revisited.
+
+The risk this accepts is stated rather than hidden: TimelinesAI is a QR-linked
+device, not the official WhatsApp Business API (§40.2), and the number at risk
+is Zac's own. `prospect_nudge_daily_cap` (30, and **never 0** — that silently
+stops the feature while the switch still reads on) is what bounds it if volume
+ever grows.
+
+### 55.6 — The Monday status change, and the third writer problem
+
+Two new labels on the **existing** Status column: `Chasing to book` at step 1,
+`Chased no booking` once the ladder finishes unbooked.
+
+⚠️ **THAT COLUMN HAS TWO OWNERS ALREADY AND THE CHASE IS THE THIRD.** §23.1:
+code owns six subscription labels, sales owns seven set by hand. So this is the
+one Monday write in the codebase that **reads the cell before writing it** —
+a deliberate departure from §23.4, which says we never do that because it costs
+round trips and makes our write conditional on somebody else's edit. Here the
+conditionality is exactly the point: `mayWriteChaseLabel()` allows an empty
+cell, `New Enquiries`, or one of our own two labels, and **refuses everything
+else**. A human judgement — "In the future", "Web meeting booked", "Abandoned" —
+outranks an automated chase, every time. It still sends; it just does not touch
+the cell. At ~15 enquiries a month the extra request costs nothing.
+
+⚠️ **The labels carry no punctuation**, and that is not a style choice. They are
+typed by hand into the board before the code ships, `setEnquiryStatus` writes
+with `create_labels_if_missing: false`, and a label differing by one character
+fails **every** push. An en dash typed where an em dash was meant is invisible
+in the Monday UI. Plain words cannot be got subtly wrong.
+
+⚠️ **A confirmed booking deliberately does NOT write `Web meeting booked`.** It
+is a sales-owned label, and setting it from here would fire the board's
+group-move automation *and* trip the `stayful-presentation` workflow, which is
+keyed on exactly that transition. The booking is recorded as an item update
+instead. Changing that is a decision about the sales process, not a tidy-up.
+
+**An update per send** carries the step, the channel and the outcome — the "what
+was actually said" record, with Monday's own update badge as the at-a-glance
+signal. `monday_status_label` is updated when the chase writes, because it is
+literally "the label WE last wrote to that cell"; one cell keeps one cache, and
+no second cache column is needed because `mondayStatusLabelFor()` returns `null`
+for a waitlisted prospect anyway.
+
+A prospect with no board item simply gets no label — 4 of the 29 current rows
+have none, and §23.7 treats that as a skip rather than an error.
+
+### 55.7 — What stops a ladder
+
+Booked (Calendly) · they stop being `waitlisted`, i.e. converted · archived ·
+they opted out of the email · **they replied on WhatsApp** · three steps done.
+
+⚠️ **The reply hook is INBOUND ONLY, and that is the self-stop trap rather than
+caution.** Inbound messages already reach `/api/webhook/timelines/[token]` and
+were discarded as `no_matching_lead`; `ingestTimelinesEvent` now checks for a
+matching prospect first and stops the ladder. But our own chase messages go out
+through that same workspace and come back as `message:sent:new`, i.e.
+**outbound** — so stopping on either direction would have step 1 cancel the
+ladder it had just started, every time, and the symptom would be a feature that
+appears to send one message and give up.
+
+The accepted gap: a reply Zac types from his own phone does not stop the chase,
+because at that point it is indistinguishable from the message the cron just
+sent.
+
+### 55.8 — The first per-minute cron in the repo
+
+`* * * * *`, because step 1 is due two minutes after the enquiry. The finest
+schedule before this was `*/5` on `poll-whatsapp-status`; Vercel Pro allows
+minute-level crons (§2, re-verified 2026-08-29). It adds ~43k invocations a
+month. If Vercel ever refuses the schedule, `*/2` is the fallback and the
+two-minute step becomes a ≤4-minute one.
+
+The job reads its settings **by name**, so `resolveSettingsGate`'s
+`not_configured` is the ordinary shape of a database where 0149 has not been
+applied and the documented default (off) is right. `read_failed` is a **500** —
+§18.3's rule, and the reason a 200 carrying `skipped` is something nobody looks
+at again.
+
+⚠️ The ladder retries the **earliest unfinished step**, never the one the clock
+has reached. A ladder whose step 1 failed must retry step 1, or the first thing
+a prospect ever hears from us is "didn't manage to get you in the diary
+yesterday".
+
+### 55.9 — Deferred
+
+- **Nothing tells Zac a chase finished unbooked** beyond the board label. A line
+  in the daily digest (§42.9) is the obvious home.
+- **The daily cap and the connection's own `daily_send_cap` do not see each
+  other.** Harmless today — zero customers have a live connection — and the
+  thing to join up if landlord messaging ever goes live on the same number.
+- **A second enquiry from the same person does not restart a finished ladder.**
+  The index allows it; nothing creates it, because the enquiry route only
+  inserts while they are still `waitlisted` and has no view of whether the
+  previous ladder completed. Worth a decision rather than a reflex.
+- **No admin list of open ladders.** The switch and the cap are on
+  `/admin/messaging`; the run report is JSON from the cron. A panel showing who
+  is mid-chase, what is due and the Calendly verdict is the next thing worth
+  building if this gets used.
+
+### Verification
+
+**All 149 migrations applied to a scratch Postgres 16 from empty, zero
+failures**, 0149 re-applied twice for idempotency.
+`supabase/tests/0149_prospect_booking_nudges_test.sql` — **25 assertions**,
+among them: the sender seed inserting **zero rows** on an empty `customers`
+(§46.6's rule, asserted before anything is inserted because that is the only
+moment the case exists), one active ladder per prospect, a finished ladder not
+barring a later one, every CHECK on its boundaries, the claim guard scoped to
+one ladder rather than global, and both cascades.
+
+⚠️ **Three SQL mutations run, all three caught**: dropping the claim unique
+index, making the ladder index plain instead of partial, and widening the step
+CHECK. ⚠️ The second **could not be applied on the first attempt** — leftover
+rows violated the plain index so the drop-and-create rolled back together, and
+the run "passed" against the original index, proving nothing. Clearing the
+tables first is what made it a real test.
+
+**1,967 vitest cases green** (54 new), `npx tsc --noEmit` clean, lint clean.
+
+⚠️ **Fifteen TypeScript mutations run. Fourteen were caught; one was NOT** — the guard
+asserting the claim precedes the provider call matched
+`.from("prospect_nudge_sends")`, which also appears twice more (the daily-cap
+count above the loop and the outcome update below it), so `indexOf` found the
+cap count and deleting the claim entirely left the test green. It now anchors on
+`.insert({ nudge_id:`. **That is the third assertion in this repo written weak
+enough to survive its own mutation** (§50.9 records the other two), and it was
+found by the mutation run and by nothing else.
+
+All fifteen now caught: Calendly failing open, Calendly losing `no-store`, Calendly
+counting cancelled meetings, `mayWriteChaseLabel` allowing anything, the phone
+using the loose identity rule, the prospect path writing to `lead_messages`,
+`copy.ts` gaining an import, the ladder skipping ahead instead of retrying,
+the claim moved after the send (both shapes), the Calendly check removed,
+writing the sales-owned booked label, writing the label without reading the
+cell, a failed settings read reading as disabled, and the enquiry route no
+longer creating the ladder.
+
+**Not exercised against anything live.** No message has been sent, no Calendly
+lookup made against a real prospect, and no label written to the board. ⚠️ A
+Vercel preview cannot do it — Deployment Protection answers 302 to
+`vercel.com/sso-api` (§45, §46, §50, §51) — and a preview runs against
+**production** Supabase (§1.1), so a test enquiry writes a real row and sends
+real messages.
+
+### Deployment order — migration BEFORE code, and three manual steps
+
+0149 is additive and inert: two new tables nothing reads until the code ships,
+three settings rows, no function replaced, no constraint widened, and
+`prospect_nudge_enabled` ships **`false`**. Nothing here touches a balance,
+counter, pacing or capacity column.
+
+Then, in order:
+
+1. ⚠️ **Add the two labels to `color_mm5eda07` by hand** — `Chasing to book` and
+   `Chased no booking`, spelled exactly. Until they exist, every label push
+   fails loudly (§23.1).
+2. ⚠️ **Reconnect TimelinesAI.** The only row in `customer_whatsapp_connections`
+   is Zac's own Stayful row, `+447957516879`, and it has been **`revoked`** since
+   2026-08-28. No WhatsApp can send until a fresh token is pasted into
+   Settings → Messaging. The workspace itself is active for that number
+   (verified live), so this is a token, not a rebuild.
+3. **Set `CALENDLY_API_TOKEN` and `CALENDLY_USER_URI`**
+   (`https://api.calendly.com/users/4524c498-f081-4a94-b99d-e0122bb33215`) in
+   Vercel **and redeploy** — env vars are baked in at build time, the trap §40's
+   own verification section records.
+
+Only then flip the switch on `/admin/messaging`. The email half works without
+steps 2 and 3; with the Calendly vars missing the booking check fails closed and
+nothing sends at all, which is the safe direction.

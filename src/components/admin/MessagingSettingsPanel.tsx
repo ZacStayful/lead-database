@@ -366,6 +366,62 @@ export function MessagingSettingsPanel({
         </button>
       </div>
 
+      <SettingSwitch
+        label="Chase enquirers to book"
+        on={on("prospect_nudge_enabled")}
+        busy={busy}
+        onChange={(next) => save({ prospect_nudge_enabled: next })}
+        description="Chases somebody who filled in the enquiry form and never booked a web meeting (§55). A WhatsApp and an email about two minutes after they enquire, another at 24 hours, a third at 48, then it stops — and it stops the moment Calendly says they booked. Only people who enquire from now on: the 29 already waiting are never contacted."
+        offWarning="Stop chasing enquirers? Anyone who enquires and does not book is simply left, as they were before this existed. Ladders already running are not deleted — they resume where they left off if you switch it back on."
+      />
+
+      <div className="rounded-md border-[0.5px] border-border p-4">
+        <h3 className="text-sm font-medium">Enquirer chase limit</h3>
+        <div className="mt-3">
+          <label className="text-xs font-medium" htmlFor="prospect_nudge_daily_cap">
+            Chase messages a day, across all prospects
+          </label>
+          <input
+            id="prospect_nudge_daily_cap"
+            type="number"
+            min={1}
+            max={200}
+            value={numbers["prospect_nudge_daily_cap"] ?? ""}
+            onChange={(e) =>
+              setNumbers((prev) => ({
+                ...prev,
+                prospect_nudge_daily_cap: e.target.value,
+              }))
+            }
+            className="mt-1 h-9 w-28 rounded-md border-[0.5px] border-border bg-background px-2 text-sm"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            A ceiling on the whole feature, not per prospect — the thing it
+            protects is the reputation of the WhatsApp number these send from,
+            which is Zac&rsquo;s own. At roughly 15 enquiries a month it is never
+            reached; it is here so a bad loop cannot empty it overnight. It
+            cannot be set to 0, because a cap of zero silently stops the feature
+            while the switch above still reads on. Turning it off is the
+            switch&rsquo;s job.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            save({
+              prospect_nudge_daily_cap: Number(
+                numbers["prospect_nudge_daily_cap"]
+              ),
+            })
+          }
+          className="mt-4 rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save chase limit"}
+        </button>
+      </div>
+
       {error && <p className="text-sm text-red-700">{error}</p>}
       {saved && <p className="text-sm text-muted-foreground">{saved}</p>}
     </div>
