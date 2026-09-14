@@ -1,24 +1,36 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { viewerScopedLead } from "@/lib/customerLeads";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LeadFeed } from "@/components/dashboard/LeadFeed";
-import { ConversionFunnel } from "@/components/dashboard/ConversionFunnel";
 import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
 import { TodayPanel } from "@/components/dashboard/TodayPanel";
+import { ExportButton } from "@/components/dashboard/ExportButton";
+import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
+import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
+import { StatCards, type StatCard } from "@/components/home/StatCards";
+import { PipelineFunnelCard } from "@/components/home/PipelineFunnelCard";
+import { RecentConversations } from "@/components/home/RecentConversations";
+import { FollowUpTasks, type FollowUpTask } from "@/components/home/FollowUpTasks";
+import { IncomeAcrossWonCard } from "@/components/home/IncomeAcrossWonCard";
+import { GoalCardWidget } from "@/components/home/GoalCardWidget";
+import { LeadSourcesCard } from "@/components/home/LeadSourcesCard";
 import { computeWorkSummary } from "@/lib/workSummary";
 import { buildTodayLines, workingDayStreak } from "@/lib/todaySummary";
 import { fetchDueAttempts } from "@/lib/contact/dueAttempts";
-import { summariseDay } from "@/lib/contact/followUpSummary";
-import { ENGAGEMENT_EVENT_TYPES } from "@/lib/types";
-import { ExportButton } from "@/components/dashboard/ExportButton";
-import { AddLeadsButton } from "@/components/dashboard/AddLeadsButton";
-import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
+import { describeChannels, summariseDay } from "@/lib/contact/followUpSummary";
+import { fetchInboxRows } from "@/lib/messaging/inbox";
 import { fetchBannerAnnouncement, paragraphs } from "@/lib/announcements";
-import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
+import { buildFunnel } from "@/lib/home/pipelineFunnel";
+import { firstNameOf, greeting, greetingSubtitle } from "@/lib/home/greeting";
+import { buildLeadSources } from "@/lib/home/leadSources";
+import { buildIncomeAcrossWon } from "@/lib/home/incomeAcrossWon";
+import { buildGoalCard } from "@/lib/home/goalCard";
+import { ENGAGEMENT_EVENT_TYPES } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import {
@@ -30,11 +42,19 @@ import {
   poolDebitExplanation,
   releaseSchedule,
   releaseSettingsFrom,
+  type Pacing,
 } from "@/lib/pacing";
-import type { AssignmentWithLead, Customer } from "@/lib/types";
+import type { AssignmentWithLead, Customer, LeadType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The dashboard home (§56.7). Every figure comes from data the page already
+ * loaded before the redesign; the two additions are the inbox rows (for
+ * Recent conversations and the reply preview on Follow-up tasks) and the
+ * per-product won count the funnel needs. Nothing here is windowed except
+ * Lead sources, which says so on its card.
+ */
 export default async function DashboardPage() {
   const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
@@ -73,86 +93,40 @@ export default async function DashboardPage() {
     ...a,
     lead: viewerScopedLead(a.lead, customer.id),
   })) as AssignmentWithLead[];
-  const unreadLeads = assignments.filter((a) => !a.viewed_at).length;
 
-  // Shown on the audience rule alone, so a customer who turned announcement
-  // emails off still reads the notice here. See lib/announcements.
   const banner = await fetchBannerAnnouncement(admin, customer);
 
   const isActive = customer.subscription_status === "active";
   const hasGuaranteedRent = customer.gr_subscription_status === "active";
   const renewalDate = nextRenewalDate(customer.billing_cycle_anchor);
   const pacing = computePacing(customer);
-  // Per product, and only where a debit actually exists — poolDebitExplanation
-  // returns null at zero, which is every customer who has never claimed.
+  const grPacing = computeGrPacing(customer);
   const managementDebitNote = isActive
     ? poolDebitExplanation(pacing.effectiveAllocation, pacing.poolDebit)
     : null;
-  const grPacing = computeGrPacing(customer);
   const grDebitNote = hasGuaranteedRent
     ? poolDebitExplanation(grPacing.effectiveAllocation, grPacing.poolDebit)
     : null;
-  const exhausted = customer.lead_balance === 0;
-  const carriedForward = customer.lead_balance - customer.monthly_allocation;
   const filterActive =
-    customer.filter_status === "active" ||
-    customer.filter_status === "pending_lift";
+    customer.filter_status === "active" || customer.filter_status === "pending_lift";
 
-  // Split what the customer has received by product so management and
-  // guaranteed rent are kept clearly separate. Every delivered lead counts
-  // (including rejected ones — rejection no longer refunds or replaces).
-  const grReceived = assignments.filter(
-    (a) => a.lead?.lead_type === "guaranteed_rent"
-  ).length;
+  const grReceived = assignments.filter((a) => a.lead?.lead_type === "guaranteed_rent").length;
   const managementReceived = assignments.length - grReceived;
+  const hasManagement = isActive || managementReceived > 0;
+  const hasGr = hasGuaranteedRent || grReceived > 0;
 
-  // Conversion funnel: of the leads delivered, how many were worked and how many
-  // were signed. 'won' is the terminal conversion signal set from the lead
-  // detail page; 'contacted' counts any lead advanced past 'new'.
-  const contactedCount = assignments.filter((a) =>
-    ["contacted", "in_discussion", "won"].includes(a.status)
-  ).length;
-  const signedCount = assignments.filter((a) => a.status === "won").length;
-
-  // Median speed-to-lead (delivery → first contact), in minutes. Null until at
-  // least one lead has a first_contacted_at stamp.
-  const responseMins = assignments
-    .filter((a) => a.first_contacted_at)
-    .map(
-      (a) =>
-        (new Date(a.first_contacted_at as string).getTime() -
-          new Date(a.assigned_at).getTime()) /
-        60000
-    )
-    .filter((m) => m >= 0)
-    .sort((x, y) => x - y);
-  const medianResponseMinutes =
-    responseMins.length === 0
-      ? null
-      : responseMins.length % 2 === 1
-        ? responseMins[(responseMins.length - 1) / 2]
-        : (responseMins[responseMins.length / 2 - 1] +
-            responseMins[responseMins.length / 2]) /
-          2;
-
-  // Unfinished work: overdue callbacks and leads that stalled after contact.
-  // Pure arithmetic on the assignments already loaded above — no extra query.
   const workSummary = computeWorkSummary(assignments);
-
-  // §54 — the Today panel. Five small reads, in parallel, all scoped to this
-  // customer. The due-attempt scan is the SAME query the 08:15 email runs
-  // (fetchDueAttempts), so the panel and the inbox never disagree.
   const now = new Date();
   const today = londonDate(now);
   const sixtyDaysAgo = new Date(now.getTime() - 60 * 86_400_000).toISOString();
-  const [releaseRows, dueScan, threadRows, poolMgmt, poolGr, eventRows] = await Promise.all([
+
+  // Six reads in parallel, all scoped to this customer. The due-attempt scan
+  // is the SAME query the 08:15 email runs (fetchDueAttempts), so the card
+  // and the inbox never disagree.
+  const [releaseRows, dueScan, inbox, poolMgmt, poolGr, eventRows] = await Promise.all([
     admin.from("system_settings").select("key, value").in("key", [...RELEASE_SETTING_KEYS]),
     fetchDueAttempts(admin, { customerId: customer.id, now }),
-    admin
-      .from("lead_message_threads")
-      .select("unread_inbound_count")
-      .eq("customer_id", customer.id)
-      .gt("unread_inbound_count", 0),
+    fetchInboxRows(admin, customer.id),
     isActive
       ? admin.rpc("get_customer_pool_leads", { p_customer_id: customer.id, p_lead_type: "management" })
       : Promise.resolve({ data: [] as unknown[] }),
@@ -170,15 +144,10 @@ export default async function DashboardPage() {
   const releaseSettings = releaseSettingsFrom(
     (releaseRows.data ?? []) as { key: string; value: string }[]
   );
-  const marketplaceToday = assignments.filter(
-    (a) => !a.lead?.owner_customer_id && londonDate(new Date(a.assigned_at)) === today
-  );
-  const receivedTodayFor = (lt: "management" | "guaranteed_rent") =>
-    assignments.filter(
-      (a) =>
-        (a.lead?.lead_type ?? "management") === lt &&
-        londonDate(new Date(a.assigned_at)) === today
-    ).length;
+  const arrivedToday = (a: AssignmentWithLead) => londonDate(new Date(a.assigned_at)) === today;
+  const marketplaceToday = assignments.filter((a) => !a.lead?.owner_customer_id && arrivedToday(a));
+  const receivedTodayFor = (lt: LeadType) =>
+    assignments.filter((a) => (a.lead?.lead_type ?? "management") === lt && arrivedToday(a)).length;
   const schedules = [
     ...(isActive
       ? [{
@@ -193,80 +162,118 @@ export default async function DashboardPage() {
         }]
       : []),
   ];
-  const unreadReplies = ((threadRows.data ?? []) as { unread_inbound_count: number | null }[]).reduce(
-    (n, t) => n + (t.unread_inbound_count ?? 0),
-    0
-  );
+  const inboxRows = inbox.rows;
+  const unreadReplies = inboxRows.reduce((n, r) => n + r.unread, 0);
   const activeDays = ((eventRows.data ?? []) as unknown as { created_at: string }[]).map((e) =>
     londonDate(new Date(e.created_at))
   );
+  const dueAttempts = dueScan.byCustomer.get(customer.id) ?? [];
+  const dueSummary = summariseDay(dueAttempts);
   const todayLines = buildTodayLines({
     today,
     newLeadsToday: marketplaceToday.length,
     schedules,
-    dueFollowUps: summariseDay(dueScan.byCustomer.get(customer.id) ?? []),
+    dueFollowUps: dueSummary,
     dueTodayCallbacks: workSummary.dueTodayCallbacks,
     overdueCallbacks: workSummary.overdueCallbacks,
     unreadReplies,
     poolLeads: ((poolMgmt.data ?? []) as unknown[]).length + ((poolGr.data ?? []) as unknown[]).length,
     streakDays: workingDayStreak(activeDays, today),
   });
+  // The greeting takes the two "today" lines; the panel keeps the rest.
+  const otherLines = todayLines.filter((l) => l.key !== "new_leads" && l.key !== "next_lead");
 
-  // Which products this customer actually holds (active sub or leads received).
-  const hasManagement = isActive || managementReceived > 0;
-  const hasGr = hasGuaranteedRent || grReceived > 0;
-  const showProductSplit = hasGr;
-  const anySubActive = isActive || hasGuaranteedRent;
+  // ── Stat cards ────────────────────────────────────────────────────────
+  const uncontacted = assignments.filter((a) => a.status === "new").length;
+  const cards: StatCard[] = [];
+  if (isActive || (!hasGr && !isActive)) {
+    cards.push(balanceCard("management", customer, hasGr ? "Management balance" : "Lead balance", renewalDate));
+  }
+  if (hasGuaranteedRent) {
+    cards.push(
+      balanceCard("guaranteed_rent", customer, "Guaranteed Rent balance", nextRenewalDate(customer.gr_billing_cycle_anchor))
+    );
+  }
+  if (hasManagement) {
+    cards.push(thisMonthCard("management", customer, pacing, hasGr ? "Management this month" : "Leads this month", filterActive, renewalDate));
+  }
+  if (hasGuaranteedRent) {
+    cards.push(thisMonthCard("guaranteed_rent", customer, grPacing, "Guaranteed Rent this month", false, null));
+  }
+  cards.push({
+    key: "attention",
+    label: "Needs attention",
+    value: String(uncontacted),
+    unit: "uncontacted",
+    caption: [
+      `${marketplaceToday.length} arrived today`,
+      workSummary.overdueCallbacks > 0
+        ? `${workSummary.overdueCallbacks} callback${workSummary.overdueCallbacks === 1 ? "" : "s"} past ${workSummary.overdueCallbacks === 1 ? "its" : "their"} date`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    trailing: "attention",
+    href: "/dashboard/leads?activity=new",
+  });
+  cards.push({
+    key: "followups",
+    label: "Follow-ups due",
+    value: String(dueSummary.total),
+    unit: "today",
+    caption:
+      dueSummary.total > 0
+        ? `About ${dueSummary.minutes} minute${dueSummary.minutes === 1 ? "" : "s"} · ${describeChannels(dueSummary)}`
+        : "Nothing due today",
+    trailing: "clock",
+    href: "#follow-up-tasks",
+  });
 
-  const stats: {
-    label: string;
-    value: string;
-    accent?: boolean;
-    valueClass?: string;
-    secondary?: string;
-  }[] = [
-    {
-      label: "Subscription",
-      value: anySubActive ? "Active" : titleCase(customer.subscription_status),
-      accent: anySubActive,
-    },
-    // Single-product customers keep the simple remaining card; dual-product
-    // customers see the per-product split card below instead.
-    ...(showProductSplit
-      ? []
-      : [
-          {
-            label: "Leads remaining",
-            value: String(customer.lead_balance),
-            valueClass: exhausted ? "text-amber-600" : undefined,
-            secondary:
-              carriedForward > 0
-                ? `includes ${carriedForward} carried forward`
-                : undefined,
-          },
-        ]),
-    {
-      label: "Unread new leads",
-      value: String(unreadLeads),
-    },
-    {
-      label: "Next renewal",
-      value: renewalDate,
-    },
-  ];
+  // ── Widgets ───────────────────────────────────────────────────────────
+  const funnels = [
+    ...(hasManagement ? [buildFunnel(assignments, "management")] : []),
+    ...(hasGr ? [buildFunnel(assignments, "guaranteed_rent")] : []),
+  ].filter((f) => f.received > 0);
+
+  const replyByAssignment = new Map(
+    inboxRows
+      .filter((r) => r.preview.kind === "message" && r.preview.direction === "inbound")
+      .map((r) => [r.assignmentId, r.preview.text] as const)
+  );
+  const tasks: FollowUpTask[] = dueAttempts
+    .slice()
+    .sort((x, y) => y.overdueDays - x.overdueDays)
+    .map((a) => ({ ...a, lastReply: replyByAssignment.get(a.assignmentId) ?? null }));
+
+  const income = buildIncomeAcrossWon(assignments);
+  const goalWon = assignments.filter(
+    (a) =>
+      a.status === "won" &&
+      (a.lead?.lead_type ?? "management") === "management" &&
+      a.lead?.owner_customer_id !== customer.id
+  ).length;
+  const goal = isActive
+    ? buildGoalCard(customer.management_customer_goal, customer.management_customer_goal_due ?? null, goalWon, today)
+    : null;
+  const sources = buildLeadSources(assignments, now);
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
+    <div className="space-y-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">
-            Welcome back, {customer.contact_name.split(" ")[0]}
+          <h1 className="font-display text-2xl font-semibold tracking-[-0.01em] text-ink">
+            {greeting(now, firstNameOf(customer.contact_name))}
           </h1>
-          <p className="text-sm text-muted-foreground">{customer.business_name}</p>
+          <p className="text-ink-2">{greetingSubtitle(today, todayLines)}</p>
         </div>
         <div className="flex items-center gap-2">
-          <AddLeadsButton />
           <ExportButton />
+          <Button asChild className="h-[38px] rounded-lg bg-brand font-semibold text-white hover:bg-brand-dark">
+            <Link href="/dashboard/leads/add">
+              <Plus className="mr-1.5 h-4 w-4" />
+              Add your own leads
+            </Link>
+          </Button>
         </div>
       </div>
 
@@ -280,104 +287,32 @@ export default async function DashboardPage() {
         />
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((s) => (
-          <Card key={s.label}>
-            <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground">{s.label}</p>
-              <div className="mt-1 flex items-center gap-2">
-                {s.accent && (
-                  <span className="h-2 w-2 rounded-full bg-brand" />
-                )}
-                <span
-                  className={"text-2xl font-semibold " + (s.valueClass ?? "")}
-                >
-                  {s.value}
-                </span>
-              </div>
-              {s.secondary && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {s.secondary}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        ))}
+      <StatCards cards={cards} />
+
+      {(managementDebitNote || grDebitNote) && (
+        <div className="space-y-1 text-sm text-ink-2">
+          {managementDebitNote && <p>{managementDebitNote}</p>}
+          {grDebitNote && <p>Guaranteed rent: {grDebitNote}</p>}
+        </div>
+      )}
+
+      <div className="grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))" }}>
+        <PipelineFunnelCard funnels={funnels} />
+        <RecentConversations rows={inboxRows} now={now} />
       </div>
 
-      {showProductSplit && (
-        <LeadsByProduct
-          showManagement={hasManagement}
-          showGr={hasGr}
-          managementReceived={managementReceived}
-          managementRemaining={customer.lead_balance}
-          grReceived={grReceived}
-          grRemaining={customer.gr_lead_balance}
-        />
-      )}
-
-      {/* Management pacing/credit message — only for customers who hold the
-          management product (GR uses the per-product card above). A customer
-          with an active or pending-lift filter sees the filter message instead
-          of the standard pacing sentence. */}
-      {hasManagement &&
-        (filterActive ? (
-          <p className="text-sm font-medium text-brand">
-            {filterMessage(customer)}
-          </p>
-        ) : exhausted ? (
-          <p className="text-sm font-medium text-amber-600">
-            You have no remaining {showProductSplit ? "management " : ""}lead
-            credit. Your balance will update when your next payment is processed
-            on {renewalDate}.
-          </p>
-        ) : (
-          <p
-            className={
-              "text-sm font-medium " +
-              (pacing.status === "behind"
-                ? "text-amber-600"
-                : pacing.status === "ahead"
-                  ? "text-muted-foreground"
-                  : "text-brand")
-            }
-          >
-            {pacingMessage(pacing.deficit, pacing.effectiveAllocation)}
-          </p>
-        ))}
-
-      {/* Why this cycle's allocation is smaller than the plan. Shown alongside
-          the credit warning as well as the pacing sentence, because the
-          zero-balance branch above replaces the latter and a customer who
-          claimed their way to zero is exactly who needs the explanation. */}
-      {managementDebitNote && (
-        <p className="text-sm text-muted-foreground">{managementDebitNote}</p>
-      )}
-      {grDebitNote && (
-        <p className="text-sm text-muted-foreground">
-          Guaranteed rent: {grDebitNote}
-        </p>
-      )}
+      <div className="grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+        <FollowUpTasks tasks={tasks} />
+        {income && <IncomeAcrossWonCard data={income} />}
+        {goal && <GoalCardWidget goal={goal} />}
+        <LeadSourcesCard rows={sources} />
+        <TodayPanel lines={otherLines} />
+        <NeedsAttention summary={workSummary} />
+      </div>
 
       {hasGuaranteedRent && <CompanyLetAgreement compact />}
 
-      <ConversionFunnel
-        received={assignments.length}
-        contacted={contactedCount}
-        signed={signedCount}
-        medianResponseMinutes={medianResponseMinutes}
-      />
-
-      {/* Today first (§54): new work outranks loose ends, and the next-lead
-          line is the reason to come back tomorrow. */}
-      <TodayPanel lines={todayLines} />
-
-      {/* Unfinished work next: it names specific leads to pick up, so it
-          outranks any comparative block. Renders nothing when nothing is
-          outstanding. */}
-      <NeedsAttention summary={workSummary} />
-
-      <div>
+      <div className="pt-2">
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>
         <LeadFeed customerId={customer.id} assignments={assignments} />
       </div>
@@ -385,94 +320,54 @@ export default async function DashboardPage() {
   );
 }
 
-function LeadsByProduct({
-  showManagement,
-  showGr,
-  managementReceived,
-  managementRemaining,
-  grReceived,
-  grRemaining,
-}: {
-  showManagement: boolean;
-  showGr: boolean;
-  managementReceived: number;
-  managementRemaining: number;
-  grReceived: number;
-  grRemaining: number;
-}) {
-  const rows = [
-    showManagement && {
-      label: "Management",
-      badge: "bg-[#EAF3DE] text-[#3B6D11]",
-      received: managementReceived,
-      remaining: managementRemaining,
-    },
-    showGr && {
-      label: "Guaranteed Rent",
-      badge: "bg-blue-50 text-blue-700",
-      received: grReceived,
-      remaining: grRemaining,
-    },
-  ].filter(Boolean) as {
-    label: string;
-    badge: string;
-    received: number;
-    remaining: number;
-  }[];
-
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="mb-3 text-sm font-medium">Leads by product</p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-muted-foreground">
-                <th className="pb-2 text-left font-medium">Product</th>
-                <th className="pb-2 text-right font-medium">Leads received</th>
-                <th className="pb-2 text-right font-medium">Leads remaining</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.label} className="border-t border-border">
-                  <td className="py-2.5">
-                    <span
-                      className={
-                        "inline-flex items-center rounded px-2 py-0.5 text-xs font-medium " +
-                        r.badge
-                      }
-                    >
-                      {r.label}
-                    </span>
-                  </td>
-                  <td className="py-2.5 text-right text-base font-semibold">
-                    {r.received}
-                  </td>
-                  <td
-                    className={
-                      "py-2.5 text-right text-base font-semibold " +
-                      (r.remaining === 0 ? "text-amber-600" : "")
-                    }
-                  >
-                    {r.remaining}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Received is the total leads assigned to you. Remaining is the lead
-          credit still owed to you for each product.
-        </p>
-      </CardContent>
-    </Card>
-  );
+function balanceCard(product: LeadType, customer: Customer, label: string, renews: string): StatCard {
+  const balance = product === "management" ? customer.lead_balance : customer.gr_lead_balance;
+  const allocation = product === "management" ? customer.monthly_allocation : customer.gr_monthly_allocation;
+  const carried = balance - allocation;
+  return {
+    key: `balance:${product}`,
+    label,
+    value: String(balance),
+    unit: balance === 1 ? "credit" : "credits",
+    caption: `${carried > 0 ? `Includes ${carried} carried forward · ` : ""}renews ${renews}`,
+    trailing: "credit",
+    valueTone: balance === 0 ? "amber" : undefined,
+  };
 }
 
-function titleCase(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function thisMonthCard(
+  product: LeadType,
+  customer: Customer,
+  pacing: Pacing,
+  label: string,
+  filterActive: boolean,
+  renewalDate: string | null
+): StatCard {
+  const received =
+    product === "management" ? customer.leads_received_this_month : customer.gr_leads_received_this_month;
+  const allocation = pacing.effectiveAllocation;
+  const pill =
+    pacing.status === "behind"
+      ? { pill: "Behind", tone: "amber" as const }
+      : pacing.status === "ahead"
+        ? { pill: "Ahead", tone: "grey" as const }
+        : { pill: "On track", tone: "green" as const };
+  const balance = product === "management" ? customer.lead_balance : customer.gr_lead_balance;
+  const caption =
+    product === "management" && filterActive
+      ? filterMessage(customer)
+      : balance === 0 && renewalDate
+        ? `No lead credit left. Your balance updates when your next payment is processed on ${renewalDate}.`
+        : pacingMessage(pacing.deficit, pacing.effectiveAllocation);
+  return {
+    key: `month:${product}`,
+    label,
+    value: String(received),
+    unit: `of ${allocation}`,
+    progressPct: allocation > 0 ? (received / allocation) * 100 : 0,
+    trailing: pill,
+    caption,
+  };
 }
 
 /** Dashboard sentence shown to a customer with an active/pending-lift filter. */
@@ -481,13 +376,7 @@ function filterMessage(customer: Customer): string {
     customer.filter_areas && customer.filter_areas.length > 0
       ? customer.filter_areas.map((a) => cityForArea(a) || a).join(", ")
       : "any location";
-  const beds = bedroomPhrase(
-    customer.filter_min_bedrooms,
-    customer.filter_max_bedrooms
-  );
-  // Give the forecast when there is one — "volume varies" is true but useless
-  // once we can put a number and a confidence on it.
-  //
+  const beds = bedroomPhrase(customer.filter_min_bedrooms, customer.filter_max_bedrooms);
   // "At least", and no clause about what happens if we fall short: the figure
   // is a lower bound at FORECAST_CONFIDENCE and nothing is credited back.
   const expected = customer.filter_expected_leads;
@@ -497,13 +386,8 @@ function filterMessage(customer: Customer): string {
     expected != null && expected > 0
       ? ` You can expect at least ${expected} lead${expected === 1 ? "" : "s"} a month on this filter${likelihood != null ? ` (${likelihood}% likely)` : ""} — some months will be quieter than others.`
       : ` Volume varies based on how many matching leads come through the marketplace each month.`;
-  if (
-    customer.filter_status === "pending_lift" &&
-    customer.filter_lift_effective_date
-  ) {
-    msg += ` Your filter is scheduled to lift on ${formatDate(
-      customer.filter_lift_effective_date
-    )}.`;
+  if (customer.filter_status === "pending_lift" && customer.filter_lift_effective_date) {
+    msg += ` Your filter is scheduled to lift on ${formatDate(customer.filter_lift_effective_date)}.`;
   }
   return msg;
 }
@@ -511,9 +395,7 @@ function filterMessage(customer: Customer): string {
 function bedroomPhrase(min: number | null, max: number | null): string {
   if (min == null && max == null) return "any bedroom size";
   if (min != null && max != null) {
-    return min === max
-      ? `exactly ${min} bedroom${min === 1 ? "" : "s"}`
-      : `${min}–${max} bedrooms`;
+    return min === max ? `exactly ${min} bedroom${min === 1 ? "" : "s"}` : `${min}–${max} bedrooms`;
   }
   if (min != null) return `${min}+ bedrooms`;
   return `up to ${max} bedrooms`;
