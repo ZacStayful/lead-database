@@ -13724,8 +13724,8 @@ A GHL-style redesign of the customer dashboard was handed off from Claude
 Design on 2026-09-14: a dark sidebar shell, a KPI home, a three-column
 **Conversations** inbox (list · thread · contact panel) and a **Lead detail**
 screen with an activity column. Before building it, every element was
-cross-checked against what the product actually does. This section records
-what that found and what 0150 closes; the screens themselves are the next PR.
+cross-checked against what the product actually does. §56.1–56.6 record what
+that found and what 0150 closes; §56.7 records the screens.
 
 ### 56.1 — The finding that reframed the design
 
@@ -13838,7 +13838,8 @@ directions, the snippet CHECK binding customer rows only, all four indexes).
 items, activity feed, tags, snippets), `npx tsc --noEmit` clean, `npm run lint`
 clean.
 
-⚠️ **Not yet exercised in a browser.** No inbox page exists yet — that is PR 2 —
+⚠️ **Not yet exercised in a browser.** No inbox page existed when this was
+written — see §56.7 —
 so the routes have been driven only by their units.
 
 ### Deployment order — migration BEFORE code
@@ -13871,3 +13872,121 @@ It is additive and inert: every new column defaults to today's meaning, the
 two-argument goal function has no caller until the route ships, and the
 one-argument function it sits beside is unchanged. Code arriving first would
 have failed every assignment PATCH that sent `tags`, and nothing else.
+
+### 56.7 — The screens *(no migration)*
+
+Every route under `/dashboard` now renders inside one frame: a dark 248px
+sidebar, a 60px top bar, and a per-section sub-tab strip. Three screens were
+rebuilt to the design — the home, the inbox (`/dashboard/conversations`,
+`/[leadId]`, `/snippets`) and the lead page — and every other page kept its
+body and gained the strip. No backend changed; the libraries and routes 0150
+shipped without a consumer now have one.
+
+#### The nav model is one pure function
+
+`src/lib/dashboardNav.ts` builds the sidebar and every tabset from the same
+gates the old header used (messaging switch, held products, admin) and is
+**import-free** so the `"use client"` shell can share it with the server
+(§21.8's rule). It restates two paths — `REPLACEMENT_PATH` and
+`FEATURE_REQUEST_HEADER_PATH` — and `dashboardNav.test.ts` pins the
+restatements against their sources and checks **every href resolves to a
+page on disk**, the `productContext.ts` discipline.
+
+Three things the design left out are kept, deliberately:
+
+- **"Request a feature" is a direct sidebar item** (§50.8). `entryPoints.test.ts`
+  now guards the nav model rather than the header it replaced.
+- **"Replace a lead" is in the Leads tabset** (§53 — a live money feature).
+- **Admin** is appended for admins, as before.
+
+The design's business switcher is a **static account chip**: both products
+render side by side everywhere (invariant 6), so there is nothing to switch
+between. Its Call button is cut (nobody to call). ⌘K is a client-side filter
+over the nav and the customer's own leads, handed down by the layout — no
+search endpoint, so §27.1 is untouched.
+
+`DesktopNav` / `MobileNav` survive because `admin/layout.tsx` still uses them.
+
+#### The home
+
+`src/lib/home/*` is pure and tested: the greeting reads the **London** hour
+(§40.12); the funnel is Received → Contacted → each `meetingStagesForLeadType`
+stage → Won, **with no "In discussion" row** (§56.2), cumulative and
+next-step percentages from counts; lead sources are **postcode areas, never
+towns** (§40.14); income across signed landlords sums `gross_annual_income`
+and never `income_estimate` (§25). The page loads nothing it did not already
+load except `fetchInboxRows`, which feeds Recent conversations and the reply
+preview on Follow-up tasks. The follow-up tasks are the SAME due-attempt scan
+the 08:15 digest runs (`fetchDueAttempts`). `LeadFeed` stays at the bottom —
+it is the realtime arrival surface and not in the design.
+
+#### One loader, two screens
+
+`src/lib/leadWorkspace.ts` is the old lead page's body lifted verbatim plus one
+`lead_events` read that feeds both `buildThreadItems` and `buildLeadActivity`.
+The lead page (Lead details · Thread · Activity) and the inbox's thread page
+(Inbox · Thread · Contact details) both call it and both render the same
+`ContactPanel`, so the two cannot drift. Selecting an inbox row is a
+navigation: every thread is one server pass, never an N+1 (§56.1's reason).
+
+`useLeadWorkflow` holds the state and handlers `LeadDetail.tsx` held — moved,
+not rewritten — and `LeadWorkspace` fires `detail_opened` **exactly once**;
+`redesignGuards.test.ts` pins that no other redesign file records it.
+
+#### What the contact panel keeps, and where
+
+Fields in the design's order with the two corrections: **Received**
+(`assigned_at`) and no enquiry date (§11); **"Your estimate"** (the operator's
+`income_estimate`) on the panel and **"Stayful projection"** (`IncomeProjection`)
+under "Work this lead", never merged (§25). Tags are the 0150 editor. Notes
+render **without** the messages prop — the thread column shows those.
+
+**"Work this lead"** is every control the single-column page had, in order and
+under its old gate (`leadOutcomes()`, the placement decided once in the hook):
+the report card, the outcome panel, Mark as contacted / signed, the closed and
+won banners with Undo, the contact timeline, the projection + report link +
+analysis offer, the landlord's answers, the GR analyser link, the toolbar, the
+presentation hint, the keep-up-to-date note, and Delete for own leads.
+`redesignGuards.test.ts` lists them, and `deadLeadPolicy.test.ts`'s banned-word
+sweep now covers `ContactPanel.tsx` and `WorkThisLead.tsx`. ⚠️ §51.10 measured
+what hiding the report control costs; it is reachable on every lead.
+
+#### The thread and the composer
+
+`ThreadColumn` renders `buildThreadItems` with London date separators: a
+message bubble carries a status and a tick; **a click row carries no status**
+(§40.15); an attempt row is the contact plan's rung as a system line. Opening
+a thread with replies waiting posts to the inbox's `read` verb, not the thread
+GET's side effect. Star and mark-unread are **disabled with the route's own
+sentence** on a click-only lead — both routes 409 there, and a control that
+silently fails is worse than one that says why.
+
+`useComposer` / `ComposerStates` are `LeadMessageButtons`' state and copy
+lifted verbatim — a failed send never clears the text, a draft never silently
+overwrites, a failed draft is a muted note. Chips are **WhatsApp / Email only**
+(there is no customer→landlord SMS anywhere; a guard fails the suite on the
+word). The hint reads `quietUntil` and never a literal hour. Snippets insert at
+the cursor. With the platform switch off the composer becomes the §40.15
+hand-off — write here, open in the operator's own WhatsApp, recorded as
+`whatsapp_click` and never `message_sent`.
+
+`LeadDetail.tsx` and `LeadMessageButtons.tsx` are **deleted**; the guard test
+fails if either comes back.
+
+#### Verification
+
+2,038 vitest cases green (the 70 new ones cover the nav model, the home
+helpers, the London-time labels and the guards above), `npx tsc --noEmit`
+clean, `npm run lint` clean, `npm run build` passes and registers
+`/dashboard/conversations`, `/dashboard/conversations/[leadId]` and
+`/dashboard/conversations/snippets`.
+
+⚠️ **Not yet exercised in a browser or against real data.** There is no local
+Supabase and a Vercel preview is behind Deployment Protection (§45), so the
+screens were built against the design file and the types. After merge, on
+`leads.stayful.co.uk`: the sidebar on every page and the mobile drawer at
+phone width, ⌘K, the unread badge, the home on a dual-product account, the
+inbox on a row with real messages (Zac's TimelinesAI token is `revoked` — §55),
+star / mark-read / tags / snippets round trips, a wa.me tap appearing as a
+click row and not a message, "n / N" and ←/→ on the lead page, and the
+outcome panel still reachable under "Work this lead".
