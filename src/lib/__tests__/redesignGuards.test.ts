@@ -88,6 +88,36 @@ describe("§56.7 redesign guards", () => {
     expect(thread).toContain('it.kind === "click"');
   });
 
+  it("loads the ⌘K lead list lazily from a query-free route, never with the layout", () => {
+    const layout = code("app/dashboard/layout.tsx");
+    expect(layout).not.toContain('from("lead_assignments")');
+    expect(layout).not.toContain("paletteLeads");
+    const palette = code("components/shell/CommandPalette.tsx");
+    expect(palette).toContain('fetch("/api/customer/leads/palette"');
+    const route = code("app/api/customer/leads/palette/route.ts");
+    expect(route).toContain("getCurrentCustomer()");
+    expect(route).toContain('.eq("customer_id", customer.id)');
+    expect(route).not.toContain("searchParams");
+    expect(route).not.toContain("request.json");
+    expect(route).toContain("no-store, private");
+  });
+
+  it("the inbox connect prompt reuses the composer's setup copy and keys on the customer's own connection", () => {
+    const prompt = code("components/conversations/ConnectPrompt.tsx");
+    expect(prompt).toContain("SETUP_BLURB.whatsapp");
+    expect(prompt).toContain("TIMELINES_SETUP_VIDEO_URL");
+    expect(prompt).toContain("TIMELINES_SIGNUP_URL");
+    // The $25 line and the token step live in SETUP_BLURB, never restated here.
+    expect(prompt).not.toMatch(/\$25|TimelinesAI account \(/);
+    for (const page of ["app/dashboard/conversations/page.tsx", "app/dashboard/conversations/[leadId]/page.tsx"]) {
+      const src = code(page);
+      expect(src, page).toContain("getWhatsappConnection(admin, customer.id)");
+      expect(src, page).toContain('whatsapp?.status === "connected"');
+    }
+    const list = code("components/conversations/InboxList.tsx");
+    expect(list).toContain("!connect.connected");
+  });
+
   it("keeps the old single-column lead page and its dialog gone", () => {
     expect(() => statSync(path.join(ROOT, "components/dashboard/LeadDetail.tsx"))).toThrow();
     expect(() => statSync(path.join(ROOT, "components/dashboard/LeadMessageButtons.tsx"))).toThrow();

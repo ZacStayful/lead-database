@@ -13814,9 +13814,15 @@ carries for `whatsapp_click`.
 
 Recorded but not fixed here: intermittent Supabase gateway timeouts and
 Cloudflare 525s across every cron since 9 Sep (the project reads
-`ACTIVE_HEALTHY`); 60-second runtime timeouts on the two Monday syncs and two
-crons that could use `maxDuration = 300` (§2); PR #74 carries a migration
-numbered 0097, long since taken, and cannot merge as-is.
+`ACTIVE_HEALTHY`); PR #74 carries a migration numbered 0097, long since
+taken, and cannot merge as-is. ~~60-second runtime timeouts on the two Monday
+syncs and two crons that could use `maxDuration = 300` (§2)~~ — **raised to 300
+in §56.7 on the two syncs and `poll-whatsapp-status`.** The poller's 45-second
+wall clock is unchanged: it is checked between items, so what overran was one
+slow provider or gateway call, and a longer ceiling stops the kill without
+letting a run reach the next 5-minute firing. `prospect-nudges` stays at 60 —
+it fires every minute, and a 300-second ceiling on a 60-second schedule is
+five runs deep even though claim-by-write makes the overlap safe.
 
 ### 56.6 — New routes, all session-authenticated, none on `/api/v1`
 
@@ -13972,6 +13978,25 @@ hand-off — write here, open in the operator's own WhatsApp, recorded as
 
 `LeadDetail.tsx` and `LeadMessageButtons.tsx` are **deleted**; the guard test
 fails if either comes back.
+
+#### Two things the pre-merge review changed
+
+- **⌘K's lead list is fetched lazily.** The first cut selected 500
+  `lead_assignments` rows in the layout on every dashboard request, for a
+  control most visits never open — on a Supabase gateway already timing out
+  (§56.5). `GET /api/customer/leads/palette` now serves the same rows on the
+  palette's first open, cached for the session. It takes **no query parameter
+  and no body** — a fixed-shape named operation, so §27.1's rule holds — and a
+  guard pins that the layout never selects from `lead_assignments` again.
+  Accepted: a lead assigned mid-session is absent from the palette until reload.
+- **The inbox says how to connect.** Nobody has a connected workspace (§56.1),
+  so an inbox of click rows with no guidance read as broken. `ConnectPrompt`
+  replaces the empty state, and sits as a dismissable card above a list where
+  every row is a click and nothing has come back. Its copy is `SETUP_BLURB`
+  and the two TimelinesAI constants — never restated, so it cannot drift from
+  the composer (§40.11) — and it keys on the **customer's** connection row,
+  never the platform switch: a connected operator with a quiet inbox sees the
+  plain empty state. The free wa.me floor is stated too (§40.15).
 
 #### Verification
 
