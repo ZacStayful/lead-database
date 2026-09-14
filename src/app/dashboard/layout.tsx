@@ -4,7 +4,6 @@ import { markFirstLoginAndNotify } from "@/lib/firstLogin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
 import { AppShell } from "@/components/shell/AppShell";
-import type { PaletteLead } from "@/components/shell/CommandPalette";
 import { messagingActiveFor } from "@/lib/messaging/service";
 import { unreadReplyCount } from "@/lib/messaging/inbox";
 import { holdsProduct } from "@/lib/products";
@@ -36,14 +35,16 @@ export default async function DashboardLayout({
   let unread = 0;
   let unreadReplies = 0;
   let messagingOn = false;
-  let paletteLeads: PaletteLead[] = [];
   if (customer) {
     // First authenticated render after login — send the one-time welcome email
     // if this is the customer's first-ever sign-in (idempotent, best-effort).
     await markFirstLoginAndNotify(customer);
 
     const admin = createAdminClient();
-    const [notif, replies, on, leads] = await Promise.all([
+    // ⌘K's lead rows are NOT loaded here: the palette fetches
+    // /api/customer/leads/palette on its first open, so a 500-row join does
+    // not ride along with every dashboard request (§56.7).
+    const [notif, replies, on] = await Promise.all([
       admin
         .from("notifications")
         .select("id", { count: "exact", head: true })
@@ -51,26 +52,10 @@ export default async function DashboardLayout({
         .is("read_at", null),
       unreadReplyCount(admin, customer.id),
       messagingActiveFor(admin, isAdmin),
-      // ⌘K rows: the customer's own leads, filtered in the browser (§27.1
-      // keeps free-form search off every server surface).
-      admin
-        .from("lead_assignments")
-        .select("lead_id, lead:leads(lead_name, address)")
-        .eq("customer_id", customer.id)
-        .order("assigned_at", { ascending: false })
-        .limit(500),
     ]);
     unread = notif.count ?? 0;
     unreadReplies = replies;
     messagingOn = on;
-    paletteLeads = ((leads.data ?? []) as unknown as {
-      lead_id: string;
-      lead: { lead_name: string | null; address: string | null } | null;
-    }[]).map((r) => ({
-      id: r.lead_id,
-      name: r.lead?.lead_name ?? "Lead",
-      address: r.lead?.address ?? null,
-    }));
   }
 
   const holdsManagement = customer?.subscription_status === "active";
@@ -105,7 +90,6 @@ export default async function DashboardLayout({
           <NotificationBell customerId={customer.id} initialCount={unread} variant="circle" />
         ) : null
       }
-      paletteLeads={paletteLeads}
     >
       {children}
     </AppShell>

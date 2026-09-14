@@ -12,7 +12,7 @@ import {
   type SidebarModel,
 } from "@/lib/dashboardNav";
 import { cn } from "@/lib/utils";
-import { CommandPalette, type PaletteLead } from "./CommandPalette";
+import { CommandPalette } from "./CommandPalette";
 import { Sidebar, type AccountChip } from "./Sidebar";
 import { SubTabs } from "./SubTabs";
 import { TopBar } from "./TopBar";
@@ -29,7 +29,6 @@ export function AppShell({
   account,
   initials,
   bell,
-  paletteLeads,
   children,
 }: {
   model: SidebarModel;
@@ -37,7 +36,6 @@ export function AppShell({
   account: AccountChip;
   initials: string;
   bell: React.ReactNode;
-  paletteLeads: PaletteLead[];
   children: React.ReactNode;
 }) {
   const pathname = usePathname() ?? "/dashboard";
@@ -101,7 +99,7 @@ export function AppShell({
         </main>
       </div>
 
-      <CommandPalette open={palette} onOpenChange={setPalette} model={model} leads={paletteLeads} />
+      <CommandPalette open={palette} onOpenChange={setPalette} model={model} />
     </div>
   );
 }

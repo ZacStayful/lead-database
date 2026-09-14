@@ -12,25 +12,57 @@ export interface PaletteLead {
   address: string | null;
 }
 
+const EMPTY_LEADS: PaletteLead[] = [];
+
+type LeadsState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; leads: PaletteLead[] }
+  | { status: "failed" };
+
 /**
- * ⌘K. A client-side filter over the nav and the customer's own leads — the
- * rows arrive with the layout, so there is no search endpoint and §27.1's
- * rule (no free-form query surface) is untouched.
+ * ⌘K. A client-side filter over the nav and the customer's own leads. The
+ * lead rows are fetched from /api/customer/leads/palette on the FIRST open
+ * and kept for the session — never with the layout, so a control most visits
+ * never touch costs nothing on the pages they do. The route takes no query,
+ * so §27.1's rule (no free-form search surface) is untouched.
+ *
+ * Accepted: a lead assigned mid-session is absent until the next full load.
+ * The nav matches never wait on the fetch.
  */
 export function CommandPalette({
   open,
   onOpenChange,
   model,
-  leads,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   model: SidebarModel;
-  leads: PaletteLead[];
 }) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
+  const [leadsState, setLeadsState] = useState<LeadsState>({ status: "idle" });
+  const leads = leadsState.status === "ready" ? leadsState.leads : EMPTY_LEADS;
+
+  useEffect(() => {
+    if (!open || leadsState.status !== "idle") return;
+    let cancelled = false;
+    setLeadsState({ status: "loading" });
+    fetch("/api/customer/leads/palette", { cache: "no-store" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        const body = (await r.json()) as { leads?: PaletteLead[] };
+        if (!cancelled) setLeadsState({ status: "ready", leads: body.leads ?? [] });
+      })
+      .catch(() => {
+        // Said out loud, and retried on the next open; the nav matches still work.
+        if (!cancelled) setLeadsState({ status: "failed" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, leadsState.status]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -47,6 +79,7 @@ export function CommandPalette({
     if (!open) {
       setQ("");
       setCursor(0);
+      setLeadsState((s) => (s.status === "failed" ? { status: "idle" } : s));
     }
   }, [open]);
 
@@ -108,7 +141,15 @@ export function CommandPalette({
         </div>
         <ul className="max-h-80 overflow-y-auto p-1" role="listbox">
           {results.length === 0 && (
-            <li className="px-3 py-6 text-center text-sm text-ink-2">Nothing matches.</li>
+            <li className="px-3 py-6 text-center text-sm text-ink-2">
+              {leadsState.status === "loading" ? "Loading your leads…" : "Nothing matches."}
+            </li>
+          )}
+          {results.length > 0 && leadsState.status === "loading" && q.trim() && (
+            <li className="px-3 py-1.5 text-xs text-ink-2">Loading your leads…</li>
+          )}
+          {leadsState.status === "failed" && q.trim() && (
+            <li className="px-3 py-1.5 text-xs text-ink-2">Could not load your leads — pages still match.</li>
           )}
           {results.map((r, i) => (
             <li key={`${r.kind}:${r.href}`} role="option" aria-selected={i === cursor}>
