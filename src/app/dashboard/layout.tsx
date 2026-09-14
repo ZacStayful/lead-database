@@ -1,23 +1,29 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import {
-  REPLACEMENT_NAV_LABEL,
-  REPLACEMENT_PATH,
-} from "@/lib/quality/replacementEntitlement";
-import {
-  FEATURE_REQUEST_HEADER_PATH,
-  FEATURE_REQUEST_LABEL,
-} from "@/lib/featureRequest";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { markFirstLoginAndNotify } from "@/lib/firstLogin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NotificationBell } from "@/components/dashboard/NotificationBell";
-import { SignOutButton } from "@/components/dashboard/SignOutButton";
-import { MobileNav } from "@/components/dashboard/MobileNav";
-import { DesktopNav, type NavGroup } from "@/components/dashboard/DesktopNav";
+import { AppShell } from "@/components/shell/AppShell";
+import type { PaletteLead } from "@/components/shell/CommandPalette";
 import { messagingActiveFor } from "@/lib/messaging/service";
-import { Logo } from "@/components/Logo";
+import { unreadReplyCount } from "@/lib/messaging/inbox";
+import { holdsProduct } from "@/lib/products";
+import { buildSidebar, type NavFlags } from "@/lib/dashboardNav";
+import { initials } from "@/lib/utils";
 
+/**
+ * The dashboard frame (§56.7): every gate is resolved here, on the server,
+ * and handed to the shell as a nav model. The rules are unchanged from the
+ * header this replaced —
+ *
+ * - Follow-ups is hidden until the messaging switch is on, and visible to an
+ *   admin throughout (§40.3). The page enforces this independently; hiding
+ *   the link is a courtesy, not a control.
+ * - Goals is management-only (subscription_status, exactly what
+ *   set_management_customer_goal checks).
+ * - "Request a feature" IS A DIRECT LINK, never folded into a menu (§50.8).
+ * - Admin is appended for admins.
+ */
 export default async function DashboardLayout({
   children,
 }: {
@@ -26,175 +32,82 @@ export default async function DashboardLayout({
   const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
 
+  const isAdmin = isAdminUser(user);
   let unread = 0;
-  // Hidden until the platform switch is flipped, and visible to an admin
-  // throughout — the same posture the messaging settings page takes, and the
-  // reason a production rehearsal is possible at all (§40.3). The page enforces
-  // this independently; hiding the link is a courtesy, not a control.
+  let unreadReplies = 0;
   let messagingOn = false;
+  let paletteLeads: PaletteLead[] = [];
   if (customer) {
     // First authenticated render after login — send the one-time welcome email
     // if this is the customer's first-ever sign-in (idempotent, best-effort).
     await markFirstLoginAndNotify(customer);
 
     const admin = createAdminClient();
-    const { count } = await admin
-      .from("notifications")
-      .select("id", { count: "exact", head: true })
-      .eq("customer_id", customer.id)
-      .is("read_at", null);
-    unread = count ?? 0;
-    messagingOn = await messagingActiveFor(admin, isAdminUser(user));
+    const [notif, replies, on, leads] = await Promise.all([
+      admin
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .eq("customer_id", customer.id)
+        .is("read_at", null),
+      unreadReplyCount(admin, customer.id),
+      messagingActiveFor(admin, isAdmin),
+      // ⌘K rows: the customer's own leads, filtered in the browser (§27.1
+      // keeps free-form search off every server surface).
+      admin
+        .from("lead_assignments")
+        .select("lead_id, lead:leads(lead_name, address)")
+        .eq("customer_id", customer.id)
+        .order("assigned_at", { ascending: false })
+        .limit(500),
+    ]);
+    unread = notif.count ?? 0;
+    unreadReplies = replies;
+    messagingOn = on;
+    paletteLeads = ((leads.data ?? []) as unknown as {
+      lead_id: string;
+      lead: { lead_name: string | null; address: string | null } | null;
+    }[]).map((r) => ({
+      id: r.lead_id,
+      name: r.lead?.lead_name ?? "Lead",
+      address: r.lead?.address ?? null,
+    }));
   }
 
-  // Goals is management-only: it targets signed management clients and reads a
-  // management-only counter. The gate is subscription_status, which is exactly
-  // what set_management_customer_goal (0050) checks — so the tab is never shown
-  // to somebody the save would then refuse. Hiding it is a courtesy, not a
-  // control: the page and the RPC each enforce this independently.
   const holdsManagement = customer?.subscription_status === "active";
+  const holdsMgmtProduct = customer ? holdsProduct(customer, "management") : false;
+  const holdsGr = customer ? holdsProduct(customer, "guaranteed_rent") : false;
 
-  // Header navigation, grouped.
-  //
-  // Sixteen destinations rendered as one flat row no longer fitted beside the
-  // logo, and since the nav shares its flex row with the notification bell and
-  // sign-out, the overflow ran underneath them — "Admin", appended last for
-  // admins, landed on top of the bell.
-  //
-  // Grouping into six top-level entries keeps every destination reachable in at
-  // most two clicks with nothing hidden behind an unlabelled overflow control.
-  // The groups are built here, on the server, so the visibility rules stay
-  // beside the reasoning for them.
-  //
-  // ⚠️ "Request a feature" IS A DIRECT LINK, NOT A GROUP (§50). Folding it into
-  // a "Feedback" menu alongside the bug link and Support would be tidier and
-  // would defeat the point: the thing being promoted would end up one click
-  // DEEPER than the footer link it exists to replace. Bug reporting stays in
-  // the footer and Support stays under Account.
-  //
-  // ⚠️ It sits before Account, NOT last. "Admin" is appended last for admins,
-  // and the last entry is the one that collided with the notification bell the
-  // time this row overflowed.
-  const navGroups: NavGroup[] = [
-    { label: "Dashboard", href: "/dashboard" },
-    {
-      label: "Leads",
-      items: [
-        { href: "/dashboard/leads", label: "All leads" },
-        { href: "/dashboard/leads/priority", label: "Priority" },
-        // The customer's own leads, imported or typed in. Ungated on product
-        // here for the same reason as Expired leads below: the page resolves
-        // which products they hold and explains itself when the answer is none.
-        { href: "/dashboard/leads/add", label: "Add your own leads" },
-        // Shown to every subscriber, not gated on holding a particular
-        // product: the page resolves which pools the customer can see and
-        // renders its own explanation when the answer is none.
-        { href: "/dashboard/leads/expired", label: "Expired leads" },
-        // Under Leads for the same reason Expired leads is: it is a way of
-        // WORKING leads, and the operator reaches it from where they were
-        // already looking at them. ⚠️ Deliberately NOT a seventh top-level
-        // entry — the comment above records this row colliding with the
-        // notification bell the one time it overflowed, and §42.7 records the
-        // same thing happening on the admin header.
-        { href: REPLACEMENT_PATH, label: REPLACEMENT_NAV_LABEL },
-        // Under Leads rather than Account: it is a way of WORKING leads, and
-        // the operator reaches it from the same place they were looking at
-        // them. Its own bulk entry point lives on the leads list itself.
-        ...(messagingOn
-          ? [{ href: "/dashboard/follow-ups", label: "Follow-ups" }]
-          : []),
-        { href: "/dashboard/filtering", label: "Lead filtering" },
-        { href: "/dashboard/topup", label: "Top up leads" },
-      ],
-    },
-    {
-      label: "Insights",
-      items: [
-        { href: "/dashboard/analytics", label: "Analytics" },
-        // Ungated: it reports on the platform rather than on this customer's
-        // own product holdings, and it renders its own explanation when there
-        // are too few recorded signings to describe a group.
-        { href: "/dashboard/leaderboard", label: "Leaderboard" },
-        ...(holdsManagement
-          ? [{ href: "/dashboard/goals", label: "Goals" }]
-          : []),
-      ],
-    },
-    {
-      label: "Learn",
-      items: [
-        // Free to every subscriber — no product or subscription gate, unlike
-        // most of what sits around it.
-        { href: "/dashboard/training", label: "Training" },
-        { href: "/dashboard/guide", label: "Guide" },
-        { href: "/dashboard/objection-assistant", label: "Objection Assistant" },
-        { href: "/dashboard/documents", label: "Documents" },
-      ],
-    },
-    { label: FEATURE_REQUEST_LABEL, href: FEATURE_REQUEST_HEADER_PATH },
-    {
-      label: "Account",
-      items: [
-        // Shown to everyone: its whole job is to tell a customer about the
-        // product they do NOT have, so gating it on holding that product is
-        // backwards.
-        { href: "/dashboard/packages", label: "Packages" },
-        { href: "/dashboard/notifications", label: "Notifications" },
-        { href: "/dashboard/settings", label: "Settings" },
-        { href: "/dashboard/support", label: "Support" },
-      ],
-    },
-  ];
-  if (isAdminUser(user)) {
-    navGroups.push({ label: "Admin", href: "/admin" });
-  }
+  const flags: NavFlags = {
+    messagingOn,
+    holdsManagement,
+    holdsAny: holdsMgmtProduct || holdsGr,
+    isAdmin,
+    unreadReplies,
+  };
 
-  // The mobile menu stays a flat list — it is a full-height vertical sheet with
-  // room for every link, so grouping there would add a tap for nothing.
-  const nav = navGroups.flatMap((g) =>
-    g.href ? [{ href: g.href, label: g.label }] : (g.items ?? [])
-  );
+  // The account chip is static (invariant 6 — nothing to switch between).
+  const products: string[] = [];
+  if (holdsMgmtProduct) products.push(`Management · ${customer!.monthly_allocation} leads/mo`);
+  if (holdsGr) products.push(`Guaranteed Rent · ${customer!.gr_monthly_allocation} leads/mo`);
+  const account = {
+    name: customer?.business_name || customer?.contact_name || user.email || "Your account",
+    subtitle: products.length > 0 ? products.join(" · ") : "No active package",
+  };
 
   return (
-    <div className="min-h-screen bg-muted/20">
-      <header className="relative border-b-[0.5px] border-border bg-background">
-        <div className="container flex h-16 items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-6">
-            <Link
-              href="/dashboard"
-              aria-label="Stayful Lead Database"
-              className="flex min-w-0 items-center gap-2.5"
-            >
-              <Logo height={32} priority />
-              <span className="truncate border-l border-border pl-2.5 text-base font-semibold text-foreground">
-                Lead Database
-              </span>
-            </Link>
-            <DesktopNav groups={navGroups} />
-          </div>
-          <div className="flex flex-shrink-0 items-center gap-1">
-            {customer && (
-              <NotificationBell
-                customerId={customer.id}
-                initialCount={unread}
-              />
-            )}
-            <SignOutButton />
-            <MobileNav items={nav} />
-          </div>
-        </div>
-      </header>
-      <main className="container py-8">{children}</main>
-      <footer className="border-t-[0.5px] border-border">
-        <div className="container flex h-14 items-center justify-center gap-6 text-xs text-muted-foreground">
-          <Link href="/feedback?type=feature" className="hover:text-foreground">
-            Request a feature
-          </Link>
-          <Link href="/feedback?type=bug" className="hover:text-foreground">
-            Report a bug
-          </Link>
-        </div>
-      </footer>
-    </div>
+    <AppShell
+      model={buildSidebar(flags)}
+      flags={flags}
+      account={account}
+      initials={initials(customer?.contact_name || user.email)}
+      bell={
+        customer ? (
+          <NotificationBell customerId={customer.id} initialCount={unread} variant="circle" />
+        ) : null
+      }
+      paletteLeads={paletteLeads}
+    >
+      {children}
+    </AppShell>
   );
 }

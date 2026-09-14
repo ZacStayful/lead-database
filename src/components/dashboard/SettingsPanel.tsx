@@ -310,7 +310,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card id="subscription">
         <CardHeader>
           <CardTitle>Subscription</CardTitle>
         </CardHeader>
@@ -632,7 +632,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
         <ReleaseHoldCard customer={customer} />
       )}
 
-      <Card>
+      <Card id="notifications">
         <CardHeader>
           <CardTitle>Notifications</CardTitle>
         </CardHeader>

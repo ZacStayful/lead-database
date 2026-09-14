@@ -13,9 +13,12 @@ import { Bell } from "lucide-react";
 export function NotificationBell({
   customerId,
   initialCount,
+  variant = "icon",
 }: {
   customerId: string;
   initialCount: number;
+  /** `circle` is the redesign's 38px grey disc with a red dot (§56.7). */
+  variant?: "icon" | "circle";
 }) {
   const router = useRouter();
   const [count, setCount] = useState(initialCount);
@@ -50,6 +53,24 @@ export function NotificationBell({
       supabase.removeChannel(channel);
     };
   }, [customerId, router]);
+
+  if (variant === "circle") {
+    return (
+      <Link
+        href="/dashboard/notifications"
+        className="relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-full bg-page text-ink hover:bg-rail"
+        aria-label={count > 0 ? `Notifications, ${count} unread` : "Notifications"}
+      >
+        <Bell className="h-[18px] w-[18px]" />
+        {count > 0 && (
+          <span
+            aria-hidden
+            className="absolute right-0.5 top-0.5 h-[9px] w-[9px] rounded-full border-2 border-white bg-alert"
+          />
+        )}
+      </Link>
+    );
+  }
 
   return (
     <Link
