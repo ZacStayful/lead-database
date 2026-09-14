@@ -21,9 +21,11 @@ export const dynamic = "force-dynamic";
  * function cannot drift apart (the same reasoning as reject_lead_assignment,
  * CLAUDE.md §5E).
  *
- * Body: { goal: number | null } — null clears the goal, any integer >= 1 sets
- * it. Zero and negatives are rejected here and again by the function and the
- * column's CHECK constraint.
+ * Body: { goal: number | null, due?: "YYYY-MM-DD" | null } — null clears the
+ * goal (and its date), any integer >= 1 sets it. Zero and negatives are
+ * rejected here and again by the function and the column's CHECK constraint.
+ * `due` is the date the customer wants it met by (0150, §56); omitted or null
+ * means no deadline.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient();
@@ -35,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { goal?: unknown };
+  let body: { goal?: unknown; due?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -56,8 +58,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let due: string | null = null;
+  if (body.due !== undefined && body.due !== null) {
+    if (typeof body.due !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.due) || Number.isNaN(Date.parse(body.due))) {
+      return NextResponse.json({ error: "due must be a date (YYYY-MM-DD) or null" }, { status: 400 });
+    }
+    due = body.due;
+  }
+
+  // The two-argument signature (0150). Named parameters resolve it; the
+  // one-argument form 0051 shipped is untouched and still exists beside it.
   const { data, error } = await supabase.rpc("set_management_customer_goal", {
     p_goal: goal,
+    p_due: due,
   });
 
   if (error) {
@@ -69,12 +82,13 @@ export async function POST(request: NextRequest) {
 
   // returns table(...) arrives as a one-row array.
   const row = (Array.isArray(data) ? data[0] : data) as
-    | { goal: number | null; goal_updated_at: string | null }
+    | { goal: number | null; goal_updated_at: string | null; goal_due: string | null }
     | undefined;
 
   return NextResponse.json({
     ok: true,
     management_customer_goal: row?.goal ?? null,
     management_customer_goal_updated_at: row?.goal_updated_at ?? null,
+    management_customer_goal_due: row?.goal_due ?? null,
   });
 }

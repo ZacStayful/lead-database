@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineBadgeClass, pipelineLabel } from "@/components/dashboard/pipelineStage";
 import { formatDate, formatDateTime, formatGBP } from "@/lib/utils";
+import { LEAD_EVENT_LABEL, SYSTEM_LEAD_EVENT_TYPES } from "@/lib/leadEvents";
 import type { Customer, Lead, LeadAssignment, LeadEvent, LeadFile, LeadNote } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -16,23 +17,17 @@ const FILES_BUCKET = "lead-files";
 const FILE_URL_TTL_SECONDS = 60 * 60;
 
 /**
- * What each telemetry event means in words.
+ * What each telemetry event means in words — the shared map (§56). This page
+ * used to carry its own, and it had drifted: whatsapp_click, message_sent and
+ * message_received were never added, so those rows rendered as raw keys.
  *
  * `nudge_sent` is system-generated and the rest are operator-generated — the
  * distinction matters when reading this list, because our own nudges would
  * otherwise look like customer activity (§3).
  */
-const EVENT_LABEL: Record<string, string> = {
-  detail_opened: "Opened the lead",
-  tel_click: "Clicked the phone number",
-  mailto_click: "Clicked the email address",
-  note_added: "Added a note",
-  file_added: "Attached a file",
-  stage_changed: "Changed the pipeline stage",
-  nudge_sent: "We sent a nudge",
-};
+const EVENT_LABEL: Record<string, string> = LEAD_EVENT_LABEL;
 
-const SYSTEM_EVENTS = new Set(["nudge_sent"]);
+const SYSTEM_EVENTS = new Set<string>(SYSTEM_LEAD_EVENT_TYPES);
 
 function Field({
   label,

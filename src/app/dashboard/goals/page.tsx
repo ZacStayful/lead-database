@@ -43,6 +43,7 @@ type GoalRow = {
   subscription_status: string | null;
   monthly_allocation: number | null;
   management_customer_goal: number | null;
+  management_customer_goal_due: string | null;
   management_lifetime_leads_received: number | null;
 };
 
@@ -73,7 +74,7 @@ export default async function GoalsPage() {
   const { data } = await supabase
     .from("customers")
     .select(
-      "id, subscription_status, monthly_allocation, management_customer_goal, management_lifetime_leads_received"
+      "id, subscription_status, monthly_allocation, management_customer_goal, management_customer_goal_due, management_lifetime_leads_received"
     )
     .eq("user_id", user.id)
     .maybeSingle();
@@ -236,6 +237,12 @@ export default async function GoalsPage() {
                         } at your current ${allocation}-lead plan`}
                 </dd>
               </div>
+              {customer.management_customer_goal_due && (
+                <div className="flex flex-wrap justify-between gap-2 border-t border-black/10 pt-3 text-sm">
+                  <dt className="text-muted-foreground">Your target date</dt>
+                  <dd className="font-medium">{describeGoalDue(customer.management_customer_goal_due)}</dd>
+                </div>
+              )}
             </dl>
           </section>
 
@@ -382,7 +389,7 @@ export default async function GoalsPage() {
         </section>
       )}
 
-      <GoalForm initialGoal={goal} />
+      <GoalForm initialGoal={goal} initialDue={customer.management_customer_goal_due} />
 
       <p className="text-xs text-muted-foreground">
         This is a long-run modelled estimate, not a per-lead guarantee. Leads
@@ -534,4 +541,20 @@ function roundedRange(low: number, high: number, step: number): string {
     if (lo > 0 && lo < hi) return `${formatNumber(lo)}–${formatNumber(hi)}`;
   }
   return `${formatNumber(low)}–${formatNumber(high)}`;
+}
+
+/**
+ * "30 Sep 2026 · 16 days left" / "today" / "3 days ago". The deadline is the
+ * customer's own (0150, §56); nothing is gated on it, so a missed date reads
+ * as a fact rather than a failure.
+ */
+function describeGoalDue(due: string): string {
+  const target = new Date(`${due}T00:00:00Z`);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const today = new Date(`${todayIso}T00:00:00Z`);
+  const days = Math.round((target.getTime() - today.getTime()) / 86_400_000);
+  const label = target.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  if (days === 0) return `${label} · today`;
+  if (days > 0) return `${label} · ${days} day${days === 1 ? "" : "s"} left`;
+  return `${label} · ${-days} day${days === -1 ? "" : "s"} ago`;
 }

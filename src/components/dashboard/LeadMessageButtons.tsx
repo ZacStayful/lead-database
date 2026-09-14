@@ -36,6 +36,10 @@ import {
 import type { ChannelAvailability, MessageChannel } from "@/lib/messaging/types";
 import { TIMELINES_SETUP_VIDEO_URL } from "@/lib/messaging/timelines";
 import { handoffDigits, whatsappHandoffLink } from "@/lib/messaging/handoff";
+// ⚠️ One definition of what "Read" / "Opened" mean (§26.7). This file used to
+// carry a private copy that ordered Opened above Read; the lead timeline and
+// the inbox read display.ts, so the composer does too.
+import { statusLabel } from "@/lib/messaging/display";
 
 interface ThreadMessage {
   id: string;
@@ -88,18 +92,6 @@ function formatWhen(iso: string): string {
   });
 }
 
-/** Delivery state in the operator's language, never the vendor's. */
-function statusLabel(m: ThreadMessage): string {
-  if (m.direction === "inbound") return "Received";
-  if (m.status === "failed") return "Failed";
-  if (m.first_clicked_at) return "Clicked a link";
-  if (m.first_opened_at) return "Opened";
-  if (m.read_at) return "Read";
-  if (m.status === "delivered") return "Delivered";
-  if (m.status === "sent") return "Sent";
-  if (m.status === "queued") return "Sending…";
-  return m.status;
-}
 
 export function LeadMessageButtons({
   assignmentId,

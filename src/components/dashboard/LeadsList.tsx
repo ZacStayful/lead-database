@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { LeadCard } from "./LeadCard";
 import { SequenceEnrolBar } from "./SequenceEnrolBar";
@@ -19,6 +20,10 @@ import type { AssignmentWithLead } from "@/lib/types";
  * haven't I looked at" versus "what's at the meeting-booked step".
  */
 type Filter = "all" | "new" | "viewed" | "contacted" | "won";
+const FILTERS: readonly Filter[] = ["all", "new", "viewed", "contacted", "won"];
+function isFilter(v: string | null): v is Filter {
+  return v !== null && (FILTERS as readonly string[]).includes(v);
+}
 type TypeFilter = "all" | "management" | "guaranteed_rent";
 /**
  * Where the lead came from. Only offered once the customer actually has some of
@@ -39,8 +44,23 @@ export function LeadsList({
   assignments: AssignmentWithLead[];
   canSequence?: boolean;
 }) {
+  // Deep links (§56). The Today panel has linked to ?activity=new and
+  // ?activity=contacted since §54 and nothing read the parameter, so both
+  // landed on the unfiltered list. ?tag= is the redesign's tag filter.
+  const searchParams = useSearchParams();
+  const initialActivity = searchParams.get("activity");
+  const initialTag = searchParams.get("tag");
+
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>(
+    isFilter(initialActivity) ? initialActivity : "all"
+  );
+  const [tagFilter, setTagFilter] = useState<string | null>(initialTag);
+  useEffect(() => {
+    const a = searchParams.get("activity");
+    if (isFilter(a)) setFilter(a);
+    setTagFilter(searchParams.get("tag"));
+  }, [searchParams]);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
@@ -88,12 +108,23 @@ export function LeadsList({
     );
   }, [assignments, typeFilter, sourceFilter]);
 
+  // Every tag in use, with counts, for the chip row. Only rendered once the
+  // customer has tagged anything.
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const a of typeScoped) {
+      for (const t of a.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+  }, [typeScoped]);
+
   // Everything except the stage filter, so stage counts reflect the other
   // filters in force.
   const beforeStage = useMemo(() => {
     const q = query.trim().toLowerCase();
     return typeScoped.filter((a) => {
       const lead = a.lead;
+      if (tagFilter && !(a.tags ?? []).includes(tagFilter)) return false;
       if (filter === "new" && a.viewed_at) return false;
       if (filter === "viewed" && !a.viewed_at) return false;
       if (filter === "contacted" && a.status !== "contacted") return false;
@@ -113,7 +144,7 @@ export function LeadsList({
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q));
     });
-  }, [typeScoped, query, filter]);
+  }, [typeScoped, query, filter, tagFilter]);
 
   const filtered = useMemo(
     () =>
@@ -212,6 +243,36 @@ export function LeadsList({
               }
             >
               {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tagCounts.length > 0 && (
+        <div className="flex flex-wrap gap-1" aria-label="Filter by tag">
+          <button
+            onClick={() => setTagFilter(null)}
+            className={
+              "rounded-full px-3 py-1 text-xs font-medium transition-colors " +
+              (tagFilter === null
+                ? "bg-brand text-brand-foreground"
+                : "bg-muted text-muted-foreground hover:bg-accent")
+            }
+          >
+            Any tag
+          </button>
+          {tagCounts.map(([tag, n]) => (
+            <button
+              key={tag}
+              onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
+              className={
+                "rounded-full px-3 py-1 text-xs font-medium transition-colors " +
+                (tagFilter === tag
+                  ? "bg-brand text-brand-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-accent")
+              }
+            >
+              {tag} · {n}
             </button>
           ))}
         </div>

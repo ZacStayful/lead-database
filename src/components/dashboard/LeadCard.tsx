@@ -170,6 +170,15 @@ export function LeadCard({
                 Call {formatDate(assignment.due_to_call_date)}
               </Badge>
             )}
+            {(assignment.tags ?? []).map((tag) => (
+              <Badge
+                key={tag}
+                variant="outline"
+                className="border-transparent bg-muted text-muted-foreground"
+              >
+                {tag}
+              </Badge>
+            ))}
             {assignment.is_reclaimed && (
               <Badge
                 variant="outline"

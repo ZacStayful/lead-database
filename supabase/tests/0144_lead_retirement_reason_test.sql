@@ -409,7 +409,10 @@ select test_util.assert_eq(
   3, 'and service_role can execute all three');
 
 select test_util.assert_eq(
-  (select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  -- Distinct NAMES, not pg_proc rows: 0150 gave set_management_customer_goal a
+  -- second signature, and invariant 7 is about four functions however many
+  -- signatures each carries.
+  (select count(distinct p.proname)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.proname in ('get_engagement_benchmarks','set_management_customer_goal',
                         'get_operator_proof','get_recent_wins_anonymised')
