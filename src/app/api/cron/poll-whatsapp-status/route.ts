@@ -69,7 +69,7 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /** Stop starting new work here, leaving room for the request already in flight. */
 const WALL_CLOCK_BUDGET_MS = 45_000;

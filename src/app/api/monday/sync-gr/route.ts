@@ -6,7 +6,7 @@ import { ingestLead } from "@/lib/ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * Pull sellable guaranteed-rent leads from the GR Monday board and ingest them

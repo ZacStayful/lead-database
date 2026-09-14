@@ -6,7 +6,7 @@ import { ingestLead } from "@/lib/ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * Pull sellable leads from the Monday board and ingest them (idempotent).
