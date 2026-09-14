@@ -3,9 +3,10 @@ import { MessageCircle } from "lucide-react";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchInboxRows } from "@/lib/messaging/inbox";
-import { enabledChannels } from "@/lib/messaging/service";
+import { enabledChannels, getWhatsappConnection } from "@/lib/messaging/service";
 import { toInboxListRows } from "@/lib/conversations/inboxRows";
 import { InboxList } from "@/components/conversations/InboxList";
+import { ConnectPrompt } from "@/components/conversations/ConnectPrompt";
 
 export const dynamic = "force-dynamic";
 
@@ -20,18 +21,29 @@ export default async function ConversationsPage() {
   if (!customer) redirect("/dashboard");
 
   const admin = createAdminClient();
-  const [inbox, channels] = await Promise.all([
+  const [inbox, channels, whatsapp] = await Promise.all([
     fetchInboxRows(admin, customer.id),
     enabledChannels(admin, isAdminUser(user)),
+    getWhatsappConnection(admin, customer.id),
   ]);
   const rows = toInboxListRows(inbox.rows);
+  const emailEnabled = channels.includes("email");
+  // The prompt keys on the CUSTOMER's connection, never the platform switch:
+  // a connected operator with a quiet inbox sees the plain empty state.
+  const connect = {
+    connected: whatsapp?.status === "connected",
+    setupStarted: Boolean(whatsapp) && whatsapp?.status !== "connected",
+  };
 
   return (
     <>
       <div className="flex min-h-0 w-full flex-shrink-0 flex-col lg:w-[clamp(260px,32%,360px)]">
-        <InboxList rows={rows} selectedLeadId={null} emailEnabled={channels.includes("email")} />
+        <InboxList rows={rows} selectedLeadId={null} emailEnabled={emailEnabled} connect={connect} />
       </div>
-      <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center rounded-xl border border-line bg-white lg:flex">
+      <div className="hidden min-h-0 min-w-0 flex-1 items-center justify-center overflow-y-auto rounded-xl border border-line bg-white p-6 lg:flex">
+        {rows.length === 0 && !connect.connected ? (
+          <ConnectPrompt variant="full" setupStarted={connect.setupStarted} emailEnabled={emailEnabled} />
+        ) : (
         <div className="max-w-xs text-center">
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-brand-light text-brand-dark">
             <MessageCircle className="h-6 w-6" />
@@ -46,6 +58,7 @@ export default async function ConversationsPage() {
           </p>
           {inbox.error && <p className="mt-3 text-xs text-destructive">Could not load the inbox: {inbox.error}</p>}
         </div>
+        )}
       </div>
     </>
   );

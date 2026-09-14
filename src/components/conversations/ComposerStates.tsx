@@ -39,9 +39,13 @@ export const SETUP_BLURB: Record<MessageChannel, { what: string; needs: string[]
   },
 };
 
+/** The messaging settings page for one channel, returning to `returnTo` when done. */
+export function setupHref(channel: MessageChannel, returnTo: string): string {
+  return `/dashboard/settings/messaging?channel=${channel}&return=${encodeURIComponent(returnTo)}`;
+}
+
 export function setupHrefFor(channel: MessageChannel, leadId: string): string {
-  const back = encodeURIComponent(`/dashboard/leads/${leadId}`);
-  return `/dashboard/settings/messaging?channel=${channel}&return=${back}`;
+  return setupHref(channel, `/dashboard/leads/${leadId}`);
 }
 
 function Amber({ children }: { children: React.ReactNode }) {

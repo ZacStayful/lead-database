@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getCurrentCustomer, isAdminUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchInboxRows } from "@/lib/messaging/inbox";
-import { enabledChannels } from "@/lib/messaging/service";
+import { enabledChannels, getWhatsappConnection } from "@/lib/messaging/service";
 import { loadLeadWorkspace } from "@/lib/leadWorkspace";
 import { toInboxListRows } from "@/lib/conversations/inboxRows";
 import { InboxList } from "@/components/conversations/InboxList";
@@ -18,12 +18,17 @@ export default async function ConversationPage({ params }: { params: { leadId: s
 
   const admin = createAdminClient();
   const isAdmin = isAdminUser(user);
-  const [inbox, channels, data] = await Promise.all([
+  const [inbox, channels, data, whatsapp] = await Promise.all([
     fetchInboxRows(admin, customer.id),
     enabledChannels(admin, isAdmin),
     loadLeadWorkspace(admin, customer, params.leadId, { isAdmin }),
+    getWhatsappConnection(admin, customer.id),
   ]);
   if (!data) notFound();
+  const connect = {
+    connected: whatsapp?.status === "connected",
+    setupStarted: Boolean(whatsapp) && whatsapp?.status !== "connected",
+  };
 
   return (
     <LeadWorkspace
@@ -36,6 +41,7 @@ export default async function ConversationPage({ params }: { params: { leadId: s
           rows={toInboxListRows(inbox.rows)}
           selectedLeadId={params.leadId}
           emailEnabled={channels.includes("email")}
+          connect={connect}
         />
       }
     />

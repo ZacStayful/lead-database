@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { shortWhen } from "@/lib/londonTime";
 import type { MessageChannel } from "@/lib/messaging/types";
 import { Avatar, type BadgeChannel } from "./Avatar";
+import { ConnectPrompt } from "./ConnectPrompt";
 
 /** The lighter row shape the server hands the client (no full assignment). */
 export interface InboxListRow {
@@ -32,17 +33,30 @@ export interface InboxListRow {
 
 type Tab = "unread" | "all" | "recent" | "starred";
 
+export interface ConnectState {
+  /** A `connected` WhatsApp workspace — the prompt never shows for one. */
+  connected: boolean;
+  /** A connection row exists but is not connected — "Continue" rather than "Begin". */
+  setupStarted: boolean;
+}
+
 export function InboxList({
   rows,
   selectedLeadId,
   emailEnabled,
+  connect,
 }: {
   rows: InboxListRow[];
   selectedLeadId: string | null;
   emailEnabled: boolean;
+  connect: ConnectState;
 }) {
   const now = useMemo(() => new Date(), []);
   const unreadCount = rows.filter((r) => r.unread > 0).length;
+  // Every row is a tap on the operator's own phone and nothing has ever come
+  // back: the one state where "connect" is worth a strip above the list.
+  const clickOnly = rows.length > 0 && rows.every((r) => r.isClick && !r.hasMessages);
+  const offerConnect = !connect.connected;
   const [tab, setTab] = useState<Tab>(unreadCount > 0 ? "unread" : "all");
   const [channel, setChannel] = useState<MessageChannel | "all">("all");
   const [searching, setSearching] = useState(false);
@@ -132,11 +146,22 @@ export function InboxList({
       </div>
 
       <ul className="min-h-0 flex-1 overflow-y-auto">
+        {offerConnect && clickOnly && (
+          <li>
+            <ConnectPrompt variant="card" setupStarted={connect.setupStarted} emailEnabled={emailEnabled} />
+          </li>
+        )}
         {visible.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-ink-2">
             {rows.length === 0
               ? "No conversations yet. Ring, WhatsApp or email a landlord from a lead and it appears here."
               : "Nothing matches."}
+          </li>
+        )}
+        {/* On a phone the right-hand panel is hidden, so the empty list carries the prompt itself. */}
+        {offerConnect && rows.length === 0 && (
+          <li className="lg:hidden">
+            <ConnectPrompt variant="card" setupStarted={connect.setupStarted} emailEnabled={emailEnabled} />
           </li>
         )}
         {visible.map((r) => {
