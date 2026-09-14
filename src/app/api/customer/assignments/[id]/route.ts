@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { stagesForLeadType } from "@/components/dashboard/pipelineStage";
+import { normaliseTags } from "@/lib/leadTags";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -32,6 +33,7 @@ export async function PATCH(
     pipeline_stage?: string;
     due_to_call_date?: string | null;
     income_estimate?: number | null;
+    tags?: unknown;
   };
   try {
     body = await request.json();
@@ -50,6 +52,18 @@ export async function PATCH(
     );
   }
 
+  // Tags (0150, §56): an array of short trimmed strings, deduped. The DB CHECK
+  // enforces the same bounds; validating here is what turns a bad request into
+  // a 400 with a sentence rather than a 23514 with a constraint name.
+  let tags: string[] | undefined;
+  if (body.tags !== undefined) {
+    const parsed = normaliseTags(body.tags);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    tags = parsed.tags;
+  }
+
   const admin = createAdminClient();
 
   // Confirm ownership before mutating. The lead's type comes back too, because
@@ -58,7 +72,7 @@ export async function PATCH(
   const { data: assignment } = await admin
     .from("lead_assignments")
     .select(
-      "id, customer_id, viewed_at, first_contacted_at, status, customers!inner(user_id), leads(lead_type)"
+      "id, customer_id, viewed_at, first_contacted_at, status, pipeline_stage, customers!inner(user_id), leads(lead_type)"
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -181,6 +195,9 @@ export async function PATCH(
     update.income_estimate =
       body.income_estimate === null ? null : Number(body.income_estimate);
   }
+  if (tags !== undefined) {
+    update.tags = tags;
+  }
 
   // Stamp the status-change time whenever this PATCH changes `status`, so the
   // inactivity nudge can measure days since last activity. pipeline_stage is a
@@ -198,12 +215,40 @@ export async function PATCH(
     .update(update)
     .eq("id", params.id)
     .select(
-      "id, viewed_at, status, pipeline_stage, due_to_call_date, income_estimate"
+      "id, viewed_at, status, pipeline_stage, due_to_call_date, income_estimate, tags"
     )
     .single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  // Stage history (§56). `stage_changed` has been in the event vocabulary and
+  // the engagement weights since 0043/0063 and nothing ever wrote it, so a
+  // stage was overwritten in place with no record of where it came from. It is
+  // written HERE, server-side, after the update succeeded — never accepted
+  // from the browser (CLIENT_LEAD_EVENT_TYPES), because a customer able to
+  // post it could shield every lead they hold from escalation (§3, §40.7).
+  //
+  // ⚠️ From the day this deploys a stage move counts as engagement in
+  // get_assignment_engagement_scores and as "worked" in the capacity model,
+  // exactly as those functions always intended. That is a definition change in
+  // the series, recorded in CLAUDE.md the way §40.15 records whatsapp_click.
+  const previousStage = (assignment as { pipeline_stage?: string | null }).pipeline_stage ?? null;
+  if (
+    body.pipeline_stage !== undefined &&
+    body.pipeline_stage !== previousStage
+  ) {
+    const { error: eventError } = await admin.from("lead_events").insert({
+      assignment_id: params.id,
+      event_type: "stage_changed",
+      metadata: { from: previousStage, to: body.pipeline_stage },
+    });
+    if (eventError) {
+      // Best effort: the stage moved, the history row is reporting. Losing it
+      // must never fail the customer's edit.
+      console.error("[assignments] stage_changed event failed", eventError);
+    }
   }
 
   return NextResponse.json({ ok: true, assignment: data });

@@ -427,7 +427,8 @@ end $$;
 do $$
 declare v int;
 begin
-  select count(*) into v from pg_proc p
+  -- Distinct names, not signatures (0150 added a second goal signature).
+  select count(distinct p.proname) into v from pg_proc p
   where p.pronamespace = 'public'::regnamespace
     and p.proname in ('get_engagement_benchmarks','set_management_customer_goal',
                       'get_operator_proof','get_recent_wins_anonymised')

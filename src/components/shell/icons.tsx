@@ -1,0 +1,35 @@
+import {
+  BarChart3,
+  BookOpen,
+  Clock,
+  Code,
+  CreditCard,
+  FileText,
+  Filter,
+  LayoutGrid,
+  LifeBuoy,
+  Lightbulb,
+  MessageCircle,
+  Settings,
+  Shield,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
+import type { SidebarIconKey } from "@/lib/dashboardNav";
+
+export const SIDEBAR_ICONS: Record<SidebarIconKey, LucideIcon> = {
+  dashboard: LayoutGrid,
+  conversations: MessageCircle,
+  leads: Users,
+  followups: Clock,
+  filtering: Filter,
+  insights: BarChart3,
+  learn: BookOpen,
+  documents: FileText,
+  billing: CreditCard,
+  api: Code,
+  support: LifeBuoy,
+  feature: Lightbulb,
+  admin: Shield,
+  settings: Settings,
+};

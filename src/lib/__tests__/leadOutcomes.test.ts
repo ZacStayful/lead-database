@@ -226,7 +226,10 @@ describe("the panel renders from the data", () => {
 });
 
 describe("what stays out of the panel", () => {
-  const detail = code("components/dashboard/LeadDetail.tsx");
+  // §56.7 split the single-column page into a workflow hook and the
+  // "Work this lead" section; the pair is what the old file was.
+  const detail = code("components/lead/WorkThisLead.tsx");
+  const workflow = code("components/lead/useLeadWorkflow.ts");
 
   it("keeps the win and the own-data deletion as their own controls", () => {
     // A win and deleting your own lead are different acts, and delete is gated
@@ -245,7 +248,7 @@ describe("what stays out of the panel", () => {
     // Two copies would be §51.6's own warning turned on itself. The placement
     // is derived ONCE and the card appears once; the panel's own copy of it
     // lives inside LeadOutcomePanel, which is the other half of the pair.
-    expect(detail.match(/const deadLeadPlacement/g) ?? []).toHaveLength(1);
+    expect(workflow.match(/const deadLeadPlacement/g) ?? []).toHaveLength(1);
     expect(detail.match(/deadLeadPlacement === "banner"/g) ?? []).toHaveLength(
       1,
     );

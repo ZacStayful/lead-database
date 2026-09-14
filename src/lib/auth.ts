@@ -13,10 +13,22 @@ export function isAdminUser(user: User | null): boolean {
 /** Current authenticated user, or null. */
 export async function getUser(): Promise<User | null> {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user;
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return user;
+  } catch (err) {
+    // A stale cookie whose refresh token Supabase no longer recognises
+    // ("Invalid Refresh Token: Refresh Token Not Found") surfaced as a 500 on
+    // /dashboard/leads and /dashboard/settings/messaging in production. It is
+    // not a fault: the person is simply no longer signed in. Every caller
+    // already redirects to /login on null, which is the right outcome.
+    const code = (err as { code?: string } | null)?.code;
+    const isAuth = Boolean((err as { __isAuthError?: boolean } | null)?.__isAuthError);
+    if (isAuth || code === "refresh_token_not_found") return null;
+    throw err;
+  }
 }
 
 /**

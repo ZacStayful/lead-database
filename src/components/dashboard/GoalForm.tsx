@@ -12,13 +12,21 @@ import { useRouter } from "next/navigation";
  * rather than adjusting numbers locally. The goal is live, not a snapshot taken
  * when it was set — an edit reshapes the whole page on the next render.
  */
-export function GoalForm({ initialGoal }: { initialGoal: number | null }) {
+export function GoalForm({
+  initialGoal,
+  initialDue = null,
+}: {
+  initialGoal: number | null;
+  /** YYYY-MM-DD, or null for no deadline (0150, §56). */
+  initialDue?: string | null;
+}) {
   const router = useRouter();
   // With no goal set there is nothing to toggle open — the input IS the page.
   const [editing, setEditing] = useState(initialGoal === null);
   const [value, setValue] = useState(
     initialGoal === null ? "" : String(initialGoal)
   );
+  const [due, setDue] = useState(initialDue ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +37,7 @@ export function GoalForm({ initialGoal }: { initialGoal: number | null }) {
       const res = await fetch("/api/customer/goal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal }),
+        body: JSON.stringify({ goal, due: goal === null || !due ? null : due }),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) {
@@ -37,6 +45,7 @@ export function GoalForm({ initialGoal }: { initialGoal: number | null }) {
         return;
       }
       setValue(goal === null ? "" : String(goal));
+      if (goal === null) setDue("");
       setEditing(goal === null);
       router.refresh();
     } catch {
@@ -102,6 +111,25 @@ export function GoalForm({ initialGoal }: { initialGoal: number | null }) {
         className="mt-4 w-full max-w-[10rem] rounded-lg border border-black/10 px-4 py-3 text-sm disabled:opacity-60"
       />
 
+      <label
+        htmlFor="management-goal-due"
+        className="mt-5 block text-sm font-medium text-foreground"
+      >
+        By when? <span className="font-normal text-muted-foreground">(optional)</span>
+      </label>
+      <input
+        id="management-goal-due"
+        name="due"
+        type="date"
+        value={due}
+        onChange={(e) => {
+          setDue(e.target.value);
+          setError(null);
+        }}
+        disabled={saving}
+        className="mt-2 w-full max-w-[12rem] rounded-lg border border-black/10 px-4 py-3 text-sm disabled:opacity-60"
+      />
+
       {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -119,6 +147,7 @@ export function GoalForm({ initialGoal }: { initialGoal: number | null }) {
               type="button"
               onClick={() => {
                 setValue(String(initialGoal));
+                setDue(initialDue ?? "");
                 setError(null);
                 setEditing(false);
               }}

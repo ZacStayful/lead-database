@@ -13715,3 +13715,303 @@ Then, in order:
 Only then flip the switch on `/admin/messaging`. The email half works without
 steps 2 and 3; with the Calendly vars missing the booking check fails closed and
 nothing sends at all, which is the safe direction.
+
+---
+
+## 56. The CRM redesign, and the gaps it found *(0150)*
+
+A GHL-style redesign of the customer dashboard was handed off from Claude
+Design on 2026-09-14: a dark sidebar shell, a KPI home, a three-column
+**Conversations** inbox (list · thread · contact panel) and a **Lead detail**
+screen with an activity column. Before building it, every element was
+cross-checked against what the product actually does. §56.1–56.6 record what
+that found and what 0150 closes; §56.7 records the screens.
+
+### 56.1 — The finding that reframed the design
+
+⚠️ **The inbox had no supply.** `lead_messages` rows exist only for a customer
+with a connected TimelinesAI workspace or a verified Resend domain, and at the
+time of writing that is nobody (§42.3, §55). The path the whole book uses — the
+`wa.me` hand-off, `tel:` and `mailto:` — writes a `lead_events` row and nothing
+else (§40.15). Built as drawn, the inbox rendered empty for every customer.
+
+The decision taken: the inbox lists **every lead the operator has approached**,
+whether the approach left a message behind or only a click, and the two are
+never confused. `src/lib/messaging/inbox.ts` folds threads and the latest
+contact click into one row per lead; `threadItems.ts` merges messages, clicks
+and due contact-plan rungs into one thread. ⚠️ **A click row carries no
+delivery status and is worded as what the operator did on their own device.**
+A test pins that the click preview has no `status` key at all.
+
+### 56.2 — What the cross-check found, in one list
+
+| Design element | Verdict |
+|---|---|
+| SMS channel, chips, "sends from your Twilio number" | ✂️ Fiction. Channels are `('email','whatsapp')` by CHECK; `src/lib/sms.ts` texts the OPERATOR. Cut everywhere. |
+| Top-bar Call button, date-range picker, product SWITCHER, email attachment chip | ✂️ Cut (no context / nothing windowed / both products render side by side / no attachment column). |
+| "In discussion" funnel row | ✂️ A legal status no customer UI ever sets (`progress-report/route.ts:17`). Funnel is Received → Contacted → `meetingStagesForLeadType()` → Won. |
+| Enquiry date | ⛔ Stays hidden (§11). Received (`assigned_at`) is the date. |
+| "Est. monthly income" | ⛔ Two numbers, never merged (§25): "Stayful projection" (`gross_annual_income`) and editable "Your estimate" (`income_estimate`). |
+| Quiet hours "08:00–20:00" | Wrong; 09:00–20:00 London from `channelAvailability().quietUntil` (§40.12). |
+| Inbox, starred, mark read, tags, snippets, goal deadline, activity timeline, stage history | 🔴 None existed. **0150 and this PR close them all.** |
+| Replacements in nav, Request a feature, Generate a draft in the composer | Missing from the design; all live features, all kept. |
+| The lead page's 27 controls vs the design's 10 | The contact panel gains a second "Work this lead" section holding every existing control — the outcome/report panel above all (§51.10 measured what hiding it costs). |
+
+### 56.3 — What 0150 adds, and what it deliberately does not
+
+- `lead_message_threads.starred_at`, plus the index the inbox lists by
+  (`customer_id, last_message_at desc`) and the two unindexed-FK indexes the
+  advisor had flagged on `lead_id`.
+- `lead_assignments.tags text[]` — **per assignment, never per lead**: two
+  holders of one lead must never see each other's labels. Bounds in
+  `lead_tags_valid()` (≤20, each 1–40 trimmed chars); `normaliseTags()` in
+  `src/lib/leadTags.ts` mirrors it so a bad request is a sentence, not a 23514.
+- `customers.management_customer_goal_due` and a **two-argument**
+  `set_management_customer_goal(integer, date)`. ⚠️ **The one-argument function
+  is untouched and sits beside it.** A defaulted second parameter creates an
+  overload, and the goal route running in production at apply time would have
+  failed `function is not unique` (§34/§35). The new signature carries its own
+  `authenticated` grant (invariant 7). ⚠️ **Four SQL suites counted `pg_proc`
+  ROWS to assert invariant 7 and read five where four functions exist; they
+  now count `distinct proname`**, which is what the invariant says.
+- Snippets on `message_templates` (0116, shipped empty): `title`, `'any'` as a
+  channel, a 480-char / 60-char CHECK on customer rows only, and a raw-link
+  refusal in `validateSnippet()` (§40.14's rule).
+- **Nothing else.** No routing function is replaced; no balance, counter, pacing
+  or capacity column is touched.
+
+### 56.4 — ⚠️ `stage_changed` is now WRITTEN, and that is a definition change
+
+`stage_changed` has been in the event CHECK since 0043 and weighted in
+`get_assignment_engagement_scores` since 0063, and **nothing in `src/` ever
+inserted it** — a stage was overwritten in place with no record of where it
+came from, so "Stage → Web meeting booked" on the design's activity column had
+no data. `PATCH /api/customer/assignments/[id]` now writes it server-side after
+a successful stage change, with `metadata {from, to}`.
+
+⚠️ **It must never join `CLIENT_LEAD_EVENT_TYPES`** — a customer able to post
+it could shield every lead they hold from escalation (§3, §40.7).
+`leadActivity.test.ts` pins the browser-reportable set at the same four.
+
+⚠️ **From the deploy date, a stage move counts as engagement** in the scorer and
+as "worked" in the capacity and recycling CTEs, exactly as those functions
+always intended. Read the step in `worked_rate` / `contact_rate` from that date
+as a definition change, not as operators improving — the same note §40.15
+carries for `whatsapp_click`.
+
+### 56.5 — Bugs fixed on the way
+
+- **`AuthApiError: Invalid Refresh Token` 500'd `/dashboard/leads` and
+  `/dashboard/settings/messaging`** (8 times, 2 users, production). `getUser()`
+  now treats an auth error as signed out; every caller already redirects.
+- **`/dashboard/leads?activity=new|contacted`** — the Today panel has linked
+  there since §54 and `LeadsList` never read the parameter. It does now, plus
+  `?tag=`.
+- **Two `statusLabel` implementations** ordered Opened and Read differently
+  (`display.ts` vs a private copy in the composer). One definition now.
+- **Admin's event label map** lacked `whatsapp_click`, `message_sent`,
+  `message_received`. `src/lib/leadEvents.ts` is the shared map, in two voices.
+
+Recorded but not fixed here: intermittent Supabase gateway timeouts and
+Cloudflare 525s across every cron since 9 Sep (the project reads
+`ACTIVE_HEALTHY`); PR #74 carries a migration numbered 0097, long since
+taken, and cannot merge as-is. ~~60-second runtime timeouts on the two Monday
+syncs and two crons that could use `maxDuration = 300` (§2)~~ — **raised to 300
+in §56.7 on the two syncs and `poll-whatsapp-status`.** The poller's 45-second
+wall clock is unchanged: it is checked between items, so what overran was one
+slow provider or gateway call, and a longer ceiling stops the kill without
+letting a run reach the next 5-minute firing. `prospect-nudges` stays at 60 —
+it fires every minute, and a 300-second ceiling on a 60-second schedule is
+five runs deep even though claim-by-write makes the overlap safe.
+
+### 56.6 — New routes, all session-authenticated, none on `/api/v1`
+
+`GET /api/customer/messaging/threads` · `POST …/threads/[leadId]/read`
+(`{read: boolean}`) · `POST|DELETE …/threads/[leadId]/star` ·
+`GET|POST …/snippets` · `PATCH|DELETE …/snippets/[id]` · `PATCH
+/api/customer/assignments/[id]` accepts `tags` · `POST /api/customer/goal`
+accepts `due`. §27.1's rule holds: the public API stays read-only.
+
+### Verification
+
+All 150 migrations applied to a scratch **Postgres 16.13** from empty, zero
+failures; 0150 re-applied twice; **all thirteen SQL suites pass**, including
+`0150_crm_inbox_foundations_test.sql` (both goal signatures and their grants,
+the one-arg body never mentioning the due date, every tag bound in both
+directions, the snippet CHECK binding customer rows only, all four indexes).
+
+**2,002 vitest cases green** (44 new: inbox grouping/ordering/preview, thread
+items, activity feed, tags, snippets), `npx tsc --noEmit` clean, `npm run lint`
+clean.
+
+⚠️ **Not yet exercised in a browser.** No inbox page existed when this was
+written — see §56.7 —
+so the routes have been driven only by their units.
+
+### Deployment order — migration BEFORE code
+
+✅ **0150 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-14, before the
+merge** (§1.1), verbatim rather than comment-stripped, and verified there
+rather than assumed:
+
+- **Pre-apply, no collision** on any of the four columns, the function, the
+  three CHECKs or the four indexes; exactly one goal signature existed.
+- **Post-apply, both new bodies hash-match the scratch build from the repo
+  file**: `set_management_customer_goal(integer, date)` `ed828c6c…` (1254
+  chars), `lead_tags_valid` `c31d2ddc…`. **The one-argument function is
+  byte-for-byte unchanged** (`9f7a5507…` before and after). Grants:
+  `authenticated` true, `anon` false, `service_role` true on the new
+  signature; invariant 7's four names all still `authenticated`-executable.
+- **Nothing moved.** 54 customers, 501 leads and 514 assignments untouched,
+  and an md5 of every customer's balances, counters and goal identical before
+  and after (`983c266a7f7452886fa8d0cb8008af56`). All 514 assignments carry
+  `tags = '{}'`, none null; 0 starred threads; 0 goal due dates.
+- `get_advisors` reports **no new finding** beyond the expected
+  signed-in-executable warning for the second goal signature — the same line
+  its sibling and the other three invariant-7 functions already carry.
+
+⚠️ Production's one-argument goal body differs from the 0051 file by comment
+lines only (`9f7a5507…` vs the scratch build's `370e85e7…`) — the
+comment-stripped apply practice §48.9 records, not drift.
+
+It is additive and inert: every new column defaults to today's meaning, the
+two-argument goal function has no caller until the route ships, and the
+one-argument function it sits beside is unchanged. Code arriving first would
+have failed every assignment PATCH that sent `tags`, and nothing else.
+
+### 56.7 — The screens *(no migration)*
+
+Every route under `/dashboard` now renders inside one frame: a dark 248px
+sidebar, a 60px top bar, and a per-section sub-tab strip. Three screens were
+rebuilt to the design — the home, the inbox (`/dashboard/conversations`,
+`/[leadId]`, `/snippets`) and the lead page — and every other page kept its
+body and gained the strip. No backend changed; the libraries and routes 0150
+shipped without a consumer now have one.
+
+#### The nav model is one pure function
+
+`src/lib/dashboardNav.ts` builds the sidebar and every tabset from the same
+gates the old header used (messaging switch, held products, admin) and is
+**import-free** so the `"use client"` shell can share it with the server
+(§21.8's rule). It restates two paths — `REPLACEMENT_PATH` and
+`FEATURE_REQUEST_HEADER_PATH` — and `dashboardNav.test.ts` pins the
+restatements against their sources and checks **every href resolves to a
+page on disk**, the `productContext.ts` discipline.
+
+Three things the design left out are kept, deliberately:
+
+- **"Request a feature" is a direct sidebar item** (§50.8). `entryPoints.test.ts`
+  now guards the nav model rather than the header it replaced.
+- **"Replace a lead" is in the Leads tabset** (§53 — a live money feature).
+- **Admin** is appended for admins, as before.
+
+The design's business switcher is a **static account chip**: both products
+render side by side everywhere (invariant 6), so there is nothing to switch
+between. Its Call button is cut (nobody to call). ⌘K is a client-side filter
+over the nav and the customer's own leads, handed down by the layout — no
+search endpoint, so §27.1 is untouched.
+
+`DesktopNav` / `MobileNav` survive because `admin/layout.tsx` still uses them.
+
+#### The home
+
+`src/lib/home/*` is pure and tested: the greeting reads the **London** hour
+(§40.12); the funnel is Received → Contacted → each `meetingStagesForLeadType`
+stage → Won, **with no "In discussion" row** (§56.2), cumulative and
+next-step percentages from counts; lead sources are **postcode areas, never
+towns** (§40.14); income across signed landlords sums `gross_annual_income`
+and never `income_estimate` (§25). The page loads nothing it did not already
+load except `fetchInboxRows`, which feeds Recent conversations and the reply
+preview on Follow-up tasks. The follow-up tasks are the SAME due-attempt scan
+the 08:15 digest runs (`fetchDueAttempts`). `LeadFeed` stays at the bottom —
+it is the realtime arrival surface and not in the design.
+
+#### One loader, two screens
+
+`src/lib/leadWorkspace.ts` is the old lead page's body lifted verbatim plus one
+`lead_events` read that feeds both `buildThreadItems` and `buildLeadActivity`.
+The lead page (Lead details · Thread · Activity) and the inbox's thread page
+(Inbox · Thread · Contact details) both call it and both render the same
+`ContactPanel`, so the two cannot drift. Selecting an inbox row is a
+navigation: every thread is one server pass, never an N+1 (§56.1's reason).
+
+`useLeadWorkflow` holds the state and handlers `LeadDetail.tsx` held — moved,
+not rewritten — and `LeadWorkspace` fires `detail_opened` **exactly once**;
+`redesignGuards.test.ts` pins that no other redesign file records it.
+
+#### What the contact panel keeps, and where
+
+Fields in the design's order with the two corrections: **Received**
+(`assigned_at`) and no enquiry date (§11); **"Your estimate"** (the operator's
+`income_estimate`) on the panel and **"Stayful projection"** (`IncomeProjection`)
+under "Work this lead", never merged (§25). Tags are the 0150 editor. Notes
+render **without** the messages prop — the thread column shows those.
+
+**"Work this lead"** is every control the single-column page had, in order and
+under its old gate (`leadOutcomes()`, the placement decided once in the hook):
+the report card, the outcome panel, Mark as contacted / signed, the closed and
+won banners with Undo, the contact timeline, the projection + report link +
+analysis offer, the landlord's answers, the GR analyser link, the toolbar, the
+presentation hint, the keep-up-to-date note, and Delete for own leads.
+`redesignGuards.test.ts` lists them, and `deadLeadPolicy.test.ts`'s banned-word
+sweep now covers `ContactPanel.tsx` and `WorkThisLead.tsx`. ⚠️ §51.10 measured
+what hiding the report control costs; it is reachable on every lead.
+
+#### The thread and the composer
+
+`ThreadColumn` renders `buildThreadItems` with London date separators: a
+message bubble carries a status and a tick; **a click row carries no status**
+(§40.15); an attempt row is the contact plan's rung as a system line. Opening
+a thread with replies waiting posts to the inbox's `read` verb, not the thread
+GET's side effect. Star and mark-unread are **disabled with the route's own
+sentence** on a click-only lead — both routes 409 there, and a control that
+silently fails is worse than one that says why.
+
+`useComposer` / `ComposerStates` are `LeadMessageButtons`' state and copy
+lifted verbatim — a failed send never clears the text, a draft never silently
+overwrites, a failed draft is a muted note. Chips are **WhatsApp / Email only**
+(there is no customer→landlord SMS anywhere; a guard fails the suite on the
+word). The hint reads `quietUntil` and never a literal hour. Snippets insert at
+the cursor. With the platform switch off the composer becomes the §40.15
+hand-off — write here, open in the operator's own WhatsApp, recorded as
+`whatsapp_click` and never `message_sent`.
+
+`LeadDetail.tsx` and `LeadMessageButtons.tsx` are **deleted**; the guard test
+fails if either comes back.
+
+#### Two things the pre-merge review changed
+
+- **⌘K's lead list is fetched lazily.** The first cut selected 500
+  `lead_assignments` rows in the layout on every dashboard request, for a
+  control most visits never open — on a Supabase gateway already timing out
+  (§56.5). `GET /api/customer/leads/palette` now serves the same rows on the
+  palette's first open, cached for the session. It takes **no query parameter
+  and no body** — a fixed-shape named operation, so §27.1's rule holds — and a
+  guard pins that the layout never selects from `lead_assignments` again.
+  Accepted: a lead assigned mid-session is absent from the palette until reload.
+- **The inbox says how to connect.** Nobody has a connected workspace (§56.1),
+  so an inbox of click rows with no guidance read as broken. `ConnectPrompt`
+  replaces the empty state, and sits as a dismissable card above a list where
+  every row is a click and nothing has come back. Its copy is `SETUP_BLURB`
+  and the two TimelinesAI constants — never restated, so it cannot drift from
+  the composer (§40.11) — and it keys on the **customer's** connection row,
+  never the platform switch: a connected operator with a quiet inbox sees the
+  plain empty state. The free wa.me floor is stated too (§40.15).
+
+#### Verification
+
+2,038 vitest cases green (the 70 new ones cover the nav model, the home
+helpers, the London-time labels and the guards above), `npx tsc --noEmit`
+clean, `npm run lint` clean, `npm run build` passes and registers
+`/dashboard/conversations`, `/dashboard/conversations/[leadId]` and
+`/dashboard/conversations/snippets`.
+
+⚠️ **Not yet exercised in a browser or against real data.** There is no local
+Supabase and a Vercel preview is behind Deployment Protection (§45), so the
+screens were built against the design file and the types. After merge, on
+`leads.stayful.co.uk`: the sidebar on every page and the mobile drawer at
+phone width, ⌘K, the unread badge, the home on a dual-product account, the
+inbox on a row with real messages (Zac's TimelinesAI token is `revoked` — §55),
+star / mark-read / tags / snippets round trips, a wa.me tap appearing as a
+click row and not a message, "n / N" and ←/→ on the lead page, and the
+outcome panel still reachable under "Work this lead".

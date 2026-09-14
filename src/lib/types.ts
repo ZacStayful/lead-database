@@ -257,6 +257,9 @@ export interface Customer {
   // column's CHECK forbids zero).
   management_customer_goal: number | null;
   management_customer_goal_updated_at: string | null;
+  // The date the goal is wanted by (0150, §56). YYYY-MM-DD or null; cleared
+  // with the goal. Written only through set_management_customer_goal(int, date).
+  management_customer_goal_due: string | null;
   // Monotonic count of management leads ever delivered. NOT a pacing counter
   // (leads_received_this_month resets on the anchor day) and NOT an allocation
   // gate (lead_balance is spent and topped up) — it only ever counts up.
@@ -659,6 +662,13 @@ export interface LeadAssignment {
   landlord_referral_error: string | null;
   landlord_referral_attempts: number;
   landlord_referral_next_attempt_at: string | null;
+  /**
+   * Operator-chosen labels on THEIR copy of the lead (0150, §56). Per
+   * assignment, never per lead — two holders must not see each other's. At
+   * most 20, each 1–40 trimmed characters (the DB CHECK). Never read by
+   * routing, scoring or reporting.
+   */
+  tags: string[];
 }
 
 /**

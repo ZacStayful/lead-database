@@ -30,6 +30,29 @@ const config: Config = {
           dark: "#3B6D11",
           foreground: "#ffffff",
         },
+        // CRM redesign tokens (§56.7). Every value is the design file's own;
+        // depth in the redesign comes from 1px `line` borders, never shadows.
+        page: "#f3f5f3",
+        line: "#e3e7e3",
+        rail: "#eef1ee",
+        control: "#d9ded9",
+        ink: {
+          DEFAULT: "#1a1a19",
+          2: "#676f67",
+          3: "#4b544c",
+          placeholder: "#9a9f9a",
+        },
+        sidebar: {
+          DEFAULT: "#1f2a22",
+          text: "#c9d3cb",
+          muted: "#9fb0a4",
+          chip: "#2a3830",
+          line: "#38493f",
+        },
+        bubble: "#dcebd2",
+        wa: "#25a244",
+        alert: "#d64545",
+        attention: "#d97706",
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -54,6 +77,19 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+      },
+      fontFamily: {
+        display: ['"Bricolage Grotesque"', '"Hanken Grotesk"', "sans-serif"],
+        body: [
+          '"Hanken Grotesk"',
+          "-apple-system",
+          "BlinkMacSystemFont",
+          '"Segoe UI"',
+          "Roboto",
+          "Helvetica",
+          "Arial",
+          "sans-serif",
+        ],
       },
       borderRadius: {
         lg: "var(--radius)",

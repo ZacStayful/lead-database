@@ -8,9 +8,12 @@ import {
   featureRequestPath,
 } from "@/lib/featureRequest";
 
-const LAYOUT = readFileSync(join(process.cwd(), "src/app/dashboard/layout.tsx"), "utf8")
+// §56.7: the header became a sidebar; the nav model is the one place the
+// entry is declared, so the guard reads that file.
+const NAV = readFileSync(join(process.cwd(), "src/lib/dashboardNav.ts"), "utf8")
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/^\s*\/\/.*$/gm, "");
+const SIDEBAR = readFileSync(join(process.cwd(), "src/components/shell/Sidebar.tsx"), "utf8");
 
 describe("the feature request link", () => {
   it("attributes each entry point differently", () => {
@@ -38,32 +41,22 @@ describe("the feature request link", () => {
   });
 });
 
-describe("the dashboard header", () => {
-  it("carries the feature request as a top-level entry", () => {
-    expect(LAYOUT).toContain("FEATURE_REQUEST_HEADER_PATH");
-    expect(LAYOUT).toContain("FEATURE_REQUEST_LABEL");
+describe("the dashboard sidebar", () => {
+  it("carries the feature request as its own entry, on the header path", () => {
+    // dashboardNav.ts is import-free by design, so it restates the path; the
+    // nav test pins the restatement against featureRequest.ts.
+    expect(NAV).toContain(`"${FEATURE_REQUEST_HEADER_PATH}"`);
+    expect(NAV).toContain('label: "Request a feature"');
   });
 
-  it("is a direct link, not a dropdown", () => {
+  it("is a direct link, not a group", () => {
     // A group would put the promoted thing one click deeper than the footer
     // link it replaces, which is the opposite of the point.
-    expect(LAYOUT).toMatch(
-      /\{\s*label:\s*FEATURE_REQUEST_LABEL,\s*href:\s*FEATURE_REQUEST_HEADER_PATH\s*\}/
-    );
+    expect(NAV).toMatch(/key:\s*"feature",\s*label:\s*"Request a feature",\s*href:\s*FEATURE_REQUEST_HREF/);
   });
 
-  it("is not the last entry, where the bell collision happened", () => {
-    // "Admin" is appended after this array for admins, so anything sitting last
-    // here is the entry that meets the notification bell first when the row
-    // runs out of room.
-    const feature = LAYOUT.indexOf("FEATURE_REQUEST_LABEL,");
-    const account = LAYOUT.indexOf('label: "Account"');
-    expect(feature).toBeGreaterThan(-1);
-    expect(account).toBeGreaterThan(feature);
-  });
-
-  it("keeps the label the customer already knows from the footer", () => {
+  it("keeps the label the customer already knows, and the bug link beside Settings", () => {
     expect(FEATURE_REQUEST_LABEL).toBe("Request a feature");
-    expect(LAYOUT).toContain('href="/feedback?type=feature"');
+    expect(SIDEBAR).toContain('href="/feedback?type=bug"');
   });
 });

@@ -79,7 +79,10 @@ export const ROUTES: RouteEntry[] = [
       "One lead: contact details, income analysis, notes, pipeline stage, and the one outcome panel that ends it.",
     files: [
       "src/app/dashboard/leads/[id]/page.tsx",
-      "src/components/dashboard/LeadDetail.tsx",
+      "src/lib/leadWorkspace.ts",
+      "src/components/lead/LeadWorkspace.tsx",
+      "src/components/lead/ContactPanel.tsx",
+      "src/components/lead/WorkThisLead.tsx",
       "src/components/dashboard/LeadOutcomePanel.tsx",
       "src/lib/leadOutcomes.ts",
       "src/lib/outcomeReasons.ts",
@@ -89,6 +92,43 @@ export const ROUTES: RouteEntry[] = [
       "src/lib/__tests__/outcomeReasons.test.ts",
     ],
     section: 5,
+  },
+  {
+    path: "/dashboard/conversations",
+    purpose:
+      "The inbox: every landlord they have approached, by a connected channel or a tap on their own phone, newest first.",
+    files: [
+      "src/app/dashboard/conversations/page.tsx",
+      "src/lib/messaging/inbox.ts",
+      "src/components/conversations/InboxList.tsx",
+    ],
+    tests: ["src/lib/messaging/__tests__/inbox.test.ts"],
+    section: 56,
+  },
+  {
+    path: "/dashboard/conversations/[leadId]",
+    purpose:
+      "One landlord's thread beside the inbox, with the contact panel: messages, their own clicks, the follow-up rungs, and the composer.",
+    files: [
+      "src/app/dashboard/conversations/[leadId]/page.tsx",
+      "src/lib/leadWorkspace.ts",
+      "src/lib/messaging/threadItems.ts",
+      "src/components/conversations/ThreadColumn.tsx",
+      "src/components/conversations/Composer.tsx",
+    ],
+    tests: ["src/lib/messaging/__tests__/threadItems.test.ts"],
+    section: 56,
+  },
+  {
+    path: "/dashboard/conversations/snippets",
+    purpose: "Saved replies they can drop into a message.",
+    files: [
+      "src/app/dashboard/conversations/snippets/page.tsx",
+      "src/lib/messaging/snippets.ts",
+      "src/components/conversations/SnippetsPanel.tsx",
+    ],
+    tests: ["src/lib/__tests__/leadTags.test.ts"],
+    section: 56,
   },
   {
     path: "/dashboard/leads/add",
