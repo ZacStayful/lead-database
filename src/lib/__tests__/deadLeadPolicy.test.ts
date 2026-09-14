@@ -664,6 +664,10 @@ describe("the allowance stays unpublished in the COPY too", () => {
     // Added by 0139: the card now carries the report control, so it is a
     // customer-facing §51 surface like the other five.
     "components/dashboard/LeadCard.tsx",
+    // Added by §56.7: the contact panel and its "Work this lead" section are
+    // where the report control now renders.
+    "components/lead/ContactPanel.tsx",
+    "components/lead/WorkThisLead.tsx",
   ];
 
   for (const file of surfaces) {
