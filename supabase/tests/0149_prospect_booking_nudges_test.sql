@@ -71,10 +71,17 @@ begin
     'false',
     'the switch ships false');
 
+  -- ⚠️ 0149 seeds 30; 0151 (§57) RAISES IT TO 200 and this assertion follows
+  -- the schema rather than the migration that first wrote it. The cap is
+  -- global and was sized for ~15 enquiries a month, which Facebook lead ads
+  -- can reach in a day — and the two populations share one budget with no
+  -- priority, so a spike would stop the chase for website enquirers too.
+  -- Asserting 30 here would mean a rebuild-from-empty disagrees with every
+  -- real database, which is the opposite of what this suite is for.
   perform test_util.assert_eq(
     (select value from public.system_settings where key = 'prospect_nudge_daily_cap'),
-    '30',
-    'the daily cap is seeded');
+    '200',
+    'the daily cap is seeded, and 0151 raised it');
 end $$;
 
 -- ---------------------------------------------------------------------------
