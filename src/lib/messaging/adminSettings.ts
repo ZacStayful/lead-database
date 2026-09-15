@@ -242,6 +242,23 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
   // set once at go-live is the position `landlord_nudge_from` and
   // `contact_notify_from` are already in. Moving it is a SQL edit.
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // §57 — Facebook lead ads arriving via the Monday enquiries board.
+  //
+  // ⚠️ The companion `enquiry_sync_from` cutoff is deliberately NOT here. It
+  // is a timestamp set once at go-live, the position landlord_nudge_from and
+  // contact_notify_from are already in — and this list has exactly two field
+  // kinds. More to the point, the cutoff is read fail-closed precisely because
+  // a bad value would enrol the whole back catalogue, and an admin able to
+  // edit it from a screen is that bad value waiting to happen. Moving it is a
+  // SQL edit.
+  // -------------------------------------------------------------------------
+  {
+    key: "enquiry_sync_enabled",
+    label: "Pull enquiries from Monday",
+    kind: "boolean",
+    fallback: "false",
+  },
   {
     key: "prospect_nudge_enabled",
     label: "Chase enquirers to book",

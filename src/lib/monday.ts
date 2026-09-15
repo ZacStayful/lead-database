@@ -388,7 +388,13 @@ async function mondayGraphql<T>(
 
 export interface MondayStatusWriteResult {
   written: boolean;
-  skipped?: "not_configured" | "not_status_board";
+  /**
+   * `unchanged` is `setEnquiryMobile` only: the cell already reads what we
+   * would write, so no request was made. Reported rather than folded into
+   * `written: false` so the sync can say "nothing to tidy" separately from
+   * "we could not tidy it" (§23.4's endDateNeedsWrite suppression).
+   */
+  skipped?: "not_configured" | "not_status_board" | "unchanged";
   error?: string;
 }
 
@@ -421,6 +427,187 @@ export interface MondayStatusWriteResult {
  * resumes from a pause, recovers a failed payment or re-subscribes. Those two
  * automation actions are removed; the group moves stay.
  */
+/**
+ * One item on the enquiries board, with everything an enquiry needs (§57).
+ *
+ * ⚠️ A SEPARATE SHAPE FROM `EnquiryBoardItem`, NOT A WIDENING OF IT. That one
+ * is projected down to what customer MATCHING needs and has four callers tuned
+ * to it; this one carries the seven form cells plus the item's creation time.
+ * Widening the shared shape would make every one of those callers pay for
+ * fields they never read.
+ */
+export interface EnquiryIntakeItem {
+  id: string;
+  name: string;
+  email: string;
+  mobile: string;
+  /** The board's separate `phone` column. Empty on Facebook-created items. */
+  phoneCell: string;
+  websiteUrl: string;
+  propertiesManaged: string;
+  preferredPlan: string;
+  currentLeadSource: string;
+  leadInterest: string;
+  statusLabel: string;
+  /** ⚠️ The API's own timestamp. NEVER the board's "Date added" cell. */
+  createdAt: string;
+}
+
+/** The board's `phone`-type column, beside the text one the app writes. */
+const ENQUIRY_PHONE_COLUMN = "phone_mm6c5qkc";
+
+/** The group Facebook lead ads and the website form both land in. */
+const ENQUIRY_NEW_GROUP = "topics";
+
+/**
+ * The newest items in the "New enquiries" group, for the enquiry sync.
+ *
+ * NEVER THROWS — a result object, as `fetchEnquiryBoardIndex` returns, because
+ * the caller is a cron that must report a Monday outage rather than die of it.
+ *
+ * ⚠️ ORDERED NEWEST-FIRST AND FILTERED SERVER-SIDE. Both were checked against
+ * the live board. Without the ordering a busy group could hide a fresh lead
+ * behind the page boundary — and this reads ONE page, deliberately, because it
+ * runs every minute and the group only holds what nobody has worked yet.
+ */
+export async function fetchNewEnquiryItems(
+  limit = 50
+): Promise<{ ok: true; items: EnquiryIntakeItem[] } | { ok: false; error: string }> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { ok: false, error: "not_configured" };
+
+  const columnIds = [
+    ENQUIRY_COLUMN_MAP.email,
+    ENQUIRY_COLUMN_MAP.mobile,
+    ENQUIRY_COLUMN_MAP.website_url,
+    ENQUIRY_COLUMN_MAP.properties_managed,
+    ENQUIRY_COLUMN_MAP.preferred_plan,
+    ENQUIRY_COLUMN_MAP.current_lead_source,
+    ENQUIRY_LEAD_INTEREST_COLUMN,
+    ENQUIRY_STATUS_COLUMN,
+    ENQUIRY_PHONE_COLUMN,
+  ];
+
+  const query = `query ($limit: Int!) {
+    boards(ids: ${enquiryBoardId()}) {
+      items_page(
+        limit: $limit
+        query_params: {
+          rules: [{ column_id: "group", compare_value: ["${ENQUIRY_NEW_GROUP}"], operator: any_of }]
+          order_by: [{ column_id: "__creation_log__", direction: desc }]
+        }
+      ) {
+        items {
+          id
+          name
+          created_at
+          column_values(ids: ${JSON.stringify(columnIds)}) { id text }
+        }
+      }
+    }
+  }`;
+
+  try {
+    const data = await mondayGraphql<{
+      boards?: { items_page: { items: (MondayItem & { created_at?: string })[] } }[];
+    }>(token, query, { limit });
+
+    const page = data.boards?.[0]?.items_page;
+    // ⚠️ A MISSING BOARD IS NOT AN EMPTY BOARD. Monday returns `boards: []` for
+    // an id it cannot see, which would otherwise read as "nothing new today"
+    // for ever — silent, plausible, and indistinguishable from a quiet week.
+    if (!page) {
+      return {
+        ok: false,
+        error: `Board ${enquiryBoardId()} returned no data — check the board id and the token's access to it`,
+      };
+    }
+
+    return {
+      ok: true,
+      items: (page.items ?? []).map((item) => ({
+        id: String(item.id),
+        name: item.name ?? "",
+        email: textFor(item, ENQUIRY_COLUMN_MAP.email),
+        mobile: textFor(item, ENQUIRY_COLUMN_MAP.mobile),
+        phoneCell: textFor(item, ENQUIRY_PHONE_COLUMN),
+        websiteUrl: textFor(item, ENQUIRY_COLUMN_MAP.website_url),
+        propertiesManaged: textFor(item, ENQUIRY_COLUMN_MAP.properties_managed),
+        preferredPlan: textFor(item, ENQUIRY_COLUMN_MAP.preferred_plan),
+        currentLeadSource: textFor(item, ENQUIRY_COLUMN_MAP.current_lead_source),
+        leadInterest: textFor(item, ENQUIRY_LEAD_INTEREST_COLUMN),
+        statusLabel: textFor(item, ENQUIRY_STATUS_COLUMN),
+        createdAt: item.created_at ?? "",
+      })),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Monday read failed" };
+  }
+}
+
+/**
+ * Tidy the Mobile cell to the E.164 form we store (§57).
+ *
+ * The board is a mix — Facebook sends whatever the lead typed, and one live
+ * row reads `07401402448` where every other reads `+447…`. Writing the
+ * resolved form back keeps the board consistent with the database and gives
+ * the customer matcher a cleaner signal.
+ *
+ * ⚠️ WRITES `text_mm50hfvg` ONLY, NEVER `phone_mm6c5qkc`. Nothing in this app
+ * has ever written that second column, and §23.1's rule about the board's
+ * duplicate date columns applies: a cell we do not own is a cell we do not
+ * touch.
+ *
+ * ⚠️ SUPPRESSED WHEN IT WOULD CHANGE NOTHING — the `endDateNeedsWrite`
+ * discipline (§23.4). Facebook usually sends `+447…` already, so most items
+ * need no write at all and the sync should cost no Monday HTTP for them.
+ *
+ * NEVER THROWS, and cosmetic by design: it runs after the customer and the
+ * ladder are recorded, so a Monday failure can never cost us the enquiry.
+ */
+export async function setEnquiryMobile(params: {
+  itemId: string;
+  mobile: string;
+  currentCell: string;
+  boardId?: string | null;
+}): Promise<MondayStatusWriteResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { written: false, skipped: "not_configured" };
+
+  const targetBoard = params.boardId ?? enquiryBoardId();
+  if (targetBoard !== enquiryBoardId()) {
+    return { written: false, skipped: "not_status_board" };
+  }
+
+  const next = params.mobile.trim();
+  if (!next || next === params.currentCell.trim()) {
+    return { written: false, skipped: "unchanged" };
+  }
+
+  const query = `mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+    change_multiple_column_values(
+      board_id: $boardId
+      item_id: $itemId
+      column_values: $values
+      create_labels_if_missing: false
+    ) { id }
+  }`;
+
+  try {
+    await mondayGraphql(token, query, {
+      boardId: enquiryBoardId(),
+      itemId: params.itemId,
+      values: JSON.stringify({ [ENQUIRY_COLUMN_MAP.mobile]: next }),
+    });
+    return { written: true };
+  } catch (err) {
+    return {
+      written: false,
+      error: err instanceof Error ? err.message : "Monday mobile write failed",
+    };
+  }
+}
+
 export async function setEnquiryStatus(params: {
   itemId: string;
   label: EnquiryStatusLabel | EnquiryChaseLabel;
@@ -595,6 +782,21 @@ export function emailsFromCell(cell: string): string[] {
  * nothing usable. Mirrors 0070's normalisation so the two never disagree about
  * whether a number matches.
  */
+/**
+ * Lower-case, collapse whitespace — enough to match "Olly  Pearce".
+ *
+ * Lives here beside `phoneMatchKey` and `emailsFromCell` because all three are
+ * the primitives for deciding whether two records describe the same person,
+ * and two of the three already did. §57 gave it a second caller (the enquiry
+ * sync's name-corroborated phone tier), and one definition is the whole point
+ * — the alternative is the "one thing written twice" problem §20 and §26.7
+ * both record.
+ */
+export function normaliseName(raw: string | null | undefined): string | null {
+  const trimmed = (raw ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  return trimmed || null;
+}
+
 export function phoneMatchKey(raw: string | null | undefined): string {
   const digits = (raw ?? "").replace(/\D/g, "");
   // The placeholder Monday sometimes carries for "no number given".

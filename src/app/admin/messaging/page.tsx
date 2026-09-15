@@ -37,6 +37,7 @@ export default async function AdminMessagingPage() {
   const user = await getUser();
 
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const [
     settingRows,
@@ -55,6 +56,12 @@ export default async function AdminMessagingPage() {
     nudgesSentToday,
     nudgesAwaiting,
     landlordsPartial,
+    // §57 — Facebook lead ads arriving through the Monday enquiries board.
+    enquiriesDay,
+    enquiriesWeek,
+    enquiriesFromAds,
+    enquiriesSkipped,
+    enquiriesStuck,
   ] = await Promise.all([
     admin
       .from("system_settings")
@@ -143,6 +150,38 @@ export default async function AdminMessagingPage() {
       .select("id", { count: "exact", head: true })
       .not("landlord_contact_method", "is", null)
       .is("landlord_wants", null),
+    // ⚠️ `fetched` is the reading that matters most and it is not here: a
+    // permanent zero means Facebook moved to another group and the whole
+    // feature is silently dead. It lives in the cron's own JSON, because only
+    // a run knows it. These five say what the runs have DONE.
+    admin
+      .from("monday_enquiry_claims")
+      .select("id", { count: "exact", head: true })
+      .in("outcome", ["customer_created", "customer_matched", "ambiguous_phone"])
+      .gte("claimed_at", dayAgo),
+    admin
+      .from("monday_enquiry_claims")
+      .select("id", { count: "exact", head: true })
+      .in("outcome", ["customer_created", "customer_matched", "ambiguous_phone"])
+      .gte("claimed_at", weekAgo),
+    // Split Facebook vs website — the whole reason 0151 added `source`.
+    admin
+      .from("prospect_booking_nudges")
+      .select("id", { count: "exact", head: true })
+      .eq("source", "monday_sync")
+      .gte("enquired_at", weekAgo),
+    admin
+      .from("monday_enquiry_claims")
+      .select("id", { count: "exact", head: true })
+      .in("outcome", ["junk", "bad_email", "stale_incomplete"])
+      .gte("claimed_at", weekAgo),
+    // ⚠️ A claim stuck pending is a LEAD THAT WAS LOST — claimed, then the run
+    // died before the customer was written. Nothing else would surface it.
+    admin
+      .from("monday_enquiry_claims")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending")
+      .lt("claimed_at", new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()),
   ]);
 
   const stored = new Map(
@@ -177,6 +216,20 @@ export default async function AdminMessagingPage() {
           label="Sent in 24h"
           value={String(sentToday.count ?? 0)}
           hint={`${inboundToday.count ?? 0} replies in · ${failedToday.count ?? 0} failed`}
+        />
+        <Stat
+          label="Enquiries pulled in 24h"
+          value={String(enquiriesDay.count ?? 0)}
+          hint={`${enquiriesWeek.count ?? 0} in 7 days · ${enquiriesFromAds.count ?? 0} chased from ads`}
+        />
+        <Stat
+          label="Board items skipped"
+          value={String(enquiriesSkipped.count ?? 0)}
+          hint={
+            (enquiriesStuck.count ?? 0) > 0
+              ? `⚠️ ${enquiriesStuck.count} stuck — claimed but never recorded`
+              : "test leads, bad addresses and items worked by hand"
+          }
         />
       </div>
 

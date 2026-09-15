@@ -313,6 +313,12 @@ export interface Customer {
     | "phone"
     | "name"
     | "manual"
+    // Adopted from an item the enquiry sync found on the board (§57). ⚠️ NOT
+    // "created" — we neither made this item nor guessed at it, and
+    // /api/admin/monday-status-check reports "created" as high confidence.
+    // 0151 widened the database CHECK in the same commit; this union has no
+    // `| string` escape hatch, so the compiler enforces the pair.
+    | "monday_sync"
     | null;
   // The Status label WE last wrote to the board — the idempotency key, NOT the
   // board's current value. Nothing reads it to decide business state; it exists

@@ -242,16 +242,48 @@ describe("the cron route's load-bearing ordering", () => {
   });
 });
 
-describe("the enquiry route starts the ladder", () => {
+describe("the enquiry route starts the ladder — now via recordEnquiry (§57)", () => {
   const route = code("src/app/api/enquiry/route.ts");
+  const shared = code("src/lib/enquiry/recordEnquiry.ts");
+  const sync = code("src/lib/enquiry/syncMondayEnquiries.ts");
 
-  it("inserts a ladder row", () => {
-    expect(route).toContain('.from("prospect_booking_nudges")');
+  it("inserts a ladder row, in the ONE module both doors use", () => {
+    // ⚠️ ANCHORED ON THE INSERT, NOT THE TABLE NAME. `recordEnquiry` also
+    // SELECTs from this table for the repeat-enquiry cooldown, so a check for
+    // `.from("prospect_booking_nudges")` finds the cooldown read and stays
+    // green with the insert deleted. That is §50.9's trap, which this repo has
+    // now recorded four times.
+    expect(shared).toContain(".insert({ customer_id: prospect.id");
+    expect(shared).toContain('.from("prospect_booking_nudges")');
+  });
+
+  /**
+   * ⚠️ The point of the extraction is that there is no SECOND copy. Facebook
+   * lead ads and the website form must record an enquiry identically, and the
+   * way that stays true is that neither caller can do it itself.
+   *
+   * Anchored on the WRITES, not on the table names. The sync legitimately
+   * READS `customers` — it checks whether the board item is already linked to
+   * one before doing anything — and banning the table outright would either
+   * fail on that honest read or push it somewhere worse. What must exist in
+   * exactly one place is the thing that CREATES a prospect and the thing that
+   * starts a chase.
+   */
+  it("and neither caller carries its own copy of the writes", () => {
+    expect(shared).toContain('account_status: "waitlisted"');
+
+    for (const src of [route, sync]) {
+      expect(src).toContain("recordEnquiry(");
+      // Creating the prospect.
+      expect(src).not.toContain('account_status: "waitlisted"');
+      // Starting the chase.
+      expect(src).not.toContain("prospect_booking_nudges");
+    }
   });
 
   it("tolerates a duplicate rather than failing the enquiry", () => {
     // The partial unique index fires on a repeat enquiry; that is the ordinary
     // case, not an error, and the enquiry itself must survive it regardless.
-    expect(route).toContain("23505");
+    expect(shared).toContain("23505");
   });
 });

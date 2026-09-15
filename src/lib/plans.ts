@@ -85,6 +85,42 @@ export function toGrPlanKey(value: unknown): PlanKey {
   return value === "lead_10" || value === "lead_20" ? value : DEFAULT_GR_PLAN;
 }
 
+/**
+ * The plan key a RENDERED plan string names — `£150/mo — 10 leads`.
+ *
+ * The website form posts a `PlanKey`; a Monday board cell holds the rendered
+ * sentence instead, because that is what a person (or a Facebook lead form)
+ * typed into a free-text column. §57.
+ *
+ * ⚠️ MATCHED ON THE LEAD COUNT, NEVER THE PRICE AND NEVER THE SEPARATOR.
+ * `monthly_allocation` is the discriminator the rest of this file is built on
+ * and the price is derived from it, so the count is the fact and `£150` is a
+ * rendering of it. The separator on the live board is an EM DASH (U+2014)
+ * typed into a free-text cell — an en dash or a hyphen is invisibly different
+ * in the Monday UI, and a Facebook form's own answer text is not ours to
+ * control at all. Matching digits makes the currency symbol, the dash and the
+ * word order all irrelevant.
+ *
+ * Unparseable falls back to `DEFAULT_PLAN`, which is exactly what `toPlanKey`
+ * gives a request naming no plan — so a Facebook lead with a plan cell we
+ * cannot read lands in the same place as a website enquiry that omitted it.
+ */
+export function planKeyFromPreferredPlan(value: unknown): PlanKey {
+  // Non-breaking spaces are routine in text pasted out of a spreadsheet or a
+  // rich-text field, and `\s` does not match U+00A0 in every engine.
+  const text = String(value ?? "").replace(/\u00a0/g, " ");
+
+  const leads = text.match(/(\d+)\s*leads?\b/i);
+  if (leads) return Number(leads[1]) <= 10 ? "lead_10" : "lead_20";
+
+  // Second best: the price. £200 is the boundary because both products sell at
+  // £150/10 and £300/20, so nothing legitimate sits between them.
+  const price = text.match(/£\s*(\d[\d,]*)/);
+  if (price) return Number(price[1].replace(/,/g, "")) <= 200 ? "lead_10" : "lead_20";
+
+  return DEFAULT_PLAN;
+}
+
 /** Map a stored monthly_allocation back to a plan (10 → lead_10, else lead_20). */
 export function planForAllocation(allocation: number): Plan {
   return allocation <= 10 ? PLANS.lead_10 : PLANS.lead_20;
