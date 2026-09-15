@@ -72,6 +72,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/cron/monday-enquiry-sync",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/prospect-nudges",
       "schedule": "* * * * *"
     }

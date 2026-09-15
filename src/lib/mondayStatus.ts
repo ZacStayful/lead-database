@@ -10,6 +10,7 @@ import {
   type EnquiryBoardItem,
   type EnquiryStatusLabel,
   type LeadInterestLabel,
+  normaliseName,
 } from "@/lib/monday";
 import { holdsProduct, type ProductCustomerFields } from "@/lib/products";
 import type { Customer } from "@/lib/types";
@@ -666,8 +667,3 @@ async function resolveItem(
   return { item: match.item };
 }
 
-/** Lower-case, collapse whitespace — enough to match "Olly  Pearce". */
-function normaliseName(raw: string | null | undefined): string | null {
-  const trimmed = (raw ?? "").trim().replace(/\s+/g, " ").toLowerCase();
-  return trimmed || null;
-}

@@ -24,6 +24,7 @@ describe("the allow-list is closed", () => {
       "contact_landlord_max_per_day",
       "contact_landlord_max_per_week",
       "contact_plans_enabled",
+      "enquiry_sync_enabled",
       "followup_adherence_notice_min_overdue",
       "followup_adherence_notice_pct",
       "landlord_prefs_nudge_first_hours",
@@ -187,6 +188,10 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     // admin page shows a limit the chase is not actually using.
     prospect_nudge_enabled: "false",
     prospect_nudge_daily_cap: "30",
+    // §57. The enquiry-sync cron reads the switch as `!== "true"`, so an
+    // absent row means off and this fallback has to say so — otherwise the
+    // admin page shows a feature as ON that is not running.
+    enquiry_sync_enabled: "false",
   };
 
   it("matches DEFAULT_QUIET_*, DEFAULT_LEAD_COOLDOWN_HOURS and sequenceSettings", () => {
