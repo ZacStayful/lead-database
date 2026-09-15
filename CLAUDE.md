@@ -14015,3 +14015,349 @@ inbox on a row with real messages (Zac's TimelinesAI token is `revoked` — §55
 star / mark-read / tags / snippets round trips, a wa.me tap appearing as a
 click row and not a message, "n / N" and ←/→ on the lead page, and the
 outcome panel still reachable under "Work this lead".
+
+---
+
+## 57. Facebook lead ads become enquiries *(0151)*
+
+Facebook lead-form ads write straight into the Monday enquiries board
+**18420649520**, group `topics` / "New enquiries" — the same board, the same
+group and the same column ids `POST /api/enquiry` writes to. **Nothing in the
+app noticed.** A Facebook lead became a row on a board and stopped there: no
+`customers` row, no booking chase, no WhatsApp, no route to becoming a customer.
+
+⚠️ **§55 IS STALE AND THIS CORRECTS IT.** That section says the chase ships
+`prospect_nudge_enabled = 'false'` and that the TimelinesAI connection has been
+`revoked` since 2026-08-28. Measured on production 2026-09-15, both are out of
+date, and the chase is **live and proven**:
+
+| | |
+|---|---|
+| `prospect_nudge_enabled` | **`true`** |
+| WhatsApp connection | **`connected`** since 2026-09-13 |
+| Ladders run | 1 — step 1 WhatsApp **and** email both sent, 0 errors |
+| How it ended | ⚠️ **`booked`** — Calendly reported the booking and the ladder stopped itself |
+
+James enquired at 22:38, was messaged within minutes, and booked the next day.
+So the whole §55 machine works end to end; **the only missing piece was the
+thing that turns a board item into a `customers` row and a ladder row**, and
+that is all 0151 adds.
+
+`/api/cron/monday-enquiry-sync` · `src/lib/enquiry/*` · `monday_enquiry_claims`.
+
+### 57.1 — Poll, not a webhook, and the cost was measured
+
+Every minute. ⚠️ **One filtered board read is 92 complexity against Monday's
+20,000,000-per-minute budget** — 0.0005%, measured against the live board
+rather than guessed, so cadence was never the constraint. Polling is also
+self-healing, needs nothing registered on the Monday side that can silently
+break (§40.8 and §40.16 record two receivers registered against routes that did
+not exist, one of which POSTed to a 404 for a day), and it catches items however
+they arrive.
+
+⚠️ **`maxDuration = 60`, not 300.** It fires every minute and a five-minute
+ceiling on a one-minute schedule is five runs deep — §55's call for
+`prospect-nudges`. The two Monday LEAD syncs use 300 because they are daily.
+
+### 57.2 — ⚠️ Source cannot be inferred from a Monday item
+
+`creator_id` on **every** item on that board — the Meta test lead, the website
+enquiries, the hand-typed ones — is the same user. There is no integration
+marker to key on, and no amount of looking will produce one.
+
+So the gate is the **status cell**: ingest only when `color_mm5eda07` is
+`"New Enquiries"` or empty. Facebook and the website both leave it there, and
+setting any other status is a deliberate one-click opt-out on the board for
+somebody already being worked by hand. It fails in the safe direction — an
+unexpected label skips rather than chases.
+
+⚠️ Once a ladder starts, §55 writes `"Chasing to book"` into that same cell,
+which is **not** in the allowed set. Harmless: the item is already claimed and
+never re-evaluated. And if the claim were ever missing, the status gate would
+skip it — again the safe direction.
+
+### 57.3 — ⚠️ The duplicate check has four layers and only ONE is the safety property
+
+| Layer | Catches |
+|---|---|
+| `monday_enquiry_claims`, unique on `monday_item_id`, **claimed by INSERT** | the same ITEM seen twice |
+| `customers.monday_item_id` already equals the item | the website → Monday → sync loop |
+| **an existing customer, by email then by name-corroborated phone** | the same PERSON through different doors |
+| the ladder's partial unique index | a second live chase |
+
+⚠️ **The ladder index cannot see a duplicated person.** It is keyed on
+`customer_id`, so two customer rows for one human means two ladders and **two
+WhatsApps from Zac's own number to a member of the public** — and the index is
+perfectly happy. Matching the customer is the safety property; the rest is
+hygiene.
+
+Measured against the real board: all three genuine `topics` items match an
+existing customer on **all three** of item id, email and phone, so a first run
+creates zero customers. Only the Meta test lead matches nothing.
+
+- ⚠️ Email is `.eq` on the lowercased value, **never `.ilike`** — §43.1: an
+  address may contain `_`, an ilike wildcard, and match a *different* customer.
+- ⚠️ **PHONE ALONE MUST NEVER MERGE TWO RECORDS.** Two colleagues on one office
+  number — entirely plausible here — would be merged, and the second person
+  **never created and never chased**. A lost lead, and invisible. §18 already
+  settles it: *"under-matching costs a duplicate, over-matching silently
+  discards a real enquiry."* So the phone tier requires the **name** to agree
+  (`normaliseName`, as `matchItemForCustomer` does), and a phone hit whose name
+  disagrees creates the customer anyway and is flagged `ambiguous_phone`. A
+  duplicate is recoverable; a lost lead is not.
+
+⚠️ **Never DELETE a claim.** The instinct is to release it on error, because
+`recordEnquiry` is idempotent on email — true for the customer row and **false
+for the ladder**: if the earlier ladder has since `completed`, a re-run creates
+a new one and the prospect is chased three more times. The claim is settled the
+moment `recordEnquiry` returns anything at all, and recovery is a **bounded
+pending retry** (10 minutes to 2 hours, 3 attempts) after which the item is
+reported as `stuck`. ⚠️ Without that retry a crash between the claim and the
+write is a **silently lost lead**.
+
+### 57.4 — The ordering, and why the claim sits where it does
+
+```
+1. cutoff missing/unparseable    → skip,  NO claim   (fail closed)
+2. created_at <= cutoff          → skip,  NO claim   (a filter, not a verdict)
+3. age < 60s                     → defer, NO claim
+4. status not New Enquiries      → skip + claim
+5. junk                          → skip + claim
+6. email empty → defer (<24h) / skip; malformed → skip
+7. ---- CLAIM BY INSERT ----
+8. already linked to a customer? → settle 'already_linked'
+9. recordEnquiry, then settle
+10. tidy the Monday phone cell, LAST
+```
+
+⚠️ **Claiming at step 3 would permanently bar a half-populated item from ever
+being ingested** — worse than the duplicate a claim prevents. ⚠️ And a cutoff
+skip must NOT claim: it is a filter, and the item may become ingestable if the
+cutoff ever moves.
+
+### 57.5 — ⚠️ The settle delay, and the thing that actually makes it correct
+
+**Monday's Facebook integration creates the item and then populates the cells.**
+Evidence from the live board: the Meta test lead's "Date added" cell reads
+`2026-09-15 19:35` against an API `created_at` of `13:35:21Z` — six hours out,
+so something wrote that row after creating it. Reading at t+0 can yield a name
+with no email, which would create a useless customer *and* burn the item's one
+claim.
+
+But a delay cannot **prove** the cells arrived. The structural guarantee is the
+**defer on an empty email**, which claims nothing, so a late cell is still
+picked up. The delay reduces churn; the defer is what makes it correct.
+
+⚠️ **Never read `date_mm50brxt`.** Six hours out on the live item, with a time
+component the website items do not have. The API's `created_at` is the only
+clock.
+
+### 57.6 — ⚠️ `MAX_CHASE_AGE_MS` is what makes forward-only safe, not the cutoff
+
+0149's header says, in terms: *"no backfill and no global cutoff row … only
+POST /api/enquiry creates one"*, citing §32.4 — a global is one bad read away
+from enrolling the whole back catalogue. **0151 makes both halves false**, and
+the enquiry route's comment saying so was rewritten in the same commit rather
+than left to lie to the next reader.
+
+What answers §32.4 is **not** the cutoff row but the six-hour chase bound: an
+older item is still turned into a customer (a lead is never lost) and is
+**never chased**. So the worst case of a cutoff misread to 1970 is a few dozen
+idempotent customer upserts and **zero messages sent**. The property 0149 was
+defending survives; only the mechanism moved.
+
+The cutoff still **fails closed** — absent, blank or unparseable means ingest
+nothing, and with the switch on that is a **500**, not a 200 carrying `skipped`
+(§18.3).
+
+⚠️ **`enquired_at` is left to its `now()` default and must never be backdated
+to the item's creation time.** `prospectWork` returns the earliest unfinished
+step and the cron claims one step per tick, so a ladder seeded three days in the
+past fires steps 1, 2 and 3 on three consecutive **minutes**.
+
+### 57.7 — ⚠️ The junk filter is NOT `isJunkName`
+
+A Meta test lead was sitting on the board while this was written (item
+13049622496, name `test lead: dummy data for full_name`, email `test@meta.com`).
+
+⚠️ **Verified by execution: `isJunkName("test lead: dummy data for full_name")`
+returns `false`** — no digits, no `@`, plenty of letters, no repeated run, not a
+placeholder word, and the no-vowel rule is skipped because `:` and `_` put it
+outside basic Latin. **So the `test lead:` / `dummy data` rule is load-bearing
+and `isJunkName` is the second line**, not the other way round. A test asserts
+that `false` beside the rule that does work, so nobody deletes rule 1 believing
+the name check covers it.
+
+`enquiryJunkReason` returns a **reason, never a boolean** — "why was that lead
+dropped" is the only question anyone will ask of it (§40.8's twenty events
+discarded silently). Meta stamps the phrase into *every* field, so all seven
+cells are checked, not just the name.
+
+### 57.8 — Phone numbers, both directions
+
+**Inbound**: `ukMobileE164` — not `toE164` (§40.9A: the loose identity rule let
+a number one digit short reach the provider as a bare `http_400`). Verified by
+running it: `07939910056` → `+447939910056`, `+4407304208011` →
+`+447304208011`. Both phone cells are read, because `phone_mm6c5qkc` is
+populated on every website item and **empty on the Meta one**.
+
+⚠️ Unresolved → **stored exactly as it arrived, never blanked** (§40.9A — the
+operator must be able to SEE a wrong number to fix it), and the ladder still
+starts. No change to the chase was needed: the WhatsApp row is claimed *before*
+sending and a `prospectPhone` refusal is written back as an error on the claimed
+row, so the ladder advances to the email steps rather than stalling.
+
+**Write-back**: `setEnquiryMobile` tidies the board cell, but only when the
+number resolved **and** differs (the `endDateNeedsWrite` suppression, §23.4), it
+never throws, and it runs **after** the customer and the ladder so a Monday
+failure cannot cost the enquiry (§23.6's "Monday last"). ⚠️ It writes
+`text_mm50hfvg` only — **never `phone_mm6c5qkc`**, which nothing in this app has
+ever written (§23.1's rule about the board's duplicate date columns).
+
+### 57.9 — ⚠️ The chase itself is not touched, and that is the safety argument
+
+A quiet-hours hold for ad leads was designed and **rejected on the evidence**:
+the only booking the system has produced enquired at 22:38, got an instant
+WhatsApp, and booked. Dropping it means `prospect-nudges/route.ts` is **not
+modified at all** — no channel filter, no clock, no restructuring of the one
+path with a production record. A guard asserts that cron knows nothing about
+`monday_sync` or `enquiry_sync`, because it is the claim a reviewer most needs
+to trust without reading two thousand lines.
+
+`prospect_booking_nudges.source` still ships: it is what lets the admin counters
+say Facebook vs website, and it leaves a future quiet-hours decision a code
+change rather than a migration.
+
+**`prospect_nudge_daily_cap` was raised 30 → 200.** It is a GLOBAL ceiling sized
+for ~15 enquiries a *month*; paid traffic can reach that in a day, and the two
+populations share one budget with no priority, so a Facebook spike would have
+stopped the chase for website enquirers too. 200 is the documented ceiling
+already in `MESSAGING_SETTINGS`, so this needed no code change. ⚠️ The migration
+does it with a **guarded UPDATE**, not an insert — 0149 already seeded the key,
+so `on conflict do nothing` would silently have left it at 30.
+
+### 57.10 — One definition of "record an enquiry"
+
+`src/lib/enquiry/recordEnquiry.ts` holds the customer upsert and the ladder
+insert, lifted verbatim from the enquiry route — the extraction `releaseLeads.ts`
+(§54) and `dueAttempts.ts` (§42.9) already made. The route went 267 → 150 lines.
+
+⚠️ **The Monday link is a discriminated union, not an optional id.** "Mint me an
+item" and "I already have one" are different acts, and the type makes it
+impossible to ask for both or neither — the sync must never create a second item
+for a lead already on the board.
+
+⚠️ **THE TWO CALLERS DIFFER ON THE MOBILE, DELIBERATELY.** The website 400s on a
+number it cannot parse, with `UK_MOBILE_ERRORS` copy, because a person is on the
+page and can fix it. The sync cannot refuse anything — nobody is watching, and
+dropping the lead would lose it — so it stores the raw cell. Do not reconcile
+them; the fix is a regression in both directions.
+
+`normaliseName` moved from `mondayStatus.ts` into `monday.ts` beside
+`phoneMatchKey` and `emailsFromCell`, its sibling matching primitives, rather
+than being written a second time (§20, §26.7).
+
+### 57.11 — Where it shows
+
+The switch joins the closed allow-list on `/admin/messaging` (§40.14) — never a
+key read from a request body, since `system_settings` also holds
+`escalation_enabled` and the capacity caps. The page renders that list
+generically, so it cost one array entry.
+
+Counters beside it: enquiries pulled in 24h and 7 days, how many of the week's
+ladders came from ads, board items skipped, and ⚠️ **a stuck count, because a
+claim left pending is a lead that was lost and nothing else would surface it**.
+
+⚠️ `enquiry_sync_from` is deliberately **not** in that list — a timestamp set
+once at go-live, the position `landlord_nudge_from` and `contact_notify_from`
+are already in (§42.7), and an admin able to edit it from a screen is precisely
+the bad read that the fail-closed reader exists to survive. Moving it is a SQL
+edit.
+
+⚠️ **`fetched` is the reading that matters most and it is not on the page**: a
+permanent zero means Facebook has moved to another group and the feature is
+silently dead. Only a run knows it, so it lives in the cron's JSON.
+
+### Verification
+
+**All 151 migrations applied to a scratch Postgres 16 from empty, zero
+failures**; 0151 re-applied twice for idempotency; **all 14 SQL suites pass**.
+
+`0151_monday_enquiry_claims_test.sql` — the unique claim, the closed
+vocabularies, `source` defaulting to `website` on a pre-existing row, every
+0086 `matched_by` value still legal, and the one the table exists for:
+**deleting the customer leaves the claim standing with its pointer nulled**.
+⚠️ The suite clears its fixtures UP FRONT as well as at the end — mutation
+testing aborts it by design, and a suite that is not re-runnable reports the
+wrong failure on the next pass (0149's own second mutation "passed" for exactly
+this reason).
+
+**2102 vitest cases green** (89 new), `tsc` clean, lint clean, `next build`
+passes and registers `ƒ /api/cron/monday-enquiry-sync`.
+
+⚠️ **TWENTY-EIGHT MUTATIONS RUN, ALL TWENTY-EIGHT CAUGHT** — each broken
+deliberately and watched to fail before the assertion was kept. Among them:
+claiming after the write, deleting the claim, writing to Monday first, the sync
+minting a board item, the cooldown dropped, the phone tier merging without the
+name, two phone hits picking the first, an ambiguous phone dropping the lead,
+the cutoff failing open, `read_failed` answering 200, the `since` override
+allowed on a real run, `maxDuration` raised to 300, `setEnquiryMobile` also
+writing the phone column, and `prospect-nudges` learning what a source is.
+
+⚠️ **One assertion was written weak and only the mutation run found it** — the
+fifth time this repo has recorded that shape (§42.8, §50.9 twice, §53, §55).
+Setting `ITEM_SETTLE_MS` to 0 left the whole suite green, because every timing
+test derived its expectations FROM the constant, so they all moved together.
+§27.2's rule, one file over. The three constants are now pinned to literals,
+duplicated on purpose.
+
+**Not yet exercised against a real Facebook lead.** Nothing has been ingested
+from the live board. After merge: dry-run with `&since=` (below), then submit a
+Meta test lead and watch it through.
+
+⚠️ **The obvious acceptance test does not work, and this is why the dry run
+takes a `since` override.** Watching the Meta test lead be classified as junk
+fails, because the cutoff is seeded at apply time and that item was created at
+13:35 on 2026-09-15 — so it is filtered at step 2 as pre-cutoff and never
+reaches the junk rule at step 4. `?dryRun=true&since=…` widens the window so an
+admin can see the real classification of all four current items: **1
+`meta_dummy`, 3 `already_linked`, 0 created**. ⚠️ The override is refused
+outside a dry run, so it can never widen what a real run ingests.
+
+⚠️ None of it can be tested on a Vercel preview — Deployment Protection answers
+302 to `vercel.com/sso-api` (§45, §46, §50, §51) — and a preview runs against
+**production** Supabase (§1.1), so a test submission writes a real row and sends
+a real WhatsApp.
+
+### Deployment order — migration BEFORE code
+
+0151 applied to `znlfwbnvhlacwzgfalcf` and verified there **before the PR
+merges** (§1.1). Additive and inert: a table nothing reads, a defaulted column,
+two widened CHECKs (a widening cannot break deployed code — nothing older can
+write the new value), and a switch shipping `false`. Nothing touches a balance,
+counter, pacing or capacity column.
+
+⚠️ **Re-seed `enquiry_sync_from` immediately before flipping the switch.**
+Everything created between apply and go-live is otherwise "after the cutoff" and
+lands in one burst. `MAX_CHASE_AGE_MS` makes that burst harmless — customers,
+no ladders — but do not lean on it. §42 carries the identical warning for
+`contact_notify_from`.
+
+Then: dry run, read the report, **then** flip `enquiry_sync_enabled`.
+
+### Deferred
+
+- **Two identities, one person.** Somebody enquiring on the website as
+  `me@work.com` and on Facebook as `me@gmail.com` with a different number is two
+  customers and two ladders, and nothing can tell. The residual after the
+  matching layer, and accepted.
+- **Repeat enquiries still duplicate the board item** (§23.10). The sync now
+  skips the duplicate as an existing customer, but the board accumulates.
+- ⚠️ **0145 is applied to production but MISSING FROM ITS MIGRATION LEDGER** —
+  `supabase_migrations.schema_migrations` runs 0144 → 0146. The objects are all
+  present (`leads.withdrawn_slots` confirmed), so it is bookkeeping rather than
+  drift; but an audit reading the ledger would conclude 0145 is unapplied and
+  re-apply it **over the three functions it rewrote**. Not caused by this work.
+- **No admin list of individual claims.** The counters plus the cron's JSON are
+  the whole surface; a per-item view is the next thing worth building if the
+  numbers ever raise a question they cannot answer.
