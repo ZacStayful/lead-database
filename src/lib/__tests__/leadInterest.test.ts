@@ -28,6 +28,8 @@ function customer(over: Partial<MondayStatusCandidate> = {}): MondayStatusCandid
     gr_subscription_status: "inactive",
     cancel_at_period_end: false,
     gr_cancel_at_period_end: false,
+    lapsed_at: null,
+    gr_lapsed_at: null,
     ...over,
   };
 }
