@@ -613,6 +613,12 @@ for being new with no way to earn out of it.
   The mirror of the defect §18.3 fixed, and left alone deliberately: closing it
   would stop the pool sweep on a transient blip, which is a decision about the
   pool rather than a tidy-up.
+- ⚠️ **A Supabase outage must never render as an empty book.** §58 records
+  what that cost: the lead-volume loader `break`-ed on a query error and every
+  filter surface believed the empty aggregate. `fetchLeadVolumeData` and
+  `fetchRetiredLeadIds` now THROW `LeadVolumeUnavailableError`, and each caller
+  decides what unavailable means for it. Do not "simplify" that back to a
+  `break`; `filterVolumeLoad.test.ts` pins it.
 - No ESLint config (`next lint` prompts interactively) and **no test suite**.
 
 ---
@@ -14353,11 +14359,168 @@ Then: dry run, read the report, **then** flip `enquiry_sync_enabled`.
   matching layer, and accepted.
 - **Repeat enquiries still duplicate the board item** (§23.10). The sync now
   skips the duplicate as an existing customer, but the board accumulates.
-- ⚠️ **0145 is applied to production but MISSING FROM ITS MIGRATION LEDGER** —
-  `supabase_migrations.schema_migrations` runs 0144 → 0146. The objects are all
-  present (`leads.withdrawn_slots` confirmed), so it is bookkeeping rather than
-  drift; but an audit reading the ledger would conclude 0145 is unapplied and
-  re-apply it **over the three functions it rewrote**. Not caused by this work.
+- ~~⚠️ **0145 is applied to production but MISSING FROM ITS MIGRATION LEDGER**~~
+  **Closed by §58** — a ledger row was inserted for it (and for 0141 part 3,
+  which had the same gap), with a statement text saying not to re-apply. The
+  objects were verified present first; 0147 has since replaced two of the three
+  functions 0145 rewrote, which is exactly why a re-apply would have been wrong.
 - **No admin list of individual claims.** The counters plus the cron's JSON are
   the whole surface; a per-item view is the next thing worth building if the
   numbers ever raise a question they cannot answer.
+
+---
+
+## 58. The audit: what was lifted, and what only looked lifted *(no migration)*
+
+Zac reported on 2026-09-17 that the lead-filter revisions were not in the
+latest production build and that "some things have been reversed", and asked
+for a sweep of everything else that might have been lifted. This is the
+record, because the same question will be asked again and most of the answer
+is "nothing was reverted".
+
+### 58.1 — Production is `main`, and no filter code was reverted
+
+Vercel's production deployment was `f289fe2` (PR #118), the tip of `main`. All
+four filter PRs — #72 prediction and radius, #75 forecast and public estimator,
+#81 admin swap filter, #83 apply-now release — are merged, and **every filter
+file on `main` is byte-identical to PR #83's tip** (28 Aug). A line-by-line
+check of #72's additions found nothing absent that was not a deliberate
+refactor in #75. The one deliberate reversal on record is the volume
+guarantee, 0098 → 0100, §28.0. Re-asked and settled: **keep the forecast**,
+and **leave radius search behind its toggle** (it is present; the dashboard
+defaults to hand-picking, the public estimator to radius).
+
+### 58.2 — ⚠️ What actually happened: an unreadable book rendered as an empty one
+
+`fetchLeadVolumeData()` and `fetchRetiredLeadIds()` in `filterPrediction.ts`
+did `if (error || !data || data.length === 0) break;` — a database error
+returned an **empty aggregate**, indistinguishable from a marketplace with no
+leads in it. Every filter surface believed it:
+
+| Surface | What an empty aggregate rendered |
+|---|---|
+| `/dashboard/filtering`, edit view | "No postcode areas are available yet" — map, area picker **and radius search** hidden, since all three sit inside the non-empty branch |
+| the forecast block | `offerable = false`, so cost per lead, % likelihood and the cheaper-plan recommendation all vanished |
+| `/api/customer/filter` apply | the apply-now question **skipped** ("no forecast could be offered") and a null forecast stored against the filter |
+| `/api/filter-estimate/public` | the cache **overwritten with zeros** for six hours |
+| admin FilterCard | zero volume |
+
+Supabase gateway timeouts and Cloudflare 525s hit production between 9 and 14
+Sep 2026 (§56.5; zero in the 24h before this was written), and Vercel's
+runtime errors show the contention read failing on `/admin` and the public
+estimator in that window. On a bad minute the filtering page looked like every
+filter revision had been removed — which is exactly what was reported. §30 had
+already recorded the identical shape from a preview deployment.
+
+**Both loaders now THROW `LeadVolumeUnavailableError`**, and each caller
+decides what that means — §18.3's three outcomes, never two:
+
+- the filtering page catches it and passes `volumeUnavailable` to the panel,
+  which renders an amber "we couldn't load lead volumes just now" block in
+  place of the empty-book copy, keeps the saved filter summary, and **disables
+  Apply**;
+- the apply route answers **503 `volume_unavailable`** and writes nothing;
+- the public estimator route already served its cached payload on a throw — it
+  simply never got one before;
+- both admin pages already caught and dropped the prediction column.
+
+Mutation-checked: putting either `break` back fails the loader tests, and
+un-gating the Apply button fails the file-text guard.
+
+### 58.3 — ⚠️ Six of nine active filters had NO stored forecast at all
+
+| product | active filters | `filter_expected_leads` null |
+|---|---|---|
+| management | 8 | **5** |
+| guaranteed rent | 1 | **1** |
+
+Applied before 0100 (23 Aug) or during a timeout, and §28.7 records that
+nothing recomputes the stored figure — so their saved-filter view showed no
+"at least N — P% likely — £X a lead" line and no cheaper-plan advice on **any**
+day. Two things close it:
+
+- **A live fallback on the saved view.** When the stored figure is null the
+  panel computes `forecastVolume()` from today's aggregate and renders the same
+  block, labelled *"Based on this month's volumes — no figure was recorded when
+  this filter was applied."* A stored figure, when present, still wins: it is
+  what the customer read (§28.7).
+- **`POST /api/admin/filters/backfill-forecast`** — "Fill in filter forecasts"
+  on `/admin/customers`, dry run by default, `?apply=1` writes. Per customer and
+  product it calls the same `forecastVolume()` the apply route uses and writes
+  the five figure columns **only where nothing is stored**, guarded on the
+  column still being null so a concurrent apply by the customer wins. ⚠️ **It
+  never writes `filter_forecast_acknowledged_at`** — nobody ticked anything —
+  and it refuses with a 503 when the book cannot be read (58.2). The decision is
+  `forecastBackfillFor()` in `src/lib/forecastBackfill.ts`, pure and tested.
+
+### 58.4 — Builds genuinely not on `main`
+
+A content-level check — every branch's added lines tested for presence on
+`main`, and every merge's added lines likewise, rather than commit ancestry,
+because squash-merges and re-implementations make ancestry lie.
+
+| What | State | Decision |
+|---|---|---|
+| PR #74 "Write off a customer whose payments keep failing" | open; 98.7% of its content absent | **Its migration IS applied to production** (`past_due_since`, `gr_past_due_since`, `lapsed_at`, `gr_lapsed_at`; `past_due_lapse_enabled = 'true'`, `past_due_lapse_days = '3'`) and nothing reads it — the switch has been on with no cron behind it since 22 Aug. Committed here as **0152** verbatim. Code re-implemented on today's label rule in a follow-up PR. |
+| PR #89 Meta Pixel + Conversions API | closed unmerged 22 minutes after opening; `mergeable_state: clean` | Its §45 collided with OAuth's §45 the same afternoon. Restored in a follow-up PR as §60; inert until env vars. |
+| PR #99 CI workflow | merged into the WRONG base (`claude/stayful-lead-marketplace-49kyjq`), then reverted there | `main` has never had `.github/workflows`. Restored, adapted to vitest, in a follow-up PR. |
+| branch `claude/lead-quality-intent-ng20m2` (never PR'd) | 98.5% absent | The application half of `worked_conversion` (0100a) plus four more migrations and an admin trends page. Overlaps 0150's `stage_changed` writes. **Deferred** — needs a rebuild, not a rebase. |
+| everything else (`lead-capacity-analysis`, the July reject-reason family, `email-reminders-lead-followup`, …) | superseded by §18, §51.10, §42.9 | Nothing to lift. |
+
+### 58.5 — Production schema, reconciled
+
+All 137 functions the repo's migrations define exist in production, and no
+function exists there that the repo does not define. Three bookkeeping gaps:
+
+- **`lead_message_threads_counterparty_idx` (0120) was NOT in production** —
+  its two settings rows were, the index was not. Applied 2026-09-17 as
+  `0120_messaging_contact_limits_counterparty_idx`. §40.12 says it is what
+  keeps the cooldown lookup off a sequential scan.
+- **0145 and 0141 part 3 were applied but never recorded** in
+  `supabase_migrations.schema_migrations`. Ledger rows inserted, each with a
+  statement text saying not to re-apply. ⚠️ Re-applying 0145 now would clobber
+  0147's `get_service_capacity` / `capture_service_capacity`, and 0142 part 3
+  replaced `customer_swap_dead_lead` — which is why the rows carry the warning.
+- `past_due_lapse` was applied and had no file — 0152, above.
+
+`lead_intro_email` and `outreach_capacity_rpc` are also in the ledger with no
+file; both were dropped by later migrations (0131, 0140) and are documented.
+
+### 58.6 — Bugs and conflicts sweep
+
+`main` was healthy as code: `tsc` clean, 2,102 tests green, one pre-existing
+lint warning. Every production error group in the preceding week bar one was
+the Supabase gateway episode; the remaining one is `parseMonthlyProfile: months
+sum to 30186, net is 26318`, a warning about one report whose 12-month table
+does not sum to its net, which §26's parser correctly refuses. Two knock-ons of
+the episode worth knowing: `escalate-leads` aborted on 13 and 14 Sep (§18.3's
+designed 500), so the daily capacity and engagement snapshot series have two
+holes that cannot be backfilled; and `prospect-nudges` and
+`monday-enquiry-sync` hit the 60-second kill during it, which is survivable
+because both claim by write.
+
+### Verification
+
+`npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing `module` warnings,
+**2,118 vitest cases green** (16 new). ⚠️ **Four mutations run, all four
+caught**: the leads loop put back to `break` (3 tests), the retired loop put
+back (2), the Apply button un-gated (1), and the backfill made to write the
+acknowledgement (2).
+
+On production, before this merged: the 0120 index applied and confirmed in
+`pg_indexes` (⚠️ `EXPLAIN` still picks a sequential scan — the table holds a
+handful of rows and the planner is right to; the index is for the day it does
+not); the two ledger rows present and returned by the insert.
+
+**Not yet exercised in a browser:** the amber unavailable state (it needs the
+database to fail) and the live fallback line on a real customer's saved
+filter. After merge: open `/dashboard/filtering` as one of the six, confirm the
+"Based on this month's volumes" line, run the backfill dry run on
+`/admin/customers`, read the list, apply, and confirm the line changes to the
+stored form.
+
+### Deployment order
+
+0152 needs no apply — it records a migration production has carried since 22
+Aug. The 0120 index and the ledger rows were applied by hand before merge. The
+code is safe in either order relative to all of it.

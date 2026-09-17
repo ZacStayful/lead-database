@@ -20,6 +20,7 @@ import type {
 import type { BillingHealth, PauseFacts } from "@/lib/pauseOutlook";
 import { AlertTriangle } from "lucide-react";
 import { LeadInterestBackfillButton } from "@/components/admin/LeadInterestBackfillButton";
+import { ForecastBackfillButton } from "@/components/admin/ForecastBackfillButton";
 import { RELEASE_SETTING_KEYS, londonDate, releaseSettingsFrom } from "@/lib/pacing";
 import { releaseOverview } from "@/lib/releaseStats";
 
@@ -360,7 +361,10 @@ export default async function AdminCustomersPage() {
             {customers.length} customer{customers.length === 1 ? "" : "s"}
           </p>
         </div>
-        <LeadInterestBackfillButton />
+        <div className="flex flex-wrap items-start gap-2">
+          <ForecastBackfillButton />
+          <LeadInterestBackfillButton />
+        </div>
       </div>
 
       {alerts.length > 0 && (
