@@ -16,7 +16,9 @@
  * - "Request a feature" stays a DIRECT sidebar link (§50.8 — folding it into
  *   a menu puts the promoted thing one click deeper than the footer link it
  *   replaced).
- * - "Replace a lead" (§53) sits in the Leads tabset — a live money feature.
+ * - "Replace a lead" (§53) is a sidebar item of its own directly under Leads
+ *   AND stays in the Leads tabset (§61) — a live money feature that nobody
+ *   found while it was a sub-tab alone.
  * - Admin, appended for admins, exactly as the old header did.
  */
 
@@ -28,6 +30,7 @@ export type SidebarIconKey =
   | "dashboard"
   | "conversations"
   | "leads"
+  | "replacements"
   | "followups"
   | "filtering"
   | "insights"
@@ -90,7 +93,13 @@ export function buildSidebar(f: NavFlags): SidebarModel {
       label: "Leads",
       href: "/dashboard/leads",
       icon: "leads",
-      matches: [REPLACEMENTS_HREF, "/dashboard/topup"],
+      matches: ["/dashboard/topup"],
+    },
+    {
+      key: "replacements",
+      label: "Replace a lead",
+      href: REPLACEMENTS_HREF,
+      icon: "replacements",
     },
     ...(f.messagingOn
       ? [

@@ -19,17 +19,19 @@ import {
   anyReasonAvailable,
   unavailableSummary,
   MIN_DETAIL_LENGTH,
-  claimBudget,
   committedAllocation,
   decideDeadLeadClaim,
-  earnedBonus,
+  monthlyReplacementGrant,
   normaliseAllowancePct,
+  replacementHoldFor,
+  replacementsAvailable,
   shouldPromptDeadLead,
+  topupReplacementGrant,
   type ClaimCustomer,
   type DeadLeadClaimInputs,
 } from "../quality/deadLeadPolicy";
 
-/** A management subscriber on the £300/20 plan, no claims yet, no streak. */
+/** A management subscriber on the £300/20 plan with two replacements banked. */
 const customer: ClaimCustomer = {
   account_status: "active",
   subscription_status: "active",
@@ -37,6 +39,7 @@ const customer: ClaimCustomer = {
   monthly_allocation: 20,
   gr_monthly_allocation: 10,
   quality_allowance_pct: 0.1,
+  replacement_balance: 2,
   quality_claims_this_cycle: 0,
   clean_leads_streak: 0,
   quality_review_required: false,
@@ -88,33 +91,134 @@ describe("committedAllocation", () => {
   });
 });
 
-describe("claimBudget", () => {
+describe("monthlyReplacementGrant", () => {
   it("is a tenth of the plan", () => {
-    expect(claimBudget(customer)).toBe(2);
+    expect(monthlyReplacementGrant(customer)).toBe(2);
   });
 
   it("rounds a ten-lead plan up to one rather than to nothing", () => {
     // A £150/10 customer must be able to report a dead lead without a person
     // reading every one of them.
-    expect(claimBudget({ ...customer, monthly_allocation: 10 })).toBe(1);
+    expect(monthlyReplacementGrant({ ...customer, monthly_allocation: 10 })).toBe(1);
   });
 
-  it("adds earned headroom for leads taken without claiming", () => {
-    expect(earnedBonus({ ...customer, clean_leads_streak: 9 })).toBe(0);
-    expect(earnedBonus({ ...customer, clean_leads_streak: 10 })).toBe(1);
-    expect(claimBudget({ ...customer, clean_leads_streak: 25 })).toBe(4);
+  // ⚠️ 0142's earned bonus is retired (§61): rollover IS the loyalty rule now,
+  // and a streak that also bought headroom would pay for restraint twice.
+  it("gives a clean streak nothing — rollover replaced the earned bonus", () => {
+    expect(monthlyReplacementGrant({ ...customer, clean_leads_streak: 500 })).toBe(2);
   });
 
-  it("caps the earned half, so a long clean run cannot bank a year of claims", () => {
-    expect(earnedBonus({ ...customer, clean_leads_streak: 500 })).toBe(2);
-    expect(claimBudget({ ...customer, clean_leads_streak: 500 })).toBe(4);
-  });
-
-  it("treats a missing or nonsense percentage as no base budget", () => {
-    expect(claimBudget({ ...customer, quality_allowance_pct: 0 })).toBe(0);
+  it("treats a missing or nonsense percentage as no grant", () => {
+    expect(monthlyReplacementGrant({ ...customer, quality_allowance_pct: 0 })).toBe(0);
     expect(
-      claimBudget({ ...customer, quality_allowance_pct: Number.NaN }),
+      monthlyReplacementGrant({ ...customer, quality_allowance_pct: Number.NaN }),
     ).toBe(0);
+  });
+
+  // ⚠️ §53.4's trap, in TypeScript: the SQL twin rounds once over the sum.
+  it("sums both products and rounds once", () => {
+    const dual = {
+      ...customer,
+      monthly_allocation: 10,
+      gr_monthly_allocation: 10,
+      gr_subscription_status: "active",
+      quality_allowance_pct: 0.05,
+    };
+    expect(monthlyReplacementGrant(dual)).toBe(1);
+  });
+
+  it("still accrues for a paused customer, by decision", () => {
+    expect(
+      monthlyReplacementGrant({ ...customer, paused_at: "2026-09-13T00:00:00Z" }),
+    ).toBe(2);
+  });
+
+  // §59 writes account_status = cancelled and leaves subscription_status
+  // past_due, which holdsProduct counts as held — so the lapse stamp is the
+  // gate, on each product's own column (invariant 6).
+  it("accrues nothing once written off", () => {
+    expect(
+      monthlyReplacementGrant({
+        ...customer,
+        account_status: "cancelled",
+        subscription_status: "past_due",
+        lapsed_at: "2026-09-16T06:00:00Z",
+      }),
+    ).toBe(0);
+    expect(
+      monthlyReplacementGrant({
+        ...customer,
+        account_status: "waitlisted",
+        subscription_status: "inactive",
+        gr_subscription_status: "past_due",
+        gr_lapsed_at: "2026-09-16T06:00:00Z",
+      }),
+    ).toBe(0);
+  });
+});
+
+describe("topupReplacementGrant", () => {
+  // The twin of the line inside record_lead_topup_success: round(5 × 0.10)
+  // is 1, so each standard top-up banks one.
+  it("banks one for a five-lead top-up", () => {
+    expect(topupReplacementGrant(5, 0.1)).toBe(1);
+    expect(topupReplacementGrant(10, 0.1)).toBe(1);
+    expect(topupReplacementGrant(15, 0.1)).toBe(2);
+  });
+
+  it("banks nothing on an allowance of zero or nonsense", () => {
+    expect(topupReplacementGrant(5, 0)).toBe(0);
+    expect(topupReplacementGrant(5, Number.NaN)).toBe(0);
+    expect(topupReplacementGrant(-5, 0.1)).toBe(0);
+  });
+});
+
+describe("replacementsAvailable", () => {
+  it("reads the banked balance off the row", () => {
+    expect(replacementsAvailable(customer)).toBe(2);
+  });
+
+  // ⚠️ Null is a select that did not name the column, not a fact — and the
+  // safe reading is zero (review, or a refusal with a date), never a swap.
+  it("reads an unreadable balance as zero, never as something banked", () => {
+    expect(replacementsAvailable({ ...customer, replacement_balance: null })).toBe(0);
+    expect(replacementsAvailable({ ...customer, replacement_balance: -3 })).toBe(0);
+    expect(replacementsAvailable({ ...customer, replacement_balance: 3.7 })).toBe(3);
+  });
+});
+
+describe("replacementHoldFor", () => {
+  it("puts a failing card on hold, per product", () => {
+    expect(
+      replacementHoldFor({ ...customer, subscription_status: "past_due" }, "management"),
+    ).toBe("past_due");
+    expect(
+      replacementHoldFor({ ...customer, subscription_status: "past_due" }, "guaranteed_rent"),
+    ).toBeNull();
+    expect(
+      replacementHoldFor(
+        { ...customer, gr_subscription_status: "past_due" },
+        "guaranteed_rent",
+      ),
+    ).toBe("past_due");
+  });
+
+  // admin_swap_lead_assignment raises on a paused MANAGEMENT customer; GR keeps
+  // flowing to a paused management customer (invariant 6).
+  it("puts a paused management subscription on hold, and only management", () => {
+    const paused = { ...customer, paused_at: "2026-09-13T00:00:00Z" };
+    expect(replacementHoldFor(paused, "management")).toBe("paused");
+    expect(replacementHoldFor(paused, "guaranteed_rent")).toBeNull();
+  });
+
+  it("ranks a failing card above a pause, and holds nothing otherwise", () => {
+    expect(
+      replacementHoldFor(
+        { ...customer, subscription_status: "past_due", paused_at: "2026-09-13T00:00:00Z" },
+        "management",
+      ),
+    ).toBe("past_due");
+    expect(replacementHoldFor(customer, "management")).toBeNull();
   });
 });
 
@@ -241,10 +345,10 @@ describe("decideDeadLeadClaim — the peers", () => {
     expect(v.corroboration).toBe("peer_contradicts");
   });
 
-  it("corroborates even when the budget is spent", () => {
+  it("corroborates even when nothing is banked", () => {
     const v = decideDeadLeadClaim({
       ...input,
-      customer: { ...customer, quality_claims_this_cycle: 99 },
+      customer: { ...customer, replacement_balance: 0 },
       peers: [{ claim_status: "upheld" }],
     });
     expect(v.decision).toBe("auto_uphold");
@@ -252,33 +356,42 @@ describe("decideDeadLeadClaim — the peers", () => {
   });
 });
 
-describe("decideDeadLeadClaim — the hidden budget", () => {
-  it("upholds inside the budget and spends one", () => {
+describe("decideDeadLeadClaim — the balance", () => {
+  it("upholds with something banked and spends one", () => {
     const v = decideDeadLeadClaim(input);
     expect(v.decision).toBe("auto_uphold");
     expect(v.consumesAllowance).toBe(true);
   });
 
-  it("sends the claim past the budget to review rather than refusing it", () => {
-    // An operator receiving genuinely dead leads is exactly who exceeds the
-    // budget. Refusing them automatically would punish the customer this
-    // feature exists for.
+  it("sends the claim to review with nothing banked rather than refusing it", () => {
+    // An operator receiving genuinely dead leads is exactly who runs out.
+    // Refusing them automatically would punish the customer this feature
+    // exists for.
     const v = decideDeadLeadClaim({
       ...input,
-      customer: { ...customer, quality_claims_this_cycle: 2 },
+      customer: { ...customer, replacement_balance: 0 },
     });
     expect(v.decision).toBe("review");
     expect(v.consumesAllowance).toBe(false);
   });
 
-  it("lets a clean streak buy headroom past the base budget", () => {
+  // ⚠️ The inverse of the case 0142 pinned: the streak is a statistic now.
+  it("gives a clean streak no headroom — rollover replaced the earned bonus", () => {
     const v = decideDeadLeadClaim({
       ...input,
       customer: {
         ...customer,
-        quality_claims_this_cycle: 2,
+        replacement_balance: 0,
         clean_leads_streak: 30,
       },
+    });
+    expect(v.decision).toBe("review");
+  });
+
+  it("ignores the per-cycle counter entirely", () => {
+    const v = decideDeadLeadClaim({
+      ...input,
+      customer: { ...customer, quality_claims_this_cycle: 99 },
     });
     expect(v.decision).toBe("auto_uphold");
   });
@@ -403,6 +516,60 @@ describe("a replacement for a replacement (§53.12)", () => {
   });
 });
 
+describe("the balance reaches every reader (0153)", () => {
+  /**
+   * ⚠️ A SELECT THAT DOES NOT NAME THE COLUMN READS AS ZERO, WITH NO ERROR.
+   * `replacementsAvailable` treats null as nothing banked — the safe direction —
+   * which means the one explicit-column customer select feeding the policy
+   * would silently route every claim to review if it dropped the column. The
+   * customer routes read the row with select("*") and need no guard.
+   */
+  it("the admin quality page selects replacement_balance and the lapse stamps", () => {
+    const src = readFileSync(
+      resolve(__dirname, "..", "..", "app/admin/quality/page.tsx"),
+      "utf8",
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toContain("replacement_balance");
+    expect(src).toContain("lapsed_at, gr_lapsed_at");
+  });
+
+  /**
+   * ⚠️ THE SQL GRANT AND THE TYPESCRIPT GRANT ARE ONE RULE WRITTEN TWICE
+   * (§20, §26.7). The SQL credits it; the TypeScript prints "N more are added
+   * on …". These pin the SQL body to the decisions the TypeScript encodes:
+   * lapsed customers excluded on each product's own stamp, paused customers
+   * NOT excluded, both products summed under one round().
+   */
+  it("the SQL grant carries the same gates as monthlyReplacementGrant", () => {
+    const sql = readFileSync(
+      resolve(__dirname, "..", "..", "..", "supabase/migrations/0153_replacement_balance.sql"),
+      "utf8",
+    ).replace(/^\s*--.*$/gm, "");
+    const start = sql.indexOf("create or replace function public.replacement_monthly_grant(");
+    expect(start).toBeGreaterThan(-1);
+    const body = sql.slice(start, sql.indexOf("$$;", start));
+    expect(body).toContain("and c.lapsed_at is null");
+    expect(body).toContain("and c.gr_lapsed_at is null");
+    expect(body).not.toContain("paused_at");
+    expect(body).toContain("coalesce(c.quality_allowance_pct, 0.10)");
+    expect(body.match(/round\(/g)).toHaveLength(1);
+  });
+
+  it("the top-up RPC banks the share in both product branches", () => {
+    const sql = readFileSync(
+      resolve(__dirname, "..", "..", "..", "supabase/migrations/0153_replacement_balance.sql"),
+      "utf8",
+    ).replace(/^\s*--.*$/gm, "");
+    const start = sql.indexOf("create or replace function public.record_lead_topup_success(");
+    expect(start).toBeGreaterThan(-1);
+    const body = sql.slice(start, sql.indexOf("$$;", start));
+    const line = "greatest(round(v_tok.credits * coalesce(quality_allowance_pct, 0.10))::integer, 0)";
+    expect(body.split(line)).toHaveLength(3);
+  });
+});
+
 describe("both claim routes actually read the depth", () => {
   /**
    * ⚠️ FILE-TEXT GUARDS, anchored on the real routes, because
@@ -449,7 +616,7 @@ describe("the allowance stays unpublished", () => {
     decideDeadLeadClaim({ ...input, contactedOn: null }),
     decideDeadLeadClaim({
       ...input,
-      customer: { ...customer, quality_claims_this_cycle: 99 },
+      customer: { ...customer, replacement_balance: 0 },
     }),
     decideDeadLeadClaim({
       ...input,
@@ -477,12 +644,12 @@ describe("the allowance stays unpublished", () => {
     }
   });
 
-  it("says nothing different to a customer over the budget than one under it", () => {
-    // Two operators comparing notes must not be able to infer the number from
-    // the wording they each got.
+  it("says nothing different to a customer with nothing banked than one under review", () => {
+    // Two operators comparing notes must not be able to infer the mechanism
+    // from the wording they each got.
     const overBudget = decideDeadLeadClaim({
       ...input,
-      customer: { ...customer, quality_claims_this_cycle: 99 },
+      customer: { ...customer, replacement_balance: 0 },
     });
     const flagged = decideDeadLeadClaim({
       ...input,
@@ -721,11 +888,11 @@ describe("the allowance is settable per customer without being floored", () => {
     expect(normaliseAllowancePct(null)).toBeNull();
   });
 
-  it("raising it to 0.15 buys one more claim on each plan", () => {
+  it("raising it to 0.15 adds one more a month on each plan", () => {
     // The worked example the admin form's caption states. Asserted here so the
     // caption cannot drift away from the arithmetic behind it.
     const at = (pct: number, allocation: number) =>
-      claimBudget({ ...customer, quality_allowance_pct: pct, monthly_allocation: allocation });
+      monthlyReplacementGrant({ ...customer, quality_allowance_pct: pct, monthly_allocation: allocation });
     expect(at(0.1, 10)).toBe(1);
     expect(at(0.15, 10)).toBe(2);
     expect(at(0.1, 20)).toBe(2);

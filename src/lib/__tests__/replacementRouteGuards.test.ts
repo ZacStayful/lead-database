@@ -115,7 +115,30 @@ describe("the client surfaces", () => {
 
   // The number is published deliberately, and a silent removal would turn the
   // hard stop back into an unexplained refusal.
-  it("renders the remaining count", () => {
-    expect(strip(COMPONENT)).toContain("remainingSentence(");
+  it("renders the banked count and what the next billing date adds", () => {
+    expect(strip(COMPONENT)).toContain("availableSentence(");
+    expect(strip(COMPONENT)).toContain("nextGrantSentence(");
+  });
+
+  // ⚠️ A disabled button is a courtesy, not a control (§50.2). The route reads
+  // the lead's product and refuses a swap on hold BEFORE the decision, and it
+  // no longer sends the three seen-values 0141/0142 compared — the balance is
+  // the entitlement (§61), so nothing about it is passed in.
+  it("refuses a swap on hold and sends the eight-argument form", () => {
+    const src = strip(SWAP);
+    expect(src).toContain('.select("lead_type")');
+    expect(src).toContain("replacementHoldFor(");
+    expect(src).toContain('code: "on_hold"');
+    expect(src.indexOf("replacementHoldFor(")).toBeLessThan(src.indexOf("decideDeadLeadClaim("));
+    for (const arg of ["p_entitlement", "p_claims_seen", "p_streak_seen"]) {
+      expect(src).not.toContain(arg);
+    }
+  });
+
+  it("both readers resolve holds per product and hand them to the list", () => {
+    expect(strip(PAGE)).toContain("replacementHoldFor(");
+    expect(strip(PAGE)).toContain("holds={holds}");
+    expect(strip(LIST)).toContain("replacementHoldFor(");
+    expect(strip(LIST)).toContain("holds,");
   });
 });

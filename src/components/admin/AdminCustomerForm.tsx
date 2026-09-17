@@ -32,6 +32,8 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
   const [reviewRequired, setReviewRequired] = useState(
     customer.quality_review_required === true
   );
+  // Replacements banked (0153, §61) — a whole count that carries over.
+  const [banked, setBanked] = useState(customer.replacement_balance ?? 0);
   // Staged release (§54). 'daily' is the rule; 'immediate' exempts them.
   const [releaseMode, setReleaseMode] = useState<"daily" | "immediate">(
     customer.release_mode === "immediate" ? "immediate" : "daily"
@@ -46,7 +48,8 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
       !Number.isFinite(balance) ||
       !Number.isFinite(grAllocation) ||
       !Number.isFinite(grReceived) ||
-      !Number.isFinite(grBalance)
+      !Number.isFinite(grBalance) ||
+      !Number.isFinite(banked)
     ) {
       setMessage("Allocation and lead counts must be numbers.");
       return;
@@ -75,6 +78,7 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
             gr_lead_balance: Number(grBalance),
             quality_allowance_pct: pct,
             quality_review_required: reviewRequired,
+            replacement_balance: Number(banked),
             release_mode: releaseMode,
           }),
         }
@@ -202,12 +206,13 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
           against. */}
       <div className="space-y-4 rounded-md border-[0.5px] border-border p-3">
         <div>
-          <p className="text-sm font-medium">Dead-lead claims</p>
+          <p className="text-sm font-medium">Dead-lead claims and replacements</p>
           <p className="text-xs text-muted-foreground">
-            When an operator reports that a landlord had already gone, this is
-            how many reports a cycle we credit back without a person reading
-            them. Anything beyond it is not refused — it goes to the review
-            queue instead.
+            When an operator reports that a landlord had already gone, a banked
+            replacement pays for the swap or the credit without a person
+            reading it. The balance is added to on every billing date and on
+            every top-up, and anything unused carries over. A credit report
+            beyond the balance is not refused — it goes to the review queue.
           </p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -223,10 +228,26 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
               onChange={(e) => setAllowancePct(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              A share of their plan size, rounded. The default 0.10 gives 1 a
-              cycle on a 10-lead plan and 2 on a 20-lead plan; 0.15 gives 2 and
-              3. They earn one more per run of ten leads taken without
-              claiming, up to two.
+              A share of their plan size, rounded, added to the balance every
+              billing date. The default 0.10 adds 1 a month on a 10-lead plan
+              and 2 on a 20-lead plan; 0.15 adds 2 and 3. Each 5-lead top-up
+              adds one more.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="replacement_balance">Replacements banked</Label>
+            <Input
+              id="replacement_balance"
+              type="number"
+              min={0}
+              step={1}
+              value={banked}
+              onChange={(e) => setBanked(Number(e.target.value))}
+            />
+            <p className="text-xs text-muted-foreground">
+              What they can spend right now, on the Replace a lead tab. Edit it
+              for goodwill or to correct a starting balance; the monthly grant
+              and their claims move it otherwise.
             </p>
           </div>
           <div className="space-y-2">
@@ -236,8 +257,9 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
               {customer.clean_leads_streak ?? 0} clean in a row
             </p>
             <p className="text-xs text-muted-foreground">
-              Both reset on their own billing anchor day. The streak also
-              resets to zero every time a claim is upheld.
+              Both are statistics: the count resets on their own billing anchor
+              day and the streak resets every time a claim is upheld. Neither
+              changes what they can spend.
             </p>
           </div>
         </div>
@@ -245,9 +267,9 @@ export function AdminCustomerForm({ customer }: { customer: Customer }) {
           <div>
             <p className="text-sm font-medium">Always review their claims</p>
             <p className="text-xs text-muted-foreground">
-              Sends every report to the queue whatever the allowance says. Use
-              this rather than an allowance of zero — the earned bonus can
-              still climb out of a zero.
+              Sends every report to the queue whatever their balance says. Use
+              this rather than an allowance of zero, which would also stop the
+              balance growing.
             </p>
           </div>
           <Switch checked={reviewRequired} onCheckedChange={setReviewRequired} />

@@ -64,6 +64,18 @@ describe("buildSidebar", () => {
     expect(buildSidebar(NONE).main.find((i) => i.key === "conversations")?.badge).toBeUndefined();
   });
 
+  // §61: nobody found Replace a lead while it was a sub-tab alone, so it is a
+  // sidebar item of its own, directly under Leads, for everyone.
+  it("puts Replace a lead directly under Leads in the sidebar, for everyone", () => {
+    for (const f of [ALL, NONE]) {
+      const keys = buildSidebar(f).main.map((i) => i.key);
+      expect(keys.indexOf("replacements")).toBe(keys.indexOf("leads") + 1);
+    }
+    const item = buildSidebar(ALL).main.find((i) => i.key === "replacements")!;
+    expect(item.href).toBe(REPLACEMENTS_HREF);
+    expect(item.label).toBe("Replace a lead");
+  });
+
   it("every href resolves to a page on disk", () => {
     const m = buildSidebar(ALL);
     for (const i of [...m.main, ...m.secondary, m.bottom]) {
@@ -83,7 +95,7 @@ describe("activeSidebarKey", () => {
     expect(activeSidebarKey(m, "/dashboard")).toBe("dashboard");
     expect(activeSidebarKey(m, "/dashboard/leads/priority")).toBe("leads");
     expect(activeSidebarKey(m, "/dashboard/leads/abc-123")).toBe("leads");
-    expect(activeSidebarKey(m, "/dashboard/replacements")).toBe("leads");
+    expect(activeSidebarKey(m, "/dashboard/replacements")).toBe("replacements");
     expect(activeSidebarKey(m, "/dashboard/filtering")).toBe("filtering");
     expect(activeSidebarKey(m, "/dashboard/documents")).toBe("documents");
     expect(activeSidebarKey(m, "/dashboard/guide")).toBe("learn");

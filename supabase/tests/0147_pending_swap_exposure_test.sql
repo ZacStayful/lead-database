@@ -57,6 +57,10 @@ delete from public.customers;
 -- ---------------------------------------------------------------------------
 -- The book, one customer per shape the entitlement rule has to get right.
 --
+-- ⚠️ SINCE 0153 THE ENTITLEMENT IS customers.replacement_balance, seeded below
+-- as exactly what the old per-cycle rule produced (A 2, B 1, C 3, E 2, F 1)
+-- so every figure this suite pins survives unchanged.
+--
 -- ⚠️ E IS THE ONE THAT SEPARATES THIS FROM `swap_demand`. Their management
 -- subscription_status is inactive while account_status is active, which
 -- `holdsProduct` admits on its OR and the served CTE refuses on its AND. A
@@ -70,20 +74,21 @@ insert into public.customers
   (id, business_name, contact_name, email, is_active,
    monthly_allocation, gr_monthly_allocation, lead_balance, gr_lead_balance,
    account_status, subscription_status, gr_subscription_status,
-   paused_at, quality_allowance_pct, clean_leads_streak, quality_claims_this_cycle)
+   paused_at, quality_allowance_pct, clean_leads_streak, quality_claims_this_cycle,
+   replacement_balance)
 values
   ('c0000000-0000-0000-0000-00000000000a','Alpha','A','a@x.com',true,
-   20,10,20,0,'active','active','inactive',null,0.10,0,0),
+   20,10,20,0,'active','active','inactive',null,0.10,0,0,2),
   ('c0000000-0000-0000-0000-00000000000b','Beta','B','b@x.com',true,
-   10,10,20,0,'active','active','inactive',null,0.10,0,0),
+   10,10,20,0,'active','active','inactive',null,0.10,0,0,1),
   ('c0000000-0000-0000-0000-00000000000c','Gamma','C','c@x.com',true,
-   20,10,20,20,'active','active','active',now(),0.10,0,0),
+   20,10,20,20,'active','active','active',now(),0.10,0,0,3),
   ('c0000000-0000-0000-0000-00000000000d','Delta','D','d@x.com',false,
-   20,10,20,0,'active','active','inactive',null,0.10,0,0),
+   20,10,20,0,'active','active','inactive',null,0.10,0,0,2),
   ('c0000000-0000-0000-0000-00000000000e','Epsilon','E','e@x.com',true,
-   20,10,20,0,'active','inactive','inactive',null,0.10,0,0),
+   20,10,20,0,'active','inactive','inactive',null,0.10,0,0,2),
   ('c0000000-0000-0000-0000-00000000000f','Zeta','F','f@x.com',true,
-   20,10,0,20,'waitlisted','inactive','active',null,0.10,0,0);
+   20,10,0,20,'waitlisted','inactive','active',null,0.10,0,0,1);
 
 -- Every lead carries max_assignments 3 and one holder, so the average
 -- withdrawal cost is exactly 3 and `swap_slots_now` is readable by eye.
@@ -131,16 +136,16 @@ select test_util.assert_eq(
   (select avg_withdrawal_cost from public.get_service_capacity() where lead_type = 'management'),
   3::numeric, 'every seeded lead costs 3 to withdraw, so the average is 3');
 
--- A: entitlement round(20 × 0.10) = 2 against 5 claimable  → 2
--- B: entitlement round(10 × 0.10) = 1 against 1 claimable  → 1
+-- A: 2 banked against 5 claimable                          → 2
+-- B: 1 banked against 1 claimable                          → 1
 -- C: PAUSED, so no management exposure                     → 0
 -- D: archived                                              → 0
--- E: entitlement 2 against 1 claimable                     → 1
+-- E: 2 banked against 1 claimable                          → 1
 select test_util.assert_eq(test_util.swaps('management'), 4,
   'management exposure is the per-customer least of entitlement and claimable');
 
--- C: entitlement round((20 + 10) × 0.10) = 3 against 1 claimable → 1
--- F: entitlement round((0 + 10) × 0.10) = 1 against 1 claimable  → 1
+-- C: 3 banked against 1 claimable → 1
+-- F: 1 banked against 1 claimable → 1
 select test_util.assert_eq(test_util.swaps('guaranteed_rent'), 2,
   'guaranteed rent counts the paused customer, because GR has no pause');
 
@@ -156,12 +161,21 @@ select test_util.assert_eq(
 -- 2 — ⚠️ BOUNDED BY ENTITLEMENT, in both directions
 --
 -- A holds five claimable assignments and contributes two. Raising the
--- entitlement must move the figure; raising the claimable count must not.
+-- balance must move the figure; raising the claimable count must not.
 -- ---------------------------------------------------------------------------
-update public.customers set quality_allowance_pct = 0.25
+update public.customers set replacement_balance = 5
  where id = 'c0000000-0000-0000-0000-00000000000a';
 select test_util.assert_eq(test_util.swaps('management'), 7,
-  'raising one customer entitlement to 5 raises the exposure by 3');
+  'raising one customer balance to 5 raises the exposure by 3');
+update public.customers set replacement_balance = 2
+ where id = 'c0000000-0000-0000-0000-00000000000a';
+
+-- ⚠️ The percentage sizes the GRANT, not the standing stock. Raising it
+-- changes nothing until the next cycle start puts a bigger grant in the bank.
+update public.customers set quality_allowance_pct = 0.25
+ where id = 'c0000000-0000-0000-0000-00000000000a';
+select test_util.assert_eq(test_util.swaps('management'), 4,
+  'raising the allowance percentage alone moves nothing — the balance is the entitlement');
 update public.customers set quality_allowance_pct = 0.10
  where id = 'c0000000-0000-0000-0000-00000000000a';
 
@@ -174,27 +188,28 @@ values ('a5510000-0000-0000-0000-00000000a006','tel_click');
 select test_util.assert_eq(test_util.swaps('management'), 4,
   'a sixth claimable lead for a customer capped at two changes nothing');
 
--- 0142's earned bonus is part of the entitlement and must move the figure too.
+-- 0142's earned bonus was retired by 0153: a clean streak buys nothing now.
 update public.customers set clean_leads_streak = 10
  where id = 'c0000000-0000-0000-0000-00000000000a';
-select test_util.assert_eq(test_util.swaps('management'), 5,
-  'an earned bonus raises the exposure, because it raises the entitlement');
+select test_util.assert_eq(test_util.swaps('management'), 4,
+  'a clean streak no longer raises the exposure — rollover replaced the earned bonus');
 update public.customers set clean_leads_streak = 0
  where id = 'c0000000-0000-0000-0000-00000000000a';
 
--- Entitlement already spent is not exposure.
-update public.customers set quality_claims_this_cycle = 2
+-- A spent balance is not exposure.
+update public.customers set replacement_balance = 0
  where id = 'c0000000-0000-0000-0000-00000000000a';
 select test_util.assert_eq(test_util.swaps('management'), 2,
-  'entitlement already spent this cycle is not exposure');
+  'a spent balance is not exposure');
 
--- And it never goes negative, however far over the entitlement a reviewed
--- uphold has pushed the counter (§53's clamp, on the SQL side).
+-- And the per-cycle counter is a statistic: however far a reviewed uphold has
+-- pushed it, it neither lowers nor raises the figure (the CHECK on the balance
+-- is what keeps it from ever reading negative).
 update public.customers set quality_claims_this_cycle = 9
  where id = 'c0000000-0000-0000-0000-00000000000a';
 select test_util.assert_eq(test_util.swaps('management'), 2,
-  'a customer pushed past their entitlement contributes zero, never a negative');
-update public.customers set quality_claims_this_cycle = 0
+  'the per-cycle counter moves nothing — a spent customer contributes zero, never a negative');
+update public.customers set quality_claims_this_cycle = 0, replacement_balance = 2
  where id = 'c0000000-0000-0000-0000-00000000000a';
 
 -- ---------------------------------------------------------------------------
@@ -332,22 +347,23 @@ select test_util.assert_eq(
     where lead_type = 'management' and captured_on = current_date),
   12.0::numeric, 'and the slots beside it');
 
-update public.customers set quality_claims_this_cycle = 2
+update public.customers set replacement_balance = 0
  where id = 'c0000000-0000-0000-0000-00000000000a';
 select public.capture_service_capacity();
 select test_util.assert_eq(
   (select swaps_available_now from public.service_capacity_snapshots
     where lead_type = 'management' and captured_on = current_date),
   2, 'a same-day re-run refreshes it rather than leaving it stale');
-update public.customers set quality_claims_this_cycle = 0
+update public.customers set replacement_balance = 2
  where id = 'c0000000-0000-0000-0000-00000000000a';
 
 -- ---------------------------------------------------------------------------
 -- 8 — The real flow, end to end
 --
--- A customer swap spends the entitlement AND consumes the claimable
+-- A customer swap spends one banked replacement AND consumes the claimable
 -- assignment, so the exposure must fall by one — and 0145's withdrawal cost
--- must still be recorded on the lead that went.
+-- must still be recorded on the lead that went. Through the eleven-argument
+-- shim, whose three seen-values are ignored since 0153.
 -- ---------------------------------------------------------------------------
 select test_util.assert_eq(test_util.swaps('management'), 4, 'exposure before the swap');
 
@@ -361,7 +377,10 @@ select count(*)::integer from public.customer_swap_dead_lead(
   1, 0, 0, false, 7);
 
 select test_util.assert_eq(test_util.swaps('management'), 3,
-  'a real self-swap spends the entitlement and removes the exposure with it');
+  'a real self-swap spends the balance and removes the exposure with it');
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id = 'c0000000-0000-0000-0000-00000000000b'),
+  0, 'and the balance it spent reads zero');
 
 select test_util.assert_eq(
   (select withdrawn_slots from public.leads

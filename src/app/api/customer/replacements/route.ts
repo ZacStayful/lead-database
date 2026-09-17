@@ -2,20 +2,23 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { viewerScopedLead } from "@/lib/customerLeads";
+import { availableLeadTypes } from "@/lib/products";
 import {
   CLAIM_WINDOW_DAYS,
   DEAD_LEAD_REASONS,
   DEAD_LEAD_REASON_LABELS,
   REASON_DETAIL_PROMPT,
-  claimBudget,
+  monthlyReplacementGrant,
   reasonAvailability,
+  replacementHoldFor,
+  replacementsAvailable,
   windowDaysForReason,
   type ClaimCustomer,
 } from "@/lib/quality/deadLeadPolicy";
 import {
-  nextResetDate,
-  remainingOf,
+  nextGrantDate,
   type ReplacementEntitlement,
+  type ReplacementHolds,
 } from "@/lib/quality/replacementEntitlement";
 import type { Lead } from "@/lib/types";
 
@@ -30,10 +33,10 @@ export const dynamic = "force-dynamic";
  * have instead of this one". Splitting them would mean two places that have to
  * agree about eligibility.
  *
- * ⚠️ The entitlement is computed HERE, with `claimBudget()` — the same pure
- * function the credit path uses (§51.3). It is not restated in SQL. The swap
- * RPC re-reads only the COUNTER under its own conditional update, so the
- * arithmetic has one home and the race is still closed.
+ * ⚠️ The figures are computed HERE, with `replacementsAvailable()` and
+ * `monthlyReplacementGrant()` — the same pure functions the credit path and the
+ * page use (§51.3, §61). The swap RPC spends the balance under its own
+ * conditional update, so two tabs still cannot both pass.
  */
 
 interface ClaimableRow {
@@ -48,18 +51,14 @@ function daysSince(iso: string): number {
 }
 
 function entitlementFor(customer: ClaimCustomer & {
-  quality_claims_this_cycle?: number | null;
   billing_cycle_anchor?: string | null;
   gr_billing_cycle_anchor?: string | null;
   created_at?: string | null;
 }): ReplacementEntitlement {
-  const entitlement = claimBudget(customer);
-  const used = Math.max(0, Math.trunc(customer.quality_claims_this_cycle ?? 0));
   return {
-    entitlement,
-    used,
-    remaining: remainingOf(entitlement, used),
-    resetsOn: nextResetDate(customer),
+    available: replacementsAvailable(customer),
+    monthlyGrant: monthlyReplacementGrant(customer),
+    nextGrantOn: nextGrantDate(customer),
   };
 }
 
@@ -173,9 +172,16 @@ export async function GET(req: NextRequest) {
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
+  // Per product the customer holds: past due, paused, or nothing.
+  const holds: ReplacementHolds = {};
+  for (const t of availableLeadTypes(customer)) {
+    holds[t] = replacementHoldFor(customer as unknown as ClaimCustomer, t);
+  }
+
   return NextResponse.json({
     ok: true,
     entitlement: entitlementFor(customer as never),
+    holds,
     items,
     reasons: DEAD_LEAD_REASONS.map((value) => ({
       value,

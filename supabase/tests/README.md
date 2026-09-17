@@ -66,6 +66,40 @@ as §48.10 already suspected.
 - **Invariant 7.** `anon` and `authenticated` hold zero execute grants on any
   0137 function.
 
+## What `0153_replacement_balance_test.sql` covers
+
+0153 turns the replacement entitlement into a balance that carries over (§61),
+so these assertions are about what credits it, what spends it, and what must
+not touch it:
+
+- **The grant.** Both products summed and rounded ONCE (10 + 10 at 0.05 is 1,
+  not 1 + 1); a paused customer still accrues; a customer written off under
+  §59 does not, on each product's own lapse stamp; a prospect and an
+  allowance of zero accrue nothing.
+- **The cycle start** the grant keys on: the same coalesce order 0141 chose,
+  the GR anchor for a GR-only customer, the signup date with no anchor at all.
+- **`reset_monthly_counts`.** Grants once per cycle, stamps the cycle start,
+  adds nothing on a same-day re-run, catches up a customer never granted for
+  the current cycle on the NEXT run rather than the next anchor day, grants a
+  dual-product customer on ONE anchor, skips archived and lapsed rows — and
+  still zeroes the three counters it always did.
+- **Top-ups.** A 5-lead top-up banks one the moment it is paid, 15 credits
+  bank two, a replayed Stripe event banks nothing twice, an allowance of zero
+  banks nothing.
+- **The credit path.** A consuming claim spends one and still restores the
+  credit; an admin uphold at zero CLAMPS rather than raises; goodwill and
+  corroboration spend nothing.
+- **The swap.** The eight-argument form spends one and refuses at zero with
+  the assignment standing and no claim written; the eleven-argument shim
+  ignores its three seen-values; only the eight-argument form names
+  `admin_swap_lead_assignment` (0143 §10 counts on that).
+- **Exposure** reads the balance, still bounded by claimable stock.
+- **The seed**, through the real function: tenure from the first PAID
+  invoice, the top-up share, the consumed claim subtracted, the stamp, and a
+  second run seeding nobody.
+- **ACLs** on every signature touched, both swap overloads included, and
+  invariant 7.
+
 ## Adding a test file
 
 Write assertions with the helpers the suite defines:
