@@ -15266,11 +15266,65 @@ the notice with Swap disabled, and the admin form edits the banked count.
 
 ### Deployment order — migration BEFORE code
 
-0153 first, applied and verified against production before the merge (§1.1).
-⚠️ **NOT INERT**: the seed writes a balance for every active holder the moment
-it applies, `swaps_available_now` steps that day, and the eleven-argument shim
-is what keeps the deployed route working until the code follows. Every
-pre-existing capacity figure and every customer's lead balances and counters
-are asserted unchanged at apply, not assumed. Code arriving first would call an
-eight-argument function that does not exist and select a column that does not
-exist, so the order is not optional.
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 2026-09-17 at 17:04 UTC (ledger
+`0153_replacement_balance`), before the merge** (§1.1), and verified there
+rather than trusted.
+
+- **No drift before it went on.** All five live bodies hash-matched the
+  pre-0153 scratch build exactly — `customer_swap_dead_lead` (11-arg)
+  `d6647683…` (4805), `get_service_capacity` `0df89253…` (18317),
+  `record_lead_topup_success` `66b391cf…` (1299), `reset_monthly_counts`
+  `dde127d8…` (1492), `uphold_dead_lead_claim` `8d0846f1…` (1396) — and no
+  `replacement_*` function, column or CHECK existed.
+- **Applied with comments stripped OUTSIDE function bodies only**, proved
+  schema-identical first (above), so every `prosrc` matches the repo file and
+  the next §11 audit is a straight comparison.
+- **All nine bodies hash-match the scratch build from the repo file**:
+  `customer_swap_dead_lead` 8-arg `d8b7d03e…` (4642) and the 11-arg shim
+  `1fb32824…` (249), `get_service_capacity` `4497c92d…` (17912),
+  `record_lead_topup_success` `f09862aa…` (1749), `reset_monthly_counts`
+  `72ecc758…` (3123), `uphold_dead_lead_claim` `e4c5cfbd…` (2142),
+  `seed_replacement_balances` `e1af9149…` (2035), `replacement_monthly_grant`
+  `1b875bcb…` (483), `replacement_cycle_start` `9a011cac…` (889). Every one
+  pins `search_path`; `anon`/`authenticated` false and `service_role` true on
+  all nine, **both swap overloads and the top-up RPC included**. Exactly one of
+  the two swap overloads names `admin_swap_lead_assignment`, so 0143 §10 holds.
+- **Invariant 7 holds** (four distinct names still `authenticated`-executable),
+  and `get_advisors` reports **no new finding** — the 53 deny-all tables, the
+  five mutable-`search_path` functions and the two auth warnings it lists are
+  all pre-existing.
+- **Nothing moved that must not move.** 56 customers, 537 leads, 532
+  assignments, 44 payments and 2 claims untouched; the md5 of every customer's
+  lead balances, monthly counters, claim counter, streak and allowance
+  identical before and after (`8a67231f95ac96d7f5ce928e33003949`); and ⚠️
+  **the fingerprint of all twenty-six pre-existing capacity figures
+  byte-identical** (`d0467ebe4dd55d14355bcda5c3d98a3f`). Not one ceiling moved.
+- **The seed landed exactly as measured**: 23 customers, **54 banked** — four
+  at 4, three at 3 (two of them paused; the third's extra is a top-up's share),
+  thirteen at 2, three at 1 — the six paused customers included, every seeded
+  row stamped with its own cycle start, no accruing holder left at zero, no
+  archived row with a balance, nobody past due or lapsed. The monthly grant
+  across the book is **32**.
+- **The step §53.13 predicted**: `swaps_available_now` went **13 → 18** for
+  management (15.3 → 21.2 slots, against 193 free), guaranteed rent 0 → 0.
+  Read the 2026-09-17 step in that series as a definition change, not as
+  demand.
+- The whole path was then driven **on production itself**, inside a block that
+  raises at the end so every write rolled back: a `reset_monthly_counts()`
+  re-run on the day of the seed added nothing (54 → 54); a 5-credit top-up on
+  a real customer banked exactly one (4 → 5) and its replayed event banked
+  nothing; a real eight-argument swap on a real claimable assignment spent
+  exactly one (5 → 4), wrote a `self_swap` / `auto_upheld` claim with the
+  allowance consumed, and left a depth-1 replacement row; and with the balance
+  set to zero a second swap raised `no_entitlement` with the claim count and
+  the assignment untouched. The row counts and both fingerprints afterwards
+  confirm it wrote nothing.
+
+⚠️ **NOT INERT**, as designed: the seed wrote a balance for every active holder
+the moment it applied, `swaps_available_now` stepped that day, and the
+eleven-argument shim is what keeps the deployed route working until the code
+follows — between apply and deploy the OLD page still prints the old "N of N"
+figure while the balance sits underneath it, and the old route's swap spends
+the balance through the shim. Code arriving first would have called an
+eight-argument function that did not exist and selected a column that did not,
+so the order was not optional.
