@@ -7,6 +7,7 @@ import {
   fetchLeadVolumeAggregate,
   fetchAreaContention,
   predictMonthlyVolume,
+  type LeadVolumeAggregate,
 } from "@/lib/filterPrediction";
 import { forecastVolume } from "@/lib/filterForecast";
 import {
@@ -188,10 +189,31 @@ export async function POST(req: NextRequest) {
     // give-back and to report back to the panel. The WRITE that clamps it on a
     // fresh enable happens under the row lock in the RPC, not from this value.
     const balance = Number(customer[c.balance] ?? 0);
-    const [aggregate, contention] = await Promise.all([
-      fetchLeadVolumeAggregate(admin),
-      fetchAreaContention(admin, product, customer.id),
-    ]);
+    // ⚠️ AN UNREADABLE BOOK REFUSES THE APPLY. The loader now throws instead of
+    // returning an empty aggregate (§58). Applying against an empty one would
+    // quote zero, store a null forecast against a filter that deserved a real
+    // one, and skip the apply-now question because "no forecast could be
+    // offered" — silently, on exactly the day the database was struggling. A
+    // 503 the panel can show is the honest answer; the customer tries again in
+    // a minute and nothing has been written.
+    let aggregate: LeadVolumeAggregate;
+    let contention: Awaited<ReturnType<typeof fetchAreaContention>>;
+    try {
+      [aggregate, contention] = await Promise.all([
+        fetchLeadVolumeAggregate(admin),
+        fetchAreaContention(admin, product, customer.id),
+      ]);
+    } catch (err) {
+      console.error("[customer/filter] lead volume read failed", err);
+      return NextResponse.json(
+        {
+          error:
+            "We couldn't load lead volumes just now, so the filter wasn't applied. Try again in a minute.",
+          code: "volume_unavailable",
+        },
+        { status: 503 }
+      );
+    }
     const prediction = predictMonthlyVolume(
       aggregate[product],
       { areas, minBedrooms: min, maxBedrooms: max },

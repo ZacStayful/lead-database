@@ -64,6 +64,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 55, title: "Chasing an enquirer who never books", migrations: "0149" },
   { n: 56, title: "The CRM redesign, and the gaps it found", migrations: "0150" },
   { n: 57, title: "Facebook lead ads become enquiries", migrations: "0151" },
+  { n: 58, title: "The audit: what was lifted, and what only looked lifted", migrations: "no migration" },
   { n: 60, title: "Measuring the adverts", migrations: "no migration" },
 ];
 
@@ -90,6 +91,7 @@ export const KNOWN_ISSUES: string[] = [
   "Stripe's billing cycle keeps running underneath a pause. pause_collection: { behavior: \"void\" } generates invoices and voids them; resuming does not create a charge, it stops voiding future ones. So…",
   "fully_served for a paused customer is a stale reading, in an unverified direction. got counts assignments since coalesce(billing_cycle_anchor, created_at). Both customers paused at the time of writin…",
   "⚠️ sweep-lead-pool's kill switch fails OPEN. It reads (settingRow?.value ?? \"true\") with the query error discarded, so an unreadable system_settings runs the sweep as though pool_enabled were on. The…",
+  "⚠️ A Supabase outage must never render as an empty book. §58 records what that cost: the lead-volume loader break-ed on a query error and every filter surface believed the empty aggregate. fetchLeadV…",
   "No ESLint config (next lint prompts interactively) and no test suite.",
 ];
 
@@ -109,7 +111,7 @@ export const DEFERRED: string[] = [
 ];
 
 /** Highest committed migration, from the directory rather than the prose. */
-export const LATEST_MIGRATION = 151;
+export const LATEST_MIGRATION = 152;
 
 /** The number a new migration must take. Migrations deploy BEFORE the code that reads them. */
-export const NEXT_MIGRATION = "0152";
+export const NEXT_MIGRATION = "0153";

@@ -8,10 +8,12 @@ import {
 } from "@/components/dashboard/LeadFilteringPanel";
 import { areaLabel } from "@/lib/postcode";
 import {
+  buildLeadVolumeAggregate,
   fetchAreaContention,
   fetchLeadVolumeData,
   type AreaContention,
   type LeadVolumeAggregate,
+  type LeadVolumeData,
 } from "@/lib/filterPrediction";
 import type { Customer, FilterStatus } from "@/lib/types";
 
@@ -29,8 +31,25 @@ export default async function LeadFilteringPage() {
   // per-product volume aggregate the prediction runs on. This page used to run
   // its own copy of that loop; it now shares the module's, so a customer and an
   // admin cannot be shown different numbers for the same filter.
-  const { aggregate: volumeAggregate, areaCounts } =
-    await fetchLeadVolumeData(admin);
+  //
+  // ⚠️ AN UNREADABLE BOOK IS SAID SO, NEVER RENDERED AS AN EMPTY ONE. The loader
+  // used to return an empty aggregate on a database error, and this page then
+  // told the customer "No postcode areas are available yet" with the map, the
+  // picker, the radius search and the whole forecast block gone — which is
+  // what a run of Supabase gateway timeouts looked like in September 2026, and
+  // what got reported as the filter revisions having been reverted (§58). The
+  // page now carries the fact through to the panel, which says so in words and
+  // disables Apply until the volumes can be read.
+  let volumeData: LeadVolumeData;
+  let volumeUnavailable = false;
+  try {
+    volumeData = await fetchLeadVolumeData(admin);
+  } catch (err) {
+    console.error("[dashboard/filtering] lead volume read failed", err);
+    volumeUnavailable = true;
+    volumeData = { aggregate: buildLeadVolumeAggregate([]), areaCounts: {} };
+  }
+  const { aggregate: volumeAggregate, areaCounts } = volumeData;
 
   // Per-product, and excluding this customer so re-quoting their own filter
   // does not count them as their own competitor.
@@ -53,7 +72,8 @@ export default async function LeadFilteringPage() {
     areaCounts,
     maxAreaCount,
     volumeAggregate,
-    { management: mgmtContention, guaranteed_rent: grContention }
+    { management: mgmtContention, guaranteed_rent: grContention },
+    volumeUnavailable
   );
 
   return (
@@ -84,7 +104,8 @@ function panelPropsFor(
   areaCounts: Record<string, number>,
   maxAreaCount: number,
   volumeAggregate: LeadVolumeAggregate,
-  contention: Record<"management" | "guaranteed_rent", AreaContention>
+  contention: Record<"management" | "guaranteed_rent", AreaContention>,
+  volumeUnavailable: boolean
 ): FilterPanelProps[] {
   const panels: FilterPanelProps[] = [];
 
@@ -115,6 +136,7 @@ function panelPropsFor(
       forecastLikelihoodPct: customer.filter_forecast_likelihood_pct,
       forecastCostPerLeadPence: customer.filter_forecast_cost_per_lead_pence,
       forecastAcknowledgedAt: customer.filter_forecast_acknowledged_at,
+      volumeUnavailable,
     });
   }
 
@@ -140,6 +162,7 @@ function panelPropsFor(
       forecastLikelihoodPct: customer.gr_filter_forecast_likelihood_pct,
       forecastCostPerLeadPence: customer.gr_filter_forecast_cost_per_lead_pence,
       forecastAcknowledgedAt: customer.gr_filter_forecast_acknowledged_at,
+      volumeUnavailable,
     });
   }
 
