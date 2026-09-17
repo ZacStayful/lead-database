@@ -85,6 +85,11 @@ export interface FilterPanelProps {
   forecastLikelihoodPct?: number | null;
   forecastCostPerLeadPence?: number | null;
   forecastAcknowledgedAt?: string | null;
+  // The lead book could not be read when the page rendered (§58). The panel
+  // then SAYS so and refuses to apply, rather than rendering an empty book as
+  // a book with no leads in it — which is what hid every forecast figure from
+  // customers during the September 2026 gateway timeouts.
+  volumeUnavailable?: boolean;
 }
 
 /** "£21.43" from 2143. */
@@ -96,6 +101,12 @@ const CONSENT_FULL =
 // Too little history through these areas to forecast anything yet.
 const CONSENT_UNRELIABLE =
   "Too few leads have come through this selection for us to forecast its volume, so we can't tell you what to expect from it yet. You may receive fewer leads some months, and your monthly subscription amount stays the same regardless. Once enough leads have come through these areas, we'll be able to show you a number.";
+
+// The volumes could not be read. Said in words, never rendered as zero: an
+// empty picker and a missing forecast look exactly like the feature having
+// been removed, and nothing in that rendering tells the customer to try again.
+const VOLUME_UNAVAILABLE =
+  "We couldn't load lead volumes just now, so we can't show what a selection would deliver or apply a filter. Try again in a minute — nothing about your current filter has changed.";
 
 const MINI_GUIDE =
   "Applying or editing your filter takes effect immediately — you'll only be matched to leads in your chosen locations and bedroom range. If you're holding leads outside that range which you haven't opened yet, we'll ask whether to put them back into the pool; doing so refunds their credits so your filter can start delivering this month instead of next. Lifting your filter does not take effect immediately. You'll keep receiving only leads matching your current filter until your next billing cycle starts, and from that date you return to the standard full allocation.";
@@ -238,9 +249,41 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
   // What the customer was SHOWN, not what today's data would quote. The two
   // drift as ingest moves, and only one of them is what they actually read.
-  const shownLeads = props.expectedLeads ?? null;
-  const shownCostPence = props.forecastCostPerLeadPence ?? null;
-  const shownLikelihood = props.forecastLikelihoodPct ?? null;
+  //
+  // ⚠️ WITH ONE FALLBACK. A filter applied before 0100 (23 Aug 2026), or during
+  // a database outage, has NO stored figure at all — six of the nine active
+  // filters on production when §58 was written. For those there is nothing the
+  // customer was shown, so showing today's forecast is honest rather than a
+  // drift, and it is labelled as today's. The stored figure, when present,
+  // still wins. The admin backfill (§58) writes the stored columns for these
+  // customers so the fallback stops being needed.
+  const liveSavedForecast = useMemo(
+    () =>
+      props.status !== "off" &&
+      props.expectedLeads == null &&
+      !props.volumeUnavailable
+        ? forecastVolume(savedPrediction, props.monthlyAllocation, product)
+        : null,
+    [
+      props.status,
+      props.expectedLeads,
+      props.volumeUnavailable,
+      savedPrediction,
+      props.monthlyAllocation,
+      product,
+    ]
+  );
+  const liveSavedOfferable = liveSavedForecast?.offerable === true;
+  const shownIsLive = props.expectedLeads == null && liveSavedOfferable;
+  const shownLeads =
+    props.expectedLeads ??
+    (liveSavedOfferable ? liveSavedForecast!.expected : null);
+  const shownCostPence =
+    props.forecastCostPerLeadPence ??
+    (liveSavedOfferable ? liveSavedForecast!.costPerLeadPence : null);
+  const shownLikelihood =
+    props.forecastLikelihoodPct ??
+    (liveSavedOfferable ? liveSavedForecast!.likelihoodPct : null);
   const savedDowngrade = useMemo(
     () =>
       shownLeads != null
@@ -442,7 +485,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
             </dl>
 
             <div className="space-y-1.5">
-              {savedPrediction.reliable ? (
+              {props.volumeUnavailable ? (
+                <p className="rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {VOLUME_UNAVAILABLE}
+                </p>
+              ) : savedPrediction.reliable ? (
                 <>
                   <p className="text-sm">
                     Predicted volume:{" "}
@@ -488,8 +535,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                       {poundsFromPence(shownCostPence)}
                     </span>{" "}
                     a lead.
-                    {props.forecastAcknowledgedAt && (
-                      <> Based on volumes as at {formatDate(props.forecastAcknowledgedAt)}.</>
+                    {shownIsLive ? (
+                      <>
+                        {" "}
+                        Based on this month&rsquo;s volumes — no figure was
+                        recorded when this filter was applied.
+                      </>
+                    ) : (
+                      props.forecastAcknowledgedAt && (
+                        <> Based on volumes as at {formatDate(props.forecastAcknowledgedAt)}.</>
+                      )
                     )}
                   </p>
                   {savedDowngrade && (
@@ -607,7 +662,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                   ? "Choose the postcode areas you want leads from. Leave all unchecked to accept any location."
                   : "Enter your business postcode and how far you're willing to travel — we'll work out which postcode areas that covers."}
               </p>
-              {availableAreas.length === 0 ? (
+              {props.volumeUnavailable ? (
+                <p className="mt-2 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {VOLUME_UNAVAILABLE}
+                </p>
+              ) : availableAreas.length === 0 ? (
                 <p className="mt-2 text-sm text-muted-foreground">
                   No postcode areas are available yet.
                 </p>
@@ -659,6 +718,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               onMaxChange={setMaxBeds}
             />
 
+            {!props.volumeUnavailable && (
             <PredictionBox
               prediction={prediction}
               allocation={props.monthlyAllocation}
@@ -671,8 +731,9 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               suggestions={suggestions}
               onAddArea={toggleArea}
             />
+            )}
 
-            {forecast.offerable && forecast.reducesVolume ? (
+            {props.volumeUnavailable ? null : forecast.offerable && forecast.reducesVolume ? (
               <div className="space-y-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 {/*
                   THE WORDING IS THE HONESTY HERE. `expected` is the largest
@@ -892,7 +953,10 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                 releaseDecision ? "hidden" : "flex flex-wrap gap-2"
               }
             >
-              <Button onClick={() => apply()} disabled={busy || blocked}>
+              <Button
+                onClick={() => apply()}
+                disabled={busy || blocked || props.volumeUnavailable === true}
+              >
                 {busy
                   ? "Saving…"
                   : needsAcknowledgement

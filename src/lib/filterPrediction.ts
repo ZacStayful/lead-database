@@ -357,6 +357,22 @@ export function buildLeadVolumeAggregate(
 }
 
 /**
+ * The lead book could not be read, so no volume figure exists.
+ *
+ * Thrown rather than swallowed (see the loops below) so every surface decides
+ * for itself what an unreadable book means — §18.3's "three outcomes, never
+ * two": the filtering page says so and disables Apply, the apply route answers
+ * 503, the public estimator keeps its last good cache, the admin pages drop
+ * the prediction column. None of them may quote zero.
+ */
+export class LeadVolumeUnavailableError extends Error {
+  constructor(detail: string) {
+    super(`Lead volume unavailable: ${detail}`);
+    this.name = "LeadVolumeUnavailableError";
+  }
+}
+
+/**
  * Fetch every lead's prediction-relevant columns (paginated — a single select
  * is capped at 1000 rows) and build the aggregate. The admin client is a
  * parameter so this module stays importable from client components.
@@ -413,7 +429,19 @@ export async function fetchLeadVolumeData(
       .gte("created_at", INGEST_EPOCH_ISO)
       .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error || !data || data.length === 0) break;
+    // ⚠️ AN ERROR THROWS. It used to `break`, which returned an EMPTY aggregate
+    // on a database error — indistinguishable from a book with no leads in it.
+    // Every consumer then rendered that as fact: the filtering page said "No
+    // postcode areas are available yet" and hid the map, the picker and the
+    // radius search; the forecast read "not offerable" so the cost per lead,
+    // the likelihood and the cheaper-plan advice vanished; the apply route
+    // skipped the apply-now question; and the public estimator OVERWROTE its
+    // cache with zeros. Supabase gateway timeouts on 9–14 Sep 2026 did exactly
+    // that to production, and it read as every filter revision having been
+    // reverted (§58). §30 had already recorded the same shape once. Only an
+    // empty page is the end of paging.
+    if (error) throw new LeadVolumeUnavailableError(error.message);
+    if (!data || data.length === 0) break;
     for (const r of data as RawLeadVolumeRow[]) {
       rows.push({
         postcode_area: r.postcode_area,
@@ -547,7 +575,10 @@ async function fetchRetiredLeadIds(admin: SupabaseClient): Promise<Set<string>> 
       .not("claimed_from_pool_at", "is", null)
       .order("lead_id", { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error || !data || data.length === 0) break;
+    // Same rule as fetchLeadVolumeData: a read that failed is not an empty set.
+    // Reading it as one would un-retire every pool-claimed lead in the figures.
+    if (error) throw new LeadVolumeUnavailableError(error.message);
+    if (!data || data.length === 0) break;
     for (const r of data as { lead_id: string }[]) ids.add(r.lead_id);
     if (data.length < PAGE) break;
   }
