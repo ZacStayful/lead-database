@@ -57,7 +57,14 @@ describe("lapse-past-due: what it must never do", () => {
   });
 
   it("is scheduled", () => {
-    expect(vercel).toContain('"path": "/api/cron/lapse-past-due"');
+    // Parsed, never matched as text: Vercel rewrites vercel.json into compact
+    // JSON before the build command runs, so a whitespace-sensitive string
+    // passes locally and fails on every deploy (§50.9's shape, found the hard
+    // way on this PR's first build).
+    const crons = JSON.parse(vercel).crons as { path: string; schedule: string }[];
+    const entry = crons.find((c) => c.path === "/api/cron/lapse-past-due");
+    expect(entry).toBeDefined();
+    expect(entry?.schedule).toBe("0 6 * * *");
   });
 });
 
