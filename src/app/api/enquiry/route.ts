@@ -4,6 +4,12 @@ import { toLeadInterest, LEAD_INTEREST } from "@/lib/monday";
 import { toPlanKey } from "@/lib/plans";
 import { recordEnquiry } from "@/lib/enquiry/recordEnquiry";
 import { ukMobileE164, UK_MOBILE_ERRORS } from "@/lib/leadQuality";
+import { APP_URL } from "@/lib/env";
+import { clientIp } from "@/lib/api/log";
+import { metaTrackingAllowed } from "@/lib/meta/consent";
+import { buildMetaUserData } from "@/lib/meta/userData";
+import { buildLeadEvent, coerceEventId } from "@/lib/meta/events";
+import { logMetaResult, sendMetaConversion } from "@/lib/meta/capi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +37,7 @@ export async function POST(request: NextRequest) {
     plan?: string;
     lead_interest?: string;
     product?: string;
+    event_id?: string;
   };
   try {
     body = await request.json();
@@ -144,7 +151,49 @@ export async function POST(request: NextRequest) {
     console.error("Enquiry recorded with errors", result.errors);
   }
 
-  // 4. Capacity no longer gates the public form — every prospect books a call.
+  // Meta Lead conversion, server-side (§60).
+  //
+  // THE RELIABLE HALF of the conversion, not a backup. Two things make the
+  // browser pixel alone insufficient here: roughly a third of visitors block
+  // fbevents.js outright, and the form's success path is a hard navigation
+  // off-site to Calendly, which races the beacon.
+  //
+  // `_fbp` / `_fbc` are first-party cookies written by the pixel on the
+  // landing page (and `_fbc` is minted from `?fbclid=` by our own bundle even
+  // when the pixel is blocked — see MetaPixel.tsx). They arrive on this
+  // request because the form's fetch is same-origin, which is why the COOKIE
+  // is the right carrier and the URL is not: the visitor lands on
+  // `/?fbclid=…` and navigates to `/enquiry`, where the param is long gone.
+  //
+  // ⚠️ AWAITED, not fire-and-forget. Vercel can freeze the function the
+  // instant the response is returned, and an un-awaited promise is simply
+  // lost. Worst case is the 4s timeout inside sendMetaConversion.
+  //
+  // ⚠️ AFTER recordEnquiry, and in THIS route rather than inside it: the
+  // Monday enquiry sync (§57) calls the same helper for a Facebook lead-form
+  // enquiry, which never touched this site and has no browser event to
+  // deduplicate against. It can never fail the request — a measurement
+  // outage must not cost us a real lead.
+  if (metaTrackingAllowed()) {
+    const event = buildLeadEvent({
+      eventId: coerceEventId(body.event_id),
+      sourceUrl: `${APP_URL}/enquiry`,
+      contentName:
+        leadInterest === LEAD_INTEREST.management ? planKey : leadInterest,
+      userData: buildMetaUserData({
+        email,
+        phone: mobile,
+        fullName: name,
+        fbp: request.cookies.get("_fbp")?.value ?? null,
+        fbc: request.cookies.get("_fbc")?.value ?? null,
+        ipAddress: clientIp(request),
+        userAgent: request.headers.get("user-agent"),
+      }),
+    });
+    logMetaResult("enquiry", event, await sendMetaConversion(event));
+  }
+
+  // Capacity no longer gates the public form — every prospect books a call.
   //    The field is kept `true` for a stable response shape.
   return NextResponse.json({ ok: true, hasCapacity: true });
 }
