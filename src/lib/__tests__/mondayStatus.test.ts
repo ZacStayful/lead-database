@@ -24,6 +24,8 @@ function customer(over: Partial<MondayStatusCandidate> = {}): MondayStatusCandid
     gr_subscription_status: "inactive",
     cancel_at_period_end: false,
     gr_cancel_at_period_end: false,
+    lapsed_at: null,
+    gr_lapsed_at: null,
     ...over,
   };
 }
@@ -256,5 +258,114 @@ describe("mondayStatusLabelFor — the live rows this change was made for", () =
         })
       )
     ).toBe(ENQUIRY_STATUS.cancelling);
+  });
+});
+
+describe("mondayStatusLabelFor — the lapse (0152, §59)", () => {
+  // A customer whose collection has been failing for longer than
+  // past_due_lapse_days is written off by /api/cron/lapse-past-due, which stamps
+  // lapsed_at and NOTHING on subscription_status — the row keeps saying
+  // 'past_due' because that is what Stripe still reports. The label rule has to
+  // read the stamp, or a written-off customer sits on card-declined for ever.
+  const LAPSED = "2026-09-17T06:00:00Z";
+
+  it("reads a lapsed management customer as Cancelled, never Cancelling", () => {
+    // Ended, not scheduled to end: nothing is being served out.
+    expect(
+      mondayStatusLabelFor(
+        customer({ ...MANAGEMENT, subscription_status: "past_due", lapsed_at: LAPSED })
+      )
+    ).toBe(ENQUIRY_STATUS.cancelled);
+  });
+
+  it("leaves a declined customer on card-declined until they lapse", () => {
+    expect(
+      mondayStatusLabelFor(customer({ ...MANAGEMENT, subscription_status: "past_due" }))
+    ).toBe(ENQUIRY_STATUS.card_declined);
+  });
+
+  it("keeps a paying GR customer off Cancelled when management lapses", () => {
+    // The defect PR #74's suite caught. Rule 1 deliberately steps aside for a
+    // live GR subscription, so without the `!managementCancelling` guard on
+    // rule 3 this fell through and read "Wants to pay card declined" — while the
+    // identical customer with management cancelled OUTRIGHT read "Guaranteed
+    // rent customer". A paying GR customer must never be described by their
+    // dead management subscription.
+    expect(
+      mondayStatusLabelFor(
+        customer({
+          ...MANAGEMENT,
+          subscription_status: "past_due",
+          lapsed_at: LAPSED,
+          gr_subscription_status: "active",
+        })
+      )
+    ).toBe(ENQUIRY_STATUS.guaranteed_rent_customer);
+  });
+
+  it("reads a lapsed GR-only customer as Cancelled", () => {
+    expect(
+      mondayStatusLabelFor(
+        customer({ ...GR, gr_subscription_status: "past_due", gr_lapsed_at: LAPSED })
+      )
+    ).toBe(ENQUIRY_STATUS.cancelled);
+  });
+
+  it("keeps a live management customer when only GR has lapsed", () => {
+    expect(
+      mondayStatusLabelFor(
+        customer({
+          ...MANAGEMENT,
+          gr_subscription_status: "past_due",
+          gr_lapsed_at: LAPSED,
+        })
+      )
+    ).toBe(ENQUIRY_STATUS.management_customer);
+  });
+
+  it("puts Cancelled ahead of Paused", () => {
+    expect(
+      mondayStatusLabelFor(
+        customer({
+          ...MANAGEMENT,
+          subscription_status: "past_due",
+          paused_at: "2026-09-01T00:00:00Z",
+          lapsed_at: LAPSED,
+        })
+      )
+    ).toBe(ENQUIRY_STATUS.cancelled);
+  });
+
+  it("does not let a stale cancelled account_status turn a decline into Cancelled", () => {
+    // Why lapsed_at had to be its own column rather than a widening of the
+    // account_status clause: that clause excludes past_due on purpose, so a
+    // customer who once left and whose card has now failed is still a decline,
+    // not a departure, until the cron says otherwise.
+    expect(
+      mondayStatusLabelFor(
+        customer({ account_status: "cancelled", subscription_status: "past_due" })
+      )
+    ).toBe(ENQUIRY_STATUS.card_declined);
+  });
+
+  it("returns them to Management Customer once the stamps are cleared", () => {
+    // Recovery: invoice.paid clears lapsed_at and past_due_since and promotes
+    // account_status, so no separate un-lapse path is needed.
+    expect(mondayStatusLabelFor(customer({ ...MANAGEMENT }))).toBe(
+      ENQUIRY_STATUS.management_customer
+    );
+  });
+
+  it("still writes nothing for an archived row, lapsed or not", () => {
+    expect(
+      mondayStatusLabelFor(
+        customer({
+          ...MANAGEMENT,
+          is_active: false,
+          subscription_status: "past_due",
+          lapsed_at: LAPSED,
+        })
+      )
+    ).toBeNull();
   });
 });

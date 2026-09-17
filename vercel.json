@@ -78,6 +78,10 @@
     {
       "path": "/api/cron/prospect-nudges",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/lapse-past-due",
+      "schedule": "0 6 * * *"
     }
   ]
 }

@@ -57,6 +57,7 @@ const SELECT =
   "id, email, contact_name, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
   "cancel_at_period_end, gr_cancel_at_period_end, " +
+  "lapsed_at, gr_lapsed_at, " +
   "monday_item_id, monday_board_id, monday_lead_interest";
 
 async function isAdminRequest(req: NextRequest): Promise<boolean> {
