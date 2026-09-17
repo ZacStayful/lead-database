@@ -65,6 +65,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 56, title: "The CRM redesign, and the gaps it found", migrations: "0150" },
   { n: 57, title: "Facebook lead ads become enquiries", migrations: "0151" },
   { n: 58, title: "The audit: what was lifted, and what only looked lifted", migrations: "no migration" },
+  { n: 59, title: "Writing off a customer whose payments keep failing", migrations: "0152" },
   { n: 60, title: "Measuring the adverts", migrations: "no migration" },
 ];
 

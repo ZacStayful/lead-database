@@ -73,6 +73,7 @@ const SELECT =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
   "cancel_at_period_end, gr_cancel_at_period_end, " +
+  "lapsed_at, gr_lapsed_at, " +
   "monday_item_id, monday_board_id, monday_status_label, monday_lead_interest";
 
 /** The labels this system owns — anything else on an item is the sales team's. */

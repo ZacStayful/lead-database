@@ -300,6 +300,20 @@ export interface Customer {
   // Display only; gates nothing.
   cancel_effective_at: string | null;
   gr_cancel_effective_at: string | null;
+  // When the CURRENT past-due episode began (0152, §59). Stamped by the Stripe
+  // webhook on the first failure and never re-stamped by a retry — a retry that
+  // reset it would keep the three-day clock permanently at zero — and cleared
+  // on recovery.
+  past_due_since: string | null;
+  gr_past_due_since: string | null;
+  // Written off after past_due_lapse_days of failed collection (0152, §59).
+  // Written ONLY by /api/cron/lapse-past-due; cleared by recovery. Read by the
+  // Monday label rule so a lapsed customer reads Cancelled rather than
+  // card-declined. account_status = 'cancelled', written alongside it on the
+  // management side, is what actually removes them from active counts and
+  // capacity.
+  lapsed_at: string | null;
+  gr_lapsed_at: string | null;
   // Link to the item on the Monday enquiries board representing this CUSTOMER
   // (0086) — not a lead, so unrelated to leads.monday_item_id. Best-effort and
   // deliberately not unique; monday_link_state records a collision rather than

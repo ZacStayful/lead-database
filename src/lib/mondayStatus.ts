@@ -45,7 +45,12 @@ import type { Customer } from "@/lib/types";
 export type MondayStatusCandidate = ProductCustomerFields &
   Pick<
     Customer,
-    "is_active" | "paused_at" | "cancel_at_period_end" | "gr_cancel_at_period_end"
+    | "is_active"
+    | "paused_at"
+    | "cancel_at_period_end"
+    | "gr_cancel_at_period_end"
+    | "lapsed_at"
+    | "gr_lapsed_at"
   >;
 
 /** Everything the orchestrator needs off the customer row. */
@@ -68,6 +73,7 @@ const ROW_COLUMNS =
   "id, email, contact_name, business_name, phone, is_active, paused_at, " +
   "account_status, subscription_status, gr_subscription_status, " +
   "cancel_at_period_end, gr_cancel_at_period_end, " +
+  "lapsed_at, gr_lapsed_at, " +
   "monday_item_id, monday_board_id, monday_link_state, monday_status_label, " +
   "monday_lead_interest";
 
@@ -116,8 +122,19 @@ export function mondayStatusLabelFor(
   // means the service has actually stopped. Collapsing the two wrote `Cancelled`
   // on still-paying customers the moment they clicked cancel, which dropped them
   // out of the board's customer groups a fortnight early.
+  //
+  // lapsed_at is the third route into "ended" (0152, §59): the lapse cron has
+  // written this customer off after past_due_lapse_days of failed collection.
+  // It has to be its own column rather than a widening of the account_status
+  // clause below, precisely BECAUSE that clause excludes past_due — a lapsed
+  // customer keeps subscription_status = 'past_due', since that is what Stripe
+  // still reports. Admitting past_due there would let a stale 'cancelled'
+  // outvote a customer who is demonstrably paying, which is the hole the clause
+  // was written to close. A lapse is ENDED rather than merely scheduled: no
+  // period is being served out, so it reads Cancelled, never Cancelling.
   const managementEnded =
     c.subscription_status === "canceled" ||
+    c.lapsed_at != null ||
     (c.account_status === "cancelled" &&
       c.subscription_status !== "active" &&
       c.subscription_status !== "past_due");
@@ -129,7 +146,8 @@ export function mondayStatusLabelFor(
   // customer for their whole last paid period, while a departing management
   // customer showed as leaving immediately — the same fact reported a billing
   // period apart for no reason a reader of the board could discover.
-  const grEnded = c.gr_subscription_status === "canceled";
+  const grEnded =
+    c.gr_subscription_status === "canceled" || c.gr_lapsed_at != null;
   const grCancelling = grEnded || c.gr_cancel_at_period_end === true;
 
   // "Still a GR relationship": active OR past_due (a billing problem is not a
@@ -171,7 +189,22 @@ export function mondayStatusLabelFor(
   //    right for "should I offer them a checkout" and wrong here, where a failed
   //    payment has its own label. Recovery needs no extra handling: invoice.paid
   //    sets subscription_status back to 'active' and rule 4 takes over.
-  if (c.subscription_status === "past_due") return ENQUIRY_STATUS.card_declined;
+  //
+  //    This label means "declined, AND WE STILL EXPECT TO BE PAID" — hence the
+  //    !managementCancelling guard, which mirrors the one the GR card-declined
+  //    rule below has always carried. Once the lapse cron has given up on them
+  //    (0152) rule 1 has already returned Cancelled above, so a customer cannot
+  //    sit here indefinitely, which is what they did before lapsed_at existed.
+  //    But rule 1 deliberately steps aside for somebody with a LIVE GR
+  //    subscription — and without this guard they fell through to here and read
+  //    "Wants to pay card declined", while the very same customer with
+  //    management cancelled OUTRIGHT read "Guaranteed rent customer". The lapse
+  //    is meant to be equivalent to a cancellation, so it must land on the same
+  //    label; a paying GR customer should never be described by their dead
+  //    management subscription.
+  if (c.subscription_status === "past_due" && !managementCancelling) {
+    return ENQUIRY_STATUS.card_declined;
+  }
 
   // 4/5. Management wins for a customer holding both.
   if (managementHeld && !managementCancelling) {
