@@ -14,20 +14,23 @@
  * because it has to agree with the row lock inside `apply_dead_lead_claim`.
  * §5E takes the same position for reject: one predicate, one place, so route
  * and function cannot disagree. This module decides only what SQL cannot —
- * the allowance, and what the co-assigned operators imply.
+ * whether the balance covers it, and what the co-assigned operators imply.
  *
- * ⚠️ THE ALLOWANCE IS NEVER SHOWN TO THE CUSTOMER, and none of the messages
- * below may name it. A published budget is a budget to play against: an
- * operator told they have two claims a month has been handed the exact number
- * of leads it is safe to write off without evidence. The mechanism only works
- * while the number is discovered rather than announced, so `deadLeadPolicy.test.ts`
- * asserts mechanically that no message contains "allowance", "quota", "budget"
- * or "limit".
+ * ⚠️ SINCE 0153 (§61) THE BUDGET IS A BALANCE THAT CARRIES OVER.
+ * `customers.replacement_balance` is credited with `monthlyReplacementGrant()`
+ * on every cycle start and with a share of every top-up, and spent one at a
+ * time by a self-serve swap or a consuming credit claim. The earned streak
+ * bonus of 0142 is retired: rollover is the loyalty rule now, and
+ * `clean_leads_streak` is a statistic. The COUNT is published on the Replace a
+ * lead page (§53); the MECHANISM still is not, and none of the messages below
+ * may name it — `deadLeadPolicy.test.ts` asserts mechanically that no message
+ * contains "allowance", "quota", "budget" or "limit".
  *
- * Going over the budget is not a refusal either. It sends the claim to admin
- * review, where a person reads the landlord's own words and decides. An
- * operator receiving genuinely dead leads is exactly who would exceed a budget,
- * and refusing them automatically would punish the customer this exists for.
+ * Going over the balance is not a refusal on the CREDIT path. It sends the
+ * claim to admin review, where a person reads the landlord's own words and
+ * decides. An operator receiving genuinely dead leads is exactly who would
+ * exceed it, and refusing them automatically would punish the customer this
+ * exists for. (The self-serve SWAP is the one place it is a hard stop — §53.)
  */
 
 import { holdsProduct, type ProductCustomerFields } from "@/lib/products";
@@ -146,12 +149,6 @@ export function normaliseAllowancePct(value: unknown): number | null {
   return Math.min(1, Math.max(0, value));
 }
 
-/** Chargeable leads taken without a claim that earn one extra claim of headroom. */
-export const STREAK_LEADS_PER_BONUS = 10;
-
-/** Ceiling on the earned half, so a long-standing account cannot bank a year of claims. */
-export const MAX_EARNED_BONUS = 2;
-
 /**
  * The deepest a slot may be and still have its report settled automatically.
  *
@@ -184,9 +181,17 @@ export interface AllowanceFields {
   monthly_allocation?: number | null;
   gr_monthly_allocation?: number | null;
   quality_allowance_pct?: number | null;
+  /** Replacements banked and not yet spent (0153). The entitlement. */
+  replacement_balance?: number | null;
+  /** Per-cycle statistics since 0153; neither gates anything. */
   quality_claims_this_cycle?: number | null;
   clean_leads_streak?: number | null;
   quality_review_required?: boolean | null;
+  /** §59: a written-off customer accrues nothing. */
+  lapsed_at?: string | null;
+  gr_lapsed_at?: string | null;
+  /** A paused management subscription puts management swaps on hold. */
+  paused_at?: string | null;
 }
 
 export type ClaimCustomer = AllowanceFields & ProductCustomerFields;
@@ -226,8 +231,7 @@ export interface DeadLeadClaimVerdict {
 }
 
 /**
- * The hidden budget: a share of what the customer is committed to each month,
- * plus headroom earned by taking leads without claiming.
+ * What the customer is committed to each month, for sizing the grant.
  *
  * Sized on the allocation of every product they HOLD, not on the product of the
  * lead being claimed. One budget spans both (0137's own note on
@@ -244,37 +248,92 @@ export interface DeadLeadClaimVerdict {
  */
 export function committedAllocation(customer: ClaimCustomer): number {
   let total = 0;
-  if (holdsProduct(customer, "management" as LeadType)) {
+  // ⚠️ A written-off customer (§59, lapsed_at) still satisfies holdsProduct —
+  // the lapse writes account_status and leaves subscription_status past_due —
+  // so the gate is applied here, where the grant is sized, and mirrored in
+  // replacement_monthly_grant() in SQL.
+  if (
+    holdsProduct(customer, "management" as LeadType) &&
+    !customer.lapsed_at
+  ) {
     total += Math.max(0, Math.trunc(customer.monthly_allocation ?? 0));
   }
-  if (holdsProduct(customer, "guaranteed_rent" as LeadType)) {
+  if (
+    holdsProduct(customer, "guaranteed_rent" as LeadType) &&
+    !customer.gr_lapsed_at
+  ) {
     total += Math.max(0, Math.trunc(customer.gr_monthly_allocation ?? 0));
   }
   return total;
 }
 
-/** Earned headroom: one claim per unbroken run of leads taken without claiming. */
-export function earnedBonus(customer: ClaimCustomer): number {
-  const streak = Math.max(0, Math.trunc(customer.clean_leads_streak ?? 0));
-  return Math.min(
-    Math.floor(streak / STREAK_LEADS_PER_BONUS),
-    MAX_EARNED_BONUS,
-  );
-}
-
 /**
- * Claims this customer may have upheld automatically this cycle.
+ * What the next cycle start adds to the balance (0153, §61).
  *
- * ⚠️ Never rendered anywhere. It exists so the route can decide, and so admin
- * can see why a claim landed in the queue.
+ * ⚠️ THE TYPESCRIPT TWIN OF `public.replacement_monthly_grant(customers)`, and
+ * the two must move together: SQL grants it, this one prints "N more are added
+ * on …". Both products summed and rounded ONCE (§53.4's trap: round(1.0) +
+ * round(1.0) on two 10-lead plans at 0.05 would be 2 against a true 1). A
+ * paused customer still accrues, by decision; a lapsed one does not.
+ *
+ * Rendered as a number only — never as the percentage behind it.
  */
-export function claimBudget(customer: ClaimCustomer): number {
+export function monthlyReplacementGrant(customer: ClaimCustomer): number {
   const pct = Number(customer.quality_allowance_pct ?? 0.1);
   const base =
     Number.isFinite(pct) && pct > 0
       ? Math.round(committedAllocation(customer) * pct)
       : 0;
-  return Math.max(0, base) + earnedBonus(customer);
+  return Math.max(0, base);
+}
+
+/**
+ * What a top-up of `credits` leads adds the moment it is paid — the twin of
+ * the line inside `record_lead_topup_success`. round(5 × 0.10) is 1, so each
+ * standard top-up banks one.
+ */
+export function topupReplacementGrant(credits: number, pct: unknown): number {
+  const p = Number(pct ?? 0.1);
+  const c = Math.max(0, Math.trunc(Number(credits) || 0));
+  if (!Number.isFinite(p) || p <= 0) return 0;
+  return Math.max(0, Math.round(c * p));
+}
+
+/**
+ * Replacements banked and not yet spent — the entitlement, read off the row.
+ *
+ * ⚠️ NULL READS AS ZERO, NOT AS "UNREADABLE". The column is NOT NULL, so a
+ * null here is a select that did not name it; reading absence as a balance
+ * would hand a swap to a customer with nothing banked. Zero is the safe
+ * direction: a credit claim goes to review, a swap is refused with a date.
+ */
+export function replacementsAvailable(customer: ClaimCustomer): number {
+  return Math.max(0, Math.trunc(customer.replacement_balance ?? 0));
+}
+
+/**
+ * Why a swap on this product is on hold, or null (0153, §61).
+ *
+ * - past_due: a failing card must not be handing out leads. The tab says so
+ *   and points at Manage billing; the balance is kept and still accrues until
+ *   the customer is written off (§59).
+ * - paused: admin_swap_lead_assignment raises on a paused MANAGEMENT customer,
+ *   so the tab says why rather than "that lead has just gone". Management
+ *   only — GR keeps flowing to a paused management customer (invariant 6).
+ *
+ * The CREDIT path does not consult this: a report over the balance goes to
+ * review, which is the documented behaviour whatever the card is doing.
+ */
+export function replacementHoldFor(
+  customer: ClaimCustomer,
+  leadType: LeadType,
+): "past_due" | "paused" | null {
+  if (leadType === "guaranteed_rent") {
+    return customer.gr_subscription_status === "past_due" ? "past_due" : null;
+  }
+  if (customer.subscription_status === "past_due") return "past_due";
+  if (customer.paused_at) return "paused";
+  return null;
 }
 
 /**
@@ -338,7 +397,7 @@ function peerAgrees(peer: PeerAssignment): boolean {
  *      claims corroborate. An `under_review` peer claim must not, or two
  *      customers holding one lead could agree their way to unlimited free
  *      credits without a person ever seeing either claim.
- *   6. Inside the budget, uphold and spend one. Beyond it, review.
+ *   6. Something banked: uphold and spend one. Nothing banked: review.
  *
  * ⚠️ Contradiction is tested BEFORE corroboration. When one peer has the lead
  * live and another has written it off, the live one is the stronger signal and
@@ -435,11 +494,7 @@ export function decideDeadLeadClaim(
     };
   }
 
-  const used = Math.max(
-    0,
-    Math.trunc(input.customer.quality_claims_this_cycle ?? 0),
-  );
-  if (used < claimBudget(input.customer)) {
+  if (replacementsAvailable(input.customer) > 0) {
     return {
       decision: "auto_uphold",
       consumesAllowance: true,

@@ -20,7 +20,8 @@ import { QualityClaimActions } from "@/components/admin/QualityClaimActions";
 import { formatDate } from "@/lib/utils";
 import {
   DEAD_LEAD_REASON_LABELS,
-  claimBudget,
+  monthlyReplacementGrant,
+  replacementsAvailable,
   type ClaimCustomer,
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadPolicy";
@@ -35,9 +36,10 @@ const LIST_LIMIT = 300;
  * What the queue needs to know about the operator who made a claim.
  *
  * ⚠️ It extends `ClaimCustomer` rather than restating the allowance columns, so
- * the budget shown here is computed by `claimBudget()` — the same function the
- * claim route decides with. Restating the arithmetic would let the page explain
- * a decision it had worked out differently.
+ * the figures shown here come from `replacementsAvailable()` and
+ * `monthlyReplacementGrant()` — the same functions the claim route decides
+ * with. Restating the arithmetic would let the page explain a decision it had
+ * worked out differently.
  */
 type QueueCustomer = ClaimCustomer & {
   id: string;
@@ -56,9 +58,10 @@ type QueueCustomer = ClaimCustomer & {
  */
 function budgetLine(customer: QueueCustomer | undefined): string | null {
   if (!customer) return null;
-  const budget = claimBudget(customer);
+  const banked = replacementsAvailable(customer);
+  const grant = monthlyReplacementGrant(customer);
   const used = Math.max(0, Math.trunc(customer.quality_claims_this_cycle ?? 0));
-  return `${used} of ${budget} used this cycle`;
+  return `${banked} banked · ${used} used this cycle · +${grant} a month`;
 }
 
 function Stat({
@@ -181,7 +184,8 @@ export default async function AdminQualityPage() {
           "id, business_name, contact_name, email, quality_claims_this_cycle, " +
             "clean_leads_streak, quality_review_required, account_status, " +
             "subscription_status, gr_subscription_status, monthly_allocation, " +
-            "gr_monthly_allocation, quality_allowance_pct",
+            "gr_monthly_allocation, quality_allowance_pct, replacement_balance, " +
+            "lapsed_at, gr_lapsed_at, paused_at",
         )
         .in("id", customerIds)
     : { data: [] };

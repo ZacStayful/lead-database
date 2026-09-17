@@ -155,7 +155,7 @@ export const ROUTES: RouteEntry[] = [
     purpose:
       "Leads the operator rang where the landlord had already gone, with a " +
       "self-serve swap for each and a published count of how many they may " +
-      "replace this month.",
+      "replace — a balance that carries over month to month (§61).",
     files: [
       "src/app/dashboard/replacements/page.tsx",
       "src/components/dashboard/ReplacementList.tsx",

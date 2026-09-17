@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   DEAD_LEAD_REASONS,
@@ -10,13 +11,17 @@ import {
   type DeadLeadReason,
 } from "@/lib/quality/deadLeadCopy";
 import {
+  MANAGE_BILLING_PATH,
   REPLACEMENT_CHAINED_ACTION,
   REPLACEMENT_CHAINED_NOTICE,
   REPLACEMENT_EMPTY,
-  REPLACEMENT_EXHAUSTED,
-  remainingSentence,
-  resetSentence,
+  availableSentence,
+  exhaustedSentence,
+  holdSentence,
+  nextGrantSentence,
   type ReplacementEntitlement,
+  type ReplacementHold,
+  type ReplacementHolds,
 } from "@/lib/quality/replacementEntitlement";
 import type { LeadType } from "@/lib/types";
 
@@ -26,7 +31,8 @@ import type { LeadType } from "@/lib/types";
  * ⚠️ IMPORTS deadLeadCopy.ts, NEVER deadLeadPolicy.ts. This is a client
  * component and the policy module reaches plans.ts through products.ts (§51.6).
  * The entitlement arrives already resolved from the server, which is also what
- * keeps claimBudget() the one definition of the arithmetic.
+ * keeps replacementsAvailable() and monthlyReplacementGrant() the one
+ * definition of the arithmetic (0153, §61).
  */
 
 export interface ReplacementItem {
@@ -85,15 +91,26 @@ function candidateLine(c: Candidate): string {
 export function ReplacementList({
   items,
   entitlement,
+  holds,
 }: {
   items: ReplacementItem[];
   entitlement: ReplacementEntitlement;
+  /** Per product the customer holds; a hold disables that product's rows. */
+  holds: ReplacementHolds;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [done, setDone] = useState<Record<string, string>>({});
 
-  const exhausted = entitlement.remaining <= 0;
-  const reset = resetSentence(entitlement);
+  const exhausted = entitlement.available <= 0;
+  const next = nextGrantSentence(entitlement);
+  const exhaustedCopy = exhaustedSentence(entitlement);
+  // One notice per held product. The product is named only when the customer
+  // holds both, so a single-product customer is not told about a product they
+  // have never had.
+  const heldProducts = (Object.keys(holds) as (keyof ReplacementHolds)[]).filter(
+    (k) => holds[k]
+  );
+  const nameProduct = Object.keys(holds).length > 1;
 
   return (
     <div className="space-y-4">
@@ -102,12 +119,28 @@ export function ReplacementList({
           about it. */}
       <div className="rounded-xl border border-[#e4e6e0] bg-white p-4">
         <p className="text-sm font-medium text-[#1a1a19]">
-          {remainingSentence(entitlement)}
+          {availableSentence(entitlement)}
         </p>
-        {reset ? <p className="mt-1 text-xs text-[#6b706a]">{reset}</p> : null}
+        {next ? <p className="mt-1 text-xs text-[#6b706a]">{next}</p> : null}
         {exhausted && items.length > 0 ? (
-          <p className="mt-2 text-xs text-[#a8620f]">{REPLACEMENT_EXHAUSTED}</p>
+          <p className="mt-2 text-xs text-[#a8620f]">{exhaustedCopy}</p>
         ) : null}
+        {heldProducts.map((k) => (
+          <p
+            key={k}
+            className="mt-2 rounded-lg border border-[#f0d9b8] bg-[#fdf8ef] px-3 py-2 text-xs text-[#7a5312]"
+          >
+            {holdSentence(holds[k] as ReplacementHold, nameProduct ? k : null)}
+            {holds[k] === "past_due" ? (
+              <>
+                {" "}
+                <Link href={MANAGE_BILLING_PATH} className="underline">
+                  Manage billing
+                </Link>
+              </>
+            ) : null}
+          </p>
+        ))}
       </div>
 
       {items.length === 0 ? (
@@ -120,6 +153,8 @@ export function ReplacementList({
             key={item.assignmentId}
             item={item}
             exhausted={exhausted}
+            exhaustedCopy={exhaustedCopy}
+            held={holds[item.leadType] ?? null}
             open={openId === item.assignmentId}
             doneMessage={done[item.assignmentId] ?? null}
             onOpen={() =>
@@ -139,6 +174,8 @@ export function ReplacementList({
 function ReplacementRow({
   item,
   exhausted,
+  exhaustedCopy,
+  held,
   open,
   doneMessage,
   onOpen,
@@ -146,6 +183,9 @@ function ReplacementRow({
 }: {
   item: ReplacementItem;
   exhausted: boolean;
+  exhaustedCopy: string;
+  /** A hold on this row's product disables the swap; the header says why. */
+  held: ReplacementHold | null;
   open: boolean;
   doneMessage: string | null;
   onOpen: () => void;
@@ -408,6 +448,7 @@ function ReplacementRow({
             disabled={
               busy ||
               exhausted ||
+              held !== null ||
               !answered ||
               !chosen ||
               (needsAcknowledgement && !acknowledged)
@@ -421,8 +462,8 @@ function ReplacementRow({
                 ? REPLACEMENT_CHAINED_ACTION
                 : "Swap this lead"}
           </button>
-          {exhausted ? (
-            <p className="text-xs text-[#8a8b84]">{REPLACEMENT_EXHAUSTED}</p>
+          {exhausted && held === null ? (
+            <p className="text-xs text-[#8a8b84]">{exhaustedCopy}</p>
           ) : null}
         </div>
       ) : null}

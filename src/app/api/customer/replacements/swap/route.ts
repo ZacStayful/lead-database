@@ -5,14 +5,15 @@ import { completeAssignment } from "@/lib/ingest";
 import { sendDeadLeadReviewEmail } from "@/lib/emails";
 import {
   MIN_DETAIL_LENGTH,
-  claimBudget,
   decideDeadLeadClaim,
   isReason,
+  replacementHoldFor,
   windowDaysForReason,
   type ClaimCustomer,
   type PeerAssignment,
 } from "@/lib/quality/deadLeadPolicy";
-import type { Lead } from "@/lib/types";
+import { HOLD_COPY } from "@/lib/quality/replacementEntitlement";
+import type { Lead, LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 /**
  * Report a lead as already gone AND take a replacement, in one step (§53).
  *
- * ⚠️ THE ENTITLEMENT IS A HARD STOP HERE, WHERE THE CREDIT PATH ROUTES TO
+ * ⚠️ THE BALANCE IS A HARD STOP HERE, WHERE THE CREDIT PATH ROUTES TO
  * REVIEW. §51.3 argues that going over should never be an automatic refusal,
  * because an operator receiving genuinely dead leads is exactly who exceeds a
  * budget. That still holds for a CREDIT, and /api/customer/dead-lead-claim is
@@ -140,6 +141,29 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /**
+   * A hold on this lead's product refuses the swap before anything is decided
+   * (0153, §61): past due — a failing card must not be handing out leads — or a
+   * paused management subscription, which admin_swap_lead_assignment would
+   * refuse anyway with a message about the lead having gone. Per PRODUCT, so a
+   * paused management customer can still swap a guaranteed-rent lead
+   * (invariant 6). The page greys the button; this is the control.
+   */
+  const { data: leadRow } = await admin
+    .from("leads")
+    .select("lead_type")
+    .eq("id", eligible.lead_id)
+    .maybeSingle();
+  const leadType = ((leadRow as { lead_type?: LeadType } | null)?.lead_type ??
+    "management") as LeadType;
+  const hold = replacementHoldFor(customer as unknown as ClaimCustomer, leadType);
+  if (hold) {
+    return NextResponse.json(
+      { ok: false, code: "on_hold", message: HOLD_COPY[hold] },
+      { status: 409 }
+    );
+  }
+
   // The peers, read exactly as the credit path reads them.
   const { data: peerRows } = await admin
     .from("lead_assignments")
@@ -233,13 +257,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, swapped: false, message: verdict.message });
   }
 
-  // ⚠️ The entitlement is computed here with claimBudget() and PASSED IN. The
-  // RPC re-reads the counter and the streak under its own conditional update,
-  // so the arithmetic has one home (§51.3) and two tabs still cannot both pass.
-  const entitlement = claimBudget(customer as unknown as ClaimCustomer);
-  const claimsSeen = Math.max(0, Math.trunc(customer.quality_claims_this_cycle ?? 0));
-  const streakSeen = Math.max(0, Math.trunc(customer.clean_leads_streak ?? 0));
-
+  // ⚠️ Nothing about the balance is passed in (0153, §61). The RPC spends
+  // `replacement_balance` under its own conditional update — the balance IS
+  // the entitlement, so there is no TypeScript arithmetic for the row to have
+  // drifted from, and two tabs still cannot both pass. The eight-argument
+  // form; the eleven-argument shim exists only for the deploy window.
   const { data: swapped, error: swapError } = await admin.rpc("customer_swap_dead_lead", {
     p_assignment_id: assignmentId,
     p_customer_id: customer.id,
@@ -247,9 +269,6 @@ export async function POST(req: NextRequest) {
     p_reason: reason,
     p_detail: detail,
     p_contacted_on: contactedOn,
-    p_entitlement: entitlement,
-    p_claims_seen: claimsSeen,
-    p_streak_seen: streakSeen,
     // Strict === true. The flag has to be SENT, so the picker cannot forget to
     // opt in — it has to opt in (§34, §35).
     p_allow_filter_mismatch: body.allow_filter_mismatch === true,
@@ -269,7 +288,7 @@ export async function POST(req: NextRequest) {
         {
           ok: false,
           code: "no_entitlement",
-          message: "You have used all of this month's replacements.",
+          message: "You have no replacements available right now.",
         },
         { status: 409 }
       );

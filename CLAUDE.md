@@ -10762,6 +10762,14 @@ fresh ones. What bounds it is a per-cycle budget the customer never sees.
 | Reset | on the customer's **own billing anchor day**, inside `reset_monthly_counts` |
 | Free | a claim corroborated by another operator's already-settled claim |
 
+⚠️ **SUPERSEDED IN THREE ROWS BY 0153 (§61).** The base is now a monthly
+GRANT into `customers.replacement_balance`, which **carries over** rather than
+resetting; the earned row is **retired** (rollover is the loyalty rule and a
+streak that also bought headroom would pay for restraint twice); and the reset
+row is a grant, not a zero. Spent and Free are unchanged. The secrecy argument
+below is unchanged too: the COUNT is published on one surface, the mechanism
+is not.
+
 ⚠️ **IT IS NEVER SHOWN, AND NO COPY MAY EVER NAME IT.** An operator told they
 have two claims a month has been handed the exact number of leads it is safe to
 write off without evidence.
@@ -11930,6 +11938,13 @@ The arithmetic itself stays in TypeScript: the route computes `claimBudget()` an
 passes the result as `p_entitlement`, and SQL re-reads only the counter. One home
 for the rule (§51.7), and the race still closed.
 
+⚠️ **THE LAST TWO PARAGRAPHS ARE REVERSED BY 0153 (§61).** There are no
+seen-values any more: the entitlement is `customers.replacement_balance`, the
+conditional update is `where replacement_balance > 0`, and the arithmetic lives
+in SQL. The lock-order argument above is untouched and is still why the update
+sits after the swap returns. The eleven-argument form survives as a shim that
+ignores its three seen-values, so the route deployed at apply time kept working.
+
 ### 53.7 — The candidate list
 
 ⚠️ **Excluded with `not lead_retired_from_allocation(l.id)`, never a
@@ -11994,6 +12009,12 @@ real database. ⚠️ A Vercel preview cannot do it — Deployment Protection an
 against **production** Supabase (§1.1), so a test swap bins a real lead.
 
 ### 53.8 — The earned half, made real *(0142)*
+
+⚠️ **RETIRED BY 0153 (§61).** `earnedBonus()` is gone and the streak feeds
+nothing: rollover is the loyalty mechanism now, and a clean run that also bought
+headroom would pay for restraint twice. Everything below about WHERE the
+column is incremented is still true — 0142's assign functions are untouched and
+the admin form still shows the run — it is simply a statistic.
 
 §53.2 records that `clean_leads_streak` had never been incremented anywhere:
 0137 created it, documented it in §51.3's table, reset it to 0 on every uphold,
@@ -12881,6 +12902,11 @@ statement about a quiet month — while saying nothing about how many replacemen
 are sitting there ready to be taken, all of which can land in an afternoon.
 
 `swaps_available_now` and `swap_slots_now` are that standing stock.
+
+⚠️ **Since 0153 (§61) the entitlement CTE reads `customers.replacement_balance`**
+rather than deriving the figure, and the series steps on the day 0153 applied:
+seeded balances exceed one month's grant. Read that step as a definition
+change, not as demand.
 
 #### ⚠️ MEASURING IT FIRST CHANGED THE SHAPE, BY MORE THAN A FACTOR OF TWO
 
@@ -14665,6 +14691,12 @@ board label and `gr_cancelled_at`. Management is where the defect was, because
 The GR branch never writes `account_status` (invariant 6), and the guard counts
 exactly one `account_status: "cancelled"` in the route.
 
+⚠️ **`holdsProduct()` still counts a lapsed customer as holding the product** —
+the lapse writes `account_status` and leaves `subscription_status = 'past_due'`,
+which that helper admits. §61 records the two places that bit and closed:
+the replacement grant gates on `lapsed_at` / `gr_lapsed_at` for exactly this
+reason, and a past-due customer's self-serve swap is on hold.
+
 ### 59.8 — The top-up hole, closed alongside
 
 `topupIneligibilityReason()` read `account_status` only — every check in it
@@ -14964,3 +14996,281 @@ by plan later, build it on the `content_name` parameter this already sends.
 test code are routed to the Test Events tool and are **not** used for delivery,
 optimisation or attribution — so leaving it set means the campaign optimises on
 nothing while Events Manager looks perfectly healthy.
+
+---
+
+## 61. Replacements carry over *(0153)*
+
+`/dashboard/replacements` (§53) said "3 of 3 replacements left this month.
+Resets on 7 October." The number was `claimBudget()` — a share of the plan plus
+0142's earned bonus, less the per-cycle counter `reset_monthly_counts` zeroed on
+the anchor day — and anything unused was lost at the reset.
+
+Zac's ask: a credit that carries forward and acts as a loyalty mechanism. A
+10-lead plan banks one a month; unused, next month they have two; a customer
+who has been on the platform longer can swap out more than a one-month customer
+who has not yet built the trust. And "Replace a lead" in the sidebar, not only
+in the Leads sub-tabs.
+
+The shape it took is `lead_balance`'s own (invariant 2: credits carry forward):
+a stored balance, credited on a schedule, spent one at a time.
+
+### 61.1 — Decisions, taken with the owner rather than inferred
+
+| Question | Decision |
+|---|---|
+| A cap on the carried balance | **None.** The brakes stay `replacement_stock_floor` (§53.3) and the 14-day claim window |
+| Existing customers | **Seeded from tenure** — one grant per cycle since their first paid invoice, minus claims already consumed |
+| 0142's earned streak bonus | **Retired.** Rollover is the loyalty rule; a streak that also bought headroom would pay for restraint twice |
+| The credit-back report on the lead page | **The same balance.** Over it a credit report still goes to review (§51.3); the self-serve swap is still the one hard stop (§53) |
+| Who accrues | A **paused** customer does. A **past-due** one sees a notice and cannot swap until it clears, keeps the balance, and still accrues — until written off under §59, when accrual stops |
+| Nothing banked, a dead lead to report | Swap stays greyed; the copy points at the lead page and names the next grant date |
+| Admin | "Replacements banked" is **editable** on the customer form |
+| Top-ups | **Counted, immediately**: each top-up banks round(credits × pct), so a 5-lead top-up banks one |
+
+### 61.2 — The balance, and what feeds it
+
+`customers.replacement_balance` (CHECK ≥ 0) and `replacement_granted_on`, the
+cycle start the balance was last granted for.
+
+**`replacement_monthly_grant(customers)` is the ONE SQL home of the grant**,
+called by the reset and the seed. It transcribes `committedAllocation` with
+0147's holds expressions — management on `account_status` OR
+`subscription_status`, guaranteed rent on `gr_subscription_status` — **excluding
+a written-off customer** on each product's own stamp (`lapsed_at` /
+`gr_lapsed_at`), because `holdsProduct()` still counts a lapsed customer as
+held (§59.7). Both products summed, then × `quality_allowance_pct`, then rounded
+**once**: 10 + 10 at 0.05 is 1, where per-product rounding says 1 + 1 (§53.4's
+trap, and a mutation the suite catches). `monthlyReplacementGrant()` in
+`deadLeadPolicy.ts` is the TypeScript twin for the "N more are added on …"
+copy, and `deadLeadPolicy.test.ts` pins the SQL body to the same three gates.
+
+**`replacement_cycle_start(customers)`** is the most recent anchor day on or
+before today, on the coalesce order 0141 chose (`billing_cycle_anchor`, then
+the GR anchor, then signup) with the month-end clamp — the exact inverse of
+`nextGrantDate()`, which prints the next one.
+
+#### ⚠️ The grant is a FOURTH statement in `reset_monthly_counts`, and it is cycle-based
+
+Never folded into the third: the three existing statements are `= 0` and
+therefore idempotent on a same-day re-run, this one is `+ grant` and is not, and
+0141's suite runs the function three times on one day. It carries its own
+guard:
+
+```sql
+where c.is_active
+  and public.replacement_monthly_grant(c) > 0
+  and (c.replacement_granted_on is null
+       or c.replacement_granted_on < public.replacement_cycle_start(c))
+```
+
+"Not yet granted for the current cycle", rather than the other three
+statements' "anchor day-of-month = today", for three reasons. A **new
+customer** whose first invoice lands at 10:00 sets their anchor to today, after
+the 00:05 pg_cron run has passed — under a day-of-month match they would wait a
+month for a grant the tab already promises; under this rule they are granted
+the next morning. A run that misses a day catches up. And a same-day re-run
+adds nothing. It is also the first **status-gated** statement in a function
+this file records as status-blind on purpose (0018: the pacing counters reset
+for everyone) — a grant to a customer holding nothing would bank replacements
+for somebody not paying. Do not "fix" the other three to match.
+
+**A top-up banks its share the moment it is paid.** `record_lead_topup_success`
+— 0042's body, the latest definition; 0074 only mentions it — gains one line in
+both product branches, inside the existing `charge_status = 'paid'` replay
+guard, so a redelivered Stripe event banks nothing twice. Both webhook call
+sites already go through this one RPC. round(5 × 0.10) is 1, and the rounding
+is per top-up by decision: two top-ups bank two where 10% of ten is one, and
+immediacy was chosen over that.
+
+### 61.3 — What spends it
+
+- **The self-serve swap.** A new eight-argument `customer_swap_dead_lead`
+  replaces 0142's compare-and-swap with `where replacement_balance > 0`. The
+  lock-order argument of §53.6 is untouched — `admin_swap_lead_assignment`
+  already holds the customer row when this runs — but its last two paragraphs
+  are reversed: there are no seen-values, and the arithmetic lives in SQL. The
+  **eleven-argument form is kept as a shim** that ignores `p_entitlement`,
+  `p_claims_seen` and `p_streak_seen`, so the route deployed at apply time kept
+  working (§1.1). ⚠️ Its body, comments included, must not contain the string
+  `admin_swap_lead_assignment`: 0143's suite counts overloads whose `prosrc`
+  names it and asserts exactly one.
+- **A consuming credit claim.** `uphold_dead_lead_claim` (0137's only
+  definition) decrements in both branches, clamped at zero **here and only
+  here** — an admin uphold of a reviewed claim can land after the balance is
+  spent, and it must never fail on the CHECK. Goodwill and corroboration spend
+  nothing, as before.
+- `decideDeadLeadClaim`'s sixth step is `replacementsAvailable() > 0`. Over it
+  the credit path still reviews, with the same neutral sentence (§51.3's
+  indistinguishability guard still passes).
+
+`quality_claims_this_cycle` and `clean_leads_streak` are still written — the
+swap and the uphold count one and zero the run, 0142's assign functions still
+increment — but they are **statistics**. Nothing reads either to decide.
+
+#### Holds
+
+`replacementHoldFor(customer, leadType)` in `deadLeadPolicy.ts`, per product:
+
+| | Copy | Swap | Accrual |
+|---|---|---|---|
+| `past_due` | "Your last payment was declined … check with your bank or update your card under Manage billing — your count is kept and keeps building" | **disabled**, and the route refuses `on_hold` before the decision | continues until written off |
+| `paused` (management only, invariant 6) | "Your subscription is paused … back the moment it resumes, and your count keeps building" | disabled — `admin_swap_lead_assignment` refused it anyway, with a message about the lead having gone | continues |
+| lapsed (§59) | — | — | **stops** |
+
+The credit path consults none of this: a report over the balance goes to
+review, which is the documented behaviour whatever the card is doing.
+
+### 61.4 — The seed
+
+`seed_replacement_balances()`, a function so the suite can drive the formula
+against seeded rows rather than restating it, called once by the migration and
+a no-op on any re-run. Per active holder with a grant, nothing banked and no
+stamp:
+
+```
+start   = earliest PAID subscription invoice, else signup   -- never billing_cycle_anchor:
+                                                             -- invoice.paid re-anchors that to the LAST invoice
+balance = (completed months since start + 1) × grant
+          + Σ round(credits × pct) over paid top-ups
+          − claims that consumed the allowance, floored at 0
+granted_on = replacement_cycle_start(c)                      -- so the cron's next grant is the next anchor day
+```
+
+The `+ 1` is this cycle's grant, so nobody who read "3 of 3" reads 0 the next
+morning.
+
+⚠️ **This overrules §53.8's no-backfill argument, knowingly.** 0142 refused to
+seed the streak because most of the book would have earned the cap on day one.
+Here recognising tenure on day one IS the point, and with no cap the standing
+exposure (§53.13) steps by the whole seed. Measured read-only on production
+immediately before apply, with the final formula: **23 customers, seeds between
+1 and 4, 54 in total** — six of them paused, one carrying a top-up's extra one,
+one with a consumed claim taken off — against 70 management and 237
+guaranteed-rent leads with a free slot. An earlier reading of 17 holders and 39
+excluded the paused customers, which the decision above includes. Nobody was
+past due. The floor is the brake.
+
+### 61.5 — The sidebar, and the copy
+
+"Replace a lead" is a sidebar item of its own directly under Leads, for
+everyone, AND stays in the Leads tabset. It left the Leads item's `matches`
+list so the highlight follows it. ⌘K picks it up from the model.
+
+`replacementEntitlement.ts` (still import-free) resolves
+`{ available, monthlyGrant, nextGrantOn }` plus per-product holds:
+
+- "You have 3 replacements available." / "You have 1 replacement available." /
+  "You have no replacements available right now." / (nothing accrues) "not
+  available on your account at the moment". ⚠️ **Never "N of N this month"** —
+  a balance that carries over makes that false the first time somebody carries
+  one, and the suite bans " of " and "this month" from the sentence.
+- "2 more are added on 7 October, and anything you don't use carries over."
+  **Null when the grant is zero** — "0 more are added" is a lie about a date on
+  which nothing happens.
+- Exhausted: the rows stay, the button stays greyed, and the copy says the
+  report is still open from the lead itself and names the next grant date.
+- The `GET /api/customer/replacements` payload gains `holds`; the swap route
+  reads the lead's product and refuses `on_hold` before it decides — a disabled
+  button is a courtesy, not a control (§50.2).
+
+Admin: `/admin/quality` selects the balance (the ONE explicit-column select
+feeding the policy — a missing column reads as zero and routes every claim to
+review with no error, so a file-text guard pins it) and prints "N banked · M
+used this cycle · +G a month"; the customer form edits "Replacements banked"
+with `Math.floor` (a whole count — unlike the pct field §51.11 warns about).
+
+### 61.6 — What the audit before starting found
+
+The branch sat at the tip of `main` with no open pull request touching these
+files. No runtime errors on any replacement, claim or admin-quality route in
+the preceding week. The feature had been used twice since §53: one credit
+auto-upheld (allowance consumed, by a customer since paused) and one admin
+swap (nothing consumed). Four pre-existing gaps, three closed here:
+
+- **A written-off customer could still swap.** `holdsProduct()` admits
+  `subscription_status = 'past_due'`, which the lapse leaves in place. Closed
+  by the past-due hold and the lapse gate on the grant.
+- **A paused customer's swap failed with "that lead has just gone."** The
+  swap function refused it correctly and the route mapped it to the generic
+  race message. Closed by the paused hold.
+- **`swapExposure.test.ts` pinned 0147 by path**, so it would have kept passing
+  against a superseded body. Repointed to 0153 for the capacity body, with the
+  capture-function slice still read from 0147.
+- **The credit path's spend is not a compare-and-swap** — two concurrent
+  credit claims at a balance of one both auto-uphold. The same shape as the
+  counter before it, bounded to one extra, noted and left alone.
+
+### Verification
+
+**All 149 migrations applied to a scratch Postgres 16 from empty, zero
+failures** (the `pg_cron` line stripped as the README says), 0153 re-applied
+twice for idempotency, and **all fifteen SQL suites pass on the same build** —
+the edited 0141, 0146 and 0147 included, and the new
+`0153_replacement_balance_test.sql` (README lists what it covers).
+
+`npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
+`module` warnings, `npm run build` passes, **2,211 vitest cases green** (23 net
+new: the grant, the top-up share, the holds, the balance-based decision, the
+sentences, the sidebar item, and the file-text guards below).
+
+**The comment-stripped apply form was proved schema-identical to the full file
+before it went near production**: both applied to clones of a pre-0153 scratch,
+and a fingerprint over every function body, `prosecdef`, `search_path` and all
+three ACLs, every column, every constraint and every index came back identical
+(`8c5d7842…`, 1,790 lines). §48.9 records what skipping that costs.
+
+⚠️ **Twenty-one mutations were run and all twenty-one caught** — ten in SQL,
+eleven across the migration text and the TypeScript — each broken deliberately
+and watched to fail before the assertion was kept.
+
+| mutation | caught by |
+|---|---|
+| the `granted_on` predicate dropped from the fourth statement | a same-day re-run adds nothing |
+| the grant keyed on anchor day-of-month, like the other three | the same assertion, and the catch-up case |
+| rounded per product instead of once | 10 + 10 at 0.05 is 1 |
+| the lapsed gate dropped from the SQL grant | a written-off customer accrues nothing, and the file-text guard on the body |
+| the shim's comment names `admin_swap_lead_assignment` | 0143's overload count |
+| the top-up line dropped from the GR branch | a GR top-up banks into the same balance |
+| the uphold decrement unclamped | the CHECK fires on an admin uphold at zero |
+| the swap's `> 0` gate removed | a swap with nothing banked is refused with nothing written |
+| the seed measured from `billing_cycle_anchor` | tenure counted from the first paid invoice |
+| the seed counting failed invoices | a customer with no paid invoice seeds from signup |
+| the capacity CTE clamped with `greatest(…, 0)` | `swapExposure.test.ts`, both assertions |
+| the sidebar item removed and the highlight put back on Leads | `dashboardNav.test.ts`, two assertions |
+| the route's hold check removed | the on-hold guard |
+| the list's button ignoring a hold | the list-renders guard |
+| the admin quality select dropping `replacement_balance` | the select guard |
+| the TypeScript grant ignoring `lapsed_at` | accrues nothing once written off |
+| the streak bonus restored | a clean streak buys nothing |
+| the copy phrased as "N of N this month" | two sentence assertions |
+| the grant sentence rendered at zero | says nothing when the grant is zero |
+| the decision reading the per-cycle counter again | four decision assertions |
+
+⚠️ **One suite defect was found by the mutation harness and by nothing else.**
+The 0153 suite seeds `payments` and `lead_topup_tokens` and cleared neither,
+so every OLDER suite run after it on one database failed at its own
+`delete from public.customers` with a foreign-key violation — a failure
+reported by a suite that did nothing wrong. `ci.sh` runs the files in name
+order with 0153 last, so CI would never have shown it. The suite now tears both
+down, and 0141 was re-run after it to prove the point.
+
+**Not yet exercised in a browser.** The sidebar item, the balance sentence, the
+paused and past-due notices and the admin field have been driven only by their
+units. ⚠️ A Vercel preview cannot do it — Deployment Protection answers 302 to
+`vercel.com/sso-api` (§45, §46, §50, §51) — and a preview runs against
+**production** Supabase (§1.1), so a test swap bins a real lead. After merge, on
+`leads.stayful.co.uk`: the sidebar lights "Replace a lead" on the page, the
+header reads the seeded balance and the next-grant line, a paused account shows
+the notice with Swap disabled, and the admin form edits the banked count.
+
+### Deployment order — migration BEFORE code
+
+0153 first, applied and verified against production before the merge (§1.1).
+⚠️ **NOT INERT**: the seed writes a balance for every active holder the moment
+it applies, `swaps_available_now` steps that day, and the eleven-argument shim
+is what keeps the deployed route working until the code follows. Every
+pre-existing capacity figure and every customer's lead balances and counters
+are asserted unchanged at apply, not assumed. Code arriving first would call an
+eight-argument function that does not exist and select a column that does not
+exist, so the order is not optional.

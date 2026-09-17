@@ -39,9 +39,15 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- Seed
 --
--- Alpha holds a worked management lead and has an entitlement of 2
--- (20 x 0.10 = 2). Gamma is the GR mirror. Stock is kept comfortably above
--- replacement_stock_floor so the floor does not fire except where tested.
+-- Alpha holds a worked management lead and has TWO replacements banked —
+-- since 0153 the entitlement is customers.replacement_balance, seeded here as
+-- the 20 x 0.10 = 2 a month the plan grants. Gamma is the GR mirror. Stock is
+-- kept comfortably above replacement_stock_floor so the floor does not fire
+-- except where tested.
+--
+-- ⚠️ Every swap below goes through the ELEVEN-argument shim, which ignores
+-- p_entitlement, p_claims_seen and p_streak_seen (0153). The three are still
+-- passed so the shim keeps being exercised; the balance is what decides.
 -- ---------------------------------------------------------------------------
 delete from public.lead_outcome_reasons;
 delete from public.lead_quality_claims;
@@ -54,18 +60,18 @@ delete from public.customers;
 insert into public.customers
   (id, business_name, contact_name, email, monthly_allocation, lead_balance,
    leads_received_this_month, billing_cycle_anchor, quality_allowance_pct,
-   quality_claims_this_cycle, clean_leads_streak,
+   quality_claims_this_cycle, clean_leads_streak, replacement_balance,
    account_status, subscription_status)
 values
-  ('11111111-1111-1111-1111-111111111111','Alpha','A','a@x.com',20,20,5,current_date,0.10,0,0,'active','active');
+  ('11111111-1111-1111-1111-111111111111','Alpha','A','a@x.com',20,20,5,current_date,0.10,0,0,2,'active','active');
 
 insert into public.customers
   (id, business_name, contact_name, email, gr_monthly_allocation, gr_lead_balance,
    lead_balance, gr_leads_received_this_month, gr_billing_cycle_anchor,
    quality_allowance_pct, quality_claims_this_cycle, clean_leads_streak,
-   account_status, subscription_status, gr_subscription_status)
+   replacement_balance, account_status, subscription_status, gr_subscription_status)
 values
-  ('33333333-3333-3333-3333-333333333333','Gamma','G','g@x.com',20,20,7,5,current_date,0.10,0,0,'waitlisted','inactive','active');
+  ('33333333-3333-3333-3333-333333333333','Gamma','G','g@x.com',20,20,7,5,current_date,0.10,0,0,2,'waitlisted','inactive','active');
 
 -- The reported lead, plus enough spare stock to clear the floor of 10.
 insert into public.leads (id, monday_item_id, lead_name, postcode_area, bedrooms,
@@ -235,7 +241,11 @@ select test_util.assert_eq(
 
 select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='11111111-1111-1111-1111-111111111111'),
-  1, 'a swap spends exactly one of the entitlement');
+  1, 'a swap counts one against the per-cycle statistic');
+
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='11111111-1111-1111-1111-111111111111'),
+  1, 'a swap spends exactly one banked replacement (0153)');
 
 -- ⚠️ The claim outlives the swap that fulfilled it. This is 0139's lesson: the
 -- assignment is deleted, the FK nulls the pointer, and origin_assignment_id —
@@ -305,7 +315,10 @@ select public.customer_swap_dead_lead(
 );
 select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='11111111-1111-1111-1111-111111111111'),
-  2, 'two swaps in a cycle both land while inside the entitlement');
+  2, 'two swaps in a cycle both land while something is banked');
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='11111111-1111-1111-1111-111111111111'),
+  0, 'and the balance is now spent');
 
 -- A third, now at the entitlement, must be refused AND write nothing.
 insert into public.lead_assignments (id, lead_id, customer_id, price_paid, assigned_at)
@@ -321,7 +334,7 @@ select test_util.assert_raises($q$
     'aaaa0000-0000-0000-0000-000000000007','unreachable',
     'Another one that never answers the phone at all.',
     current_date - 1, 2, 2, 0, false, 14)
-$q$, 'a swap at the entitlement is refused');
+$q$, 'a swap with nothing banked is refused');
 
 select test_util.assert_eq(
   (select count(*)::integer from public.lead_assignments
@@ -336,12 +349,13 @@ select test_util.assert_eq(
 select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='11111111-1111-1111-1111-111111111111'),
   2, 'a refused swap does not move the counter');
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='11111111-1111-1111-1111-111111111111'),
+  0, 'a refused swap does not move the balance');
 
--- ⚠️ THE COMPARE-AND-SWAP TESTS THE STREAK TOO, AND IN ONE DIRECTION ONLY.
--- p_entitlement is base + earnedBonus(streak), and earnedBonus only rises with
--- the streak. So a streak that has SHRUNK since the route read it — a claim
--- landed and zeroed it — means the figure we were handed may be an
--- overestimate, and that is the race this guard exists for.
+-- ⚠️ SINCE 0153 THE THREE SEEN-VALUES ARE IGNORED. The balance is the
+-- entitlement, so a caller claiming an entitlement of 4 against a zeroed
+-- counter and a streak of 20 gets exactly what the balance says: nothing.
 update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 0
   where id = '11111111-1111-1111-1111-111111111111';
 select test_util.assert_raises($q$
@@ -350,13 +364,12 @@ select test_util.assert_raises($q$
     'aaaa0000-0000-0000-0000-000000000007','unreachable',
     'Another one that never answers the phone at all.',
     current_date - 1, 4, 0, 20, false, 14)
-$q$, 'an entitlement computed from a streak that has since been zeroed is refused');
+$q$, 'nothing banked is refused whatever the caller claims about the entitlement');
 
--- ⚠️ And the other direction is ALLOWED, which is what 0142 had to fix. Once
--- clean_leads_streak counts every delivery, an ordinary lead landing between
--- the page loading and the button being pressed moves it — and refusing that
--- would be a refusal the operator caused nothing and could not act on.
-update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 7
+-- And with ONE banked, the same call goes through — the seen arguments
+-- (entitlement 2, claims 0, streak 3 against a real streak of 7) play no part.
+update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 7,
+                            replacement_balance = 1
   where id = '11111111-1111-1111-1111-111111111111';
 select public.customer_swap_dead_lead(
   'bbbb0000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111',
@@ -367,7 +380,7 @@ select test_util.assert_eq(
   (select count(*)::integer from public.lead_assignments
     where lead_id = 'aaaa0000-0000-0000-0000-000000000007'
       and customer_id = '11111111-1111-1111-1111-111111111111'),
-  1, 'a streak that GREW since the read still lets the swap through');
+  1, 'one banked lets the swap through — the three seen arguments are ignored');
 update public.customers set quality_claims_this_cycle = 0, clean_leads_streak = 0
   where id = '11111111-1111-1111-1111-111111111111';
 
@@ -397,6 +410,9 @@ select test_util.assert_eq(
   (select gr_lead_balance from public.customers where id='33333333-3333-3333-3333-333333333333'),
   20, 'a GR swap does not touch gr_lead_balance');
 select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='33333333-3333-3333-3333-333333333333'),
+  1, 'a GR swap spends one of the same balance — one balance spans both products');
+select test_util.assert_eq(
   (select lead_balance from public.customers where id='33333333-3333-3333-3333-333333333333'),
   7, 'a GR swap does not touch the management balance (invariant 6)');
 select test_util.assert_eq(
@@ -422,7 +438,8 @@ values ('bbbb0000-0000-0000-0000-000000000008','tel_click');
 
 -- Alpha now wants GL only, and every replacement in stock is BS.
 update public.customers
-  set filter_status = 'active', filter_areas = array['GL'], quality_claims_this_cycle = 0
+  set filter_status = 'active', filter_areas = array['GL'], quality_claims_this_cycle = 0,
+      replacement_balance = 2
   where id = '11111111-1111-1111-1111-111111111111';
 
 select test_util.assert_eq(
@@ -483,6 +500,11 @@ select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='44444444-4444-4444-4444-444444444444'),
   0, 'the claim counter resets on the management anchor for a dual-product customer');
 
+-- 0153: the same run GRANTS, once, for the whole book — (20 + 20) x 0.10 = 4.
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='44444444-4444-4444-4444-444444444444'),
+  4, 'the grant lands once on the management anchor for a dual-product customer (0153)');
+
 -- Put it back, and roll the clock to the GR anchor day. It must NOT reset again.
 update public.customers
   set quality_claims_this_cycle = 2,
@@ -493,6 +515,9 @@ select public.reset_monthly_counts();
 select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='44444444-4444-4444-4444-444444444444'),
   2, 'the claim counter does NOT reset again on the GR anchor — one budget, one anchor');
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='44444444-4444-4444-4444-444444444444'),
+  4, 'and the grant does NOT land again on the GR anchor — one balance, one anchor (0153)');
 
 -- A GR-only customer still resets, on the GR anchor rather than their signup day.
 update public.customers
@@ -502,6 +527,11 @@ select public.reset_monthly_counts();
 select test_util.assert_eq(
   (select quality_claims_this_cycle from public.customers where id='33333333-3333-3333-3333-333333333333'),
   0, 'a GR-only customer''s claim counter resets on their GR anchor');
+-- Gamma: seeded 2, spent 1 in section 5, granted 2 on the first run of this
+-- section (their GR anchor is today), and NOT again on the runs since.
+select test_util.assert_eq(
+  (select replacement_balance from public.customers where id='33333333-3333-3333-3333-333333333333'),
+  3, 'a GR-only customer is granted on their GR anchor, once, and not again the same day (0153)');
 
 -- ---------------------------------------------------------------------------
 -- 7 — Capacity: replacement demand is inside the ceiling, and reported beside it

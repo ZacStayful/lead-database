@@ -32,6 +32,7 @@ export async function POST(
     gr_lead_balance?: number;
     quality_allowance_pct?: number;
     quality_review_required?: boolean;
+    replacement_balance?: number;
     release_mode?: string;
   };
   try {
@@ -98,6 +99,12 @@ export async function POST(
   }
   if (typeof body.quality_review_required === "boolean") {
     update.quality_review_required = body.quality_review_required;
+  }
+  // Replacements banked (0153, §61). A whole count, so the floor is right here
+  // — unlike the fraction above it. Editable for goodwill and for correcting a
+  // seed; the cron and the claims move it otherwise.
+  if (Number.isFinite(body.replacement_balance)) {
+    update.replacement_balance = Math.max(0, Math.floor(body.replacement_balance!));
   }
 
   // Staged release (§54). Admin-only by design: `immediate` exempts a customer

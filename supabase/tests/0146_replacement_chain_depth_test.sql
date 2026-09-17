@@ -76,10 +76,10 @@ insert into public.customers
   (id, business_name, contact_name, email, monthly_allocation, lead_balance,
    leads_received_this_month, management_lifetime_leads_received,
    billing_cycle_anchor, quality_allowance_pct, quality_claims_this_cycle,
-   clean_leads_streak, account_status, subscription_status)
+   clean_leads_streak, replacement_balance, account_status, subscription_status)
 values
   ('11111111-1111-1111-1111-111111111111','Alpha','A','a@x.com',20,20,5,9,
-   current_date,0.10,0,0,'active','active');
+   current_date,0.10,0,0,9,'active','active');
 
 -- Thirty management leads. #1 is the one Alpha holds; the rest are stock.
 insert into public.leads (id, monday_item_id, lead_name, postcode, postcode_area,
@@ -243,9 +243,9 @@ select * from public.customer_swap_dead_lead(
   'unreachable',
   'Rang four times over a week, the number rings out every time.',
   current_date,
-  9,   -- entitlement: generous on purpose, the budget is not under test here
-  0,   -- claims seen
-  0,   -- streak seen
+  9,   -- entitlement: ignored since 0153 (the balance decides; seeded generous)
+  0,   -- claims seen: ignored since 0153
+  0,   -- streak seen: ignored since 0153
   false,
   14);
 

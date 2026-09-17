@@ -5,7 +5,12 @@ import { join } from "node:path";
 const ROOT = join(__dirname, "..", "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-const MIGRATION = "supabase/migrations/0147_pending_swap_exposure.sql";
+// ⚠️ 0153 re-issued get_service_capacity with the entitlement CTE reading the
+// stored balance. 0147 stays on disk unchanged, so pinning it here would keep
+// passing against a superseded body; the capacity body is read from 0153 and
+// only the capture function (untouched by 0153) is still read from 0147.
+const MIGRATION = "supabase/migrations/0153_replacement_balance.sql";
+const MIGRATION_0147 = "supabase/migrations/0147_pending_swap_exposure.sql";
 const HEALTH = "src/lib/serviceHealth.ts";
 const PANEL = "src/components/admin/ServiceHealthPanel.tsx";
 
@@ -28,7 +33,7 @@ function code(path: string): string {
     .replace(/\s+/g, " ");
 }
 
-/** The body of get_service_capacity as 0147 defines it, comments stripped. */
+/** The body of get_service_capacity as 0153 defines it, comments stripped. */
 function capacityBody(): string {
   const sql = code(MIGRATION);
   const start = sql.indexOf("create or replace function public.get_service_capacity()");
@@ -70,33 +75,38 @@ describe("the exposure figure is reported and never added", () => {
   });
 });
 
-describe("the entitlement is the one in deadLeadPolicy, transcribed", () => {
+describe("the entitlement is the stored balance (0153)", () => {
   // `holdsProduct` is an OR on the management side, and the served CTE beside
   // this one is an AND. A customer whose account_status is active while their
   // subscription_status is not can still claim, and a figure built on the
   // served population would miss them.
   it("admits a holder on the OR, not the AND", () => {
-    expect(capacityBody()).toContain(
-      "case when (c.account_status = 'active' or c.subscription_status in ('active', 'past_due'))",
-    );
-  });
-
-  // 0142's earned bonus is half of the published rule (§53.8). Dropping it
-  // would under-report the exposure of exactly the customers who have earned
-  // the most headroom.
-  it("includes the earned bonus and its cap of two", () => {
-    expect(capacityBody()).toContain(
-      "least(floor(coalesce(c.clean_leads_streak, 0) / 10)::integer, 2)",
-    );
-  });
-
-  // ⚠️ A reviewed uphold can push the counter past the entitlement (§53), so
-  // the clamp is the rule and not decoration. There is deliberately no
-  // `remaining > 0` short-circuit in the join below it: it would make this
-  // clamp unobservable, which is a guard no test could ever fail.
-  it("clamps a spent-past entitlement at zero rather than going negative", () => {
     const body = capacityBody();
-    expect(body).toContain("- coalesce(c.quality_claims_this_cycle, 0), 0)::integer as remaining");
+    const cte = body.slice(body.indexOf("entitlement as ("), body.indexOf("pending as ("));
+    expect(cte).toContain(
+      "where c.is_active and (c.account_status = 'active' or c.subscription_status in ('active', 'past_due') or c.gr_subscription_status in ('active', 'past_due'))",
+    );
+  });
+
+  // ⚠️ Since 0153 the entitlement is customers.replacement_balance — what the
+  // swap actually decrements — and nothing derived. The streak bonus is retired
+  // (§61) and the per-cycle counter is a statistic, so neither may appear.
+  it("reads the stored balance and nothing derived", () => {
+    const body = capacityBody();
+    const cte = body.slice(body.indexOf("entitlement as ("), body.indexOf("pending as ("));
+    expect(cte).toContain("c.replacement_balance as remaining");
+    expect(cte).not.toContain("clean_leads_streak");
+    expect(cte).not.toContain("quality_claims_this_cycle");
+    expect(cte).not.toContain("quality_allowance_pct");
+  });
+
+  // ⚠️ The column carries a CHECK (>= 0), so a greatest(…, 0) here would be
+  // unobservable — the §50.9 shape. And there is deliberately no
+  // `remaining > 0` short-circuit in the join below it.
+  it("does not clamp what the CHECK already guarantees, and keeps the join honest", () => {
+    const body = capacityBody();
+    const cte = body.slice(body.indexOf("entitlement as ("), body.indexOf("pending as ("));
+    expect(cte).not.toContain("greatest(");
     expect(body).not.toContain("where e.remaining > 0");
   });
 
@@ -141,7 +151,7 @@ describe("the daily series carries both columns", () => {
   // fails silently: the day's first capture writes them and every same-day
   // re-run leaves them stale, with no error. The escalation cron does re-run.
   it("names them in all three lists", () => {
-    const sql = code(MIGRATION);
+    const sql = code(MIGRATION_0147);
     const cap = sql.slice(sql.indexOf("create or replace function public.capture_service_capacity()"));
     expect(cap).toContain("swaps_available_now, swap_slots_now )");
     expect(cap).toContain("c.swaps_available_now, c.swap_slots_now");

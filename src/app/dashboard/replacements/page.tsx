@@ -6,15 +6,17 @@ import { viewerScopedLead } from "@/lib/customerLeads";
 import { availableLeadTypes } from "@/lib/products";
 import {
   CLAIM_WINDOW_DAYS,
-  claimBudget,
+  monthlyReplacementGrant,
   reasonAvailability,
+  replacementHoldFor,
+  replacementsAvailable,
   type ClaimCustomer,
 } from "@/lib/quality/deadLeadPolicy";
 import {
   REPLACEMENT_PAGE_HEADING,
   REPLACEMENT_PAGE_INTRO,
-  nextResetDate,
-  remainingOf,
+  nextGrantDate,
+  type ReplacementHolds,
 } from "@/lib/quality/replacementEntitlement";
 import {
   ReplacementList,
@@ -105,12 +107,21 @@ export default async function ReplacementsPage() {
     })
     .filter((x): x is ReplacementItem => x !== null);
 
-  const entitlement = claimBudget(customer as unknown as ClaimCustomer);
-  const used = Math.max(0, Math.trunc(customer.quality_claims_this_cycle ?? 0));
+  // The balance and what the next billing date adds (0153, §61). Both from the
+  // policy module, so the page cannot explain a figure the swap route worked
+  // out differently.
+  const claimCustomer = customer as unknown as ClaimCustomer;
 
   // Shown so a customer who has never held a product understands why the page
   // is empty, rather than reading it as a fault (§18A's end state).
-  const holdsAnything = availableLeadTypes(customer).length > 0;
+  const heldTypes = availableLeadTypes(customer);
+  const holdsAnything = heldTypes.length > 0;
+
+  // Per product: past due, paused, or nothing. Resolved here rather than in the
+  // list so the list never reads a subscription column (invariant 6 lives in
+  // replacementHoldFor).
+  const holds: ReplacementHolds = {};
+  for (const t of heldTypes) holds[t] = replacementHoldFor(claimCustomer, t);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -131,11 +142,11 @@ export default async function ReplacementsPage() {
         <ReplacementList
           items={items}
           entitlement={{
-            entitlement,
-            used,
-            remaining: remainingOf(entitlement, used),
-            resetsOn: nextResetDate(customer),
+            available: replacementsAvailable(claimCustomer),
+            monthlyGrant: monthlyReplacementGrant(claimCustomer),
+            nextGrantOn: nextGrantDate(customer),
           }}
+          holds={holds}
         />
       ) : (
         <p className="rounded-lg border border-[#e4e6e0] bg-white p-6 text-sm text-[#55564f]">

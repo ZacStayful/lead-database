@@ -1,54 +1,37 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
-  nextResetDate,
-  remainingOf,
-  remainingSentence,
-  resetSentence,
+  HOLD_COPY,
+  MANAGE_BILLING_PATH,
   REPLACEMENT_CHAINED_ACTION,
   REPLACEMENT_CHAINED_NOTICE,
   REPLACEMENT_EMPTY,
-  REPLACEMENT_EXHAUSTED,
   REPLACEMENT_NAV_LABEL,
   REPLACEMENT_PATH,
+  availableSentence,
+  exhaustedSentence,
+  holdSentence,
+  nextGrantDate,
+  nextGrantSentence,
   type ReplacementEntitlement,
 } from "@/lib/quality/replacementEntitlement";
 
 const e = (o: Partial<ReplacementEntitlement>): ReplacementEntitlement => ({
-  entitlement: 2,
-  used: 0,
-  remaining: 2,
-  resetsOn: null,
+  available: 2,
+  monthlyGrant: 2,
+  nextGrantOn: null,
   ...o,
 });
 
-describe("remainingOf", () => {
-  it("subtracts what has been used", () => {
-    expect(remainingOf(2, 1)).toBe(1);
-  });
-
-  // ⚠️ THE CASE THIS EXISTS FOR. An admin upholding a reviewed claim consumes
-  // the entitlement (`resolve_dead_lead_claim` passes p_consumes_allowance for
-  // the plain `uphold` action), and that can land after the customer has
-  // already spent everything. Without the clamp the header reads "-1 left".
-  it("never goes negative when an admin uphold pushes used past the entitlement", () => {
-    expect(remainingOf(2, 3)).toBe(0);
-  });
-
-  it("treats rubbish as zero rather than NaN", () => {
-    expect(remainingOf(Number.NaN, 1)).toBe(0);
-    expect(remainingOf(2, Number.NaN)).toBe(2);
-  });
-});
-
-describe("nextResetDate", () => {
-  // ⚠️ THE COALESCE ORDER MUST MIRROR reset_monthly_counts. 0141 keys the claim
-  // counter on coalesce(billing_cycle_anchor, gr_billing_cycle_anchor,
-  // created_at), so a GR-only customer resets on their GR anchor. Deriving it
-  // from anything else prints a day on which nothing happens.
+describe("nextGrantDate", () => {
+  // ⚠️ THE COALESCE ORDER MUST MIRROR replacement_cycle_start (0153) — the
+  // same order 0141 keyed the claim counter on: coalesce(billing_cycle_anchor,
+  // gr_billing_cycle_anchor, created_at), so a GR-only customer is granted on
+  // their GR anchor. Deriving it from anything else prints a day on which
+  // nothing happens.
   it("uses the management anchor when there is one", () => {
     expect(
-      nextResetDate(
+      nextGrantDate(
         {
           billing_cycle_anchor: "2026-01-08",
           gr_billing_cycle_anchor: "2026-01-20",
@@ -61,7 +44,7 @@ describe("nextResetDate", () => {
 
   it("falls back to the GR anchor for a GR-only customer", () => {
     expect(
-      nextResetDate(
+      nextGrantDate(
         {
           billing_cycle_anchor: null,
           gr_billing_cycle_anchor: "2026-01-20",
@@ -74,7 +57,7 @@ describe("nextResetDate", () => {
 
   it("falls back to the signup date when neither product has ever billed", () => {
     expect(
-      nextResetDate(
+      nextGrantDate(
         { billing_cycle_anchor: null, gr_billing_cycle_anchor: null, created_at: "2025-05-03" },
         new Date("2026-09-12T00:00:00Z"),
       ),
@@ -83,24 +66,24 @@ describe("nextResetDate", () => {
 
   it("returns the same month when the anchor day is still ahead", () => {
     expect(
-      nextResetDate(
+      nextGrantDate(
         { billing_cycle_anchor: "2026-01-20" },
         new Date("2026-09-12T00:00:00Z"),
       ),
     ).toBe("2026-09-20");
   });
 
-  // ⚠️ Mirrors the SQL's `v_dom = v_last_dom and anchor_dom > v_last_dom`
-  // branch: an anchor on the 31st falls on the last day of a short month.
+  // ⚠️ Mirrors the SQL's month-end clamp: an anchor on the 31st falls on the
+  // last day of a short month.
   it("clamps a 31st anchor to the last day of a short month", () => {
     expect(
-      nextResetDate(
+      nextGrantDate(
         { billing_cycle_anchor: "2026-01-31" },
         new Date("2026-09-30T00:00:00Z"),
       ),
     ).toBe("2026-10-31");
     expect(
-      nextResetDate(
+      nextGrantDate(
         { billing_cycle_anchor: "2026-01-31" },
         new Date("2026-01-31T00:00:00Z"),
       ),
@@ -108,37 +91,114 @@ describe("nextResetDate", () => {
   });
 
   it("returns null when there is nothing to anchor on", () => {
-    expect(nextResetDate({})).toBeNull();
-    expect(nextResetDate({ billing_cycle_anchor: "not a date" })).toBeNull();
+    expect(nextGrantDate({})).toBeNull();
+    expect(nextGrantDate({ billing_cycle_anchor: "not a date" })).toBeNull();
   });
 });
 
 describe("the published count", () => {
   // §53 reverses §51.3 on THIS SURFACE ONLY. The number has to actually appear,
   // or the hard stop becomes a refusal with no explanation.
-  it("states the remaining count and the total", () => {
-    expect(remainingSentence(e({ remaining: 2, entitlement: 2 }))).toContain("2 of 2");
-  });
-
-  it("says plainly when they are used up", () => {
-    const s = remainingSentence(e({ remaining: 0, used: 2 }));
-    expect(s.toLowerCase()).toContain("used all");
-  });
-
-  it("explains an entitlement of zero rather than showing 0 of 0", () => {
-    expect(remainingSentence(e({ entitlement: 0, remaining: 0 }))).toContain(
-      "not available",
+  it("states how many are available", () => {
+    expect(availableSentence(e({ available: 3 }))).toBe(
+      "You have 3 replacements available.",
     );
   });
 
-  it("names the date the count comes back", () => {
-    expect(resetSentence(e({ resetsOn: "2026-10-08" }))).toContain("8 October");
-    expect(resetSentence(e({ resetsOn: null }))).toBeNull();
+  it("gets the singular right", () => {
+    expect(availableSentence(e({ available: 1 }))).toBe(
+      "You have 1 replacement available.",
+    );
   });
 
-  it("points at the date rather than the shortfall once they are used up", () => {
-    expect(resetSentence(e({ remaining: 0, resetsOn: "2026-10-08" }))).toContain(
-      "You get more on",
+  // ⚠️ Never "N of N this month". A balance that carries over makes that
+  // sentence false the first time somebody carries one.
+  it("never phrases the balance as a share of this month", () => {
+    for (const n of [0, 1, 2, 5]) {
+      const s = availableSentence(e({ available: n })).toLowerCase();
+      expect(s).not.toContain(" of ");
+      expect(s).not.toContain("this month");
+    }
+  });
+
+  it("says plainly when there are none right now", () => {
+    expect(availableSentence(e({ available: 0 }))).toBe(
+      "You have no replacements available right now.",
+    );
+  });
+
+  it("explains an account that accrues nothing rather than showing a zero", () => {
+    expect(availableSentence(e({ available: 0, monthlyGrant: 0 }))).toContain(
+      "not available",
+    );
+  });
+});
+
+describe("what the next billing date adds", () => {
+  it("names the number, the date, and that unused ones carry over", () => {
+    const s = nextGrantSentence(e({ monthlyGrant: 2, nextGrantOn: "2026-10-08" }));
+    expect(s).toBe(
+      "2 more are added on 8 October, and anything you don't use carries over.",
+    );
+  });
+
+  it("gets the singular right", () => {
+    expect(nextGrantSentence(e({ monthlyGrant: 1, nextGrantOn: "2026-10-08" }))).toBe(
+      "1 more is added on 8 October, and anything you don't use carries over.",
+    );
+  });
+
+  // ⚠️ A written-off customer or one holding no product accrues nothing, and
+  // "0 more are added on 8 October" is a lie about a date on which nothing
+  // happens.
+  it("says nothing when the grant is zero", () => {
+    expect(nextGrantSentence(e({ monthlyGrant: 0, nextGrantOn: "2026-10-08" }))).toBeNull();
+  });
+
+  it("says nothing when the date cannot be resolved", () => {
+    expect(nextGrantSentence(e({ monthlyGrant: 2, nextGrantOn: null }))).toBeNull();
+    expect(nextGrantSentence(e({ monthlyGrant: 2, nextGrantOn: "nonsense" }))).toBeNull();
+  });
+});
+
+describe("the exhausted state", () => {
+  it("points at the lead page and names the next grant date", () => {
+    const s = exhaustedSentence(e({ available: 0, monthlyGrant: 1, nextGrantOn: "2026-10-08" }));
+    expect(s).toContain("report these from the lead itself");
+    expect(s).toContain("8 October");
+  });
+
+  it("drops the date when nothing accrues", () => {
+    const s = exhaustedSentence(e({ available: 0, monthlyGrant: 0, nextGrantOn: "2026-10-08" }));
+    expect(s).toContain("report these from the lead itself");
+    expect(s).not.toContain("October");
+  });
+
+  it("never promises a swap", () => {
+    const s = exhaustedSentence(e({ available: 0, nextGrantOn: "2026-10-08" })).toLowerCase();
+    expect(s).not.toContain("swap");
+  });
+});
+
+describe("holds", () => {
+  it("tells a past-due customer to check with their bank and that the count is kept", () => {
+    const s = HOLD_COPY.past_due.toLowerCase();
+    expect(s).toContain("declined");
+    expect(s).toContain("bank");
+    expect(s).toContain("kept");
+    expect(MANAGE_BILLING_PATH).toBe("/dashboard/packages");
+  });
+
+  it("tells a paused customer it comes back on resume and keeps building", () => {
+    const s = HOLD_COPY.paused.toLowerCase();
+    expect(s).toContain("paused");
+    expect(s).toContain("keeps building");
+  });
+
+  it("names the product only when asked to", () => {
+    expect(holdSentence("paused", null)).toBe(HOLD_COPY.paused);
+    expect(holdSentence("past_due", "guaranteed_rent")).toBe(
+      `Guaranteed rent: ${HOLD_COPY.past_due}`,
     );
   });
 });
@@ -154,11 +214,16 @@ describe("what the copy may not say", () => {
       REPLACEMENT_CHAINED_NOTICE,
       REPLACEMENT_CHAINED_ACTION,
       REPLACEMENT_EMPTY,
-      REPLACEMENT_EXHAUSTED,
-      remainingSentence(e({})),
-      remainingSentence(e({ remaining: 0 })),
-      remainingSentence(e({ entitlement: 0, remaining: 0 })),
-      resetSentence(e({ resetsOn: "2026-10-08" })) ?? "",
+      HOLD_COPY.past_due,
+      HOLD_COPY.paused,
+      availableSentence(e({})),
+      availableSentence(e({ available: 1 })),
+      availableSentence(e({ available: 0 })),
+      availableSentence(e({ available: 0, monthlyGrant: 0 })),
+      nextGrantSentence(e({ nextGrantOn: "2026-10-08" })) ?? "",
+      nextGrantSentence(e({ monthlyGrant: 1, nextGrantOn: "2026-10-08" })) ?? "",
+      exhaustedSentence(e({ available: 0, nextGrantOn: "2026-10-08" })),
+      exhaustedSentence(e({ available: 0, monthlyGrant: 0 })),
     ];
     for (const s of strings) {
       for (const word of banned) {
@@ -233,5 +298,8 @@ describe("a row whose slot is already a replacement (§53.12)", () => {
     expect(src).toContain("REPLACEMENT_CHAINED_ACTION");
     // The depth has to reach the row, or nothing can branch on it.
     expect(src).toContain("item.replacementDepth > 0");
+    // And so does a hold, or the button stays live on a failing card.
+    expect(src).toContain("held !== null ||");
+    expect(src).toContain("holdSentence(");
   });
 });
