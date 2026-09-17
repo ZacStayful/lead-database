@@ -3614,8 +3614,12 @@ serves `/.well-known/*` fine, so there is no platform blocker.
 
 The repo's first automated tests: **vitest**, 60 cases, pure units only — no
 network, no database, sub-second — which is what makes it safe to put in front of
-`next build`. There is no CI here, so the Vercel build is the only place tests
-can be enforced, and an untriggered suite reads as coverage without being any.
+`next build`. ~~There is no CI here, so the Vercel build is the only place tests
+can be enforced~~ — **since the CI workflow landed (§58.4, PR #99 restored),
+`.github/workflows/ci.yml` runs typecheck, lint, the unit suite, the build and
+every `supabase/tests/*_test.sql` on every pull request**; the Vercel build
+still runs the suite as well. An untriggered suite reads as coverage without
+being any.
 `npm run lint` also runs for the first time: there was no ESLint config, so it
 had been sitting on an interactive prompt.
 
@@ -5884,7 +5888,8 @@ deploy at any point after the migration.
 **`vercel.json`'s `buildCommand` was `next build`, which overrode
 `package.json`'s `vitest run && next build`, so the suite gated nothing on
 deploy.** It now runs the tests. The phone normaliser's only defence is a unit
-test, and it was one CI never executed.
+test, and it was one CI never executed. (A GitHub Actions workflow now runs it
+on every pull request as well — §58.4.)
 
 ---
 

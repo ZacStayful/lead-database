@@ -1,0 +1,96 @@
+name: CI
+
+# Until this existed nothing ran on a pull request except Vercel's preview
+# build. That build does run the unit suite (vercel.json's buildCommand is
+# `vitest run && next build`), but a preview is not a required check, its
+# result is a comment rather than a status, and the fourteen SQL suites under
+# supabase/tests/ have only ever been run by hand on a scratch Postgres. Money
+# moves in those functions, so a regression there needs to fail the pull
+# request, not a session's memory.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# A new push supersedes the run in flight for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Typecheck, lint, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repo pins no Node version (§25 records why: unpdf is held at ~1.7.0
+      # so nothing demands one). 22 is what the build has been run on locally.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # `next lint` exits 0 on warnings; the four pre-existing `module`
+      # warnings in the training pages are known (§58.6).
+      - name: Lint
+        run: npm run lint
+
+      # vitest exits 1 when its include glob matches no files, so a renamed
+      # test directory fails here rather than passing with nothing run.
+      - name: Unit tests
+        run: npm test
+
+      # No secrets: every environment variable in this app is read at request
+      # time, and a fresh clone with no .env.local builds (§45.15).
+      - name: Build
+        run: npm run build
+
+  database:
+    name: Migrations and SQL tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Production is Postgres 17.6 (§27); every rebuild recorded in
+        # CLAUDE.md was done on 16, so 16 is what the suites are known to
+        # pass on. Move both together.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y postgresql-client
+
+      # Applies every migration from empty, then runs every
+      # supabase/tests/*_test.sql. See supabase/tests/README.md.
+      - name: Apply migrations and run SQL suites
+        run: supabase/tests/ci.sh

@@ -28,6 +28,13 @@ psql -v ON_ERROR_STOP=1 -q -d leadtest -f supabase/tests/0137_dead_lead_claims_t
 A passing run ends with `0137 BEHAVIOURAL TESTS PASSED` and exits 0. Any failed
 assertion raises and stops the script.
 
+`supabase/tests/ci.sh` does all of the above in one go — stubs, every migration
+with the `pg_cron` line stripped, then every `*_test.sql` in order on the same
+database — and is what `.github/workflows/ci.yml` runs on every pull request.
+Point `PGHOST` / `PGPORT` / `PGUSER` at any scratch Postgres and run it locally
+the same way; it creates and drops its own database (`leadtest_ci`). It refuses
+to pass when the test glob matches nothing.
+
 Note for §45.14: applying every migration in order from 0001 to 0137 succeeds on
 Postgres 16. That section's warning about a rebuild failing at 0124 is stale,
 as §48.10 already suspected.
