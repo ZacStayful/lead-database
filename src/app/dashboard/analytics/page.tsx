@@ -65,7 +65,7 @@ type AnalyticsAssignment = {
 };
 
 export default async function AnalyticsPage() {
-  const { user, customer } = await getCurrentCustomer();
+  const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
   if (!customer) redirect("/dashboard");
 
@@ -90,11 +90,16 @@ export default async function AnalyticsPage() {
   // admin client: get_engagement_benchmarks derives identity from auth.uid()
   // and returns aggregates only, so the service role would gain nothing and
   // calling it as the user keeps the security boundary where it belongs.
-  const userClient = createClient();
-  const { data: benchmarkRaw } = await userClient.rpc(
-    "get_engagement_benchmarks"
-  );
-  const benchmarkRows = (benchmarkRaw ?? []) as BenchmarkRow[];
+  //
+  // ⚠️ Which is also why it CANNOT follow an admin's view-as (§62): the function
+  // takes no id and would report the ADMIN's own figures inside the viewed
+  // customer's page. So it is not called in that mode and the block says so.
+  let benchmarkRows: BenchmarkRow[] = [];
+  if (!viewAs) {
+    const userClient = createClient();
+    const { data: benchmarkRaw } = await userClient.rpc("get_engagement_benchmarks");
+    benchmarkRows = (benchmarkRaw ?? []) as BenchmarkRow[];
+  }
 
   const { data: telemetrySetting } = await admin
     .from("system_settings")
@@ -167,7 +172,14 @@ export default async function AnalyticsPage() {
 
       {/* Cohort comparison — below the funnels, as the last block on the page:
           it is context for everything above it, not a headline. */}
-      <EngagementBenchmarks rows={benchmarkRows} telemetryFrom={telemetryFrom} />
+      {viewAs ? (
+        <p className="text-sm text-muted-foreground">
+          Comparisons of this customer&apos;s own figures against typical operators aren&apos;t
+          available in this view.
+        </p>
+      ) : (
+        <EngagementBenchmarks rows={benchmarkRows} telemetryFrom={telemetryFrom} />
+      )}
     </div>
   );
 }

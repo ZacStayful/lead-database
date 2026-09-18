@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildPresentationSeed, type SeedLead } from "@/lib/presentationSeed";
 import { validatePresentationBrand } from "@/lib/presentationBrand";
@@ -34,10 +34,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { leadId: string } }
 ) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity from getCurrentCustomer(), so an admin viewing a customer (§62)
+  // is handed that customer's presentation and never their own.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
@@ -48,14 +47,6 @@ export async function GET(
   }
 
   const admin = createAdminClient();
-
-  const { data: customer } = await admin
-    .from("customers")
-    .select(
-      "id, business_name, presentation_settings, presentation_settings_updated_at, presentation_brand"
-    )
-    .eq("user_id", user.id)
-    .maybeSingle();
   if (!customer) {
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });
   }

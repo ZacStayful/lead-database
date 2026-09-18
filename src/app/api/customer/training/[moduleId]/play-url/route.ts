@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { signedMediaUrl } from "@/lib/trainingMedia";
 import type { TrainingModule } from "@/lib/types";
@@ -25,21 +25,14 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { moduleId: string } }
 ) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity from getCurrentCustomer(), so entitlement is judged on the
+  // customer being viewed (§62), not the admin viewing them.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const admin = createAdminClient();
-
-  const { data: customer } = await admin
-    .from("customers")
-    .select("subscription_status, gr_subscription_status")
-    .eq("user_id", user.id)
-    .maybeSingle();
   if (!customer) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

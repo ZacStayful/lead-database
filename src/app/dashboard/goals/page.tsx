@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { GoalForm } from "@/components/dashboard/GoalForm";
 import { LEAD_PRICE_GBP } from "@/lib/plans";
 
@@ -38,14 +39,6 @@ const CALLS_PER_LEAD_HIGH = 6;
  */
 const MAX_PROJECTION_ROWS = 25;
 
-type GoalRow = {
-  id: string;
-  subscription_status: string | null;
-  monthly_allocation: number | null;
-  management_customer_goal: number | null;
-  management_customer_goal_due: string | null;
-  management_lifetime_leads_received: number | null;
-};
 
 /**
  * Goals — management only.
@@ -59,28 +52,19 @@ type GoalRow = {
  *     current plan. Someone who signs five clients from forty leads has met a
  *     goal of five, even though the model said a hundred.
  *
- * Everything is read through the SESSION client, not the service role: RLS
- * (customers_select_own, lead_assignments_select_own) already restricts both
- * queries to the caller's own rows, so there is nothing the admin client would
- * add except the ability to get the scoping wrong.
+ * Identity comes from getCurrentCustomer() and the won count is read on the
+ * service role scoped by that customer's id — how every other dashboard page
+ * reads. This page used to read both through the SESSION client under RLS,
+ * which is exactly right for a customer and wrong for an admin viewing one
+ * (§62): under the admin's own JWT the reads returned the admin's row or
+ * nothing, and the page bounced to /dashboard. The scoping is the same
+ * `customer.id` either way; only who resolves it moved.
  */
 export default async function GoalsPage() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
-
-  const { data } = await supabase
-    .from("customers")
-    .select(
-      "id, subscription_status, monthly_allocation, management_customer_goal, management_customer_goal_due, management_lifetime_leads_received"
-    )
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  const customer = data as GoalRow | null;
   if (!customer) redirect("/dashboard");
+  const admin = createAdminClient();
 
   // Enforced here as well as in the nav and again in the RPC. Hiding a nav item
   // is presentation; this is the page's own check.
@@ -89,7 +73,7 @@ export default async function GoalsPage() {
   // Won, management only. lead_assignments carries no lead_type of its own, so
   // the product filter has to come from the joined lead — an inner join, so a
   // GR assignment cannot fall through into the count.
-  const { count: wonCount } = await supabase
+  const { count: wonCount } = await admin
     .from("lead_assignments")
     .select("id, leads!inner(lead_type)", { count: "exact", head: true })
     .eq("customer_id", customer.id)

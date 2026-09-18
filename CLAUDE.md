@@ -386,8 +386,9 @@ here authenticates on the session client and then writes on the service role.
 **Unauthenticated:** `/api/auth/forgot-password` (POST) — password reset. No
 session by definition; see §15 for why it exists at all. ⚠️ **And
 `/api/feedback` (POST)**, which this list wrongly implied was the only one:
-`middleware.ts` matches `/dashboard` and `/admin` only, so the bug/feature form
-has always worked signed out. Since §46 it is also the first unauthenticated
+there is no session gate in front of it (the only middleware, `src/middleware.ts`,
+matches `/api` and refuses writes only while an admin is viewing a customer —
+§62), so the bug/feature form has always worked signed out. Since §46 it is also the first unauthenticated
 write of free text into a table, which is why its length caps are load-bearing.
 
 **Support and feature requests:** `/api/feedback` (POST, public) and
@@ -9337,6 +9338,12 @@ load-bearing — but it means the file is dead code that reads as live, and movi
 it into `src/` would wake dormant request handling for every dashboard and admin
 route. That is its own change, not a hotfix.
 
+⚠️ **Superseded by §62.** There is now a `src/middleware.ts`, and it is the
+read-only gate for an admin viewing a customer. It matches `/api` only, imports
+nothing from Supabase, and never touches a page — so the dormant route
+protection this paragraph warned about was never woken; both dead files were
+deleted instead. The nonce route above is unchanged.
+
 Three details on the route that are not decoration:
 
 - **`Cache-Control: no-store` on the success response.** A cached nonce would be
@@ -14893,8 +14900,8 @@ only as a fallback — `api/enquiry/route.ts` writes the person's name into both
 so `business_name` is frequently a person and only sometimes a company.
 
 **No browser counterpart, so nothing to deduplicate against.** The success URL
-is `/dashboard?checkout=success`, behind middleware and inside the pixel's
-exclusion. That is the right shape anyway: the real funnel is ad → enquiry →
+is `/dashboard?checkout=success`, behind the dashboard's session redirect and
+inside the pixel's exclusion. That is the right shape anyway: the real funnel is ad → enquiry →
 Calendly call → admin invite → a Stripe link opened from an **email**, often days
 later on another device.
 
@@ -15328,3 +15335,185 @@ figure while the balance sits underneath it, and the old route's swap spends
 the balance through the shim. Code arriving first would have called an
 eight-argument function that did not exist and selected a column that did not,
 so the order was not optional.
+
+---
+
+## 62. Seeing what a customer sees *(no migration)*
+
+Admin → **Customer portal** used to be a plain link to the admin's own
+dashboard. It now opens a picker: the first option is the admin's own account,
+opened exactly as their normal live dashboard (that is the view Zac demos
+from), and below it every customer. Picking a customer opens their dashboard as
+they see it — every page, every lead, their inbox, their billing screen — and
+**nothing done there can change their account**.
+
+`/admin/portal` · `POST|DELETE /api/admin/view-as` · `src/lib/viewAs.ts` ·
+`src/middleware.ts` · `ViewAsBanner` / `ViewAsContext` in the shell.
+
+Decisions taken with Zac on 2026-09-18: the own-account option is fully live
+and unchanged (no demo mode, Admin link still visible); every customer is
+listed, archived rows included and labelled; no audit record of who viewed
+whom; any admin may use it; nothing else in `/admin` changes.
+
+### 62.1 — One cookie, honoured in one place
+
+`POST /api/admin/view-as { customer_id }` — **session admin only**, never the
+`x-admin-key` fallback (§43.3's argument) — sets `sf_view_as=<customer uuid>`:
+HttpOnly, SameSite=Lax, Secure in production, path `/`, **8 hours**. Set from a
+Route Handler because a page cannot (§45.15). Choosing the admin's own row
+clears the cookie instead of setting it.
+
+`getCurrentCustomer()` reads it. **Only when `isAdminUser(user)` and the value
+is a strict uuid** does it load that row by id instead of the session user's
+row by `user_id`, and it returns a third field, `viewAs`, non-breaking for the
+82 existing destructurings. Every dashboard page and every `/api/customer`
+route that resolves identity there follows the swap with no edit.
+
+⚠️ **In that mode the returned `user` has its admin claim STRIPPED**
+(`withoutAdminClaim`). Two dozen pages and routes ask `isAdminUser(user)` to
+decide what an admin previews — `messagingActiveFor(admin, isAdmin)` shows
+Follow-ups and enables the composer for an admin while the switch is off
+(§40.3). A faithful copy of the customer's view needs every one of those to
+answer false, and stripping the claim once does that everywhere. The admin
+layout and the view-as route read `getUser()` directly, so admin access is
+untouched.
+
+A non-admin carrying the cookie (only by hand — it is HttpOnly) gets their own
+row exactly as before and merely has their own writes refused. Self-inflicted
+and harmless, which is why the cookie is not signed.
+
+### 62.2 — ⚠️ The control is `src/middleware.ts`, and it is the ONE middleware
+
+There is no shared write wrapper: every mutating customer route writes on the
+service role after its own auth check, and **29 of them resolve identity
+inline** rather than through `getCurrentCustomer()`. The only place that sees
+the HTTP method for every route without editing each is middleware.
+
+`viewAsRefusal(method, pathname, hasCookie)` in `src/lib/viewAs.ts` is the
+whole rule, pure and unit-tested: cookie present **and** method not
+GET/HEAD/OPTIONS **and** path not under `/api/admin/` → `403 { error, code:
+"read_only_view" }`. No Supabase call. `/api/admin/*` stays writable so Exit
+and the admin screens keep working with a view selected. The `error` key
+carries the sentence because that is what the client components render.
+
+- **Matcher `/api/((?!webhook|cron|monday).*)`.** The Stripe webhook, the
+  crons and the Monday syncs never pass through it — none carries a browser
+  cookie, so they could never be refused; the exclusion is so a fault here can
+  never sit in front of a credited invoice.
+- **The two dead files are gone.** §45.15 records that the repo-root
+  `middleware.ts` never ran (the app lives in `src/`) and warned that moving
+  it would wake `updateSession`'s route protection for every page. This
+  middleware does not import it and never touches a page; the root file and
+  `src/lib/supabase/middleware.ts` are deleted rather than left reading as
+  live. `next build` now prints `ƒ Middleware`, which is the line §45.15 used
+  as proof of the opposite.
+- **`viewAs.ts` is import-free** — it is bundled into the edge middleware and
+  into a `"use client"` banner (§21.8's rule), and a guard pins it.
+- ⚠️ **Public forms are refused too** while a view is selected: `/api/enquiry`,
+  `/api/signup`, `/api/feedback`, `/api/support`, and the OAuth consent POST.
+  Deliberate — an admin viewing a customer submitting the feedback form would
+  otherwise file a ticket as that customer.
+
+UI disabling is a courtesy on top of this. The fire-and-forget telemetry posts
+(`recordLeadEvent`, the composer's `whatsapp_click`) get the 403 their callers
+already swallow, and stay blocked: they feed contact-attempt state.
+
+### 62.3 — Reads that resolved identity inline now follow the swap
+
+Nine GET routes and three pages replaced `createClient().auth.getUser()` +
+`.eq("user_id", user.id)` with `getCurrentCustomer()`; behaviour outside a view
+is identical. Routes: `customer/presentation/[leadId]`,
+`customer/presentation/brand`, `customer/training/[moduleId]/play-url`,
+`customer/lead-analysis/[jobId]`, `customer/files/[id]/download`,
+`customer/settings/presentation` and `…/presentation/brand` (**GET only** — the
+PUT/DELETE keep their session lookup), `leads/[id]/report`, `leads/export`.
+Pages: both training pages and goals.
+
+⚠️ **`files/[id]/download` compared ownership on `user_id`**, which in a view
+is the admin's own id and 404'd every file. It now compares `customer_id`
+against `customer.id`.
+
+⚠️ **`goals/page.tsx` read through the RLS session client on purpose**, and its
+comment argued the service role "would add nothing except the ability to get
+the scoping wrong". Under the admin's JWT those reads returned the admin's row
+or nothing and the page bounced to `/dashboard`. Its won count now reads on the
+service role scoped by `customer.id`, as every other dashboard page does.
+
+The 20 write-only inline routes are **left alone**: the gate refuses them
+upstream, and if the gate were ever bypassed an inline lookup writes the
+admin's own row rather than the viewed customer's — the safer failure.
+
+⚠️ **Four SQL functions cannot follow the swap.** `get_engagement_benchmarks`,
+`get_operator_proof`, `get_recent_wins_anonymised` and
+`set_management_customer_goal` resolve identity from `auth.uid()` inside the
+function and take no id — invariant 7, and the security design of §10 and §20.
+Called under the admin's JWT they would report the ADMIN's figures inside the
+viewed customer's Insights. So in a view the analytics page does not call the
+benchmarks and prints a one-line note, and the leaderboard drops its `you` row
+and says so; cohort rows and the anonymised wins still show. Not a fifth
+`SECURITY DEFINER` grant and not a service-role variant.
+
+### 62.4 — The frame, and the two browser-side writes
+
+`dashboard/layout.tsx` **skips `markFirstLoginAndNotify` in a view** — it stamps
+`first_login_at` and emails a welcome to a customer who has not logged in. The
+Admin sidebar item is gone (stripped claim), so the amber `ViewAsBanner` above
+the top bar is the way back: Exit DELETEs the cookie and returns to the picker.
+Typing `/admin` still works because that layout uses `getUser()`.
+
+`AppShell` provides `ViewAsContext` — the repo's first `createContext`. Two
+components write through the browser Supabase client with no route in between
+and consult it: `LeadFiles` (the Storage upload happens BEFORE any route could
+refuse it, so the drop zone and delete are withheld) and `NotificationsCentre`
+(its mount effect marks notifications read). RLS keyed on `auth.uid()` already
+made both no-ops against another customer's rows; the context stops the
+attempt.
+
+**Realtime does not follow the swap.** `LeadFeed`, `NotificationBell` and the
+centre subscribe under the admin's JWT, so live inserts for the viewed customer
+never arrive; the initial rows come from the server and are right. Accepted.
+
+### 62.5 — The shared-laptop hole
+
+Sign-out is client-side (`supabase.auth.signOut()`) and cannot clear an
+HttpOnly cookie; a Server Component cannot either. An admin who viewed a
+customer, signed out and handed the laptop over would leave the next person
+with every write refused for up to eight hours. So `DELETE /api/admin/view-as`
+clears the cookie **for any caller** (clearing is harmless; only POST is
+gated), `SignOutButton` calls it before signing out, and the login page calls
+it after a successful sign-in. The DELETE passes the gate because it is under
+`/api/admin/`.
+
+### Verification
+
+`npx tsc --noEmit` clean, lint clean bar the four pre-existing `module`
+warnings, `npm run build` passes **and prints `ƒ Middleware`**, 2,242 vitest
+cases green (31 new: the decision function over every method and namespace,
+the cookie shape, the resolver for admin / non-admin / bad value / a role
+claimed in `user_metadata`, the claim strip, and the file-text guards).
+
+⚠️ **Sixteen mutations run, all sixteen caught** — each applied, watched to
+fail, and restored: the first-login skip removed, the matcher losing its
+webhook exclusion, the POST losing its admin check, the DELETE gaining one, the
+centre marking read in a view, delete surviving in LeadFiles, the refusal
+ignoring the admin namespace or letting PATCH through, the resolver honouring
+a non-admin, the swap keeping the admin claim, the download comparing on the
+session user, the benchmarks RPC called in a view, the `you` row kept,
+sign-out no longer clearing, the portal link pointing back at `/dashboard`,
+and the cookie lasting a week.
+
+**Not yet exercised in a browser.** A Vercel preview cannot do it — Deployment
+Protection answers 302 to `vercel.com/sso-api` (§45, §46) — and a preview runs
+against production Supabase. After merge, on `leads.stayful.co.uk` as admin:
+Customer portal → pick a customer → their dashboard with the banner and no
+Admin link; try a note, a reject, Manage billing, a top-up and a file upload →
+each refused with the read-only sentence and nothing written; open a report
+PDF, the XLSX export, Goals and Training → theirs; Exit; pick "Your own
+account" → the plain live dashboard; sign out mid-view and confirm the cookie
+is gone. Then confirm the Stripe webhook and a cron still answer.
+
+### Deployment order
+
+No migration. Code only, safe in any order relative to everything else, and
+inert for every customer: without the cookie `getCurrentCustomer()` and the
+middleware both behave exactly as before.

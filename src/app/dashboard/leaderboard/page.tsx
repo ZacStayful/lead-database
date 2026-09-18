@@ -25,19 +25,25 @@ export const dynamic = "force-dynamic";
  * Every figure is a group average. Nobody is named and nobody is placed.
  */
 export default async function LeaderboardPage() {
-  const { user, customer } = await getCurrentCustomer();
+  const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
   if (!customer) redirect("/dashboard");
 
   // Both functions derive identity from auth.uid() and return aggregates only,
   // so they are called on the customer's own session rather than the service
   // role — same boundary as the benchmarks on the analytics page.
+  //
+  // ⚠️ Which is why the "you" row cannot follow an admin's view-as (§62): under
+  // the admin's own JWT it would be the ADMIN's figures on the viewed
+  // customer's page. The cohort rows and the anonymised wins are about nobody
+  // in particular and still show; the "you" row is dropped and the page says so.
   const userClient = createClient();
   const [{ data: proofRaw }, { data: winsRaw }] = await Promise.all([
     userClient.rpc("get_operator_proof"),
     userClient.rpc("get_recent_wins_anonymised", { p_limit: 10 }),
   ]);
-  const rows = (proofRaw ?? []) as ProofRow[];
+  const allRows = (proofRaw ?? []) as ProofRow[];
+  const rows = viewAs ? allRows.filter((r) => r.group_key !== "you") : allRows;
   const wins = (winsRaw ?? []) as AnonymisedWin[];
 
   // OperatorProof renders nothing below three signed operators, which is right
@@ -57,6 +63,13 @@ export default async function LeaderboardPage() {
           operators do differently from everyone else — so you can copy it.
         </p>
       </div>
+
+      {viewAs && (
+        <p className="text-sm text-muted-foreground">
+          This customer&apos;s own row isn&apos;t available in this view; the group figures below
+          are what they see.
+        </p>
+      )}
 
       {hasContent ? (
         <OperatorProof rows={rows} wins={wins} />

@@ -68,6 +68,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 59, title: "Writing off a customer whose payments keep failing", migrations: "0152" },
   { n: 60, title: "Measuring the adverts", migrations: "no migration" },
   { n: 61, title: "Replacements carry over", migrations: "0153" },
+  { n: 62, title: "Seeing what a customer sees", migrations: "no migration" },
 ];
 
 /**

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -14,27 +14,30 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Ownership is the CUSTOMER's, resolved through getCurrentCustomer() so an
+  // admin viewing a customer (§62) can open that customer's files. It used to
+  // compare the row's user_id against the session, which in that mode is the
+  // admin's own id and would 404 on every file.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!customer) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const admin = createAdminClient();
 
   const { data: file } = await admin
     .from("lead_files")
-    .select("storage_path, file_name, customers!inner(user_id)")
+    .select("storage_path, file_name, customer_id")
     .eq("id", params.id)
     .maybeSingle();
 
-  const ownerId = (file as { customers?: { user_id?: string } } | null)
-    ?.customers?.user_id;
+  const ownerId = (file as { customer_id?: string } | null)?.customer_id;
   const path = (file as { storage_path?: string } | null)?.storage_path;
 
-  if (!file || ownerId !== user.id || !path) {
+  if (!file || ownerId !== customer.id || !path) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

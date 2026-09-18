@@ -28,9 +28,11 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, customer } = await getCurrentCustomer();
+  const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
 
+  // While an admin views a customer (§62) `user` carries no admin claim, so
+  // this reads false and every gate below is the customer's own.
   const isAdmin = isAdminUser(user);
   let unread = 0;
   let unreadReplies = 0;
@@ -38,7 +40,9 @@ export default async function DashboardLayout({
   if (customer) {
     // First authenticated render after login — send the one-time welcome email
     // if this is the customer's first-ever sign-in (idempotent, best-effort).
-    await markFirstLoginAndNotify(customer);
+    // ⚠️ Never while an admin is viewing them (§62): it stamps first_login_at
+    // and emails a welcome to somebody who has not logged in.
+    if (!viewAs) await markFirstLoginAndNotify(customer);
 
     const admin = createAdminClient();
     // ⌘K's lead rows are NOT loaded here: the palette fetches
@@ -85,6 +89,7 @@ export default async function DashboardLayout({
       flags={flags}
       account={account}
       initials={initials(customer?.contact_name || user.email)}
+      viewAs={viewAs}
       bell={
         customer ? (
           <NotificationBell customerId={customer.id} initialCount={unread} variant="circle" />
