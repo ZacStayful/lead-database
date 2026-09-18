@@ -10,30 +10,12 @@
 import { cookies } from "next/headers";
 import { getUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { holdsProduct } from "@/lib/products";
-import { pendingCancellation } from "@/lib/cancelOptions";
+import { PORTAL_STATUS_ORDER, portalProducts, portalStatus } from "@/lib/portalStatus";
 import { VIEW_AS_COOKIE, isViewAsId } from "@/lib/viewAs";
 import { ViewAsPicker, type PickerCustomer } from "@/components/admin/ViewAsPicker";
 import type { Customer } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-function statusOf(c: Customer): string {
-  if (c.paused_at) return "paused";
-  if (pendingCancellation(c, "management") || pendingCancellation(c, "guaranteed_rent")) return "cancelling";
-  if (c.subscription_status === "past_due" || c.gr_subscription_status === "past_due") return "declined";
-  if (holdsProduct(c, "management") || holdsProduct(c, "guaranteed_rent")) return "active";
-  return c.account_status ?? "waitlisted";
-}
-
-function productsOf(c: Customer): string {
-  const out: string[] = [];
-  if (holdsProduct(c, "management")) out.push("Management");
-  if (holdsProduct(c, "guaranteed_rent")) out.push("Guaranteed Rent");
-  return out.join(" · ");
-}
-
-const ORDER: Record<string, number> = { active: 0, paused: 1, cancelling: 2, declined: 3, invited: 4, waitlisted: 5, cancelled: 6 };
 
 export default async function AdminPortalPage() {
   const user = await getUser();
@@ -55,13 +37,13 @@ export default async function AdminPortalPage() {
       name: c.business_name || c.contact_name || c.email,
       contact: c.contact_name ?? "",
       email: c.email,
-      status: statusOf(c),
-      products: productsOf(c),
+      status: portalStatus(c),
+      products: portalProducts(c),
       archived: c.is_active === false,
     }))
     .sort((a, b) => {
       if (a.archived !== b.archived) return a.archived ? 1 : -1;
-      const d = (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9);
+      const d = PORTAL_STATUS_ORDER[a.status] - PORTAL_STATUS_ORDER[b.status];
       return d !== 0 ? d : a.name.localeCompare(b.name);
     });
 

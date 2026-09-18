@@ -15512,6 +15512,16 @@ PDF, the XLSX export, Goals and Training → theirs; Exit; pick "Your own
 account" → the plain live dashboard; sign out mid-view and confirm the cookie
 is gone. Then confirm the Stripe webhook and a cron still answer.
 
+⚠️ **It shipped with the picker labelling every unpaused customer
+"cancelling".** The page tested `pendingCancellation()` as a boolean; it
+returns an OBJECT (`{ pending, effectiveAt }`) and is always truthy. The
+customers table reads `.pending`; the page did not, and being a page it had no
+unit test. The status rule now lives in `src/lib/portalStatus.ts`, pure and
+tested over the real row shapes — an active management subscriber, a GR-only
+subscriber sitting at `account_status = 'waitlisted'` (§18A), paused,
+cancelling, past due and the non-holders — and a guard pins that the page
+calls it rather than carrying a copy. Reverting the `.pending` fails the suite.
+
 ### Deployment order
 
 No migration. Code only, safe in any order relative to everything else, and

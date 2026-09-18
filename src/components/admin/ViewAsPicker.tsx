@@ -6,14 +6,15 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { VIEW_AS_ROUTE } from "@/lib/viewAs";
+import type { PortalStatus } from "@/lib/portalStatus";
 
 export interface PickerCustomer {
   id: string;
   name: string;
   contact: string;
   email: string;
-  /** One word for the badge: active · paused · cancelling · cancelled · waitlisted · invited · declined. */
-  status: string;
+  /** One word for the badge, decided by portalStatus(). */
+  status: PortalStatus;
   products: string;
   archived: boolean;
 }
