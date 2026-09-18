@@ -16,6 +16,9 @@ import { CommandPalette } from "./CommandPalette";
 import { Sidebar, type AccountChip } from "./Sidebar";
 import { SubTabs } from "./SubTabs";
 import { TopBar } from "./TopBar";
+import { ViewAsBanner } from "./ViewAsBanner";
+import { ViewAsProvider } from "./ViewAsContext";
+import type { ViewAs } from "@/lib/viewAs";
 
 /**
  * The dashboard chrome (§56.7): sidebar · top bar · sub-tabs · page. Built
@@ -29,6 +32,7 @@ export function AppShell({
   account,
   initials,
   bell,
+  viewAs = null,
   children,
 }: {
   model: SidebarModel;
@@ -36,6 +40,8 @@ export function AppShell({
   account: AccountChip;
   initials: string;
   bell: React.ReactNode;
+  /** Set while an admin is viewing a customer read-only (§62). */
+  viewAs?: ViewAs | null;
   children: React.ReactNode;
 }) {
   const pathname = usePathname() ?? "/dashboard";
@@ -57,6 +63,7 @@ export function AppShell({
   const columns = isColumnsPath(pathname);
 
   return (
+    <ViewAsProvider value={viewAs}>
     <div className="flex h-screen overflow-hidden bg-page font-body text-[14px] leading-[1.45] text-ink antialiased">
       <Sidebar model={model} activeKey={activeKey} account={account} onSearch={() => setPalette(true)} />
 
@@ -80,6 +87,7 @@ export function AppShell({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {viewAs && <ViewAsBanner viewAs={viewAs} />}
         <TopBar
           title={tabset ? null : sectionTitle(pathname)}
           bell={bell}
@@ -101,5 +109,6 @@ export function AppShell({
 
       <CommandPalette open={palette} onOpenChange={setPalette} model={model} />
     </div>
+    </ViewAsProvider>
   );
 }

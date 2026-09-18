@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   BRAND_PRESETS,
@@ -66,14 +67,18 @@ async function respond(row: BrandRow, brand: PresentationBrand) {
 }
 
 export async function GET() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // The read resolves through getCurrentCustomer(), so an admin viewing a
+  // customer (§62) sees that customer's branding. PUT and DELETE keep the
+  // session lookup: writes are refused upstream in that mode, and an inline
+  // lookup can only ever write the caller's own row.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const row = await loadCustomer(user.id);
-  if (!row) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+  if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+  const row: BrandRow = {
+    id: customer.id,
+    presentation_brand: customer.presentation_brand,
+    presentation_brand_updated_at: customer.presentation_brand_updated_at,
+  };
 
   return respond(row, validatePresentationBrand(row.presentation_brand));
 }

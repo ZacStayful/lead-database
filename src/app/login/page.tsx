@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 import { Eye, EyeOff } from "lucide-react";
+import { VIEW_AS_ROUTE } from "@/lib/viewAs";
 
 export default function LoginPage() {
   return (
@@ -79,6 +80,10 @@ function LoginForm() {
     } catch {
       /* ignore */
     }
+
+    // A stale admin view-as cookie (§62) must not follow whoever signs in
+    // next on this browser; the route clears it for any caller.
+    await fetch(VIEW_AS_ROUTE, { method: "DELETE" }).catch(() => {});
 
     const role = data.user?.app_metadata?.role as string | undefined;
     const redirectedFrom = params.get("redirectedFrom");

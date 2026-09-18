@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import type { Notification } from "@/lib/types";
 import { Bell } from "lucide-react";
+import { useReadOnlyView } from "@/components/shell/ViewAsContext";
 
 export type NotificationWithLead = Notification & { lead_id: string | null };
 
@@ -17,10 +18,15 @@ export function NotificationsCentre({
   initial: NotificationWithLead[];
 }) {
   const router = useRouter();
+  const readOnly = useReadOnlyView();
   const [items, setItems] = useState<NotificationWithLead[]>(initial);
 
-  // Mark everything as read when the centre is opened.
+  // Mark everything as read when the centre is opened — unless an admin is
+  // viewing this customer (§62): opening the page must not mark their
+  // notifications read. (RLS would match zero rows anyway; this stops the
+  // attempt and the refresh that follows it.)
   useEffect(() => {
+    if (readOnly) return;
     const unreadIds = initial.filter((n) => !n.read_at).map((n) => n.id);
     if (unreadIds.length === 0) return;
     const supabase = createClient();

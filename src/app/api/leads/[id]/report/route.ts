@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { LEAD_REPORTS_BUCKET } from "@/lib/incomeReportStorage";
 
@@ -46,10 +46,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity from getCurrentCustomer(), so an admin viewing a customer (§62)
+  // opens the reports that customer can, not their own.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
@@ -60,12 +59,6 @@ export async function GET(
   }
 
   const admin = createAdminClient();
-
-  const { data: customer } = await admin
-    .from("customers")
-    .select("id")
-    .eq("user_id", user.id)
-    .maybeSingle();
   if (!customer) {
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });
   }

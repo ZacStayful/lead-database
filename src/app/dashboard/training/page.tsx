@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDuration, mediumLabel, ordinal, readMinutes } from "@/lib/training";
 import { OUTCOME_LABEL } from "@/lib/caseStudies";
@@ -25,21 +25,13 @@ export const dynamic = "force-dynamic";
  * Nothing on this page touches balances, allocation or pacing.
  */
 export default async function TrainingPage() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity from getCurrentCustomer(), so an admin viewing a customer (§62)
+  // sees the modules and progress that customer sees.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) redirect("/login");
+  if (!customer) redirect("/dashboard");
 
   const admin = createAdminClient();
-
-  const { data: customer } = await admin
-    .from("customers")
-    .select("id, subscription_status, gr_subscription_status")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!customer) redirect("/dashboard");
 
   const { data: moduleRows } = await admin
     .from("training_modules")

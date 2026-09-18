@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { formatDateTime } from "@/lib/utils";
 import type { LeadFile } from "@/lib/types";
 import { FileText, Upload, Trash2, Download } from "lucide-react";
+import { useReadOnlyView } from "@/components/shell/ViewAsContext";
 
 const BUCKET = "lead-files";
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB, matching the bucket limit
@@ -30,6 +31,10 @@ export function LeadFiles({
   userId: string;
   initialFiles: LeadFile[];
 }) {
+  // An admin viewing this customer (§62): the Storage upload below happens in
+  // the browser BEFORE any route can refuse it, so the drop zone and delete
+  // are withheld here rather than left to fail after the object is written.
+  const readOnly = useReadOnlyView();
   const [files, setFiles] = useState<LeadFile[]>(initialFiles);
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -105,6 +110,11 @@ export function LeadFiles({
       </div>
 
       {/* Drop zone */}
+      {readOnly ? (
+        <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+          Files can be read but not added in this view.
+        </p>
+      ) : (
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -140,6 +150,7 @@ export function LeadFiles({
           onChange={(e) => handleFiles(e.target.files)}
         />
       </div>
+      )}
 
       {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
 
@@ -171,13 +182,15 @@ export function LeadFiles({
               >
                 <Download className="h-4 w-4" />
               </a>
-              <button
-                onClick={() => remove(f.id)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-destructive"
-                title="Delete"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              {!readOnly && (
+                <button
+                  onClick={() => remove(f.id)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-destructive"
+                  title="Delete"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </li>
           ))}
         </ul>

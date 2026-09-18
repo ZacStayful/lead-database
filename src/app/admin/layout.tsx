@@ -66,7 +66,7 @@ export default async function AdminLayout({
         { href: "/admin/support", label: "Support" },
       ],
     },
-    { label: "Customer portal", href: "/dashboard" },
+    { label: "Customer portal", href: "/admin/portal" },
   ];
 
   // The mobile menu stays a flat list, exactly as the dashboard layout does it:

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   DEFAULT_PRESENTATION_SETTINGS,
@@ -28,20 +29,14 @@ export const dynamic = "force-dynamic";
  * (invariant 7).
  */
 export async function GET() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // The read resolves through getCurrentCustomer(), so an admin viewing a
+  // customer (§62) sees that customer's profile. The PUT below keeps its own
+  // session lookup: writes are refused upstream in that mode, and an inline
+  // lookup can only ever write the caller's own row.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const admin = createAdminClient();
-  const { data: customer } = await admin
-    .from("customers")
-    .select("presentation_settings, presentation_settings_updated_at")
-    .eq("user_id", user.id)
-    .maybeSingle();
 
   if (!customer) {
     return NextResponse.json({ error: "Customer not found" }, { status: 404 });

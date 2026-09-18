@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { formatDateTime } from "@/lib/utils";
 import { leadSourceLabel, viewerScopedLead } from "@/lib/customerLeads";
@@ -11,22 +11,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity from getCurrentCustomer(), so an admin viewing a customer (§62)
+  // exports that customer's book, never their own.
+  const { user, customer } = await getCurrentCustomer();
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const admin = createAdminClient();
-
-  const { data: customer } = await admin
-    .from("customers")
-    .select("id, business_name")
-    .eq("user_id", user.id)
-    .maybeSingle();
 
   if (!customer) {
     return NextResponse.json({ error: "No customer record" }, { status: 404 });

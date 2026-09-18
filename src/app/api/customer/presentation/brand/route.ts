@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getCurrentCustomer } from "@/lib/auth";
 import { validatePresentationBrand } from "@/lib/presentationBrand";
 import { buildBrandPayload } from "@/lib/presentationBrandStorage";
 
@@ -23,18 +22,10 @@ export const dynamic = "force-dynamic";
  * unreadable one both come back as the default palette.
  */
 export async function GET() {
-  const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Identity from getCurrentCustomer(): an admin viewing a customer (§62)
+  // gets that customer's branding, never their own.
+  const { user, customer } = await getCurrentCustomer();
   if (!user) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
-
-  const admin = createAdminClient();
-  const { data: customer } = await admin
-    .from("customers")
-    .select("business_name, presentation_brand")
-    .eq("user_id", user.id)
-    .maybeSingle();
   if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 
   const row = customer as { business_name: string | null; presentation_brand: unknown };
