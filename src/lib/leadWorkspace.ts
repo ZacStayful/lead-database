@@ -24,6 +24,7 @@ import { channelAvailability } from "@/lib/messaging/service";
 import { buildThreadItems, type ThreadItem } from "@/lib/messaging/threadItems";
 import type { ChannelAvailability } from "@/lib/messaging/types";
 import { deadLeadClaimState } from "@/lib/quality/claimState";
+import { markLeadSeen } from "@/lib/leadSeen";
 import type { AssignmentWithLead, Customer, LeadFile, LeadNote } from "@/lib/types";
 
 export interface LeadWorkspaceData {
@@ -57,7 +58,12 @@ export async function loadLeadWorkspace(
   admin: SupabaseClient,
   customer: Customer,
   leadId: string,
-  opts: { from?: string; isAdmin: boolean }
+  opts: {
+    from?: string;
+    isAdmin: boolean;
+    /** An admin viewing this customer (§62): read everything, mark nothing. */
+    viewAs?: boolean;
+  }
 ): Promise<LeadWorkspaceData | null> {
   const { data } = await admin
     .from("lead_assignments")
@@ -73,6 +79,15 @@ export async function loadLeadWorkspace(
   } as AssignmentWithLead;
 
   const from = parseSource(opts.from);
+  // Opening the lead marks it seen (§63.5): viewed_at first-open-wins, and the
+  // new_lead notification read. Rides the parallel block so it costs no extra
+  // round trip; the in-memory row is updated below so this render already
+  // shows the lead as viewed.
+  //
+  // ⚠️ NEVER while an admin is viewing the customer (§62): the customer has
+  // not looked, so nothing may say they have.
+  const wasViewed = assignment.viewed_at != null;
+  const markSeen = opts.viewAs !== true;
   const [signed, notesRes, filesRes, ordered, messagesRes, eventsRes, planSettings, threadsRes, deadLeadClaim, messageChannels] =
     await Promise.all([
       admin
@@ -120,7 +135,15 @@ export async function loadLeadWorkspace(
         lead: assignment.lead,
         preview: opts.isAdmin,
       }),
+      markSeen
+        ? markLeadSeen(admin, {
+            assignmentId: assignment.id,
+            customerId: customer.id,
+            alreadyViewed: wasViewed,
+          })
+        : Promise.resolve(),
     ]);
+  if (markSeen && !wasViewed) assignment.viewed_at = new Date().toISOString();
 
   // The contact plan (§42): where this landlord sits in the five-attempt
   // sequence. Read on the admin client because message_sequence_* are deny-all

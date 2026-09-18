@@ -707,9 +707,11 @@ export interface LeadAssignment {
  * what they said they did. Only the browser-driven three are emitted today;
  * the remaining three are reserved for server-side emission.
  *
- * Distinct from `viewed_at`: that is set solely by expanding a lead CARD in the
- * feed, so a lead read end-to-end via a direct link or prev/next navigation
- * never sets it. `detail_opened` is the honest "this lead was read" signal.
+ * Distinct from `viewed_at`: that is set by expanding a lead CARD in the feed
+ * and, since §63.5, by opening the lead page (first open wins) — but never by
+ * telemetry. `detail_opened` is still the honest "this lead was read" signal,
+ * and a card expand sets viewed_at with no detail_opened, so the two are not
+ * interchangeable.
  */
 export type LeadEventType =
   | "detail_opened"

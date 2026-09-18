@@ -69,6 +69,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 60, title: "Measuring the adverts", migrations: "no migration" },
   { n: 61, title: "Replacements carry over", migrations: "0153" },
   { n: 62, title: "Seeing what a customer sees", migrations: "no migration" },
+  { n: 63, title: "A lead lands within minutes, and the customer knows", migrations: "0154" },
 ];
 
 /**
@@ -82,7 +83,7 @@ export const INVARIANTS = "1. `(gr_)lead_balance` is the allocation gate; assign
 /** §11, one line per entry. */
 export const KNOWN_ISSUES: string[] = [
   "~~pipeline_stage validation is management-only.~~ Fixed (0050 branch). PATCH /api/customer/assignments/[id] validated every lead against PIPELINE_STAGES, so a GR customer setting any of their own sta…",
-  "viewed_at ≠ telemetry. viewed_at is set *only* by expanding a lead card in the feed. Opening /dashboard/leads/[id] does not set it, so a lead read end-to-end via a direct link leaves it null forever.…",
+  "viewed_at ≠ telemetry. ~~viewed_at is set *only* by expanding a lead card in the feed. Opening /dashboard/leads/[id] does not set it, so a lead read end-to-end via a direct link leaves it null foreve…",
   "enquiry_date is not displayed anywhere, admin included (0071 branch). It is free text of uneven quality from Monday — safe_enquiry_date() exists in 0062 precisely because it does not always parse. Le…",
   "~~get_next_customers_for_lead is executable by anon.~~ Fixed in 0049. 0028 blanket-revoked schema-wide, then 0038 dropped and recreated the function, which discards its ACL. Re-revoked. Any future cr…",
   "~~outreach_capacity() is in production and in NO migration file.~~ Dropped by 0140, and the decision it was waiting on is made: those figures are not public. It was security definer with an explicit…",
@@ -114,7 +115,7 @@ export const DEFERRED: string[] = [
 ];
 
 /** Highest committed migration, from the directory rather than the prose. */
-export const LATEST_MIGRATION = 153;
+export const LATEST_MIGRATION = 154;
 
 /** The number a new migration must take. Migrations deploy BEFORE the code that reads them. */
-export const NEXT_MIGRATION = "0154";
+export const NEXT_MIGRATION = "0155";

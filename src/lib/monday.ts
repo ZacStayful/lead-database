@@ -1119,25 +1119,262 @@ export async function fetchMondayLeads(): Promise<N8nLeadPayload[]> {
     for (const item of items) {
       // Only ingest items marked as sellable.
       if (textFor(item, COLUMN_MAP.status) !== SELLABLE_STATUS) continue;
-
-      const report = pickIncomeReportAsset(item.assets);
-
-      leads.push({
-        monday_item_id: item.id,
-        lead_name: item.name,
-        lead_profile: textFor(item, COLUMN_MAP.lead_profile),
-        email: textFor(item, COLUMN_MAP.email),
-        phone: textFor(item, COLUMN_MAP.phone),
-        address: textFor(item, COLUMN_MAP.address),
-        bedrooms: textFor(item, COLUMN_MAP.bedrooms),
-        enquiry_date: textFor(item, COLUMN_MAP.enquiry_date),
-        income_report_asset_id: report?.id,
-        income_report_url: report?.public_url,
-      });
+      leads.push(mapManagementItem(item));
     }
   } while (cursor);
 
   return leads;
+}
+
+/**
+ * One management board item → the payload shape ingest takes. Shared by the
+ * daily walker above and the five-minute poll below (§63.1), so the two cannot
+ * drift on which cell feeds which field.
+ */
+function mapManagementItem(item: MondayItem): N8nLeadPayload {
+  const report = pickIncomeReportAsset(item.assets);
+  return {
+    monday_item_id: item.id,
+    lead_name: item.name,
+    lead_profile: textFor(item, COLUMN_MAP.lead_profile),
+    email: textFor(item, COLUMN_MAP.email),
+    phone: textFor(item, COLUMN_MAP.phone),
+    address: textFor(item, COLUMN_MAP.address),
+    bedrooms: textFor(item, COLUMN_MAP.bedrooms),
+    enquiry_date: textFor(item, COLUMN_MAP.enquiry_date),
+    income_report_asset_id: report?.id,
+    income_report_url: report?.public_url,
+  };
+}
+
+/** One GR board item → the payload shape, keyed by Monday column id. */
+function mapGuaranteedRentItem(item: MondayItem): N8nLeadPayload {
+  const payload: N8nLeadPayload = {
+    monday_item_id: item.id,
+    lead_name: item.name,
+    lead_type: "guaranteed_rent",
+  };
+  for (const columnId of Object.keys(GR_COLUMN_MAP)) {
+    payload[columnId] = textFor(item, columnId);
+  }
+  return payload;
+}
+
+// ---------------------------------------------------------------------------
+// The five-minute poll (§63.1): ONE page per board, newest-updated first.
+// ---------------------------------------------------------------------------
+
+/** Monday's virtual column for "order by last change". */
+const MONDAY_LAST_UPDATED_COLUMN = "__last_updated__";
+
+/**
+ * The status column's label INDEX for a given label text, from the column's
+ * `settings_str`.
+ *
+ * ⚠️ A `query_params` rule on a status column takes label INDEXES, not text.
+ * `compare_value: ["Lead for sale"]` does not error — it returns an EMPTY page,
+ * silently, for ever. Measured against the live board while building §63:
+ * the text form returned nothing and `[16]` returned the sellable items. So
+ * the index is resolved at runtime from the column settings, and a label that
+ * cannot be found is reported as a failure rather than read as a quiet board.
+ *
+ * Pure. Accepts both shapes Monday has returned for `labels` — an id→text map
+ * and an array of `{ id, label }` — so a settings format change fails loudly
+ * in the unit test rather than quietly on the board.
+ */
+export function sellableStatusIndex(settingsStr: string, label: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(settingsStr);
+  } catch {
+    return null;
+  }
+  const labels = (parsed as { labels?: unknown } | null)?.labels;
+  if (!labels) return null;
+  if (Array.isArray(labels)) {
+    const hit = labels.find(
+      (l) => l && typeof l === "object" && (l as { label?: unknown }).label === label
+    ) as { id?: unknown } | undefined;
+    const id = Number(hit?.id);
+    return hit && Number.isInteger(id) ? id : null;
+  }
+  if (typeof labels === "object") {
+    for (const [key, value] of Object.entries(labels as Record<string, unknown>)) {
+      if (value === label) {
+        const id = Number(key);
+        return Number.isInteger(id) ? id : null;
+      }
+    }
+  }
+  return null;
+}
+
+/** A lead item as the poll sees it: the ingest payload plus Monday's clocks. */
+export interface RecentLeadItem {
+  payload: N8nLeadPayload;
+  /** The API's own timestamp — never the board's "Date added" cell (§57.5). */
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RecentLeadsResult =
+  | { ok: true; items: RecentLeadItem[] }
+  | { ok: false; error: string };
+
+type RecentPageItem = MondayItem & { created_at?: string; updated_at?: string };
+
+/** Resolved once per process; the column settings change by hand, rarely. */
+let sellableIndexCache: number | null = null;
+
+/**
+ * The most recently changed sellable items on the management board (§63.1).
+ *
+ * NEVER THROWS — a result object, the `fetchNewEnquiryItems` contract, because
+ * the caller is a cron that must report a Monday outage rather than die of it.
+ *
+ * ⚠️ ORDERED BY LAST UPDATE, not creation: an item created weeks ago and moved
+ * to "Lead for sale" today is exactly the lead the poll exists to catch, and
+ * a creation-ordered page would never see it. Filtered server-side on the
+ * status INDEX (see sellableStatusIndex) and again client-side on the label
+ * text, so a resolved-but-wrong index can never sell the wrong items.
+ */
+export async function fetchRecentManagementLeads(limit = 30): Promise<RecentLeadsResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { ok: false, error: "not_configured" };
+
+  try {
+    if (sellableIndexCache === null) {
+      const settings = await mondayGraphql<{
+        boards?: { columns?: { id: string; settings_str?: string | null }[] }[];
+      }>(
+        token,
+        `query ($board: [ID!], $col: [String!]) { boards(ids: $board) { columns(ids: $col) { id settings_str } } }`,
+        { board: [boardId()], col: [COLUMN_MAP.status] }
+      );
+      const board = settings.boards?.[0];
+      if (!board) {
+        return {
+          ok: false,
+          error: `Board ${boardId()} returned no data — check the board id and the token's access to it`,
+        };
+      }
+      const col = board.columns?.find((c) => c.id === COLUMN_MAP.status);
+      const idx = sellableStatusIndex(col?.settings_str ?? "", SELLABLE_STATUS);
+      if (idx === null) {
+        return {
+          ok: false,
+          error: `Status label "${SELLABLE_STATUS}" not found on column ${COLUMN_MAP.status} — the poll cannot filter the board`,
+        };
+      }
+      sellableIndexCache = idx;
+    }
+
+    const columnIds = Object.values(COLUMN_MAP);
+    const data = await mondayGraphql<{
+      boards?: { items_page: { items: RecentPageItem[] } }[];
+    }>(
+      token,
+      `query ($board: [ID!], $limit: Int!, $cols: [String!]) {
+        boards(ids: $board) {
+          items_page(
+            limit: $limit
+            query_params: {
+              rules: [{ column_id: "${COLUMN_MAP.status}", compare_value: [${sellableIndexCache}], operator: any_of }]
+              order_by: [{ column_id: "${MONDAY_LAST_UPDATED_COLUMN}", direction: desc }]
+            }
+          ) {
+            items {
+              id name created_at updated_at
+              assets { id name public_url }
+              column_values(ids: $cols) { id text }
+            }
+          }
+        }
+      }`,
+      { board: [boardId()], limit, cols: columnIds }
+    );
+
+    const page = data.boards?.[0]?.items_page;
+    // ⚠️ A MISSING BOARD IS NOT AN EMPTY BOARD (§57's rule).
+    if (!page) {
+      return {
+        ok: false,
+        error: `Board ${boardId()} returned no data — check the board id and the token's access to it`,
+      };
+    }
+
+    const items: RecentLeadItem[] = [];
+    for (const item of page.items ?? []) {
+      // The second line: the index filter is trusted only as far as the text agrees.
+      if (textFor(item, COLUMN_MAP.status) !== SELLABLE_STATUS) continue;
+      items.push({
+        payload: mapManagementItem(item),
+        createdAt: item.created_at ?? "",
+        updatedAt: item.updated_at ?? "",
+      });
+    }
+    return { ok: true, items };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Monday read failed" };
+  }
+}
+
+/**
+ * The GR mirror. No server-side status rule — every GR item is sellable unless
+ * MONDAY_GR_SELLABLE_STATUS narrows it, and that is applied client-side exactly
+ * as the daily walker applies it.
+ */
+export async function fetchRecentGuaranteedRentLeads(limit = 30): Promise<RecentLeadsResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { ok: false, error: "not_configured" };
+
+  const columnIds = [...Object.keys(GR_COLUMN_MAP), GR_STATUS_COLUMN];
+  const sellable = grSellableStatus();
+
+  try {
+    const data = await mondayGraphql<{
+      boards?: { items_page: { items: RecentPageItem[] } }[];
+    }>(
+      token,
+      `query ($board: [ID!], $limit: Int!, $cols: [String!]) {
+        boards(ids: $board) {
+          items_page(
+            limit: $limit
+            query_params: {
+              order_by: [{ column_id: "${MONDAY_LAST_UPDATED_COLUMN}", direction: desc }]
+            }
+          ) {
+            items {
+              id name created_at updated_at
+              column_values(ids: $cols) { id text }
+            }
+          }
+        }
+      }`,
+      { board: [grBoardId()], limit, cols: columnIds }
+    );
+
+    const page = data.boards?.[0]?.items_page;
+    if (!page) {
+      return {
+        ok: false,
+        error: `Board ${grBoardId()} returned no data — check the board id and the token's access to it`,
+      };
+    }
+
+    const items: RecentLeadItem[] = [];
+    for (const item of page.items ?? []) {
+      if (sellable !== null && textFor(item, GR_STATUS_COLUMN) !== sellable) continue;
+      items.push({
+        payload: mapGuaranteedRentItem(item),
+        createdAt: item.created_at ?? "",
+        updatedAt: item.updated_at ?? "",
+      });
+    }
+    return { ok: true, items };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Monday read failed" };
+  }
 }
 
 /**
@@ -1257,17 +1494,8 @@ export async function fetchGuaranteedRentLeads(): Promise<N8nLeadPayload[]> {
       if (sellable !== null && textFor(item, GR_STATUS_COLUMN) !== sellable) {
         continue;
       }
-
       // Key by Monday column id so ingest's GR column map applies directly.
-      const payload: N8nLeadPayload = {
-        monday_item_id: item.id,
-        lead_name: item.name,
-        lead_type: "guaranteed_rent",
-      };
-      for (const columnId of Object.keys(GR_COLUMN_MAP)) {
-        payload[columnId] = textFor(item, columnId);
-      }
-      leads.push(payload);
+      leads.push(mapGuaranteedRentItem(item));
     }
   } while (cursor);
 

@@ -47,9 +47,11 @@ export default async function AdminAllocationPage() {
   const todayStartIso = new Date(now.getTime() - 36 * 3_600_000).toISOString();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 86_400_000).toISOString();
 
-  const releaseKeys = MESSAGING_SETTINGS.filter((s) => s.key.startsWith("release_")).map(
-    (s) => s.key
-  );
+  // The release_* keys plus the five-minute poll's switch (§63.1), which lives
+  // on this page because it is the other half of how leads reach customers.
+  const releaseKeys = MESSAGING_SETTINGS.filter(
+    (s) => s.key.startsWith("release_") || s.key === "lead_sync_enabled"
+  ).map((s) => s.key);
 
   const [settingRows, customersRes, todayRes, windowRes, stockRes] = await Promise.all([
     admin.from("system_settings").select("key, value").in("key", releaseKeys),

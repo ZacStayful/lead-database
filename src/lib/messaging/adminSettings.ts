@@ -231,6 +231,26 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     min: 1,
     max: 60,
   },
+  // §63.3 — a lead younger than this skips the daily curve, never the hold,
+  // the credit balance or the daily cap. ⚠️ 0 is OFF and is the seeded value:
+  // migration 0154 is inert until an admin sets it (24 recommended). Unlike
+  // `release_max_per_day`, 0 here is the SAFE value, so the floor is 0.
+  {
+    key: "release_fresh_hours",
+    label: "Fresh-lead window (hours)",
+    kind: "number",
+    fallback: "0",
+    min: 0,
+    max: 168,
+  },
+  // §63.1 — the five-minute poll of both lead boards. The two 09:00 syncs
+  // stay as the backstop whether this is on or off.
+  {
+    key: "lead_sync_enabled",
+    label: "Pull new leads every five minutes",
+    kind: "boolean",
+    fallback: "false",
+  },
 
   // -------------------------------------------------------------------------
   // Chasing an enquirer who never books a web meeting (§55). In THIS list for

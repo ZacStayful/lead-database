@@ -12,7 +12,7 @@
  * Privacy: the SMS carries no landlord PII beyond the town — just enough to
  * make the operator open the portal, where the full lead lives behind auth.
  */
-import { APP_URL } from "@/lib/env";
+import { leadDeepLink } from "@/lib/leadLink";
 import { extractCity } from "@/lib/utils";
 import type { Customer, Lead } from "@/lib/types";
 
@@ -40,10 +40,11 @@ function composeMessage(lead: Lead): string {
   const city = extractCity(lead.address);
   const beds = lead.bedrooms ? `, ${lead.bedrooms} bed` : "";
   const where = city ? ` in ${city}${beds}` : beds ? ` (${lead.bedrooms} bed)` : "";
-  // The lead detail route resolves its [id] param as the lead_id, so the deep
-  // link must use lead.id — NOT the assignment id.
-  const link = `${APP_URL}/dashboard/leads/${lead.id}`;
-  return `Stayful: a new lead just landed${where}. Be first to call — open your dashboard: ${link}`;
+  // The `/l/` redirector (§63.4): a signed-in operator lands on the lead, a
+  // signed-out one goes through login AND BACK to it. Keyed on lead.id — the
+  // lead page resolves its [id] as the lead_id, NOT the assignment id.
+  const link = leadDeepLink(lead.id);
+  return `Stayful: a new lead just landed${where}. Be first to call — open it here: ${link}`;
 }
 
 export async function sendNewLeadSms(params: {

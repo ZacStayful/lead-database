@@ -34,6 +34,13 @@ const NUMBER_FIELDS: { key: string; label: string; hint: string; min: number; ma
     min: 1,
     max: 60,
   },
+  {
+    key: "release_fresh_hours",
+    label: "Fresh-lead window (hours)",
+    hint: "A lead younger than this skips the daily curve so it goes out the moment it lands, to anyone with credit. It never skips a hold, the credit balance or the daily cap above. 0 turns it off; 24 is the recommended value.",
+    min: 0,
+    max: 168,
+  },
 ];
 
 export function AllocationSettingsPanel({
@@ -78,9 +85,27 @@ export function AllocationSettingsPanel({
   }
 
   const on = initial.release_enabled === "true";
+  const pollOn = initial.lead_sync_enabled === "true";
 
   return (
     <div className="space-y-4">
+      <SettingSwitch
+        label="Pull new leads every five minutes"
+        on={pollOn}
+        busy={busy}
+        onChange={(next) => save({ lead_sync_enabled: next })}
+        description={
+          <>
+            Reads the newest items on both Monday lead boards every five minutes
+            and ingests any that are not in the book yet, so a lead is offered —
+            and the customer texted and emailed — within minutes of appearing
+            rather than at the 09:00 sync. The two daily syncs keep running as
+            the backstop either way.
+          </>
+        }
+        offWarning="Switch the five-minute poll off? New leads then wait for the 09:00 sync, as they did before. Nothing already in the book changes."
+      />
+
       <SettingSwitch
         label="One lead a working day"
         on={on}
@@ -101,7 +126,7 @@ export function AllocationSettingsPanel({
 
       <div className="rounded-md border-[0.5px] border-border p-4">
         <h3 className="text-sm font-medium">Limits</h3>
-        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {NUMBER_FIELDS.map((f) => (
             <div key={f.key}>
               <label className="text-xs font-medium" htmlFor={f.key}>

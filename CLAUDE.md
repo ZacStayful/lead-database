@@ -83,6 +83,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/contact-followups` | `15 8 * * *` | Today's follow-up prompt, and the weekly falling-behind notice (§42.8) |
 | `/api/cron/release-leads` | `30 7 * * 1-5` | Weekdays: the morning release — every banked lead re-offered, oldest first, through the one-a-working-day rule (§54). Lands before the 08:15 digest |
 | `/api/cron/lapse-past-due` | `0 6 * * *` | Write off a customer whose card has been failing for `past_due_lapse_days` (3): `account_status → cancelled`, board → `Cancelled`. Never calls Stripe (§59) |
+| `/api/cron/monday-lead-sync` | `*/5 * * * *` | Ingest NEW sellable items from both lead boards within minutes of them appearing; only ids not yet in `leads`. The two 09:00 syncs stay as the backstop (§63). Switch `lead_sync_enabled` on `/admin/allocation` |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
@@ -512,10 +513,16 @@ for being new with no way to earn out of it.
   taken further — see §14. (An earlier draft of this entry claimed
   `GR_PIPELINE_STAGES` / `stagesForLeadType()` "are not imported"; that was
   wrong when written — `LeadDetail.tsx` and the guide page both used them.)
-- **`viewed_at` ≠ telemetry.** `viewed_at` is set *only* by expanding a lead
+- **`viewed_at` ≠ telemetry.** ~~`viewed_at` is set *only* by expanding a lead
   card in the feed. Opening `/dashboard/leads/[id]` does not set it, so a lead
-  read end-to-end via a direct link leaves it null forever. `detail_opened` is
-  the honest "this lead was read" signal. Never treat them as equivalent.
+  read end-to-end via a direct link leaves it null forever.~~ **Changed by
+  §63.5**: opening the lead page now stamps `viewed_at` too (first open wins,
+  guarded on the column still being null), and reads the lead's `new_lead`
+  notification — because the email and text now deep-link to the page, and a
+  lead reached that way read "new" for ever. Never while an admin is viewing
+  the customer (§62). `detail_opened` is still the honest "this lead was read"
+  signal and is still recorded once from the browser; the two are still NOT
+  equivalent — a card expand sets `viewed_at` with no `detail_opened`.
 - **`enquiry_date` is not displayed anywhere**, admin included (0071 branch). It
   is free text of uneven quality from Monday — `safe_enquiry_date()` exists in
   0062 precisely because it does not always parse. Lead age is measured from
@@ -13196,8 +13203,9 @@ dashboard every morning. `/admin/allocation` · `customer_release_allows()` ·
 
 ### 54.1 — The rule, and why it is on the entitlement
 
-`public.customer_release_allows(customer_id, lead_type)`, per product
-(`gr_` columns for GR — invariant 6):
+`public.customer_release_allows(customer_id, lead_type, lead_created_at)`
+(three arguments since 0154 — the two-argument form is a shim passing null,
+§63.3), per product (`gr_` columns for GR — invariant 6):
 
 ```
 anchor    := coalesce((gr_)billing_cycle_anchor, created_at::date)
@@ -13207,10 +13215,12 @@ k         := working days (Mon–Fri) in [anchor, today]                   -- 0 
 E         := (gr_)leads_received_this_month + (gr_)lead_balance          -- this cycle's entitlement
 allowance := least(E, ceil(k * E / W))                                   -- 20/22 ≈ one a day; 10/22 ≈ one every other
 today_n   := assignments to this customer + product dated today (London)
+fresh     := lead_created_at > now() - release_fresh_hours                -- 0154; 0 (the default) = never
 allow     := release_enabled is false
           or release_mode = 'immediate'
           or (today >= coalesce((gr_)release_hold_until, today)
-              and received_this_month < allowance
+              and E > 0
+              and (received_this_month < allowance or fresh)
               and today_n < release_max_per_day)
 ```
 
@@ -13286,7 +13296,7 @@ nothing; the SQL gates.** The two change in one commit — the
 `releaseSettingsFrom()` reads the three settings and fails towards the defaults;
 `enabled` is only the literal `"true"`, exactly as the SQL reads it.
 
-### 54.5 — The morning release, and the three things that assign
+### 54.5 — The morning release, and the three things that assign *(four since §63)*
 
 `/api/cron/release-leads`, weekdays at **07:30 UTC** (07:30 GMT / 08:30 BST) —
 so each customer's lead for the day is in their inbox BEFORE the 08:15 UTC
@@ -13301,6 +13311,12 @@ moment it arrives (a customer with allowance left gets it at 14:00 rather than
 tomorrow), and both 09:00 Monday syncs still re-offer every banked lead. The
 cron adds the morning pass; it replaces neither. All three go through the same
 two RPCs, which is why the rule lives there and not in a cron.
+
+⚠️ **Four since §63.** `/api/cron/monday-lead-sync` ingests a new board item
+within five minutes of it appearing, through the same `ingestLead` →
+`autoAssignLead` → two RPCs. And the n8n webhook, measured on 2026-09-18, has
+**no caller** — nothing in n8n posts to it — so until §63 "the moment it
+arrives" was in practice the 09:00 sync.
 
 The sync responses now count top-up assignments too — the duplicate branch is
 most of what an ordinary morning does, and it used to go uncounted.
@@ -13407,6 +13423,9 @@ and never a filter (§27.1) — so a customer's own automation can pace itself.
 - **Per-customer release time**, a `uk_bank_holidays` table, a stale-stock
   bypass (lead older than N days ignores the curve but never the cap), and
   merging the Monday nudge and Friday report into one weekly plan and recap.
+  ⚠️ The stale-stock bypass's **inverse** shipped in 0154 (§63.3): a FRESH
+  lead ignores the curve but never the cap. The same shape would serve the
+  stale case — a second window on the other end of `created_at`.
 
 ### Verification
 
@@ -14306,8 +14325,12 @@ than being written a second time (§20, §26.7).
 
 The switch joins the closed allow-list on `/admin/messaging` (§40.14) — never a
 key read from a request body, since `system_settings` also holds
-`escalation_enabled` and the capacity caps. The page renders that list
-generically, so it cost one array entry.
+`escalation_enabled` and the capacity caps. ~~The page renders that list
+generically, so it cost one array entry.~~ ⚠️ **Wrong, found while building
+§63.** `MessagingSettingsPanel` and `AllocationSettingsPanel` hard-code their
+switches; the allow-list only decides what the ROUTE accepts. A key added to
+the list alone has no control anywhere — `enquiry_sync_enabled` has never had
+one. Every new switch needs its `SettingSwitch` written by hand.
 
 Counters beside it: enquiries pulled in 24h and 7 days, how many of the week's
 ladders came from ads, board items skipped, and ⚠️ **a stuck count, because a
@@ -15527,3 +15550,281 @@ calls it rather than carrying a copy. Reverting the `.pending` fails the suite.
 No migration. Code only, safe in any order relative to everything else, and
 inert for every customer: without the cookie `getCurrentCustomer()` and the
 middleware both behave exactly as before.
+
+---
+
+## 63. A lead lands within minutes, and the customer knows *(0154)*
+
+Three things a customer asked for in one sentence: leads reaching them as soon
+as they appear rather than once a day, a button in the text and the email that
+opens THAT lead, and the same lead shown on the dashboard when they log in
+instead. Measured before any of it was built, on 2026-09-18:
+
+| | |
+|---|---|
+| Marketplace leads created in the last 60 days | 279 |
+| … at 10:00 London, i.e. by the 09:00 UTC Monday sync | **263** |
+| Requests to the "instant" `/api/webhook/n8n` in 7 days | **0** — no n8n workflow posts to it |
+| The new-lead email's only link | **`/login`**, no lead id anywhere in the message |
+| Unread `new_lead` notifications sitting in production | **141** across 13 customers, one with 40 |
+
+So leads did arrive once a day, in one lump; the email could not take anyone
+to a lead; and the one link that did (the SMS) bounced a signed-out customer to
+`/login` with no way back: the root `middleware.ts` that would have set the
+return path never ran (§45.15) and is now deleted, and §62's `src/middleware.ts`
+matches `/api/` paths only.
+
+`/api/cron/monday-lead-sync` · `src/lib/leadSync.ts` · `/l/[leadId]` ·
+`src/lib/leadSeen.ts` · `NewLeadCard` · `/admin/allocation`.
+
+### 63.1 — The five-minute poll, and why it ingests only unknown ids
+
+One page per lead board (management 18420117742, GR 18396542480) every five
+minutes, ordered by **last update** — an item created weeks ago and moved to
+"Lead for sale" today is exactly the lead this exists to catch, and a
+creation-ordered page would never see it. Every id already in `leads` is
+dropped with ONE `in(...)` read, and only the remainder goes to `ingestLead`.
+
+⚠️ **That filter is the whole cost argument.** The 09:00 sync walks the whole
+board and lands every lead already in the book in `ingestLead`'s duplicate
+branch, which re-judges quality and re-runs allocation per lead — fine once a
+day, ruinous every five minutes. Running the existing sync at this cadence was
+costed at roughly five function-hours a day; the poll is ~8,600 invocations a
+month at a second each, pennies inside Vercel Pro's credit, and ~75–100 Monday
+complexity per read against a per-minute budget in the millions.
+
+⚠️ **No claim table, argued.** 0151's enquiry sync needed one because its side
+effects (a customer row, a WhatsApp) happen before any unique key is written.
+Here the FIRST side effect is the `leads` insert and `monday_item_id` is
+unique, so the poll and the 09:00 sync (or the admin button) overlapping both
+call `ingestLead` and the loser gets 23505 — reported as `duplicate`, zero
+assignments — or the existing row, and `assign_lead_to_customer` refuses a
+duplicate under its row lock regardless. Idempotent by construction.
+
+⚠️ **The settle is on `updated_at`, and it defers rather than claims.**
+`ingestLead` never re-reads an item once it exists, so a lead ingested seconds
+after its cells were half-typed is frozen that way. An item changed inside the
+last two minutes is left for the next tick — free, because "unknown" is
+re-evaluated every tick. Person-level duplicates (`find_duplicate_lead`) stay
+"unknown" and cost one RPC per tick until they scroll off the 30-item page;
+reported under `duplicates`, accepted.
+
+`maxDuration = 60`, not 300 — a five-minute ceiling on a five-minute schedule
+is one run deep at best (§57's argument). `fetched` per board is in the JSON
+and is the reading that matters: a permanent zero means the board or the label
+moved and the poll is silently dead.
+
+### 63.2 — ⚠️ A status rule takes the label INDEX, and text returns nothing
+
+`rules: [{ column_id: "status5", compare_value: ["Lead for sale"], operator:
+any_of }]` does not error. It returns an **empty page, silently, for ever**.
+Measured against the live board while building this: the text form returned
+nothing and `compare_value: [16]` returned the sellable items. Label 16 is
+"Lead for sale" in the column's `settings_str`, and it is a fact about the
+board, not the code — a label added, removed or reordered by hand moves it.
+
+So `fetchRecentManagementLeads` resolves the index at runtime from the column
+settings (`sellableStatusIndex`, pure, cached per process), returns `ok:false`
+when the label cannot be found rather than reading a quiet board, and STILL
+re-checks the label text on every item it gets back. The GR board has no
+status rule (every GR item is sellable unless `MONDAY_GR_SELLABLE_STATUS`
+narrows it, client-side as the daily walker does).
+
+### 63.3 — Fresh leads skip the curve, never the cap *(0154)*
+
+§54 hands each customer one lead per UK working day, and the 07:30 morning
+pass fills that slot from BANKED stock (85 management leads with a free slot
+when this was written) before any new lead has arrived. So a lead that lands
+at 11am would bank until tomorrow for almost everyone, and "notified the
+moment it comes in" would rarely be felt. Zac's call: **a lead younger than
+`release_fresh_hours` skips the pacing curve and nothing else.**
+
+| Still refuses a fresh lead | Because |
+|---|---|
+| a hold | "hold my leads" means all of them |
+| `E = received + balance <= 0` | no entitlement is no entitlement |
+| `lead_balance > 0` in the candidate WHERE | the money gate is untouched |
+| `today_n < release_max_per_day` | **the cap is what bounds it** |
+
+The accepted trade: with heavy supply a 10-lead plan at cap 2/day can be
+drained in a week. The knob is `release_max_per_day`, not the window.
+
+`customer_release_allows` gains a **three-argument** overload carrying the
+lead's `created_at`; both candidate functions pass it (`l.created_at` from the
+filtered function's CTE; an uncorrelated scalar subquery in the unfiltered one,
+which has no lead CTE and must not gain a join that changes what an unknown id
+returns). The two-argument form is a shim passing `null`, which is never fresh.
+
+⚠️ **ZERO defaults on the three-argument form.** The 0148 suite calls the
+function with ONE argument, resolved through the shim's `default
+'management'`; a default on the new form makes that call `function is not
+unique` — §34's and §35's overload trap, one layer down. `pronargdefaults` is
+asserted 0 and 1.
+
+⚠️ **`release_fresh_hours` ships `'0'`, which is OFF**, so 0154 is inert when
+applied ahead of the code in either order (§1.1): at 0 the three-argument body
+is 0148's body, and old code calling the shim sees 0148's behaviour exactly.
+24 is the recommended value, set from `/admin/allocation`. Unlike
+`release_max_per_day`, 0 is the SAFE value here, so its floor is 0.
+
+`releaseSchedule()` in `pacing.ts` — display only — is unchanged: its copy
+already reads "there may be another if one arrives".
+
+### 63.4 — The deep link, and the sign-in return
+
+`/l/<leadId>` (`src/app/l/[leadId]/route.ts`): signed in → 302 to the lead
+page; signed out → 302 to `/login?redirectedFrom=/dashboard/leads/<id>`, which
+`login/page.tsx` has honoured for same-site paths all along — nothing ever SET
+it: the root `middleware.ts` that would have never ran and is now deleted, and
+§62's live `src/middleware.ts` matches `/api/` paths only. A Route Handler may refresh the session cookie, which is why the
+Supabase client lives there rather than in a Server Component (§45.15's
+distinction). `Cache-Control: no-store`; a non-UUID is a 404 before the session
+is touched; no ownership check, because the lead page 404s a lead the customer
+does not hold.
+
+`leadLink.ts` is the one definition. The email button, the SMS and the
+replacement email (§52) all use it; the SMS body still carries only the town
+and the bedrooms. The email gains Stayful's projected gross for a management
+lead with a figure (§25) — absent means the row is absent, never "£—".
+
+⚠️ **No page middleware was added for this.** §62's `src/middleware.ts` is
+scoped to `/api/` paths on purpose; a redirector is the narrow fix and leaves
+that scope alone.
+
+### 63.5 — Opening a lead marks it seen
+
+`markLeadSeen()` in `src/lib/leadSeen.ts`, called from `loadLeadWorkspace` so
+both the lead page and the inbox thread page agree: `viewed_at` is stamped
+where it is still null (first open wins; two tabs cannot race), and the
+assignment's unread `new_lead` notification is read. Best effort, never
+throws. §11's `viewed_at ≠ telemetry` entry is corrected rather than
+contradicted: `detail_opened` is still recorded exactly once from the browser,
+and a card expand still sets `viewed_at` with no `detail_opened`.
+
+### 63.6 — The home card
+
+`NewLeadCard` in the announcement banner's slot on the dashboard home, built
+by the pure `buildNewLeadCard()` from UNREAD `new_lead` notifications joined to
+their assignment and lead: name, town, postcode area, bedrooms, the projection
+(management only), how long ago, and one "Open this lead" button. The newest in
+full, up to three more compact, "and N more" to `/dashboard/leads?activity=new`.
+Dismiss marks the primary notification read through a session-scoped POST
+(`/api/customer/notifications/[id]/read` — identity from the session, never
+the body, §8). Home page only, like the banner.
+
+⚠️ **Bounded, or the first login after deploy is a wall.** 141 unread rows
+existed; one customer held 40. The page reads the last **7 days**, capped at
+10, and the builder drops any whose assignment has since been viewed. Only our
+own lead columns are selected — no uploader id, no profile — and the builder
+still drops the viewer's own uploads by owner id (§32.8).
+
+### 63.7 — Where the switches show, and ⚠️ §57.11 was wrong
+
+`lead_sync_enabled` (boolean, off) and `release_fresh_hours` (number, 0) join
+the closed allow-list in `adminSettings.ts` and render on `/admin/allocation`
+as a `SettingSwitch` and a number field. ⚠️ §57.11 claimed the admin page
+"renders that list generically, so it cost one array entry". It does not:
+both panels hard-code their switches, and `enquiry_sync_enabled` has never had
+one. The allow-list decides what the route ACCEPTS; every switch is written
+by hand.
+
+### Verification
+
+**All 154 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0154 re-applied twice for idempotency, and **all 16 SQL suites
+pass on the same build** — 0148's unchanged, which is the check that matters,
+since 0154 rewrites the predicate it exercises.
+
+`0154_fresh_lead_release_test.sql` — **33 assertions**: the seeds; exactly two
+overloads with `pronargdefaults` 0 and 1 and the one-argument call still
+resolving; **inert at 0** (an over-curve customer refused by both forms, and
+absent from the candidate list for a lead created just now); at 24 a lead
+created now or 23 hours ago admitted, 25 hours ago refused, null never fresh,
+the shim still refusing; a hold still refusing; E = 0 still refusing; the cap
+of 1 refusing and the cap of 2 admitting; both candidate functions admitting
+the fresh lead and refusing the stale one; release off → true for everyone;
+GR on `gr_` columns with a management hold leaving it alone; the money path
+still accepting a direct call and spending exactly one credit; ACLs on all four
+signatures.
+
+⚠️ **Nine SQL mutations run against the 0154 suite.** Eight caught: the shim
+passing `now()`, the cap skipped when fresh, the hold bypassed when fresh,
+either candidate function passing `now()` instead of the lead's `created_at`,
+a default added to the third argument, the window seeded at 24, and the
+three-argument form's `revoke` dropped. ⚠️ **That last one was NOT caught at
+first** — `information_schema.role_routine_grants` names PUBLIC in upper case
+and the 0148-style count could not see the grant left on it — and the suite
+now asserts `has_function_privilege('anon', …)` on both overloads, which is
+what catches a dropped revoke (§50.9's shape, again). The ninth mutation,
+removing the `v_fresh_hours > 0` guard, is **behaviour-preserving by
+arithmetic** (an interval of zero makes nothing fresh), so no test can catch
+it; the guard is kept for the reader and recorded here rather than pretended
+to be load-bearing.
+
+Unit: `leadSyncGuard.test.ts` (the schedule PARSED from `vercel.json`,
+`maxDuration = 60`, the 500 above the kill switch, no full-board walk, the one
+`in(...)` read, the settle pinned to a literal, `pickItemsToIngest`, the status
+index resolved from a captured `settings_str` and refused for a missing label,
+the migration's seeds and no-default signature, the clause order hold →
+entitlement → curve → cap), `leadDeepLink.test.ts`, `leadSeenGuard.test.ts`
+(including that an admin viewing a customer marks nothing, §62),
+`newLeadCard.test.ts`. **2,292 vitest cases green**, `npx tsc --noEmit`
+clean, `npm run lint` clean bar the four pre-existing `module` warnings,
+`npm run build` passes and registers `ƒ /api/cron/monday-lead-sync` and
+`ƒ /l/[leadId]`.
+
+⚠️ **Not yet exercised in a browser or against a real tick.** The poll has
+never run against the live boards, no email or text with the new link has been
+sent, and the card has not been seen on a real account — a preview cannot do
+any of it (§1.1, §45). The switch-on list below is the acceptance test.
+
+### Deployment order — migration BEFORE code
+
+✅ **0154 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-18, before the
+merge** (§1.1), verbatim from the file so every `prosrc` matches it, and
+verified there rather than assumed:
+
+- **No drift before it went on.** Production's `customer_release_allows`
+  (`c6dc8172…`), `get_filtered_candidates_for_lead` (`07ba9120…`) and
+  `get_unfiltered_candidates_for_lead` (`4680a634…`) hash-matched a scratch
+  build of the repo through 0153 exactly; neither settings key existed.
+- **Post-apply, all four bodies hash-match the scratch build from the file**:
+  the three-argument `customer_release_allows` `c3ca37f6…` (`pronargdefaults`
+  0), the shim `76c30784…` (1), `get_filtered_candidates_for_lead`
+  `dd874341…`, `get_unfiltered_candidates_for_lead` `af23aa94…`. All
+  `security definer` with `search_path` pinned; `anon` and `authenticated`
+  false, `service_role` true on every signature.
+- **Inert, proved rather than argued.** Both candidate functions were
+  fingerprinted over all **362** unsold marketplace leads immediately before
+  and after the apply — `50afeeb6ae97bbdc72166f7169f04492` both times. 57
+  customers, 539 leads and 536 assignments untouched; the balance-and-counter
+  fingerprint (`a922e7c7…`) identical; `release_fresh_hours = 0`,
+  `lead_sync_enabled = false`, `release_enabled` still `true`.
+- `get_advisors` reports **no new finding** — the 53 deny-all tables, the five
+  mutable-`search_path` functions and the two auth warnings are all
+  pre-existing.
+
+It is inert: both switches ship off, the shim keeps every deployed caller on
+0148's behaviour, and no balance, counter, pacing or capacity column is
+touched. Code arriving first would have called a three-argument function that
+did not exist and failed every candidate query — which is every assignment on
+the platform.
+
+Switch-on, after merge: `GET /api/cron/monday-lead-sync?dryRun=true` as admin
+(`fetched > 0` on both boards, `would_ingest` ids all genuinely absent), then
+`lead_sync_enabled` on `/admin/allocation`, then `release_fresh_hours = 24`.
+Watch one tick's JSON, then one real lead through the email and text links
+signed out: login → the lead page → `viewed_at` stamped, bell count down, card
+gone. ⚠️ A preview cannot do any of it — Deployment Protection answers 302 to
+`vercel.com/sso-api`, and a preview runs against production Supabase (§1.1).
+
+### Deferred
+
+- **A `lead_sync_runs` reading on `/admin/allocation`** — today the run
+  report is the cron's JSON, and `fetched` is the figure that says whether the
+  poll is alive.
+- **Whether the poll should also trigger `parse-income-reports` sooner**: a
+  lead ingested at 11am carries its figures only if the PDF was on the item at
+  that moment; otherwise it waits for the 12:00 sweep.
+- **The stale-stock bypass** (§54.10) is now a second window on the other end
+  of the same argument.
