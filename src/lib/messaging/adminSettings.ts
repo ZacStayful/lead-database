@@ -251,6 +251,14 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     kind: "boolean",
     fallback: "false",
   },
+  // §64 — withdraw any lead that turns out to be in Stayful's own sales
+  // pipeline, and replace it. Ships OFF; a dry run is allowed while off.
+  {
+    key: "stayful_conflict_enabled",
+    label: "Withdraw leads in Stayful's pipeline",
+    kind: "boolean",
+    fallback: "false",
+  },
 
   // -------------------------------------------------------------------------
   // Chasing an enquirer who never books a web meeting (§55). In THIS list for

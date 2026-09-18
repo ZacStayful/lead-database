@@ -10,6 +10,7 @@ import {
   passesQualityGate,
   type LeadQualityCode,
 } from "@/lib/leadQuality";
+import { isStayfulConflicted } from "@/lib/stayfulConflict";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -106,6 +107,19 @@ export async function POST(request: NextRequest) {
           describeLeadQuality(typedLead.lead_quality_codes as LeadQualityCode[]) +
           ". Override it on the lead page if you want it assigned anyway.",
         code: "lead_quality_blocked",
+      },
+      { status: 400 }
+    );
+  }
+
+  // §64. Stayful's own pipeline. Same reasoning as the gate above: the
+  // override RPC consults no retirement predicate, so it is refused here.
+  if (isStayfulConflicted(typedLead)) {
+    return NextResponse.json(
+      {
+        error:
+          "This landlord is in Stayful's own sales pipeline and cannot be assigned to anyone.",
+        code: "stayful_conflict",
       },
       { status: 400 }
     );

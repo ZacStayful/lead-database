@@ -9,6 +9,12 @@ import { leadPriceFor } from "@/lib/plans";
 import { incomeReportPatch, resolveIncomeReport } from "@/lib/incomeReport";
 import { syncStoredReport } from "@/lib/incomeReportStorage";
 import { shouldRaiseContentionCap, shouldRouteLead } from "@/lib/leadResale";
+import { findStayfulConflict, isStayfulConflicted } from "@/lib/stayfulConflict";
+import { loadStayfulConflictContext } from "@/lib/stayfulConflictIndex";
+import {
+  flagStayfulConflictLead,
+  fulfilOwedReplacementsForLead,
+} from "@/lib/owedReplacements";
 import { enrolOnAssignment } from "@/lib/messaging/sequences";
 import { sendLandlordReferral } from "@/lib/landlordReferralSend";
 import {
@@ -207,6 +213,8 @@ export interface IngestResult {
   lead_id?: string;
   assignments_made: number;
   error?: string;
+  /** §64 — the lead is in Stayful's own pipeline and was withheld/withdrawn. */
+  stayful_conflict?: boolean;
 }
 
 /**
@@ -243,6 +251,39 @@ export async function ingestLead(
     // number corrected on the board clears itself on the next sync, with no
     // admin action and no separate re-check job.
     await refreshLeadQuality(supabase, existingLead);
+
+    // §64. Stayful's own pipeline. Re-screened on every sync for the same
+    // reason the quality gate is: Stayful's "Qualified lead" automation moves
+    // an item INTO a pipeline group AFTER it was sold, so a lead that was
+    // clean yesterday may be a conflict today. Already-flagged rows are
+    // refused by autoAssignLead and every SQL path, so the index is only
+    // consulted for the rest. Fails OPEN on an unreadable index — the
+    // fifteen-minute sweep is the backstop (stayfulConflictIndex.ts).
+    if (existingLead.lead_type === "management" && !isStayfulConflicted(existingLead)) {
+      const ctx = await loadStayfulConflictContext(supabase);
+      const match = ctx.enabled && ctx.index ? findStayfulConflict(existingLead, ctx.index) : null;
+      if (match) {
+        try {
+          const outcome = await flagStayfulConflictLead(
+            supabase,
+            existingLead,
+            match,
+            (l, c, a) => completeAssignment(supabase, l, c, a, false)
+          );
+          return {
+            status: "duplicate",
+            lead_id: existingLead.id,
+            assignments_made: outcome.fulfilled,
+            stayful_conflict: true,
+          };
+        } catch (err) {
+          // Flagging failed: leave it to the sweep rather than sell it now.
+          console.error("[stayful-conflict] flag at ingest failed; withheld", existingLead.id, err);
+          return { status: "duplicate", lead_id: existingLead.id, assignments_made: 0, stayful_conflict: true };
+        }
+      }
+    }
+
     const assignmentsMade = await autoAssignLead(supabase, existingLead);
     return {
       status: "duplicate",
@@ -314,6 +355,39 @@ export async function ingestLead(
   insertPayload.lead_quality_codes = verdict.codes;
   insertPayload.lead_quality_checked_at = new Date().toISOString();
 
+  // §64. Stamped BEFORE the insert, for 0111's reason: the row must never be
+  // momentarily sellable between the insert and a later sweep. Nothing to
+  // withdraw — no assignment exists yet — so no RPC. Fails OPEN on an
+  // unreadable index; the sweep is the backstop.
+  let stayfulConflict = false;
+  if (leadType === "management") {
+    const ctx = await loadStayfulConflictContext(supabase);
+    const match =
+      ctx.enabled && ctx.index
+        ? findStayfulConflict(
+            {
+              lead_type: "management",
+              monday_item_id: String(payload.monday_item_id ?? ""),
+              email: insertPayload.email as string | null,
+              phone: insertPayload.phone as string | null,
+            },
+            ctx.index
+          )
+        : null;
+    if (match) {
+      stayfulConflict = true;
+      insertPayload.stayful_conflict_at = new Date().toISOString();
+      insertPayload.stayful_conflict_item_id = match.itemId;
+      insertPayload.stayful_conflict_group_id = match.groupId;
+      insertPayload.stayful_conflict_matched_by = match.matchedBy;
+      console.warn("[stayful-conflict] withheld at ingest", {
+        monday_item_id: payload.monday_item_id,
+        matched_by: match.matchedBy,
+        group: match.groupId,
+      });
+    }
+  }
+
   const { data: lead, error: insertError } = await supabase
     .from("leads")
     .insert(insertPayload)
@@ -336,6 +410,15 @@ export async function ingestLead(
   const typedLead = lead as Lead;
 
   await attachIncomeProjection(supabase, typedLead, payload);
+
+  if (stayfulConflict) {
+    return {
+      status: "created",
+      lead_id: typedLead.id,
+      assignments_made: 0,
+      stayful_conflict: true,
+    };
+  }
 
   const assignmentsMade = await autoAssignLead(supabase, typedLead);
 
@@ -444,7 +527,13 @@ export async function autoAssignLead(
   // `max_assignments` straight through PostgREST, where no SQL guard reaches.
   if (!passesQualityGate(lead)) return 0;
 
-  const remaining =
+  // §64. A landlord Stayful is already working. The arm in
+  // lead_retirement_reason refuses it in SQL; this is here for the same
+  // reason the quality line above is — the contention branch below writes
+  // max_assignments straight through PostgREST, where no SQL guard reaches.
+  if (isStayfulConflicted(lead)) return 0;
+
+  let remaining =
     (lead.max_assignments ?? DEFAULT_MAX_ASSIGNMENTS) - (lead.assignment_count ?? 0);
   if (remaining <= 0) return 0;
 
@@ -479,6 +568,18 @@ export async function autoAssignLead(
   } else if (isClosed) {
     return 0;
   }
+
+  // §64. Anyone owed a replacement this lead satisfies is served FIRST,
+  // before ordinary routing: no credit, no curve, no cap — it is the slot
+  // they already paid for. Fails open on a failed read.
+  const owedPlaced = await fulfilOwedReplacementsForLead(
+    supabase,
+    lead,
+    remaining,
+    (l, c, a) => completeAssignment(supabase, l, c, a, false)
+  );
+  remaining -= owedPlaced;
+  if (remaining <= 0) return owedPlaced;
 
   const leadType = lead.lead_type;
 
@@ -551,7 +652,7 @@ export async function autoAssignLead(
 
   const price = leadPriceFor(leadType);
 
-  let assignmentsMade = 0;
+  let assignmentsMade = owedPlaced;
   for (const customerId of customerIds) {
     const { data: assignmentId, error: assignError } = await supabase.rpc(
       "assign_lead_to_customer",

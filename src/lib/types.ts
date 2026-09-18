@@ -519,6 +519,17 @@ export interface Lead {
   lead_quality_override_by: string | null;
   lead_quality_override_note: string | null;
   /**
+   * Set when the lead matched Stayful's own pipeline (0155, §64): the landlord
+   * is being worked, or has been signed, by Stayful itself. Permanent — never
+   * cleared — and retires the lead from every allocation path and the pool.
+   * Read it through `isStayfulConflicted()` in `src/lib/stayfulConflict.ts`.
+   */
+  stayful_conflict_at: string | null;
+  stayful_conflict_item_id: string | null;
+  stayful_conflict_group_id: string | null;
+  /** `item` | `email` | `phone` — which rule matched. */
+  stayful_conflict_matched_by: string | null;
+  /**
    * What the landlord told us at /p/[token] (0126, §41).
    *
    * ⚠️ ON THE LEAD, NOT THE ASSIGNMENT, AND THAT IS THE FAIRNESS PROPERTY.

@@ -13,7 +13,7 @@ import {
 const ROOT = join(__dirname, "..", "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
-const MIGRATION = "supabase/migrations/0144_lead_retirement_reason.sql";
+const MIGRATION = "supabase/migrations/0155_stayful_pipeline_conflict.sql";
 const CONTROL = "src/components/admin/SwapLeadControl.tsx";
 
 /**
@@ -41,7 +41,8 @@ describe("the reason vocabulary is one contract with the SQL", () => {
   });
 
   it("really did find the arms, rather than matching nothing", () => {
-    expect(sqlReasonValues()).toHaveLength(5);
+    expect(sqlReasonValues()).toHaveLength(6);
+    expect(sqlReasonValues()).toContain("stayful_conflict");
     expect(sqlReasonValues()).toContain("claimed_from_pool");
   });
 

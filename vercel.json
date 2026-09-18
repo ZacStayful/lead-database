@@ -86,6 +86,10 @@
     {
       "path": "/api/cron/lapse-past-due",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/stayful-conflict-sweep",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

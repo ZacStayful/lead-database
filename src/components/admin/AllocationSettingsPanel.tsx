@@ -47,10 +47,13 @@ export function AllocationSettingsPanel({
   initial,
   slotOpenToday,
   onHold,
+  owedOpen,
 }: {
   initial: Record<string, string>;
   slotOpenToday: number;
   onHold: number;
+  /** §64 — replacements still owed after a Stayful-pipeline withdrawal. */
+  owedOpen: number;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -86,6 +89,7 @@ export function AllocationSettingsPanel({
 
   const on = initial.release_enabled === "true";
   const pollOn = initial.lead_sync_enabled === "true";
+  const stayfulOn = initial.stayful_conflict_enabled === "true";
 
   return (
     <div className="space-y-4">
@@ -122,6 +126,29 @@ export function AllocationSettingsPanel({
           </>
         }
         offWarning="Switch the daily release off? From the next sync every customer with credit is offered leads until their credit runs out — the renewal-day batch comes back for everyone. Holds and the per-customer exemption stay recorded but do nothing."
+      />
+
+      <SettingSwitch
+        label="Withdraw leads in Stayful's pipeline"
+        on={stayfulOn}
+        busy={busy}
+        onChange={(next) => save({ stayful_conflict_enabled: next })}
+        description={
+          <>
+            A landlord Stayful&apos;s own team is working — qualified, meeting
+            booked, warm, or signed on the Management Leads board — is never
+            sold. Checked as each lead arrives and by a sweep every fifteen
+            minutes: a match is withdrawn from every operator holding it and
+            each of them is owed a replacement at the price they paid, filled
+            from stock at once where a lead fits their filter, otherwise by the
+            next lead that does. Nothing is said to the customer; the
+            replacement arrives as an ordinary new lead.
+            {owedOpen > 0
+              ? ` ${owedOpen} replacement${owedOpen === 1 ? " is" : "s are"} still owed.`
+              : " Nothing is currently owed."}
+          </>
+        }
+        offWarning="Switch this off? Nothing new is flagged; leads already flagged stay withdrawn and replacements already owed are still delivered by the next matching lead."
       />
 
       <div className="rounded-md border-[0.5px] border-border p-4">

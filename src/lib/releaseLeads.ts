@@ -58,6 +58,10 @@ export async function releasePendingLeads(
     .from("leads")
     .select("*")
     .or("owner_customer_id.is.null,owner_resale_qualified_at.not.is.null")
+    // §64. A lead in Stayful's own pipeline is retired for good; every RPC
+    // refuses it anyway, this just saves the round trips and keeps `pending`
+    // honest.
+    .is("stayful_conflict_at", null)
     .order("created_at", { ascending: true });
   if (opts.leadType) query = query.eq("lead_type", opts.leadType);
 

@@ -84,6 +84,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/release-leads` | `30 7 * * 1-5` | Weekdays: the morning release — every banked lead re-offered, oldest first, through the one-a-working-day rule (§54). Lands before the 08:15 digest |
 | `/api/cron/lapse-past-due` | `0 6 * * *` | Write off a customer whose card has been failing for `past_due_lapse_days` (3): `account_status → cancelled`, board → `Cancelled`. Never calls Stripe (§59) |
 | `/api/cron/monday-lead-sync` | `*/5 * * * *` | Ingest NEW sellable items from both lead boards within minutes of them appearing; only ids not yet in `leads`. The two 09:00 syncs stay as the backstop (§63). Switch `lead_sync_enabled` on `/admin/allocation` |
+| `/api/cron/stayful-conflict-sweep` | `*/15 * * * *` | Withdraw any management lead that matches a landlord in one of the nine pipeline groups on Stayful's own Management Leads board (5891626711), owe each holder a replacement, and fill every open debt from stock (§64). Switch `stayful_conflict_enabled` on `/admin/allocation`; ships off |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
@@ -460,12 +461,16 @@ write of free text into a table, which is why its length caps are load-bearing.
 10. **No code path may ask Supabase to send an email.** Links are minted with
     `generateLink` and delivered through Resend (§15).
 11. A lead that has been **claimed from the expired pool**, that pooled on the
-    `ignored` basis, or that a **customer added themselves** (§30), is never
-    re-allocated by ordinary routing (§19).
+    `ignored` basis, that a **customer added themselves** (§30), or that is
+    **in Stayful's own sales pipeline** (§64), is never re-allocated by
+    ordinary routing (§19).
     `lead_retired_from_allocation()` is the single expression of this and is
     asserted in all three candidate functions, in `get_escalation_candidates`,
     and inside `assign_lead_to_customer` under its row lock. A lead pooled on
-    the `unassigned` basis is deliberately **not** retired.
+    the `unassigned` basis is deliberately **not** retired. ⚠️ Since 0144 the
+    arms live in `lead_retirement_reason()` and the boolean delegates; since
+    0155 the `stayful_conflict` arm is FIRST and, alone among the arms, has no
+    escape hatch of any kind.
 12. `(gr_)pool_debit` is never negative and is settled only inside
     `credit_invoice()`, behind the same idempotency claim as the credit (§19).
     Never decrement it from application code.
@@ -628,6 +633,19 @@ for being new with no way to earn out of it.
   `fetchRetiredLeadIds` now THROW `LeadVolumeUnavailableError`, and each caller
   decides what unavailable means for it. Do not "simplify" that back to a
   `break`; `filterVolumeLoad.test.ts` pins it.
+- ⚠️ **`isRetired()` in `filterPrediction.ts` mirrors only PART of the
+  retirement predicate**, by design (it is a JS copy of the two `leads`-column
+  branches plus the pool-claim set, because the SQL function is
+  `service_role`-only and cannot be called per row from PostgREST). 0155 adds
+  `stayful_conflict_at` to it. The owner-resale and quality arms are still not
+  mirrored there, so the volume forecast can quote a quality-blocked lead as
+  supply. Known, small, and the fix is to keep adding columns to the mirror in
+  step with the SQL.
+- ⚠️ **`withdrawn_slots_per_month` on the capacity panel now includes
+  Stayful-pipeline withdrawals** (§64) as well as swaps, because the flag
+  function writes `withdrawn_slots` through the same column 0145 reads. The
+  first sweep after switch-on steps that series by roughly twenty slots; read
+  it as a definition change, not as customers swapping.
 - No ESLint config (`next lint` prompts interactively) and **no test suite**.
 
 ---
@@ -15828,3 +15846,393 @@ gone. ⚠️ A preview cannot do any of it — Deployment Protection answers 302
   that moment; otherwise it waits for the 12:00 sweep.
 - **The stale-stock bypass** (§54.10) is now a second window on the other end
   of the same argument.
+
+---
+
+## 64. A landlord Stayful is already working is never sold *(0155)*
+
+Stayful runs its own landlord sales pipeline on Monday board **5891626711**
+("Management Leads", ~1,200 items). Nine of its groups mean "Stayful is
+actively working, or has signed, this landlord":
+
+| group id | title |
+|---|---|
+| `group_mm28ypgs` | Qualified Management Leads |
+| `group_mm1htyz7` | In the future Due to call |
+| `group_mkwthdxq` | In the future management leads |
+| `group_mksxb5m0` | Web meeting booked |
+| `group_mkwx4dhv` | Web meeting No show |
+| `group_mksx27r4` | Web meeting sat/warm |
+| `group_mm47p8js` | Warm due to call |
+| `group_mm16jhqm` | Special offer applied |
+| `group_mm1dtkdm` | Customer / signed |
+
+A landlord in one of them must never be sold to an operator: Stayful and the
+operator would both be ringing the same person. **Nothing in `src/` referenced
+that board or any of those group ids before this.**
+
+Measured live on 2026-09-18, all three pages of the board cross-referenced
+with `leads` by item id, lowercased email and last-nine-digit phone:
+
+| | |
+|---|---|
+| Items in the nine groups | 179 |
+| Marketplace leads matching one | **11** (10 management, 1 GR) |
+| … currently held by customers | **9 leads, 24 assignments** — 12 `new`, 9 `contacted`, 1 `interested_in_the_future` with notes, 2 rejected/not_relevant, 0 won |
+| … same Monday item — ingested from 5891626711 by n8n, later moved INTO a group | 5 |
+| … matched by email+phone / email only / phone only | 4 / 1 / 1 |
+| Sale-board items (of 252) matching a group | 3 |
+
+⚠️ **The conflict arises AFTER the sale as often as before it.** The
+`Qualified lead` status automation (WF 7920617387 on 18420117742) moves an
+already-sold item back onto 5891626711 into *Qualified Management Leads*.
+An ingest-time check alone would have missed five of the eleven; hence a
+sweep as well.
+
+`/api/cron/stayful-conflict-sweep` (every 15 minutes) · `src/lib/stayfulConflict.ts`
+(pure) · `stayfulConflictIndex.ts` · `owedReplacements.ts` ·
+`stayfulConflictSweep.ts` · the **Check Stayful conflicts** button on
+`/admin/leads` · the switch on `/admin/allocation` · `StayfulConflictPanel`
+on `/admin/leads/[id]`.
+
+### 64.1 — Decisions taken with the owner (do not re-open)
+
+1. **Match rule**: same Monday item id, OR same email (lowercased, any address
+   in a multi-address cell on either side), OR same phone (last nine digits —
+   the 0070 rule). Precedence item → email → phone decides the recorded
+   `matched_by`.
+2. **Management leads only.** A GR lead is never checked, even on an item hit.
+3. **At ingest AND a sweep every fifteen minutes** over already-ingested
+   management leads.
+4. **Withdraw every live assignment** (`new` / `contacted` / `in_discussion`,
+   `closed_at` null) **and leave settled ones** — won, rejected, not_relevant,
+   closed.
+5. **Replace, never credit.** A matching in-stock lead is swapped in at once
+   (the customer keeps the slot at the same `price_paid`; no credit moves);
+   with nothing matching in stock a **replacement is owed**, and the next
+   lead that arrives and passes their filter goes to them AHEAD of ordinary
+   routing — no credit, skipping the one-a-day curve and the daily cap.
+   `replacement_balance`, `clean_leads_streak` and `quality_claims_this_cycle`
+   are untouched: this is our fault, not a claim.
+6. **No customer-facing notice** of the withdrawal, in the owner's words:
+   *"nothing it will just be swapped without notification"*. The replacement
+   arrives through the ordinary `completeAssignment()` — new-lead email, text,
+   contact-plan enrolment — and that is the only thing the customer sees.
+7. **Sticky, never lifted**, in the owner's words: *"never sell those leads
+   into the database as they will have long expired"*. No admin clear control,
+   no override argument anywhere.
+8. **Automatic**, behind `stayful_conflict_enabled` (ships `false`), with a
+   dry run an admin may run while it is off.
+
+### 64.2 — Why the flag is four things, not one
+
+A flagged lead has to be refused by every path a lead can reach a customer by,
+and those paths consult different things. Each line is enforced by something:
+
+| Path | What refuses it | Because |
+|---|---|---|
+| both candidate functions, escalation, `assign_lead_to_customer` under its lock, the swap picker and `admin_swap_lead_assignment` | a new arm of **`lead_retirement_reason()`** — `stayful_conflict`, placed **FIRST** | invariant 11's single expression; 0144 made the boolean delegate, so one arm reaches all of them with no further edit |
+| the expired-pool sweep | `lead_pool_barred()` gains `or l.stayful_conflict_at is not null` | that function and the retirement predicate agree about owned leads only by coincidence (§32.6, §36.5) |
+| a customer already looking at the pool | the flag function **force-outs** the lead: `pool_entered_at = null`, `pool_entry_basis = null`, `pool_excluded_at = now()` | `customer_can_see_pool_lead` (0074) tests `pool_entered_at`, never `lead_pool_barred` — so the clause alone leaves a pooled lead claimable until the next morning's sweep |
+| `admin_assign_lead` and the two admin assign routes | the flag **clamps `max_assignments = assignment_count`** (the swap's own withdraw statement), plus `isStayfulConflicted` in TypeScript — a 400 on the single route, a per-pair skip on bulk | `admin_assign_lead` (0142) consults NO retirement predicate; §36.5's precedent for the quality gate |
+| the contention write in `autoAssignLead` | `if (isStayfulConflicted(lead)) return 0;` immediately after `passesQualityGate` | that branch writes `max_assignments` straight through PostgREST, where no SQL guard reaches (§32.6) |
+| the morning release and the volume forecast | `.is("stayful_conflict_at", null)` in `releaseLeads.ts`; `isRetired()` in `filterPrediction.ts` | the release cron selects under-assigned leads itself; the forecast must not quote a withdrawn lead as supply |
+
+⚠️ **The arm is FIRST and has no hatch.** Every other arm can be undone —
+a pool force-out, a quality override, the pool claim's "belongs to whoever
+claimed it" is at least explicable. `stayful_conflict` is placed above them so
+a flagged lead that is also quality-blocked reads as the reason nobody can
+act on, and the explainer under the swap picker says so in one sentence.
+`SwapLeadControl` greys it like any other retired lead (§53.10).
+
+### 64.3 — `flag_stayful_conflict`, and the lock order
+
+`flag_stayful_conflict(p_lead_id, p_item_id, p_group_id, p_matched_by)`
+returns one row per withdrawn assignment `(owed_id, customer_id,
+withdrawn_assignment_id)`. In order: validate `matched_by`; **lock the live
+assignments first, in id order**; lock the lead; refuse a non-management or
+owned lead; **return zero rows if already flagged** (idempotent — the sweep
+and ingest can both find the same lead in one minute); per live assignment,
+lock the customer, insert the owed row, delete the assignment; then ONE
+update on the lead from the locked pre-image; then the clamp.
+
+**Lock order is assignments → lead → customer**, the swap's own order
+(assignment → old lead → new lead → customer), so the two cannot deadlock
+against each other. `fulfil_*` take owed → lead → customer, the order
+`assign_lead_to_customer` (lead → customer) already relies on. The residual —
+a swap holding assignment A waiting on lead L while the flag holds A's
+siblings and wants A — is a Postgres deadlock abort on one side; the flag is
+idempotent and re-runs in fifteen minutes. Stated in the file header.
+
+The owed row snapshots **`origin_status`, `price_paid`, `replacement_depth`
+and the notes** (`origin_notes`, `jsonb_agg` over `lead_notes`) because the
+assignment cascade (0009) destroys them with the row. Files are not
+snapshotted. `origin_assignment_id` carries **no FK** — it is deleted by the
+same statement that creates the row (0139's argument for the same column
+name on claims) — and is UNIQUE, which is the idempotency guard: one debt per
+withdrawn slot, ever.
+
+**`withdrawn_slots` is ADDED, not overwritten**: `+ greatest(M − greatest(C −
+n, 0), 0)` from the pre-image, 0145's formula generalised to n withdrawals,
+so a swap-withdrawn lead keeps its figure and a never-sold lead leaving
+supply still records a real drop. It lands in the same column 0145's
+capacity CTE reads (§11).
+
+**No `customers` money column moves** — no balance, no monthly counter, no
+odometer, no `replacement_balance`, no streak, no `last_assignment_at`. The
+suite fingerprints every holder's money columns before and after and asserts
+identity. `assignment_count` is decremented (the slot genuinely closed) but
+the clamp immediately makes it the cap, so nothing can ever be sold into it.
+
+### 64.4 — Fulfilment mirrors the swap's incoming half, with NO override
+
+`fulfil_owed_replacement(p_owed_id, p_lead_id)` inserts the replacement at the
+owed `price_paid` and `replacement_depth + 1`, bumps `assignment_count`,
+clears an `unassigned`-basis pool tenancy (0142:186's expressions), and marks
+the row fulfilled — with **no `customers` UPDATE at all**. Its guards are the
+swap's (settled, product, owned, withdrawn, `coalesce(lead_retired_from_allocation(),
+true)`, plain cap, customer active + product active + unpaused on the
+management side, already holds it) plus the filter, and ⚠️ **there is no
+`p_allow_filter_mismatch`**. 0109 gave the admin swap an override because a
+narrow filter may have nothing in stock and a person is choosing; here nobody
+is choosing, so the lead either fits or the row stays owed. A file-text guard
+pins the signature.
+
+`fulfil_owed_from_stock(p_owed_id)` picks the **newest** matching non-retired
+lead with a free slot (`for update of l skip locked`, stepping round an
+in-flight ingest) and returns null — waiting, not an error — when the
+customer cannot receive (paused, inactive, product lapsed). ⚠️ **No
+`replacement_stock_floor`**: that bounds customer-initiated swaps (§53.3); a
+replacement we owe is not rationed.
+
+`open_owed_replacements_for_lead(p_lead_id)` is what `autoAssignLead` calls on
+every arriving lead, **before** the two candidate RPCs and after the
+`lead_is_closed` check: one row per customer owed a replacement this lead
+satisfies, longest-owed first in TypeScript. `remaining -= owedPlaced`, and
+ordinary routing gets what is left. ⚠️ **It skips the curve and the daily
+cap** by construction — it never calls `customer_release_allows` — which is
+decision 5, and the accepted consequence is that an unfiltered holder owed
+two can receive two in one morning on top of the day's release.
+
+### 64.5 — Ingest fails OPEN; the sweep flags nothing on a failed read
+
+Two deliberately different directions, each with its argument:
+
+- **`loadStayfulConflictContext`** (ingest) caches one Monday read per process
+  per ten minutes — the 09:00 sync's ~250 `ingestLead` calls and the
+  five-minute poll share it — and on an unreadable settings table or an
+  unreadable board yields `index: null`, logged loudly, and **the lead is
+  sold**. The `lead_is_closed` argument (ingest.ts): the money path must not
+  halt on a Monday blip, and the sweep is the backstop. A failure is cached
+  for the same ten minutes so one outage is not 250 failed reads.
+- **`runStayfulConflictSweep`** returns `ok:false` and **flags nothing** when
+  the board read fails — a sweep that could not look must not conclude
+  anything (§18.3's rule for the escalation cron). The route answers a
+  **500** on `read_failed` ABOVE the kill switch, and `not_configured` reads
+  as off, which is right for a database 0155 has not reached.
+
+`fetchStayfulPipelineIndex()` filters on a **group rule** — `column_id:
+"group"`, which takes group-id strings and pages (verified live: a cursor
+whose payload reads 179), unlike a status rule, which needs label indexes
+(§63.2) — then **re-checks `group.id` client-side** so a mistyped rule can
+never index the other thousand items, and ⚠️ **treats zero items as a
+failure**: 179 sit in those groups today, and an empty page is exactly what a
+renamed group would silently produce.
+
+### 64.6 — Where the switches and readings are
+
+The switch is in the closed allow-list (`adminSettings.ts`, §40.14's rule —
+never a key read from a request body) and rendered by hand on
+`/admin/allocation` (§63.7 records that the list decides what the ROUTE
+accepts and every switch is written by hand), with the count of open debts
+beside it. Its off-warning names what stops and what does not: nothing new is
+flagged; leads already flagged stay withdrawn; replacements already owed are
+still delivered by the next matching lead, because none of the SQL is gated
+on the switch — the column and the rows only exist because the feature ran.
+
+`/admin/leads` prints an amber "N in Stayful's pipeline" counter, excludes
+flagged leads from `routable` and from every pool's waiting figure, badges
+each row, and carries **Check Stayful conflicts** — dry run first; with the
+switch on, a second armed press runs for real (arm-then-confirm, never a
+modal, §31.9). `/admin/leads/[id]` renders `StayfulConflictPanel`: matched by,
+the group name, when, a link to the Monday item, and the owed rows with their
+origin status, note count and fulfilment. **No button on it, by decision 7**
+— a file-text guard pins that.
+
+### 64.7 — Risks stated rather than hidden
+
+- **Email/phone false positives** — a shared office mailbox, a family number.
+  `matched_by` is stored, the dry run lists them, and there is no hatch by
+  decision 7. ⚠️ **Review the six non-item matches by hand on the first dry
+  run before switching on.** A `stayful_conflict_cleared_at` plus a route is
+  the obvious Deferred item if one ever bites.
+- **Silent withdrawal of an `in_discussion` lead** — one live case, with
+  notes — is a customer-relations hazard accepted under decision 6.
+  `origin_status` on the owed row and the admin panel make it visible on day
+  one.
+- **Owned leads** are excluded outright, resale-qualified ones included —
+  their dashboard, their lead.
+- **Departed customers** keep an `open` row for ever, harmlessly (every
+  fulfilment path requires an active subscription); `cancelled` exists on the
+  status CHECK for a hand close and no route writes it.
+- **Notes are snapshotted; files are not.**
+- **Deadlock residual** — §64.3.
+
+### Verification
+
+**All 155 migrations applied to a scratch Postgres 16 from empty, zero
+failures**, 0155 re-applied twice for idempotency, and **all 17 SQL suites
+pass in name order on the same build** — the 0144 suite unchanged, which is
+the check that matters most since 0155 rewrites the predicate it pins.
+
+`0155_stayful_pipeline_conflict_test.sql`: the switch ships false, the
+columns null, RLS on with zero policies; a marketplace lead still allocates
+spending exactly one credit (10 → 9); the 0111 oracle agrees with the
+delegating boolean on every seed before any flag; the flag withdraws three
+live assignments and leaves the won one, stamps the columns, decrements and
+clamps, records `withdrawn_slots = 2`, force-outs from the pool, writes three
+open owed rows at the original `price_paid` with the note snapshotted, and
+**moves no money on any holder** (md5 before and after identical); the lead
+is absent from both candidate functions, from escalation and from the pool
+entry candidates, `assign_lead_to_customer` and `admin_assign_lead` both
+raise, the swap refuses it IN even with the override, and the picker does
+not offer a withdrawn lead; a second flag returns zero rows and changes
+nothing; GR, owned, unknown and `matched_by = 'name'` all raise; the open
+list returns the right customers per lead, one each, and never a paused one;
+fulfilment refuses an off-filter lead and writes nothing, succeeds at the
+same price and depth 1, ignores the curve, refuses a retired, withdrawn, full
+or GR lead and a paused customer; from-stock picks the newest match and
+returns null for a paused customer leaving the row open; ordinary routing
+still works afterwards; ACLs via `has_function_privilege` on all six
+signatures (the 0154 lesson); invariant 7's four still
+`authenticated`-executable.
+
+⚠️ One assertion changed while being written, and the change is recorded
+rather than smoothed over: the plan said the swap picker would return a
+flagged lead with `retired_reason = 'stayful_conflict'`. It does not — the
+flag stamps `withdrawn_at`, and the picker has excluded withdrawn leads since
+0109. The suite asserts the count is zero instead. Same refusal, one filter
+earlier.
+
+`stayfulConflict.test.ts` (pure): every branch of the match rule, the three
+phone prefixes keying identically, placeholders and short numbers never
+matching, precedence, the GR refusal even on an item hit, determinism, and
+`STAYFUL_CONFLICT_MATCHED_BY` equal to the CHECK parsed from 0155.
+`stayfulConflictGuard.test.ts` (file-text, comments stripped): the schedule
+parsed from `vercel.json`, `maxDuration = 60`, the gate order, the two
+literals, the sweep's failed-read return before any flag, ingest's fail-open,
+the `autoAssignLead` ordering (refusal before the contention write; owed
+fulfilment between `lead_is_closed` and `get_filtered_candidates_for_lead`),
+the insert-path stamp before the insert, every replacement delivery passing
+`false`, the release and forecast exclusions, both assign routes, the group
+rule and its nine keys and the empty-result failure, the allow-list entry,
+0155's seed / first arm / pool clause / no-override / no-money / force-out /
+deny-all, the panel having no button, and the quality-claims route
+deep-linking the lead id. `leadRetirement.test.ts` now reads its vocabulary
+from 0155 and expects six arms; `filterVolumeLoad.test.ts` gains the
+flagged-lead case.
+
+**2,341 vitest cases green** (48 new), `npx tsc --noEmit` clean, `npm run lint`
+clean bar the four pre-existing `module` warnings.
+
+⚠️ **Eighteen mutations were run and all eighteen caught** — each broken
+deliberately and watched to fail before the assertion was kept: the flagged
+refusal dropped from `autoAssignLead`; a replacement delivered with threshold
+warnings on; owed fulfilment moved after routing; the sweep flagging on a
+failed board read; the arm moved off the top; the fulfilment given a filter
+override; the switch seeded on; the pool force-out dropped; the morning
+release selling flagged leads; the uphold email deep-linking the assignment
+id; GR leads checked; phone outranking email; the forecast quoting flagged
+leads; the sweep every five minutes; the group not re-checked client-side; an
+empty board read indexing nothing silently; the panel gaining a clear button;
+and `leadRetirement.ts` losing the key.
+
+⚠️ **One of those was NOT caught at first, and the fix was to the test.** The
+"flags nothing on a failed read" guard asserted a `return result;` somewhere
+after the `!board.ok` check — and the dry-run branch has one, so deleting the
+early return left the guard green. §50.9's shape, the sixth time this file has
+recorded it. It is now anchored on the block itself.
+
+⚠️ **The bug this found on the way**: `quality-claims/[id]/route.ts` passed
+the new ASSIGNMENT id as `leadId` into `notifyUpheld`, so the "See the new
+lead" button in the admin-swap uphold email deep-linked `/l/<assignment id>`
+and 404'd. `leadLink.ts` is explicit the argument is the lead id. Fixed in
+the same PR; the guard pins it.
+
+**Not yet exercised against the live board or in a browser.** No lead has
+been flagged on production. ⚠️ A Vercel preview cannot do it — Deployment
+Protection answers 302 to `vercel.com/sso-api` — and a preview runs against
+production Supabase (§1.1), so a real run withdraws real assignments.
+
+### Deployment order — migration BEFORE code, then the dry run, then the switch
+
+1. ✅ **0155 applied to `znlfwbnvhlacwzgfalcf` on 2026-09-18, before the PR
+   merged** (§1.1), with comments stripped OUTSIDE function bodies only, and
+   verified there rather than trusted:
+   - **No drift before it went on.** `lead_retirement_reason` (`b093c50d…`,
+     1072 chars) and `lead_retired_from_allocation` (`baa64531…`, 64) matched
+     the repo file exactly; `lead_pool_barred` read `48a0475f…` (1437); none
+     of the four new functions, the table, the four columns or the switch
+     existed.
+   - **All six bodies hash-match the repo file byte for byte** — the `prosrc`
+     including its leading and trailing newline: `lead_retirement_reason`
+     `82355d16…` (1234), `lead_pool_barred` `1ba6ab85…` (1625),
+     `flag_stayful_conflict` `158ae325…` (4389), `fulfil_owed_replacement`
+     `884c0c91…` (4345), `fulfil_owed_from_stock` `28415945…` (1635),
+     `open_owed_replacements_for_lead` `79eac1a1…` (995). All six
+     `security definer` with `search_path` pinned; `anon` and `authenticated`
+     false, `service_role` true on every one (`has_function_privilege`, the
+     0154 lesson). `lead_retired_from_allocation` unchanged (`baa64531…`).
+   - **Invariant 7 holds** — the four names still `authenticated`-executable —
+     and `get_advisors` reports **no new finding**: `owed_lead_replacements`
+     joins the deliberate RLS-on-no-policy posture (now 54 tables), and the
+     five mutable-`search_path` functions it lists are all pre-existing.
+2. ✅ **Inert, proved rather than argued.** Fingerprinted immediately before
+   and immediately after the apply, all identical: `lead_retirement_reason` +
+   `lead_pool_barred` over all **542** leads (`514bbfcc…`, 79 retired both
+   times); both candidate functions over all **365** unsold marketplace leads
+   (`18ac21dc…`); every customer's balances, counters, replacement balance,
+   streak and claim counter (`7e271308…`); every lead's `assignment_count` /
+   `max_assignments` / `withdrawn_at` / `withdrawn_slots` (`78477ea1…`). 57
+   customers, 542 leads and 536 assignments untouched; switch `false`; zero
+   flagged; zero owed rows; RLS on with zero policies; 4 columns, 2 CHECKs, 6
+   indexes present.
+   - The flag was then driven **on production itself**, inside a block that
+     raises at the end so every write rolled back: a real management lead
+     held by two operators returned **2** rows, wrote **2** open owed rows,
+     went to `assignment_count = 0` / `max_assignments = 0` /
+     `withdrawn_slots = 3`, read `stayful_conflict` from the reason function
+     and `true` from `lead_pool_barred`, returned **zero** candidates, and the
+     money fingerprint was unchanged across it. Afterwards: 536 assignments,
+     0 flagged, 0 owed, both fingerprints identical — it wrote nothing.
+3. Merge. The cron registers on deploy. With the switch off the sweep answers
+   `skipped`, ingest never loads the index, and the two `autoAssignLead`
+   lines are no-ops.
+4. **Check Stayful conflicts** on `/admin/leads` (a dry run while off): expect
+   `fetched ≈ 179`, `matched = 10` (the GR lead is skipped by decision 2), and
+   the live assignments summing to about 22. **Read the email- and
+   phone-matched rows by hand** — this is the moment to catch a shared mailbox.
+5. Flip `stayful_conflict_enabled` on `/admin/allocation`. First run: ~22
+   withdrawn, ~22 owed. Olly Pearce and Muazzam Ali are paused ⇒ their rows
+   wait, filled by any later sweep after they resume or by the next matching
+   lead. Allan Carmichael ×2 probably fills from stock; Myles Denton's CB 2+
+   filter had zero matching stock at §53.2 ⇒ waits for the next CB lead,
+   ahead of routing. Unfiltered holders fill at once from the newest stock and
+   each gets the ordinary new-lead email and text. The first run may
+   `truncate` on the 45-second budget — state is in the table and the next
+   tick continues.
+6. Watch `fetched` (a permanent zero means a group id moved), `owed_open`, the
+   `/admin/leads` counter, and `withdrawn_slots_per_month` stepping on
+   `/admin`. **Record the switch-on date as a definition change** in that
+   series (§11).
+
+### Deferred
+
+- **A clear control** (`stayful_conflict_cleared_at` + a route), if a false
+  positive ever bites. Decision 7 says not yet.
+- **Files** die with the withdrawn assignment and are not snapshotted.
+- **A per-customer reading of what is owed** on `/admin/customers/[id]` —
+  today the owed rows show on the lead page and as one count on
+  `/admin/allocation`.
+- **The GR board** is never checked (decision 2). If GR ever gets its own
+  Stayful pipeline the matcher takes a `lead_type` and a second board id.

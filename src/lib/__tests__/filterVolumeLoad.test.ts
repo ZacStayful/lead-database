@@ -108,6 +108,20 @@ describe("fetchLeadVolumeData — an unreadable book is an error, never an empty
     expect(out.aggregate.management.totalLeads).toBe(2);
     expect(out.areaCounts).toEqual({ BS: 1, GL: 1 });
   });
+
+  it("reads a lead in Stayful's own pipeline as retired, never as supply (§64)", async () => {
+    const admin = fakeAdmin({
+      lead_assignments: [{ data: [], error: null }],
+      leads: [
+        {
+          data: [LEAD, { ...LEAD, id: "l2", stayful_conflict_at: "2026-09-18T00:00:00Z" }],
+          error: null,
+        },
+      ],
+    });
+    const out = await fetchLeadVolumeData(admin);
+    expect(out.aggregate.management.totalLeads).toBe(1);
+  });
 });
 
 /**
