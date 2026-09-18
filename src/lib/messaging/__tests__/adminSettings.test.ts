@@ -48,6 +48,7 @@ describe("the allow-list is closed", () => {
       "release_fresh_hours",
       "release_hold_max_days",
       "release_max_per_day",
+      "stayful_conflict_enabled",
     ]);
   });
 
@@ -190,6 +191,9 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     // `!== "true"`, so an absent row is off.
     release_fresh_hours: "0",
     lead_sync_enabled: "false",
+    // §64. The sweep and the ingest cache both read the switch as `=== "true"`,
+    // so an absent row is off, and 0155 seeds it off.
+    stayful_conflict_enabled: "false",
     // §55. The cron reads the switch as `!== "true"` (fails to off) and the cap
     // through `Number(config.get(...) ?? "30")`, so both must match here or the
     // admin page shows a limit the chase is not actually using.

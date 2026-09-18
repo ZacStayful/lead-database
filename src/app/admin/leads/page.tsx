@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { SyncMondayButton } from "@/components/admin/SyncMondayButton";
 import { ParseIncomeReportsButton } from "@/components/admin/ParseIncomeReportsButton";
 import { CheckLeadQualityButton } from "@/components/admin/CheckLeadQualityButton";
+import { CheckStayfulConflictsButton } from "@/components/admin/CheckStayfulConflictsButton";
 import { passesQualityGate } from "@/lib/leadQuality";
 import {
   AdminLeadsTable,
@@ -24,6 +25,8 @@ interface LeadQueryRow {
   lead_quality_status: string | null;
   lead_quality_codes: string[] | null;
   lead_quality_override_at: string | null;
+  stayful_conflict_at: string | null;
+  stayful_conflict_matched_by: string | null;
   owner: { business_name: string } | null;
   lead_assignments: {
     customers: { business_name: string } | null;
@@ -35,7 +38,7 @@ export default async function AdminLeadsPage() {
   const { data } = await admin
     .from("leads")
     .select(
-      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, owner_customer_id, owner_source, lead_quality_status, lead_quality_codes, lead_quality_override_at, owner:customers!leads_owner_customer_id_fkey(business_name), lead_assignments(customers(business_name))"
+      "id, lead_name, lead_type, address, assignment_count, max_assignments, created_at, owner_customer_id, owner_source, lead_quality_status, lead_quality_codes, lead_quality_override_at, stayful_conflict_at, stayful_conflict_matched_by, owner:customers!leads_owner_customer_id_fkey(business_name), lead_assignments(customers(business_name))"
     )
     .order("created_at", { ascending: false });
 
@@ -54,6 +57,8 @@ export default async function AdminLeadsPage() {
     lead_quality_status: l.lead_quality_status,
     lead_quality_codes: l.lead_quality_codes,
     lead_quality_override_at: l.lead_quality_override_at,
+    stayful_conflict_at: l.stayful_conflict_at,
+    stayful_conflict_matched_by: l.stayful_conflict_matched_by,
     recipients: l.lead_assignments
       .map((a) => a.customers?.business_name)
       .filter((n): n is string => Boolean(n)),
@@ -77,8 +82,13 @@ export default async function AdminLeadsPage() {
       })
   );
   const blockedCount = qualityBlocked.length;
+  // §64. A lead in Stayful's own pipeline is withdrawn for good; it is not a
+  // backlog and no action clears it.
+  const stayfulConflicted = assignable.filter((l) => Boolean(l.stayful_conflict_at));
+  const stayfulCount = stayfulConflicted.length;
   const routable = assignable.filter(
     (l) =>
+      !l.stayful_conflict_at &&
       passesQualityGate({
         lead_quality_status: l.lead_quality_status,
         lead_quality_override_at: l.lead_quality_override_at,
@@ -108,6 +118,13 @@ export default async function AdminLeadsPage() {
     .eq("is_active", true)
     .or("account_status.eq.active,gr_subscription_status.eq.active")
     .order("business_name");
+  const { data: switchRow } = await admin
+    .from("system_settings")
+    .select("value")
+    .eq("key", "stayful_conflict_enabled")
+    .maybeSingle();
+  const stayfulEnabled = (switchRow as { value?: string } | null)?.value === "true";
+
   const custs = (custRaw ?? []) as (CustomerRow & {
     is_active: boolean;
     account_status: string;
@@ -135,7 +152,7 @@ export default async function AdminLeadsPage() {
       label: "Management",
       buyers: mgmt.length,
       credits: mgmt.reduce((s, c) => s + c.lead_balance, 0),
-      waiting: assignable.filter(
+      waiting: routable.filter(
         (l) =>
           l.lead_type !== "guaranteed_rent" &&
           l.assignment_count < l.max_assignments
@@ -145,7 +162,7 @@ export default async function AdminLeadsPage() {
       label: "Guaranteed Rent",
       buyers: gr.length,
       credits: gr.reduce((s, c) => s + c.gr_lead_balance, 0),
-      waiting: assignable.filter(
+      waiting: routable.filter(
         (l) =>
           l.lead_type === "guaranteed_rent" &&
           l.assignment_count < l.max_assignments
@@ -177,6 +194,14 @@ export default async function AdminLeadsPage() {
                 </span>
               </>
             )}
+            {stayfulCount > 0 && (
+              <>
+                {" · "}
+                <span className="font-medium text-amber-700">
+                  {stayfulCount} in Stayful&apos;s pipeline
+                </span>
+              </>
+            )}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Tick leads below, then choose who receives them — old leads stay put
@@ -191,6 +216,7 @@ export default async function AdminLeadsPage() {
           />
           <ParseIncomeReportsButton />
           <CheckLeadQualityButton />
+          <CheckStayfulConflictsButton enabled={stayfulEnabled} />
         </div>
       </div>
 

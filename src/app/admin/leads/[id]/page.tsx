@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AdminLeadControls } from "@/components/admin/AdminLeadControls";
 import { LeadQualityPanel } from "@/components/admin/LeadQualityPanel";
+import { StayfulConflictPanel, type OwedRowView } from "@/components/admin/StayfulConflictPanel";
 import { formatDate, formatGBP } from "@/lib/utils";
 import { activeLeadFilters, filterSummary } from "@/lib/leadFilter";
 import type { Customer, Lead } from "@/lib/types";
@@ -66,6 +67,42 @@ export default async function AdminLeadDetailPage({
       .eq("id", lead.owner_customer_id)
       .maybeSingle();
     ownerName = (owner as { business_name?: string } | null)?.business_name ?? null;
+  }
+
+  // §64. What was withdrawn and what is owed, when the lead is in Stayful's
+  // own pipeline. Display only.
+  let owedRows: OwedRowView[] = [];
+  if (lead.stayful_conflict_at) {
+    const { data: owedRaw } = await admin
+      .from("owed_lead_replacements")
+      .select(
+        "id, customer_id, origin_status, origin_notes, status, created_at, fulfilled_at, fulfilled_lead_id, customers(business_name), fulfilled:leads!owed_lead_replacements_fulfilled_lead_id_fkey(lead_name)"
+      )
+      .eq("origin_lead_id", lead.id)
+      .order("created_at");
+    owedRows = ((owedRaw ?? []) as unknown as {
+      id: string;
+      customer_id: string;
+      origin_status: string;
+      origin_notes: unknown[] | null;
+      status: string;
+      created_at: string;
+      fulfilled_at: string | null;
+      fulfilled_lead_id: string | null;
+      customers: { business_name: string } | null;
+      fulfilled: { lead_name: string } | null;
+    }[]).map((o) => ({
+      id: o.id,
+      customer_id: o.customer_id,
+      business_name: o.customers?.business_name ?? null,
+      origin_status: o.origin_status,
+      status: o.status,
+      created_at: o.created_at,
+      fulfilled_at: o.fulfilled_at,
+      fulfilled_lead_id: o.fulfilled_lead_id,
+      fulfilled_lead_name: o.fulfilled?.lead_name ?? null,
+      notes_count: Array.isArray(o.origin_notes) ? o.origin_notes.length : 0,
+    }));
   }
 
   const isGuaranteedRent = lead.lead_type === "guaranteed_rent";
@@ -193,6 +230,14 @@ export default async function AdminLeadDetailPage({
       {/* Above the fold and outside the two-column grid: a blocked lead is the
           first thing an admin opening this page needs to know, and burying it
           in a sidebar card is how it gets missed. */}
+      <StayfulConflictPanel
+        at={lead.stayful_conflict_at ?? null}
+        itemId={lead.stayful_conflict_item_id ?? null}
+        groupId={lead.stayful_conflict_group_id ?? null}
+        matchedBy={lead.stayful_conflict_matched_by ?? null}
+        owed={owedRows}
+      />
+
       <LeadQualityPanel
         leadId={lead.id}
         status={lead.lead_quality_status ?? "pending"}

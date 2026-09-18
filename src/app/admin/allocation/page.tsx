@@ -50,10 +50,13 @@ export default async function AdminAllocationPage() {
   // The release_* keys plus the five-minute poll's switch (§63.1), which lives
   // on this page because it is the other half of how leads reach customers.
   const releaseKeys = MESSAGING_SETTINGS.filter(
-    (s) => s.key.startsWith("release_") || s.key === "lead_sync_enabled"
+    (s) =>
+      s.key.startsWith("release_") ||
+      s.key === "lead_sync_enabled" ||
+      s.key === "stayful_conflict_enabled"
   ).map((s) => s.key);
 
-  const [settingRows, customersRes, todayRes, windowRes, stockRes] = await Promise.all([
+  const [settingRows, customersRes, todayRes, windowRes, stockRes, owedRes] = await Promise.all([
     admin.from("system_settings").select("key, value").in("key", releaseKeys),
     admin
       .from("customers")
@@ -74,7 +77,12 @@ export default async function AdminAllocationPage() {
       .is("owner_customer_id", null)
       .is("withdrawn_at", null)
       .is("pool_expired_at", null),
+    admin
+      .from("owed_lead_replacements")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open"),
   ]);
+  const owedOpen = owedRes.count ?? 0;
 
   const settings = releaseSettingsFrom(
     (settingRows.data ?? []).filter((r) =>
@@ -175,6 +183,7 @@ export default async function AdminAllocationPage() {
             initial={values}
             slotOpenToday={overview.slotOpenToday}
             onHold={overview.onHold}
+            owedOpen={owedOpen}
           />
         </CardContent>
       </Card>

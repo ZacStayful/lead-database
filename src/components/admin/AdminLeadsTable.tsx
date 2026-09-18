@@ -39,6 +39,9 @@ export interface LeadRow {
   lead_quality_status: string | null;
   lead_quality_codes: string[] | null;
   lead_quality_override_at: string | null;
+  /** §64 — set when the lead is in Stayful's own pipeline; withdrawn for good. */
+  stayful_conflict_at?: string | null;
+  stayful_conflict_matched_by?: string | null;
 }
 
 export interface CustomerRow {
@@ -334,6 +337,7 @@ export function AdminLeadsTable({
           <TableBody>
             {leads.map((l) => {
               const owned = Boolean(l.owner_customer_id);
+              const stayful = Boolean(l.stayful_conflict_at);
               const qualityBlocked =
                 !owned && !passesQualityGate({
                   lead_quality_status: l.lead_quality_status,
@@ -343,7 +347,7 @@ export function AdminLeadsTable({
               // anyway; disabling the box means an admin never ticks fifty rows
               // and gets fifty failures back.
               const full =
-                l.assignment_count >= l.max_assignments || owned || qualityBlocked;
+                l.assignment_count >= l.max_assignments || owned || qualityBlocked || stayful;
               const none = l.assignment_count === 0;
               const checked = selectedLeads.has(l.id);
               return (
@@ -388,6 +392,14 @@ export function AdminLeadsTable({
                   <TableCell>
                     {owned ? (
                       <span className="text-muted-foreground">—</span>
+                    ) : stayful ? (
+                      <Badge
+                        variant="muted"
+                        className="border-amber-300 bg-amber-50 text-amber-700"
+                        title={`In Stayful's own sales pipeline (matched on ${l.stayful_conflict_matched_by ?? "?"}) — withdrawn for good.`}
+                      >
+                        Stayful
+                      </Badge>
                     ) : qualityBlocked ? (
                       <Badge
                         variant="muted"

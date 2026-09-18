@@ -419,7 +419,7 @@ export async function fetchLeadVolumeData(
     const { data, error } = await admin
       .from("leads")
       .select(
-        "id, postcode_area, bedrooms, lead_type, created_at, pool_expired_at, pool_entered_at, pool_entry_basis"
+        "id, postcode_area, bedrooms, lead_type, created_at, pool_expired_at, pool_entered_at, pool_entry_basis, stayful_conflict_at"
       )
       // Customer-owned leads are not marketplace supply. Counting them here
       // would inflate the volume figure we QUOTE to a customer applying a
@@ -464,6 +464,8 @@ interface RawLeadVolumeRow extends LeadVolumeRow {
   pool_expired_at: string | null;
   pool_entered_at: string | null;
   pool_entry_basis: string | null;
+  /** §64 — a landlord in Stayful's own pipeline is never supply. */
+  stayful_conflict_at?: string | null;
 }
 
 /**
@@ -474,6 +476,7 @@ interface RawLeadVolumeRow extends LeadVolumeRow {
  * up front rather than joined per row.
  */
 function isRetired(row: RawLeadVolumeRow, claimedLeadIds: Set<string>): boolean {
+  if (row.stayful_conflict_at != null) return true;
   if (row.pool_expired_at != null) return true;
   if (row.pool_entered_at != null && row.pool_entry_basis === "ignored") {
     return true;

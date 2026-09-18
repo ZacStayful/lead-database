@@ -129,6 +129,53 @@ function grSellableStatus(): string | null {
 }
 
 /**
+ * Board 5891626711 "Management Leads" — STAYFUL'S OWN sales pipeline (§64).
+ * Not a lead source for the database: the one board a lead must NOT be on.
+ */
+export function pipelineBoardId(): string {
+  return process.env.MONDAY_PIPELINE_BOARD_ID ?? "5891626711";
+}
+
+/**
+ * The nine groups on that board that mean "Stayful is actively working, or has
+ * signed, this landlord". A lead in the database that matches an item in any
+ * of them is withdrawn from every operator (§64). Ids → titles, so the admin
+ * panel can print the name and the guard test can count nine.
+ *
+ * ⚠️ NOT the whole board. "Leads that can be sold", "Cold Management Leads"
+ * and the three Abandoned groups are deliberately absent: an abandoned or
+ * cold Stayful lead may be sold.
+ */
+export const STAYFUL_PIPELINE_CONFLICT_GROUPS = {
+  group_mm28ypgs: "Qualified Management Leads",
+  group_mm1htyz7: "In the future Due to call",
+  group_mkwthdxq: "In the future management leads",
+  group_mksxb5m0: "Web meeting booked",
+  group_mkwx4dhv: "Web meeting No show",
+  group_mksx27r4: "Web meeting sat/warm",
+  group_mm47p8js: "Warm due to call",
+  group_mm16jhqm: "Special offer applied",
+  group_mm1dtkdm: "Customer / signed",
+} as const;
+
+/** Pipeline board columns the conflict index reads. Both phone cells are read. */
+const PIPELINE_COLUMNS = {
+  email: "text_mkygb5xx",
+  phone: "phone_mm1hp0a8",
+  phoneText: "text_mm1jzzzc",
+} as const;
+
+/** One pipeline item reduced to what identity matching needs (§64). */
+export interface StayfulPipelineItem {
+  id: string;
+  groupId: string;
+  /** Every address in the Email cell, lowercased (`emailsFromCell`). */
+  emails: string[];
+  /** Last-9-digit keys from both phone cells, deduped, "" dropped. */
+  phoneKeys: string[];
+}
+
+/**
  * Board 18420649520 "Stayful Lead database enquiries" (landing-page form).
  * Exported because the customer link columns (0086) store which board an item
  * lives on, and only this one carries the Status column.
@@ -886,6 +933,111 @@ export async function fetchEnquiryBoardIndex(): Promise<
     } while (cursor);
 
     return { ok: true, items };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Read the nine conflict groups of Stayful's own pipeline board (§64), reduced
+ * to what identity matching needs. NEVER THROWS — a result object, like
+ * fetchEnquiryBoardIndex.
+ *
+ * One `query_params` rule on the virtual "group" column — which takes group id
+ * STRINGS, unlike a status rule, which takes label indexes (§63.2) — then the
+ * ordinary cursor loop. ~180 items today, two pages at 100.
+ *
+ * Two refusals that look like paranoia and are not:
+ *   - a missing board is NOT an empty board (`boards: []` → ok:false);
+ *   - ⚠️ ZERO ITEMS IS A FAILURE, not an empty index. 179 items sit in those
+ *     groups today, and an empty page is exactly what a renamed or deleted
+ *     group would produce, silently, for ever — the feature would switch
+ *     itself off with nothing to say so.
+ * Every item is also re-checked client-side against the group set, so a
+ * mistyped rule can never index the other thousand items on the board.
+ */
+export async function fetchStayfulPipelineIndex(): Promise<
+  | { ok: true; items: StayfulPipelineItem[]; pages: number }
+  | { ok: false; error: string }
+> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { ok: false, error: "not_configured" };
+
+  const groupIds = Object.keys(STAYFUL_PIPELINE_CONFLICT_GROUPS);
+  const groupSet = new Set<string>(groupIds);
+  const columnIds = [
+    PIPELINE_COLUMNS.email,
+    PIPELINE_COLUMNS.phone,
+    PIPELINE_COLUMNS.phoneText,
+  ];
+  const fields = `cursor items { id name group { id } column_values(ids: ${JSON.stringify(
+    columnIds
+  )}) { id text } }`;
+
+  const items: StayfulPipelineItem[] = [];
+  let cursor: string | null = null;
+  let pages = 0;
+
+  try {
+    do {
+      const query: string = cursor
+        ? `query ($cursor: String!) { next_items_page(limit: 100, cursor: $cursor) { ${fields} } }`
+        : `query { boards(ids: ${pipelineBoardId()}) { items_page(limit: 100, query_params: { rules: [{ column_id: "group", compare_value: ${JSON.stringify(
+            groupIds
+          )}, operator: any_of }] }) { ${fields} } } }`;
+
+      const variables: Record<string, unknown> = cursor ? { cursor } : {};
+      const data: MondayPageData = await mondayGraphql<MondayPageData>(
+        token,
+        query,
+        variables
+      );
+
+      const page: MondayItemsPage | undefined = cursor
+        ? data.next_items_page
+        : data.boards?.[0]?.items_page;
+
+      if (!cursor && !page) {
+        return {
+          ok: false,
+          error: `Board ${pipelineBoardId()} returned no data — check the board id and the token's access to it`,
+        };
+      }
+
+      pages += 1;
+      cursor = page?.cursor ?? null;
+
+      for (const item of page?.items ?? []) {
+        const groupId = (item as MondayItem & { group?: { id?: string } }).group?.id ?? "";
+        if (!groupSet.has(groupId)) continue;
+        const phoneKeys = Array.from(
+          new Set(
+            [
+              phoneMatchKey(textFor(item, PIPELINE_COLUMNS.phone)),
+              phoneMatchKey(textFor(item, PIPELINE_COLUMNS.phoneText)),
+            ].filter(Boolean)
+          )
+        );
+        items.push({
+          id: String(item.id),
+          groupId,
+          emails: emailsFromCell(textFor(item, PIPELINE_COLUMNS.email)),
+          phoneKeys,
+        });
+      }
+    } while (cursor);
+
+    if (items.length === 0) {
+      return {
+        ok: false,
+        error: `Board ${pipelineBoardId()} returned no items in the nine pipeline groups — a group id has probably changed`,
+      };
+    }
+
+    return { ok: true, items, pages };
   } catch (err) {
     return {
       ok: false,

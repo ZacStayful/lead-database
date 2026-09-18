@@ -10,6 +10,7 @@ import {
   passesQualityGate,
   type LeadQualityCode,
 } from "@/lib/leadQuality";
+import { isStayfulConflicted } from "@/lib/stayfulConflict";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -140,8 +141,15 @@ export async function POST(request: NextRequest) {
   // a bulk assign over a hundred leads must not be refused outright because one
   // of them has a bad phone number. Each is reported as its own failure so the
   // admin can see exactly which, and why.
-  const leads = allLeads.filter((lead) => passesQualityGate(lead));
+  // §64: a lead in Stayful's own pipeline is skipped the same way, with its
+  // own reason — the override RPC consults no retirement predicate either.
+  const leads = allLeads.filter(
+    (lead) => passesQualityGate(lead) && !isStayfulConflicted(lead)
+  );
   const blockedLeads = allLeads.filter((lead) => !passesQualityGate(lead));
+  const conflictedLeads = allLeads.filter(
+    (lead) => passesQualityGate(lead) && isStayfulConflicted(lead)
+  );
 
   const leadsAffected = new Set<string>();
   const failures: { lead_id: string; customer_id: string; error: string }[] = [];
@@ -154,6 +162,15 @@ export async function POST(request: NextRequest) {
         error:
           "Failed the contact-quality check: " +
           describeLeadQuality(lead.lead_quality_codes as LeadQualityCode[]),
+      });
+    }
+  }
+  for (const lead of conflictedLeads) {
+    for (const customerId of customerIds) {
+      failures.push({
+        lead_id: lead.id,
+        customer_id: customerId,
+        error: "In Stayful's own sales pipeline — cannot be assigned to anyone.",
       });
     }
   }

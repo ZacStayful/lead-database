@@ -23,6 +23,12 @@
 /** The basis, exactly as `lead_retirement_reason()` spells it. */
 export const LEAD_RETIREMENT_REASONS = {
   /**
+   * Stayful's own sales pipeline holds this landlord (§64). Permanent, and the
+   * one basis with no admin escape hatch at all: a lead Stayful is working
+   * itself is never sold, whatever happens to it on the board later.
+   */
+  stayful_conflict: "in Stayful's own sales pipeline",
+  /**
    * Somebody claimed it out of the expired pool. The only basis with no admin
    * escape hatch, and none should exist: the lead belongs to whoever claimed
    * it and §19.6 is explicit the slot never reopens.
@@ -78,4 +84,5 @@ export const LEAD_RETIREMENT_EXPLAINER =
   "them, so nothing is selling them to anyone. A pooled lead can be forced " +
   "back out from Expired leads, and a quality-blocked one can be overridden " +
   "on its own lead page; a lead claimed out of the pool belongs to whoever " +
-  "claimed it and cannot be recovered.";
+  "claimed it and cannot be recovered. A lead in Stayful's own pipeline is " +
+  "withdrawn for good and has no override.";
