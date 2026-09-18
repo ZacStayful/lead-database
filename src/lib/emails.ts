@@ -7,6 +7,8 @@ import {
   FEATURE_REQUEST_PROMPT,
 } from "@/lib/featureRequest";
 import { extractCity } from "@/lib/utils";
+import { leadDeepLink } from "@/lib/leadLink";
+import { buildIncomeProjection } from "@/lib/incomeProjection";
 import { pauseMonthsWords } from "@/lib/pauseOptions";
 import { keepCrmBulletsHtml } from "@/lib/retentionCopy";
 import { declineCopyFor, type DeclineReasonKey } from "@/lib/declineReason";
@@ -26,6 +28,11 @@ function getResend(): Resend {
     _resend = new Resend(process.env.RESEND_API_KEY!);
   }
   return _resend;
+}
+
+/** Whole pounds, thousands-separated: "£36,112". */
+function gbp(n: number): string {
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
 }
 
 function button(href: string, label: string): string {
@@ -399,23 +406,38 @@ export async function sendNewLeadEmail(params: {
     ? `${TODAYS_LEAD_SUBJECT_PREFIX} — ${who}`
     : `New lead — ${who}`;
 
-  const rows = [
+  const rowList: [string, string][] = [
     ["Name", lead.lead_name],
     ["Address", lead.address ?? "—"],
     ["Bedrooms", lead.bedrooms ?? "—"],
     ["Lead profile", lead.lead_profile ?? "—"],
-  ]
+  ];
+  // Stayful's own projection (§25), management only — a management fee is not
+  // what a GR operator earns. Absent means the row is absent, never "£—".
+  const projection =
+    (lead.lead_type ?? "management") === "management" ? buildIncomeProjection(lead) : null;
+  if (projection) {
+    rowList.push([
+      "Projected gross income",
+      `${gbp(projection.grossAnnualLow)}–${gbp(projection.grossAnnualHigh)} a year`,
+    ]);
+  }
+  const rows = rowList
     .map(
       ([k, v]) =>
         `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:180px;vertical-align:top">${esc(k)}</td><td style="padding:6px 0;font-size:14px">${esc(v)}</td></tr>`
     )
     .join("");
 
+  // ⚠️ The `/l/` redirector, not /login (§63.4): a signed-in operator lands
+  // on the lead, a signed-out one goes through login and BACK to it. A bare
+  // path with no query string, so no esc() — the rule at the feature-request
+  // button below.
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">A new lead is ready</h1>
-    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">A pre-screened landlord enquiry has just been assigned to you.</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">A pre-screened landlord enquiry has just been assigned to you. Open it to see the full details and start making contact.</p>
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px">${rows}</table>
-    ${button(LOGIN_URL, "Log in to view this lead")}
+    ${button(leadDeepLink(lead.id), "Open this lead")}
   `;
 
   try {
@@ -1691,7 +1713,7 @@ export async function sendDeadLeadUpheldEmail(params: {
     <p style="margin:0 0 18px;font-size:14px;color:#6b706a;line-height:1.6">Telling us about these is what lets us trace a bad lead back to where it came from, so thank you for taking the time.</p>
     ${button(
       isSwap && params.replacementLeadId
-        ? `${APP_URL}/dashboard/leads/${params.replacementLeadId}`
+        ? leadDeepLink(params.replacementLeadId)
         : `${APP_URL}/dashboard/leads`,
       isSwap ? "See the new lead" : "Go to your leads",
     )}

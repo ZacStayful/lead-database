@@ -11,6 +11,8 @@ import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
 import { TodayPanel } from "@/components/dashboard/TodayPanel";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
+import { NewLeadCard } from "@/components/dashboard/NewLeadCard";
+import { NEW_LEAD_CARD_DAYS, buildNewLeadCard, type NewLeadRow } from "@/lib/home/newLeadCard";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { StatCards, type StatCard } from "@/components/home/StatCards";
 import { PipelineFunnelCard } from "@/components/home/PipelineFunnelCard";
@@ -123,7 +125,8 @@ export default async function DashboardPage() {
   // Six reads in parallel, all scoped to this customer. The due-attempt scan
   // is the SAME query the 08:15 email runs (fetchDueAttempts), so the card
   // and the inbox never disagree.
-  const [releaseRows, dueScan, inbox, poolMgmt, poolGr, eventRows] = await Promise.all([
+  const newLeadSince = new Date(now.getTime() - NEW_LEAD_CARD_DAYS * 86_400_000).toISOString();
+  const [releaseRows, dueScan, inbox, poolMgmt, poolGr, eventRows, newLeadRows] = await Promise.all([
     admin.from("system_settings").select("key, value").in("key", [...RELEASE_SETTING_KEYS]),
     fetchDueAttempts(admin, { customerId: customer.id, now }),
     fetchInboxRows(admin, customer.id),
@@ -140,7 +143,28 @@ export default async function DashboardPage() {
       .in("event_type", [...ENGAGEMENT_EVENT_TYPES])
       .gte("created_at", sixtyDaysAgo)
       .limit(5000),
+    // The new-lead card (§63.6): unread new_lead notifications from the last
+    // week, joined to the assignment and its lead. Bounded on purpose — see
+    // newLeadCard.ts for why.
+    admin
+      .from("notifications")
+      .select(
+        "id, created_at, lead_assignments(id, lead_id, viewed_at, lead:leads(id, lead_name, address, postcode_area, bedrooms, lead_type, gross_annual_income, owner_customer_id))"
+      )
+      .eq("customer_id", customer.id)
+      .eq("notification_type", "new_lead")
+      .is("read_at", null)
+      .gte("created_at", newLeadSince)
+      .order("created_at", { ascending: false })
+      .limit(10),
   ]);
+  // Only our own columns are selected above, so there is no uploader id or
+  // private profile to strip — but the builder still drops the viewer's own
+  // uploads by owner id (§32.8).
+  const newLeadCard = buildNewLeadCard(
+    ((newLeadRows.data ?? []) as unknown as NewLeadRow[]),
+    { now, viewerId: customer.id }
+  );
   const releaseSettings = releaseSettingsFrom(
     (releaseRows.data ?? []) as { key: string; value: string }[]
   );
@@ -276,6 +300,8 @@ export default async function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      {newLeadCard && <NewLeadCard card={newLeadCard} />}
 
       {banner && (
         <AnnouncementBanner

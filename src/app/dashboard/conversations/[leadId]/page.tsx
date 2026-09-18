@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 /** The inbox with a thread open (§56.7): Inbox · Thread · Contact details. */
 export default async function ConversationPage({ params }: { params: { leadId: string } }) {
-  const { user, customer } = await getCurrentCustomer();
+  const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
   if (!customer) redirect("/dashboard");
 
@@ -21,7 +21,7 @@ export default async function ConversationPage({ params }: { params: { leadId: s
   const [inbox, channels, data, whatsapp] = await Promise.all([
     fetchInboxRows(admin, customer.id),
     enabledChannels(admin, isAdmin),
-    loadLeadWorkspace(admin, customer, params.leadId, { isAdmin }),
+    loadLeadWorkspace(admin, customer, params.leadId, { isAdmin, viewAs: viewAs != null }),
     getWhatsappConnection(admin, customer.id),
   ]);
   if (!data) notFound();

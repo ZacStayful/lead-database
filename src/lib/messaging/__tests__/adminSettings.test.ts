@@ -31,6 +31,7 @@ describe("the allow-list is closed", () => {
       "landlord_prefs_nudge_second_hours",
       "landlord_prefs_reask_days",
       "landlord_referral_nudge_enabled",
+      "lead_sync_enabled",
       "messaging_email_enabled",
       "messaging_enabled",
       "messaging_lead_cooldown_hours",
@@ -44,6 +45,7 @@ describe("the allow-list is closed", () => {
       "prospect_nudge_enabled",
       "release_cycle_days",
       "release_enabled",
+      "release_fresh_hours",
       "release_hold_max_days",
       "release_max_per_day",
     ]);
@@ -183,6 +185,11 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     release_max_per_day: "2",
     release_cycle_days: "30",
     release_hold_max_days: "14",
+    // §63. The SQL reads release_fresh_hours through pool_setting_int with a
+    // default of 0, and 0 is OFF; the poll cron reads its switch as
+    // `!== "true"`, so an absent row is off.
+    release_fresh_hours: "0",
+    lead_sync_enabled: "false",
     // §55. The cron reads the switch as `!== "true"` (fails to off) and the cap
     // through `Number(config.get(...) ?? "30")`, so both must match here or the
     // admin page shows a limit the chase is not actually using.

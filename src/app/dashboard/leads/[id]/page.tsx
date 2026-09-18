@@ -18,7 +18,7 @@ export default async function LeadDetailPage({
   params: { id: string };
   searchParams: { from?: string; report?: string };
 }) {
-  const { user, customer } = await getCurrentCustomer();
+  const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
   if (!customer) redirect("/dashboard");
 
@@ -26,6 +26,7 @@ export default async function LeadDetailPage({
   const data = await loadLeadWorkspace(admin, customer, params.id, {
     from: searchParams.from,
     isAdmin: isAdminUser(user),
+    viewAs: viewAs != null,
   });
   if (!data) notFound();
 
