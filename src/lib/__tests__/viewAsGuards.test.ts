@@ -163,6 +163,11 @@ describe("§62 the admin entry point", () => {
     const picker = code("components/admin/ViewAsPicker.tsx");
     expect(picker).toContain("Open my dashboard");
     expect(picker).toContain("Archived");
-    expect(code("app/admin/portal/page.tsx")).toContain("archived: c.is_active === false");
+    const page = code("app/admin/portal/page.tsx");
+    expect(page).toContain("archived: c.is_active === false");
+    // The status word comes from the tested module, never a copy in the page —
+    // the copy is what labelled every active customer "cancelling" (§62).
+    expect(page).toContain("status: portalStatus(c)");
+    expect(page).not.toContain("pendingCancellation(");
   });
 });
