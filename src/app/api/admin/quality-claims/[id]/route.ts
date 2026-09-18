@@ -236,6 +236,7 @@ async function upholdWithSwap(
    */
   let notified = false;
   let replacementName: string | null = null;
+  let replacementLeadId: string | null = null;
   try {
     const { data: created } = await admin
       .from("lead_assignments")
@@ -252,6 +253,7 @@ async function upholdWithSwap(
 
       if (lead) {
         replacementName = (lead as Lead).lead_name ?? null;
+        replacementLeadId = created.lead_id as string;
         await completeAssignment(
           admin,
           lead as Lead,
@@ -269,10 +271,15 @@ async function upholdWithSwap(
     console.error("[admin/quality-claims] replacement placed, notify failed", err);
   }
 
-  await notifyUpheld(admin, claim, "swap", note, {
-    leadId: newAssignmentId,
-    leadName: replacementName,
-  });
+  // ⚠️ The LEAD id, not the assignment id: leadDeepLink() builds /l/<leadId>,
+  // and the "See the new lead" button 404'd on an assignment id before this.
+  await notifyUpheld(
+    admin,
+    claim,
+    "swap",
+    note,
+    replacementLeadId ? { leadId: replacementLeadId, leadName: replacementName } : null
+  );
 
   return NextResponse.json({
     ok: true,
