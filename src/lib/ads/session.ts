@@ -182,7 +182,7 @@ export const GENERATION_STALE_MS = 6 * 60 * 1000;
  * ⚠️ ONE CONDITIONAL UPDATE, NEVER A READ THEN A WRITE. A double-tapped Send
  * puts two requests in flight; both pass a TypeScript `if`, and neither passes
  * a WHERE clause. §50's route states the same rule, and the cost of getting it
- * wrong here is two paid generations and two different adverts racing to be
+ * wrong here is two paid generations and two different ads racing to be
  * the one stored.
  */
 export async function claimForGeneration(
@@ -215,7 +215,7 @@ export async function claimForGeneration(
   return { ok: true, draft: rows[0] as AdDraftRow };
 }
 
-/** The finished advert. `status = 'ready'` requires copy AND slots (0156). */
+/** The finished ad. `status = 'ready'` requires copy AND slots (0156). */
 export async function finishDraft(
   admin: SupabaseClient,
   draftId: string,
@@ -293,7 +293,7 @@ export async function spendBudget(
 /**
  * ⚠️ MERGED IN SQL, NEVER READ-MODIFY-WRITE. Two writers exist — the answers
  * route and the profile form — and the edit most likely to be lost in a tab
- * race is the FEE, which decides whether a price appears on a live advert.
+ * race is the FEE, which decides whether a price appears on a live ad.
  */
 /**
  * ⚠️ RETURNS THE MERGED PROFILE, WHICH THE RPC WAS ALREADY PRODUCING AND WE

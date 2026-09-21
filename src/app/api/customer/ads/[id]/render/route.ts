@@ -31,7 +31,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
   const draft = await loadDraft(admin, customer.id, params.id);
   if (!draft) return adJson({ error: "Not found" }, 404);
   if (draft.status !== "ready" || !draft.copy) {
-    return adJson({ error: "There is no advert to draw yet." }, 409);
+    return adJson({ error: "There is no ad to draw yet." }, 409);
   }
 
   const template = templateById(draft.template_id ?? DEFAULT_TEMPLATE_ID)!;
@@ -99,7 +99,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     });
     if (!stored.ok) {
       // ⚠️ A FAILED UPLOAD NEVER COSTS THE COPY (§25). The words are already
-      // stored; the operator gets a Retry rather than a failed advert.
+      // stored; the operator gets a Retry rather than a failed ad.
       results.push({ ratio, ok: false, url: null, reason: stored.reason });
       continue;
     }

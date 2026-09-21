@@ -5,7 +5,7 @@ import { serviceTokensFor, type AdTemplate } from "./templates";
 import type { AdProfile, SlotValues, TargetingState } from "./resolveSlots";
 
 /**
- * The last thing between a model and a live advert (§65).
+ * The last thing between a model and a live ad (§65).
  *
  * Three layers, the same arrangement `messaging/validateDraft.ts` uses:
  *   1. omission — a figure we do not have never enters the prompt

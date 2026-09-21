@@ -9,7 +9,7 @@ import { templateById, DEFAULT_TEMPLATE_ID } from "./templates";
 import type { Answer } from "./schemas";
 
 /**
- * Writing the advert, shared verbatim by the answers route and Regenerate
+ * Writing the ad, shared verbatim by the answers route and Regenerate
  * (§65) — the extraction `releaseLeads.ts` and `dueAttempts.ts` already make.
  *
  * Six things happen here and every one of them can go wrong on its own, which
@@ -27,7 +27,7 @@ export type WriteOutcome =
  * ⚠️ THE CUSTOMER IS RE-READ BEFORE THE CONTEXT IS BUILT. The answers route
  * has just merged a patch into `ad_profile` with SQL `||`, so the row it was
  * handed at the top of the request is already stale — and the stale copy is
- * missing exactly the answers the operator gave for this advert. An advert
+ * missing exactly the answers the operator gave for this ad. An ad
  * written from it would ignore everything they just typed.
  */
 export async function writeAd(params: {

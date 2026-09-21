@@ -18,7 +18,7 @@ export const maxDuration = 60;
  * breaks twice if copied: a template can ask eight slot questions where a
  * support ticket asks three, so a flat six is exhausted by the first four
  * rewordings — and §50 can tolerate running out because the ticket still
- * sends. An advert with no answers cannot be built at all.
+ * sends. An ad with no answers cannot be built at all.
  */
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   const gate = await adWriteSession();

@@ -148,9 +148,29 @@ describe("tabsetFor", () => {
    * other section without tripping on a new one.
    */
   it("titles the ads section rather than falling back to the product name", () => {
-    expect(sectionTitle("/dashboard/ads")).toBe("Facebook adverts");
-    expect(sectionTitle("/dashboard/ads/profile")).toBe("Facebook adverts");
-    expect(tabsetFor("/dashboard/ads", ALL)?.title).toBe("Facebook adverts");
+    expect(sectionTitle("/dashboard/ads")).toBe("Facebook ads");
+    expect(sectionTitle("/dashboard/ads/profile")).toBe("Facebook ads");
+    expect(tabsetFor("/dashboard/ads", ALL)?.title).toBe("Facebook ads");
+  });
+
+  /**
+   * ⚠️ "ad", NEVER "advert", ON ANY AD SURFACE. Meta's own vocabulary is "ad"
+   * and the code has said `ads` throughout since 0156, so the UI was the only
+   * thing saying something else — a product that calls one thing two names in
+   * two places reads as two features.
+   *
+   * ⚠️ This does NOT extend to the privacy policy or §60. That is Stayful's own
+   * advertising, it is legal copy, and "advert" is correct there.
+   */
+  it("says ad rather than advert everywhere the operator reads", () => {
+    const nav = readFileSync(path.resolve(__dirname, "../dashboardNav.ts"), "utf8");
+    expect(nav).not.toMatch(/\badverts?\b/i);
+    for (const item of buildSidebar(ALL).main) {
+      expect(item.label, item.key).not.toMatch(/\badverts?\b/i);
+    }
+    const tabs = tabsetFor("/dashboard/ads", ALL)!;
+    expect(tabs.title).not.toMatch(/\badverts?\b/i);
+    for (const tab of tabs.tabs) expect(tab.label, tab.href).not.toMatch(/\badverts?\b/i);
   });
 
   /** Demo-only today: off, and it is off everywhere at once. */

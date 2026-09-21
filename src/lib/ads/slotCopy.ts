@@ -122,7 +122,7 @@ export function questionForSlot(slot: AdSlotKey, t: AdTemplate): SlotQuestion | 
  * sentence rather than a snake_case string.
  */
 export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
-  company_name: "the name the advert goes out under",
+  company_name: "the name the ad goes out under",
   city: "a town or city to name",
   areas: "the areas you cover",
   destination: "where the button should send people",
@@ -130,7 +130,7 @@ export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
   fee_pct: "your fee",
   fee_basis: "whether the fee is on gross or net",
   fee_vat: "how VAT is treated",
-  fee_public: "whether the fee goes on the advert",
+  fee_public: "whether the fee goes on the ad",
   included: "what is included",
   handled: "what you handle",
   councils: "the councils you deal with",

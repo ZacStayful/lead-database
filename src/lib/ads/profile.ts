@@ -14,8 +14,8 @@ import { parseAdUrl, URL_REFUSAL_COPY, URL_UPGRADED_NOTE, type UrlRefusal } from
  *
  * ⚠️ AND AN UNPARSEABLE ANSWER SETS NOTHING. Every coercion below fails to
  * `undefined` rather than to a guess, and every guess it declines to make
- * fails in the direction of a quieter advert: no fee published, no place
- * named, no figure stated. A wrong value here is on a live advert in the
+ * fails in the direction of a quieter ad: no fee published, no place
+ * named, no figure stated. A wrong value here is on a live ad in the
  * operator's own name.
  */
 
@@ -78,7 +78,7 @@ const clean = (v: string, cap: number) => v.replace(/\s+/g, " ").trim().slice(0,
 /**
  * ⚠️ "No", "none", "anywhere", "skip" ARE NOT A TOWN. An operator declining to
  * narrow is the unlocated case, and storing their refusal as a place name puts
- * "Landlords in None" on an advert. Short, because a town called "Anywhere"
+ * "Landlords in None" on an ad. Short, because a town called "Anywhere"
  * does not exist but a road might.
  */
 const REFUSAL_RE = /^(no|none|n\/?a|skip|any|anywhere|not sure|don'?t mind|no preference|without.*)$/i;
@@ -104,7 +104,7 @@ function asCount(raw: string, opts: { max?: number }): number | undefined {
 /**
  * ⚠️ IT DECLINES RATHER THAN GUESSES, and the direction is load-bearing: an
  * unset `fee_public` reads as false everywhere, so the fee stays off the
- * advert. Guessing "yes" from an ambiguous sentence publishes a price the
+ * ad. Guessing "yes" from an ambiguous sentence publishes a price the
  * operator never agreed to publish.
  */
 function asYesNo(raw: string): boolean | undefined {
@@ -145,7 +145,7 @@ function asServiceKeys(raw: string, template: AdTemplate): string[] | undefined 
   const text = raw.toLowerCase();
   // ⚠️ MATCHED AGAINST THE TEMPLATE'S OWN OPTIONS, so a service the model
   // invented cannot become a ticked key — and a ticked key is what licenses
-  // naming it on the advert.
+  // naming it on the ad.
   const keys = template.services.options
     .filter((o) => o.tokens.some((t) => text.includes(t)) || text.includes(o.label.toLowerCase()))
     .map((o) => o.key);

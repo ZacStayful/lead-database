@@ -16242,18 +16242,21 @@ production Supabase (§1.1), so a real run withdraws real assignments.
 
 ---
 
-## 65. A chat that makes the advert *(0156)*
+## 65. A chat that makes the ad *(0156)*
 
 Customers are property managers who need landlord enquiries, and the only way
 they get one today is to buy a Stayful lead for £15. The *Landlord ad template
-pack* (spec v1, 2026-09-20) defines ten templates so they can generate their
-own, and its closing section sets out a four-stage path to running those adverts
-from the platform.
+pack* (spec v1, 2026-09-20) defines **eight core templates and two optional
+ones** — T9 and T10 ship off by default — so they can generate their own, and
+its closing section sets out a four-stage path to running those ads from the
+platform. The spec is committed at `docs/landlord-ad-template-pack-v1.md`; it
+was not in the repository when this section was written, which is how four of
+the errors below got in.
 
 **This is part 1, and it deliberately stops short of publishing.** It ships to
 the `zac@stayful.co.uk` portal alone as a demo surface. It behaves like a Claude
 chat: a pre-written prompt already in the box, the operator presses Send, the
-model picks a template and asks what it needs, and the finished advert comes
+model picks a template and asks what it needs, and the finished ad comes
 back — copy plus three downloadable PNGs.
 
 Publishing needs `ads_management` App Review, which is "weeks, not days" — **and
@@ -16267,7 +16270,7 @@ App Review needs a working demo to submit. This build is that demo.**
 |---|---|
 | Deliverable | Copy **and** statics at 4:5, 9:16, 1:1. No video, no Meta publishing |
 | Gate | Demo-only, keyed on the owner email |
-| Templates | T3, T6, T7, T8 — the four whose claims gate is `none` |
+| Templates | T3, T6, T7, T8 — **the four that need no photo layer** (§65.11) |
 | Template choice | The chat picks, names which and why, one tap to switch |
 
 ### 65.1 — ⚠️ The model does not write the headline
@@ -16298,6 +16301,13 @@ without `review_quote_confirmed`, the prompt forbids quoting, and
 **T8's headline names no audience at all** — so without a line on the card,
 nothing on it says who it is for.
 
+⚠️ **AND THE SPEC ASKS FOR FIVE PRIMARY TEXTS, WHERE PART 1 SHIPS ONE.** Every
+template's `primary_text: 5 variants` is **one text per named angle**, not a
+menu the model chooses from — and `angleListFor()` picking one is a shortfall
+rather than a reading of the spec. Meta wants several texts to test against each
+other; one is an ad that cannot learn. Closed in PR C, which also pairs each
+text with its own 40-character `headline` and 30-character `description`.
+
 ### 65.2 — Decidable rules and heuristics are not peers
 
 `validateAdCopy.ts` keeps them apart, and the file says why at the top.
@@ -16308,7 +16318,7 @@ matches "interest", "request", "honest" and "invest".
 
 ⚠️ **AN OVER-STRICT RULE DOES NOT ANNOUNCE ITSELF.** A rejection retries once
 and then collapses to the template's default text, so a bad rule produces no
-error anybody sees: every advert simply comes back generic and it reads as "the
+error anybody sees: every ad simply comes back generic and it reads as "the
 model is bad". Every heuristic is scoped to a subject plus a modal, and the
 template's own fixed headline and sub are **exempt**, because they are not
 model-written.
@@ -16351,7 +16361,7 @@ and yoga. Every item below was found by **running it**, not by reading:
    `renderSpec` sets `display: flex` on **every** non-text node unconditionally.
 2. ⚠️ **Satori applies GPOS kerning, and applies it wrongly**: the glyph shifts
    but the run's measured width does not, so every kerned pair leaves visible
-   slack. `Talk to` renders `Talk  to` — which is T8's CTA, on every advert.
+   slack. `Talk to` renders `Talk  to` — which is T8's CTA, on every ad.
    **Stripping `GPOS`/`GSUB`/`GDEF` from the subset fixes it exactly** and cuts
    the fonts 37%.
 3. ⚠️ **A glyph outside the registered fonts makes a LIVE NETWORK CALL to
@@ -16431,7 +16441,7 @@ reaches the ledger. A bare "try again" produces the same copy with different
 adjectives.
 
 ⚠️ **An empty question list is SUCCESS in §50 and a DEAD END here.** A support
-ticket with no clarification still sends; an advert with no answers cannot be
+ticket with no clarification still sends; an ad with no answers cannot be
 built at all. Every degraded path lands on `fallbackQuestionnaire`, which asks
 only what is missing and **shrinks as the profile fills** — the promise the
 setup/ad slot split makes.
@@ -16458,7 +16468,7 @@ read-modify-write the same paragraph forbids. Two tabs both pass a TypeScript
 | Function | Why it is one |
 |---|---|
 | `spend_ad_budget(draft, customer, kind)` | column arithmetic. ⚠️ The kind is a CLOSED vocabulary checked in SQL, never a column name from a request — §27.1 one layer down. Null means no, without saying whether the cap is spent or the draft is somebody else's |
-| `merge_ad_profile(customer, patch)` | `ad_profile \|\| $1`. ⚠️ Two writers exist — the answers route and the profile form — and the edit most likely lost in a tab race is the FEE, which decides whether a price appears on a live advert |
+| `merge_ad_profile(customer, patch)` | `ad_profile \|\| $1`. ⚠️ Two writers exist — the answers route and the profile form — and the edit most likely lost in a tab race is the FEE, which decides whether a price appears on a live ad |
 | `claim_ad_draft(draft, customer, stale_seconds)` | ⚠️ The filter form is `.or("status.neq.generating,updated_at.lt.<iso>")`, whose correctness rests on how PostgREST parses the dots inside a timestamp — easy to reason about wrongly, and **impossible to test without PostgREST running** |
 
 ⚠️ **THE STALE WINDOW IS NOT OPTIONAL.** Nothing else clears a draft left in
@@ -16493,14 +16503,14 @@ something, settable on the form and nowhere else, and the route **stamps the
 date itself**: an attestation dated by its subject is not an attestation.
 
 ⚠️ **An unparseable answer sets NOTHING**, and every guess declined fails
-towards a quieter advert: no fee published, no place named, no figure stated. A
+towards a quieter ad: no fee published, no place named, no figure stated. A
 real bug lived here and a test found it — **`asYesNo` checked only the opening
 word, so "yes and no" published the operator's fee.** It now scans the whole
 answer for the other polarity and declines when both appear, which is safe
 because an unset `fee_public` reads as false everywhere.
 
 Also refused: `"No"`, `"none"`, `"anywhere"` as a town (storing a refusal puts
-"Landlords in None" on an advert); a service the template does not offer; `http`
+"Landlords in None" on an ad); a service the template does not offer; `http`
 for the button; a review score outside 0–5.
 
 ⚠️ **`ad_profile` is readable over PostgREST from apply time.** `customers_select_own`
@@ -16556,11 +16566,11 @@ draft, so a cap counted there resets itself. `draft_id` therefore carries **no
 foreign key**, and the cap counts `kind = 'questions'` only — counting every row
 would charge an operator for their own simplifications and for our automatic
 retry, so somebody who could not follow a question and asked twice would get
-fewer adverts than somebody who followed it first time.
+fewer ads than somebody who followed it first time.
 
 ⚠️ **The cap read FAILS CLOSED.** The whole point of counting an append-only
 table is that it cannot be reset; reading an error as zero hands out an
-unbounded number of adverts at the one moment we cannot see how many have gone.
+unbounded number of ads at the one moment we cannot see how many have gone.
 
 ⚠️ **`ad-creative` IS THE FIRST BUCKET HERE WHERE AN OBJECT CAN OUTLIVE ITS ONLY
 POINTER.** 0092 and 0112 get "nothing to garbage-collect" from ONE OBJECT PER
@@ -16595,7 +16605,7 @@ schema says never to set or infer a value on the advertiser's behalf — but the
 field declares that the creative contains **media created or edited with a
 generative AI tool**. Our media is a Satori-rendered card with no AI in it; only
 the copy is model-written. Storing `OPT_IN` would put *"Media in this ad created
-or edited with AI"* on an advert where it is untrue — §51.11's exact failure,
+or edited with AI"* on an ad where it is untrue — §51.11's exact failure,
 caused by us.
 
 **So no disclosure value is set in part 1 and there is no `ai_disclosure`
@@ -16643,10 +16653,10 @@ it, and a valid PNG with the spaces eaten out of the headline. **Anybody
 changing a layout has to look at the result.**
 
 **Not yet exercised against anything live.** No model call has been made, no
-advert written, no PNG rendered on a real request. ⚠️ A Vercel preview cannot do
+ad written, no PNG rendered on a real request. ⚠️ A Vercel preview cannot do
 it — Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50,
 §51, §52) — and a preview runs against **production** Supabase (§1.1), so a test
-advert writes real rows and spends real tokens.
+ad writes real rows and spends real tokens.
 
 ### Deployment order — migration BEFORE code
 
@@ -16700,10 +16710,207 @@ columns collide.
 Code arriving first would fail every ads read on four missing tables and every
 budget spend on three missing functions.
 
+### 65.11 — It could not produce anything, and the diagnosis was not the symptom *(no migration)*
+
+Reported the day after 0156 applied: the builder refused every run with *"I
+still need a page for the button to point at"*, there was no box to put a link
+in, and nothing said what would count. Production held **one draft, zero
+creatives, and both model calls `ok`** — so the model wiring was fine and the
+feature had never produced anything at all.
+
+#### ⚠️ The cause was a question the system could not store the answer to
+
+The ladder asked five questions. Three of the five answers **wrote nothing and
+said nothing**, and the fourth is the whole story:
+
+| Slot | Asked | Answered | Stored |
+|---|---|---|---|
+| *(none)* | which town to name | "Leave it off for now" | — *(correct: unlocated)* |
+| `property_types` | what kinds of property | "Whole properties only" | ✅ |
+| `turnaround` | how quickly they reply | "Same day" | ✅ |
+| **`landing_url`** | *(simplified)* "a message straight to your phone, or landing on your website?" | **"Message straight to my phone"** | ❌ **dropped** |
+| *(none)* | what happens next | "I call to talk it through" | — *(goes nowhere)* |
+
+The simplify rung **reworded the question into a genuine product choice the
+schema did not have**, the operator picked it, `asUrl` threw and returned
+`undefined` in silence, and the run then refused for a page they had been asked
+about in other words. They answered exactly what was asked and were told they
+had not.
+
+⚠️ **THE MODEL WRITES THE QUESTION *AND* ITS OPTIONS, AND NOTHING CHECKED THE
+OPTIONS AGAINST THE SLOT THEY ANSWER.** That is the root cause, not the URL
+parser: any slot can be offered an answer guaranteed to be binned.
+`answerableOptions()` now runs each option through `answersToProfile` itself and
+drops any that does not land in the patch — **the check IS the write path**, so
+there is no second definition of a coercer to keep in step (§34's fifth-copy
+trap). A question left with fewer than two options degrades to free text rather
+than to a shorter list of bad ones.
+
+#### ⚠️ One line refused every run the feature ever had
+
+`context.ts` carried `if (!resolution.slots.landing_url)
+unresolved.push("landing_url")` **unconditionally**. Every other entry in that
+array comes from a `{slot}` some headline, sub or CTA pattern actually needs,
+and `landing_url` appears in none of them — so that line was the only thing
+that could ever put it there.
+
+`ad_profile.destination` ∈ `website` | `instant_form` is what replaces it, with
+`destinationNeedsLink()` the one function that decides. **Absent means ask**:
+`resolveDestination` infers `website` from an already-resolved link, so the
+customers who have a `website_url` on file are unaffected, and an operator with
+no website is asked a question they can answer instead of chased for a page
+they never said they had. ⚠️ **"A message straight to my phone" is still not one
+of them** — Meta supports click-to-message ads and adding a third destination is
+its own piece of work — so anything that is neither is **refused with both
+choices named**.
+
+⚠️ **Stored in `customers.ad_profile`, which is jsonb with no key whitelist, and
+`merge_ad_profile` does `coalesce(ad_profile,'{}') || p_patch`. So none of this
+needed a migration**, which took the production apply off the critical path of
+a fix for a feature that did not work.
+
+⚠️ **AND INSTANT FORM LEADS DO NOT REACH THIS CRM.** They leave Meta by the
+`leadgen` webhook on an App's Page subscription, signed over the raw body and
+carrying only a `leadgen_id` — nothing §48's `/api/webhook/customer-leads/[token]`
+can receive. The destination copy says in one sentence that they land in Meta's
+Leads Centre and points at the existing lead webhook for a Make or Zapier
+bridge. Saying otherwise would be §51.11's failure aimed at the customer.
+
+#### Refusals speak, and `asUrl` is gone
+
+`answersToProfile` returns `{ patch, refusals, notes }`. Every coercion that
+declines records `{ slot, reason, answer }`, the routes return the sentences,
+and the profile form renders them. §65.7's "an unparseable answer sets NOTHING"
+was right; its missing half was "and says so".
+
+`parseAdUrl` in the import-free `url.ts` replaces `asUrl` and returns a verdict.
+What is stored is unchanged — an absolute `https` URL, dotted public hostname,
+no userinfo — and ⚠️ **it never truncates**, because slicing a long URL to 400
+characters yields a DIFFERENT, possibly valid one pointing a paid ad somewhere
+nobody chose. A bare domain works, `http://` is upgraded **and said so**, and
+zero-width characters and trailing paste punctuation are stripped.
+
+⚠️ **The scheme check runs on the RAW input, before any prefixing, and that
+ordering is the whole point**: `new URL("https://javascript:alert(1)")` parses
+perfectly well, reading `javascript` as the host. `localhost`, bare IPs and
+`user:pass@host` are refused too; none of them was before.
+
+#### ⚠️ The pre-flight runs before the claim
+
+The answers route claimed the draft, merged the profile, and only then let
+`writeAd` discover the gap, refuse, and **release the claim it had just taken**
+— so an operator burned a generation slot to be told what was missing. The
+order is now
+
+> collect → complete? → coerce → merge → file the answers → **preflight** →
+> claim → write
+
+⚠️ **The merge stays above the pre-flight**, because the answers being submitted
+are usually exactly what fills the gap. ⚠️ **And the answers are filed above it
+too**, because a refusal must never cost the operator their typing.
+
+`mergeAdProfile` returns `{ ok, profile }` rather than a boolean: the RPC was
+already producing the merged profile and it was being discarded, and the route
+needs the post-merge state to pre-flight without a second round trip or a second
+source of truth. ⚠️ **Both call sites test `merged.ok`** — an object is always
+truthy, so the `if (!merged)` they carried was a failure branch that could never
+run.
+
+`preflight()` is the single expression of "is this runnable", asked by the
+answers route, the render route and `writeAd`. ⚠️ **`writeAd` keeps its own
+copy** because it re-reads the customer, so a profile edited between the check
+and the claim is still caught — and because it is the **only** stop for
+Regenerate, which never passes through the answers route. One sentence in
+`copy.ts` for all three: the render route showed only `generic` for the
+identical condition and Regenerate wrote its own wording inline, so which
+explanation a customer met depended on where they were standing.
+
+#### The fee rule existed and was never consulted
+
+`feeVerdict` has implemented the spec's *"under 8% or over 30% is almost
+certainly a typo, and a wrong fee in a live ad is worse than no ad"* since 0156,
+and `profile.ts` stored whatever `asCount` read. ⚠️ **That was worse than merely
+permissive**: `resolveSlots` then refuses the same number, so the fee vanished
+off the ad with the reason recorded in a `warnings` array **nothing rendered**.
+It is refused at the point of typing now, quoting the number back and saying how
+to insist; and `warningSentences()` words the flags for the profile GET and the
+form. ⚠️ **Never the raw key** (`slotCopy.ts`'s rule), and an unknown flag yields
+nothing rather than a column name.
+
+⚠️ `asCount` still reads a number out of prose, so **"45ish" is a typo and
+"15ish" is a fee** — only the value decides. That forgiveness is deliberate: an
+operator who writes "about 15" means 15.
+
+#### "advert" → "ad", and what keeps its old name
+
+Meta's vocabulary is "ad" and the code has said `ads` throughout since 0156, so
+the UI was the only thing saying something else. Renamed across every ad surface
+and guarded. ⚠️ **Two deliberate exceptions**: `prompts.ts` and `brief.ts` are
+**model-facing** — rewording a prompt to match a UI string is how a retune
+arrives by accident — and the **privacy policy and §60** are Stayful's own
+advertising, which is legal copy where "advert" is correct. ⚠️ The guard bans the
+**noun only**: "advertising" is an ordinary word, and the ASA is the Advertising
+Standards Authority, which the attestation copy names.
+
+#### ⚠️ What selected the four templates, and what did not
+
+This section said "the four whose claims gate is `none`", `templates.ts` said it
+too, and `templates.test.ts` asserted both properties under one title. **They
+are independent.** Six of the spec's eight core templates have a claims gate of
+`none` (T3–T8); only T1 is `customer_data_required` and only T2 is conditional.
+What holds T4 and T5 back is that they need a photograph, which nothing here can
+take or crop — a layout problem with no legal surface at all.
+
+The consequence, and the reason it is worth correcting: **T4 and T5 ride in on
+the photo layer; T1 and T2 must wait for the claims gate.** A reader taking the
+old wording at face value lands them together, and the half with legal exposure
+arrives on a layout change.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
+`@next/next/no-assign-module-variable` warnings, **2,764 vitest cases green**.
+
+⚠️ **Twenty-three mutations were run and all twenty-three caught**, each broken
+deliberately and watched to fail before the assertion was kept — §50.9 records
+two assertions in this repo already written weak enough to survive their own
+mutation, and §53 made it three. Among them: restoring the unconditional
+`landing_url`; claiming before the pre-flight; merging after it; pre-flighting
+the stale row; testing `merged` rather than `merged.ok`; filing the answers
+after the refusal; writing the fee straight from `asCount`; sending the flags as
+raw keys; the form dropping the block; the render route back to `generic`;
+Regenerate writing its own sentence; `writeAd` re-deriving the refusal; and
+`parseAdUrl` going silent again.
+
+⚠️ **One guard of my own was written weak and only the mutation run found it.**
+It sliced `profile.ts` between `const put =` and a `// Array.from` comment — and
+`source()` strips comments, so `indexOf` returned −1, the slice ran to
+end-of-file, and it passed on an unrelated `refusals.push`. Anchored on code
+rather than a comment now. That is the **seventh** instance of this shape
+recorded here.
+
+**Not yet exercised in a browser or against the live model.** No run has
+completed end to end. ⚠️ A Vercel preview cannot do it — Deployment Protection
+answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51, §52) — and a preview
+runs against **production** Supabase (§1.1), so a test run spends real tokens.
+On `leads.stayful.co.uk` after merge: a run with no link and `instant_form`
+completing; a website run asking in the chat and accepting an `http://` paste; a
+fee of 45% refused with the number quoted back.
+
+⚠️ **And clear `referral_business_name` first.** It reads `"test"` on the owner
+account, and the override chain puts it on the ad as the trading name.
+
+#### Deployment order — code only
+
+**No migration.** `ad_profile` is jsonb with no key whitelist and
+`merge_ad_profile` merges with `||`, so `destination` persists with nothing
+applied to the database. Nothing here touches a balance, counter, pacing or
+capacity column.
+
 ### Deferred
 
 - **A sweeper for the tombstones.** They are recorded and drainable; automatic
-  deletion of somebody's adverts is a decision, not a default.
+  deletion of somebody's ads is a decision, not a default.
 - **An `ad_creative_enabled` kill switch** — cheap now that `adsEnabledFor` is
   one call site.
 - **Converging the two clarify ladders**, and fixing §50's stale-answer bug,
@@ -16715,17 +16922,20 @@ budget spend on three missing functions.
 - ⚠️ **T7 writes a cheque the operator's landing page has to cash.** It is the
   default and promises *"we'll run the numbers against your current rent"*.
   Stayful can (the analyser, already sold at £3 a lead under §31); a customer may
-  not be able to. Either the advert warns them what they are committing to, or
+  not be able to. Either the ad warns them what they are committing to, or
   the estimate becomes something we offer them.
 - **The four templates in scope answer NEITHER objection the spec names.**
   Income consistency and setup cost belong to T1, T2 and T9. These work on
   effort, risk, curiosity and trust — the right place to start, and the wrong
   place to expect objection-template conversion.
-- **Stages 2–5** in the spec's order: video (clone §31's queue and self-chaining
-  worker), voiceover, the photo layer with T1/T2/T4/T5 and the
-  `customer_data_required` gate, then T9/T10.
+- **Stages 2–5** in the spec's order: video (clone §31's queue and
+  self-chaining worker), voiceover, then ⚠️ **the photo layer and the claims
+  gate as SEPARATE steps** — T4 and T5 need only a photograph and carry a
+  claims gate of `none`, where T1 needs `customer_data_required` and T2 is
+  conditional. Landed together, the half with legal exposure rides in on a
+  layout change. Then T9/T10.
 - **Publishing**, in the spec's order: read-only insights, then paused creation,
   then Instant Form retrieval, then budget guidance. `copy jsonb` is shaped for
   the mapping. **Start App Review as soon as this merges.**
-- The spec's two open questions: whether customer adverts carry a "powered by"
+- The spec's two open questions: whether customer ads carry a "powered by"
   mark, and who owns a customer's ad files if they leave.

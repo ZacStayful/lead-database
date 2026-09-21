@@ -2,7 +2,19 @@ import type { MetaCtaType } from "./metaFields";
 
 /**
  * The four templates part 1 ships — T3, T6, T7 and T8 from the landlord ad
- * template pack (spec v1, 2026-09-20), the ones whose claims gate is `none`.
+ * template pack (spec v1, 2026-09-20).
+ *
+ * ⚠️ THEY WERE SELECTED BY THE PHOTO LAYER, NOT BY THE CLAIMS GATE, AND THIS
+ * COMMENT SAID OTHERWISE. Two independent properties, and conflating them
+ * understates what is available: SIX of the spec's eight core templates have a
+ * claims gate of `none` (T3–T8). Only T1 is `customer_data_required` and only
+ * T2 is conditional. What holds T4 and T5 back is that they need a photograph
+ * of a property, which nothing here can take or crop yet — a layout problem,
+ * with no legal surface at all.
+ *
+ * The consequence for anybody adding templates: T4 and T5 ride in on the photo
+ * layer (B4a), where T1 and T2 must wait for the claims gate (B4b). The half
+ * with legal exposure does not arrive on a layout change.
  *
  * ⚠️ IMPORT-FREE apart from a type. The picker renders these in the browser.
  *

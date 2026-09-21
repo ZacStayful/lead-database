@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * The business details every advert is built from (§65).
+ * The business details every ad is built from (§65).
  *
  * ⚠️ EVERY FIELD IS AN OVERRIDE, NEVER A COPY (§41.6). A NULL key means "use
  * what the account already has" — company_name falls back to

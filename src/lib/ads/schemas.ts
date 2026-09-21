@@ -46,7 +46,7 @@ export type Question = {
   /**
    * ⚠️ WHICH SLOT THIS ANSWER FILLS, AND IT IS THE ONLY LINK BETWEEN THE CHAT
    * AND THE PROFILE. Without it an answer is prose nobody can file, so a
-   * second advert would ask every question again — which is exactly the
+   * second ad would ask every question again — which is exactly the
    * promise the setup/ad slot split makes. `profile.ts` checks it against a
    * closed list before writing anything, because this string came from a model.
    */

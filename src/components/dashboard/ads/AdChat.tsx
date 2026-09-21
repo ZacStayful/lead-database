@@ -9,7 +9,7 @@ import type { AdCopy } from "@/lib/ads/metaFields";
 
 /**
  * The chat (§65): a prompt already in the box, then the questions it produced,
- * then the advert.
+ * then the ad.
  *
  * ⚠️ IMPORTS `copy.ts` AND `metaFields.ts`, NEVER `templates.ts`'s server
  * siblings. Both are import-free for exactly this — the split `deadLeadCopy.ts`
@@ -147,7 +147,7 @@ export function AdChat(props: AdChatProps) {
       <div className="space-y-3">
         {props.readOnly ? <ReadOnly /> : null}
         <label className="block text-sm font-medium text-[#1a1a19]" htmlFor="ad-prompt">
-          What do you want the advert to do?
+          What do you want the ad to do?
         </label>
         <textarea
           id="ad-prompt"
@@ -308,7 +308,7 @@ function Problem({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The finished advert.
+ * The finished ad.
  *
  * ⚠️ THE TRUNCATION MARKS ARE DRAWN, NEVER ENFORCED. 125/40/30 are where
  * Facebook shortens the rendered ad with a "See more"; the API accepts far
@@ -415,7 +415,7 @@ function AdResult({
       {error ? <Problem>{error}</Problem> : null}
       <p className="text-xs text-[#6b706a]">
         <Link href="/dashboard/ads" className="underline">
-          All your adverts
+          All your ads
         </Link>
       </p>
     </div>

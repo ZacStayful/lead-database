@@ -51,14 +51,14 @@ const MAX_REASON = 200;
  * Write what a generation cost.
  *
  * ⚠️ IT NEVER THROWS AND NEVER FAILS THE REQUEST. A lost ledger row is a
- * reporting gap; a failed advert is the operator's afternoon. Same discipline
+ * reporting gap; a failed ad is the operator's afternoon. Same discipline
  * `subscription_plan_changes` states for its own audit trail (§24) — live
  * state is elsewhere, and the history is best-effort beside it.
  *
  * ⚠️ THE ONE THING IT CANNOT SKIP IS THE `questions` ROW, because the draft
  * cap counts these. A silent failure there hands somebody an unbounded number
  * of drafts — which is the argument for logging loudly rather than for making
- * this throw, since throwing would hand them a failed advert instead.
+ * this throw, since throwing would hand them a failed ad instead.
  */
 export async function recordGenerations(
   admin: SupabaseClient,
@@ -94,12 +94,12 @@ export async function recordGenerations(
  * questions call, so that is the count of drafts. Counting every row would
  * charge a customer for their own simplifications and for our automatic
  * retry — so somebody who could not understand a question and asked twice
- * would get fewer adverts than somebody who understood them first time, which
+ * would get fewer ads than somebody who understood them first time, which
  * is precisely backwards.
  *
  * ⚠️ AND IT FAILS CLOSED. An unreadable ledger is not permission: the whole
  * point of counting an append-only table is that it cannot be reset, and
- * reading an error as zero hands out an unbounded number of adverts at the one
+ * reading an error as zero hands out an unbounded number of ads at the one
  * moment we cannot see how many have been handed out already.
  */
 export async function draftsStartedToday(

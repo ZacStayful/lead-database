@@ -39,7 +39,7 @@ import type { GenerationKind, LedgerEntry } from "./ledger";
  *      Nothing here decides anything and nothing here publishes anything.
  *   2. IT ALWAYS DEGRADES. No API key, a timeout, malformed output, two
  *      rejections in a row — every one of them ends with a real questionnaire
- *      or the template's own default text, which is an advert we are content
+ *      or the template's own default text, which is an ad we are content
  *      to have written.
  *   3. NOTHING IT RETURNS IS TRUSTED VERBATIM. Questions go through
  *      `normaliseQuestions`; copy goes through `validateAdCopy`, which
@@ -159,7 +159,7 @@ export type QuestionSet = {
  *
  * ⚠️ IT NEVER RETURNS NOTHING. §50 treats an empty question list as success —
  * the ticket still sends unclarified — and here it is a dead end, because an
- * advert with no answers cannot be built at all. Every degraded path lands on
+ * ad with no answers cannot be built at all. Every degraded path lands on
  * `fallbackQuestionnaire`, which asks the same things in our own words.
  */
 export async function generateQuestions(params: {
@@ -346,7 +346,7 @@ export type CopyResult = {
  * `defaultDescription` are written to name no service and state no figure
  * precisely so they survive a customer who has ticked nothing — and the unit
  * suite drives every default through `validateAdCopy` against an empty
- * selection. If one ever fails, this returns it anyway: an advert the operator
+ * selection. If one ever fails, this returns it anyway: an ad the operator
  * reads before publishing beats a blank page, and the ledger says it happened.
  */
 export function defaultCopyFor(ctx: ValidationContext): AdCopy {
@@ -361,7 +361,7 @@ export function defaultCopyFor(ctx: ValidationContext): AdCopy {
 }
 
 /**
- * Write the advert: one attempt, one retry with the refusal fed back, then the
+ * Write the ad: one attempt, one retry with the refusal fed back, then the
  * template's own text.
  *
  * ⚠️ THE RETRY IS TOLD WHY, IN ITS OWN TERMS. A bare "try again" produces the
@@ -450,7 +450,7 @@ export async function generateCopy(params: {
       );
       // ⚠️ A TIMEOUT IS NOT RETRIED. The first call has already spent 60 of a
       // 300-second ceiling and a provider that just timed out is the least
-      // likely to answer in 45. Falling back leaves an advert on the screen.
+      // likely to answer in 45. Falling back leaves an ad on the screen.
       return fallback(entries);
     }
   }

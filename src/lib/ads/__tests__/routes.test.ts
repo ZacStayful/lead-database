@@ -417,6 +417,62 @@ describe("the refusal", () => {
 });
 
 /**
+ * ⚠️ "ad", NEVER "advert", ON EVERY SURFACE AN OPERATOR READS.
+ *
+ * Meta's own vocabulary is "ad" and the code has said `ads` throughout since
+ * 0156, so the UI was the only thing saying something else — a product that
+ * calls one thing two names in two places reads as two features.
+ *
+ * ⚠️ TWO DELIBERATE EXCEPTIONS, AND NEITHER IS AN OVERSIGHT.
+ *
+ *   `prompts.ts` and `brief.ts` are MODEL-FACING. Nothing there is read by a
+ *   customer, the wording is tuned against what the model produced, and
+ *   rewording a prompt to match a UI string is how a retune arrives by
+ *   accident.
+ *
+ *   The privacy policy and §60 are STAYFUL'S OWN advertising. That is legal
+ *   copy about our Meta pixel, where "advert" is correct and where §51.11
+ *   records what changing published claims carelessly costs.
+ */
+describe("the word", () => {
+  const SURFACES = [
+    ...FILES,
+    "src/lib/ads/copy.ts",
+    "src/lib/ads/slotCopy.ts",
+    "src/lib/ads/destination.ts",
+    "src/lib/ads/url.ts",
+    "src/lib/dashboardNav.ts",
+    "src/components/dashboard/ads/AdChat.tsx",
+    "src/components/dashboard/ads/AdCreatives.tsx",
+    "src/components/dashboard/ads/AdProfileForm.tsx",
+    "src/app/dashboard/ads/page.tsx",
+    "src/app/dashboard/ads/[id]/page.tsx",
+    "src/app/dashboard/ads/profile/page.tsx",
+  ];
+
+  it("is ad, not advert, on every ad surface", () => {
+    for (const file of SURFACES) {
+      // ⚠️ NOT comment-stripped, unlike every other guard in this file. The
+      // point is the vocabulary a reader meets, and half of these strings sit
+      // in a docblock explaining the copy beneath them.
+      //
+      // ⚠️ THE NOUN ONLY. "advertising" is an ordinary word — the ASA is the
+      // Advertising Standards Authority, which the attestation copy names —
+      // and banning it pushes perfectly good sentences into circumlocution to
+      // satisfy a test.
+      const text = readFileSync(join(ROOT, file), "utf8");
+      expect(text, file).not.toMatch(/\badverts?\b/i);
+    }
+  });
+
+  it("leaves the model's own prompts alone", () => {
+    const prompts = readFileSync(join(ROOT, "src/lib/ads/prompts.ts"), "utf8");
+    const brief = readFileSync(join(ROOT, "src/lib/ads/brief.ts"), "utf8");
+    expect(prompts + brief).toMatch(/\badverts?\b/i);
+  });
+});
+
+/**
  * ⚠️ ONE LAYOUT OVER THE WHOLE SEGMENT, not a check in the page. A page-level
  * check leaves the next page somebody adds ungated, and `dashboard/layout.tsx`
  * is a server component with no pathname so it cannot gate one route.

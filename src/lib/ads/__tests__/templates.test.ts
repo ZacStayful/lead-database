@@ -44,11 +44,20 @@ describe("the registry covers the four templates the spec calls gate-free", () =
     expect(templateById(DEFAULT_TEMPLATE_ID)).not.toBeNull();
   });
 
-  it("every claims gate is none — a photo template must not sneak in", () => {
+  /**
+   * ⚠️ TWO INDEPENDENT PROPERTIES, AND THIS USED TO ASSERT THEM UNDER ONE
+   * TITLE — "every claims gate is none — a photo template must not sneak in".
+   * They are not the same rule and they gate different work: six of the spec's
+   * eight core templates have a claims gate of `none`, so that is not what
+   * selected these four, and a reader taking the old title at face value
+   * concludes T4 and T5 need the claims gate when all they need is a
+   * photograph.
+   */
+  it("makes no claim needing evidence, so no claims gate is owed", () => {
     for (const t of AD_TEMPLATES) expect(t.claimsGate).toBe("none");
   });
 
-  it("renders no photo in part 1, whatever the spec allows later", () => {
+  it("needs no photo layer, which is what selected these four", () => {
     // ⚠️ "required" is not expressible: the union is "none" | "optional", so
     // tsc refuses a photo template before a test could. T7 stays declared
     // `optional` because the spec says so; what this pins is that the other

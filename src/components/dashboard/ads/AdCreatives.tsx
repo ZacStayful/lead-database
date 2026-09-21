@@ -28,7 +28,7 @@ export function AdCreatives({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={c.url}
-                alt={`Your advert at ${c.ratio.replace("x", ":")}`}
+                alt={`Your ad at ${c.ratio.replace("x", ":")}`}
                 className="mt-2 w-full rounded-lg border border-[#eceee8]"
               />
             ) : (

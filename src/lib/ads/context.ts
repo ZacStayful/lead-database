@@ -9,11 +9,11 @@ import { slotCopyLabel } from "./slotCopy";
 import type { AdSlotKey } from "./templates";
 
 /**
- * One reading of "what does this customer's advert look like right now" (§65).
+ * One reading of "what does this customer's ad look like right now" (§65).
  *
  * Four routes need it — questions, answers, regenerate and render — and they
  * must agree, because the copy is validated against the fixed headline that
- * the image then draws. Two readings would eventually produce an advert whose
+ * the image then draws. Two readings would eventually produce an ad whose
  * words were checked against a headline it is not carrying.
  */
 
@@ -28,7 +28,7 @@ export type AdContext = {
   /**
    * ⚠️ SLOTS THE TEMPLATE'S OWN PATTERNS NEED AND STILL DO NOT HAVE. A
    * template whose headline cannot be filled cannot render — returning the
-   * half-filled string would put "Landlords in : 8 years" on an advert — so
+   * half-filled string would put "Landlords in : 8 years" on an ad — so
    * this is what the route refuses on, with the list in the message.
    */
   unresolved: string[];
@@ -38,9 +38,9 @@ export type AdContext = {
 
 /**
  * ⚠️ NEVER DEFAULTS THE ACCENT TO STAYFUL GREEN. `derivePalette` falls back to
- * `STAYFUL_ACCENT`, which would put OUR colour on a customer's advert in their
+ * `STAYFUL_ACCENT`, which would put OUR colour on a customer's ad in their
  * own name. When they have not set one the ad themes supply a neutral, which
- * is honest: an unbranded advert rather than somebody else's brand.
+ * is honest: an unbranded ad rather than somebody else's brand.
  */
 export function adAccentFor(customer: Customer, template: AdTemplate): string {
   const brand = (customer as { presentation_brand?: unknown }).presentation_brand;

@@ -16,10 +16,10 @@ export const dynamic = "force-dynamic";
  *
  * ⚠️ THE BRAND CARD LEADS, AND IT IS THE EXISTING §37 ONE. `derivePalette`
  * falls back to Stayful green, so an operator who has never set a colour would
- * otherwise put OUR brand on their own advert — and a file upload cannot be a
+ * otherwise put OUR brand on their own ad — and a file upload cannot be a
  * chat question. That split is what keeps the chat short: the card takes the
  * colour and the logo, this form takes the text, and the chat asks only what
- * is still missing when an advert is actually being made.
+ * is still missing when an ad is actually being made.
  */
 export default async function AdProfilePage() {
   const { user, customer, viewAs } = await getCurrentCustomer();
@@ -35,14 +35,14 @@ export default async function AdProfilePage() {
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
       <p className="text-xs text-[#6b706a]">
         <Link href="/dashboard/ads" className="underline">
-          ← Back to your adverts
+          ← Back to your ads
         </Link>
       </p>
 
       <header>
         <h1 className="text-xl font-semibold text-[#1a1a19]">Your business details</h1>
         <p className="mt-1 text-sm text-[#55564f]">
-          Everything here goes on your adverts, in your name. Fill it in once and the
+          Everything here goes on your ads, in your name. Fill it in once and the
           questions get shorter every time.
         </p>
       </header>
