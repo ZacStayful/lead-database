@@ -22,6 +22,7 @@ import {
   type Question,
 } from "./schemas";
 import { fallbackTemplate } from "./fallback";
+import { answerableQuestion, answerableQuestions } from "./profile";
 import { templateById, type AdTemplate } from "./templates";
 import { validateAdCopy, type AdRejection, type ValidationContext } from "./validateAdCopy";
 import type { AdCopy } from "./metaFields";
@@ -238,7 +239,11 @@ export async function generateQuestions(params: {
     return {
       template,
       reason: parsed.reason || fallbackTemplate().reason,
-      questions: parsed.questions,
+      // ⚠️ FILTERED HERE, AT THE ONLY BOUNDARY THE MODEL'S QUESTIONS CROSS.
+      // An option the slot cannot store must never be offered — that is what
+      // produced "Message straight to my phone (WhatsApp or Messenger)" as an
+      // answer to a URL, and then a refusal for the answer it had invited.
+      questions: answerableQuestions(parsed.questions, template),
       degraded: false,
       entries: [entry(kind, "ok", common)],
     };
@@ -292,7 +297,12 @@ export async function simplifyQuestion(params: {
       messages: [{ role: "user", content: simplifyUser(params) }],
     });
     return {
-      question: normaliseSimplified(response.parsed_output, params.question, true),
+      // Same filter on the simplify rung, which is where the bug happened: the
+      // operator tapped "Not sure what this means?" and the reworded question
+      // offered a destination the schema had no way to keep.
+      question: answerableQuestion(
+        normaliseSimplified(response.parsed_output, params.question, true)
+      ),
       entries: [
         entry("simplify", "ok", {
           modelId: response.model,

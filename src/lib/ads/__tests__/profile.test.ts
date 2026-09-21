@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CHAT_WRITABLE_SLOTS, ATTESTATION_KEYS, answersToProfile, isChatWritable } from "../profile";
+import {
+  CHAT_WRITABLE_SLOTS,
+  ATTESTATION_KEYS,
+  answerableOptions,
+  answerableQuestions,
+  answersToProfile,
+  isChatWritable,
+} from "../profile";
 import { templateById } from "../templates";
 import type { Answer, Question } from "../schemas";
 
@@ -317,5 +324,81 @@ describe("the patch", () => {
       { id: "q2", question: "b", answer: "Bradford", depth: 0 },
     ];
     expect(answersToProfile(questions, answers, T7).patch.city).toBe("Leeds");
+  });
+});
+
+/**
+ * ⚠️ THE ROOT CAUSE, PINNED. The model writes the options as well as the
+ * question, and nothing checked them against the slot they answer — so it
+ * offered a destination the schema could not keep, the operator tapped it, and
+ * the run was refused for the answer it had invited.
+ */
+describe("an option the slot cannot store is never offered", () => {
+  /** Verbatim from the one draft production ever made (draft dd4a1a7e, 21 Sep). */
+  const REAL = "Message straight to my phone (WhatsApp or Messenger)";
+
+  it("drops the exact option that broke the first real run", () => {
+    const kept = answerableOptions("landing_url", [REAL, "https://adco.example/quote"]);
+    expect(kept).toEqual(["https://adco.example/quote"]);
+  });
+
+  it("keeps options the destination slot genuinely accepts", () => {
+    expect(
+      answerableOptions("destination", ["A page on my own website", "A form inside Facebook"])
+    ).toEqual(["A page on my own website", "A form inside Facebook"]);
+  });
+
+  it("drops a town that is a refusal and keeps a real one", () => {
+    expect(answerableOptions("city", ["Leeds", "Leave it off for now"])).toEqual(["Leeds"]);
+  });
+
+  it("drops a fee that is not a number", () => {
+    expect(answerableOptions("fee_pct", ["15%", "It depends on the property"])).toEqual(["15%"]);
+  });
+
+  it("leaves a free-prose slot alone", () => {
+    const opts = ["Same day", "Within a week", "Whenever I get round to it"];
+    expect(answerableOptions("turnaround", opts)).toEqual(opts);
+  });
+
+  it("leaves a slot nobody can write alone", () => {
+    expect(answerableOptions("review_quote", ["anything"])).toEqual(["anything"]);
+    expect(answerableOptions(undefined, ["anything"])).toEqual(["anything"]);
+  });
+
+  /**
+   * ⚠️ A SINGLE BUTTON IS NOT A QUESTION. The ladder already terminates in a
+   * plain text box, so the honest degradation when the options are gutted is to
+   * ask in words — not to offer the one survivor as though it were a choice.
+   */
+  it("falls back to free text rather than offering one option", () => {
+    const q = {
+      id: "q1",
+      question: "Where should the button send them?",
+      options: [REAL, "Ring me instead"],
+      allowOther: false,
+      slot: "landing_url",
+      depth: 1,
+      calls: 1,
+    };
+    const [out] = answerableQuestions([q]);
+    expect(out.options).toEqual([]);
+    expect(out.allowOther).toBe(true);
+    // The question itself is untouched — only what it offered.
+    expect(out.question).toBe(q.question);
+    expect(out.depth).toBe(1);
+  });
+
+  it("leaves a question whose options all survive exactly as it was", () => {
+    const q = {
+      id: "q1",
+      question: "Which town?",
+      options: ["Leeds", "Bradford"],
+      allowOther: true,
+      slot: "city",
+      depth: 0,
+      calls: 0,
+    };
+    expect(answerableQuestions([q])[0]).toBe(q);
   });
 });

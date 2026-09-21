@@ -1,5 +1,5 @@
 import type { AdProfile, FeeBasis, FeeVat } from "./resolveSlots";
-import type { AdSlotKey, AdTemplate } from "./templates";
+import { AD_TEMPLATES, type AdSlotKey, type AdTemplate } from "./templates";
 import type { Answer, Question } from "./schemas";
 import { asDestination, AD_DESTINATION_REFUSAL } from "./destination";
 import { parseAdUrl, URL_REFUSAL_COPY, URL_UPGRADED_NOTE, type UrlRefusal } from "./url";
@@ -335,4 +335,78 @@ export function mappingSentences(mapping: ProfileMapping): string[] {
     ...mapping.refusals.map(refusalMessage),
     ...mapping.notes.map(noteMessage),
   ].filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// Options the slot can actually store
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠️ THE ROOT CAUSE OF THE BUG THIS FEATURE SHIPPED WITH.
+ *
+ * The model writes the question AND its options, and nothing checked the options
+ * against the slot they answer. So on the first real run it simplified the
+ * `landing_url` question into a choice between "a message straight to your
+ * phone" and "landing on your website", the operator tapped the phone, and the
+ * coercer binned an option the system had offered them itself.
+ *
+ * An option that cannot survive the write path must never appear. And rather
+ * than restate the coercers here — which is precisely how two copies of one
+ * rule drift — THE CHECK IS THE WRITE PATH: each option is run through
+ * `answersToProfile` and kept only if it lands in the patch. There is no second
+ * definition to keep in step.
+ */
+const SERVICE_SLOTS = new Set<string>(["included", "handled"]);
+
+export function answerableOptions(
+  slot: string | undefined,
+  options: string[],
+  template?: AdTemplate
+): string[] {
+  if (!slot || !isChatWritable(slot)) return options;
+  // A multi-select's options ARE the template's own vocabulary, so they are
+  // answerable by construction — and with no template there is nothing to check
+  // them against.
+  if (SERVICE_SLOTS.has(slot)) return options;
+
+  // Any template will do for a non-service slot: the switch consults
+  // `template.services` and nothing else.
+  const t = template ?? AD_TEMPLATES[0];
+  return options.filter((option) => {
+    const probe: Question = {
+      id: "probe",
+      question: "probe",
+      options: [],
+      allowOther: true,
+      slot,
+      depth: 0,
+      calls: 0,
+    };
+    const answer: Answer = { id: "probe", question: "probe", answer: option, depth: 0 };
+    const { patch } = answersToProfile([probe], [answer], t);
+    return (patch as Record<string, unknown>)[slot] !== undefined;
+  });
+}
+
+/**
+ * The same rule over a whole question set.
+ *
+ * ⚠️ A QUESTION LEFT WITH TOO FEW OPTIONS BECOMES FREE TEXT, never a one-option
+ * choice. Offering a single button is not a question, and the ladder already
+ * terminates in a plain box — so the honest degradation is to ask in words.
+ */
+export function answerableQuestions(questions: Question[], template?: AdTemplate): Question[] {
+  return questions.map((q) => {
+    if (!q.options.length) return q;
+    const kept = answerableOptions(q.slot, q.options, template);
+    if (kept.length === q.options.length) return q;
+    return kept.length >= 2
+      ? { ...q, options: kept }
+      : { ...q, options: [], allowOther: true };
+  });
+}
+
+/** One question, for the simplify rung — which is the rung the bug happened on. */
+export function answerableQuestion(question: Question, template?: AdTemplate): Question {
+  return answerableQuestions([question], template)[0];
 }

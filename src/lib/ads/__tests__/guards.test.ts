@@ -350,3 +350,33 @@ describe("no coercion fails in silence", () => {
     expect(profile).not.toMatch(/function asUrl\b/);
   });
 });
+
+/**
+ * ⚠️ BOTH RUNGS, OR THE BUG COMES BACK ON THE ONE IT HAPPENED ON.
+ *
+ * The production failure was on the SIMPLIFY rung — the operator tapped "Not
+ * sure what this means?" and the reworded question offered an answer the schema
+ * could not keep. Filtering only the first rung would leave that path exactly as
+ * it was, and no behavioural test reaches it without a live model.
+ */
+describe("the model's options are filtered on every rung", () => {
+  const gen = source("src/lib/ads/generate.ts");
+
+  it("filters the question set", () => {
+    expect(gen).toMatch(/answerableQuestions\(\s*parsed\.questions/);
+  });
+
+  it("filters a simplified question", () => {
+    expect(gen).toMatch(/answerableQuestion\(/);
+  });
+
+  it("is the only place that normalises them, so there is no third rung", () => {
+    // schemas.ts is where `normaliseSimplified` is DEFINED, so it matches its
+    // own name — the assertion is about who CALLS it. A second caller is a rung
+    // the filter above does not cover.
+    const callers = grepOrEmpty([
+      "-rl", "--include=*.ts", NOT_TESTS, "-F", "normaliseSimplified(", "src/lib/ads", "src/app",
+    ]).filter((f) => f !== "src/lib/ads/schemas.ts");
+    expect(callers).toEqual(["src/lib/ads/generate.ts"]);
+  });
+});
