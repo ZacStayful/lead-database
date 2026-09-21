@@ -149,6 +149,7 @@ describe("the simplify turn", () => {
     question: "What is your fee basis?",
     options: ["Of gross", "Of net"],
     allowOther: false,
+    slot: "fee_basis",
     depth: 0,
     calls: 0,
   };

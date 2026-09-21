@@ -23,7 +23,7 @@ const T8 = templateById("years-properties-review")!;
 const T3 = templateById("never-see-the-messages")!;
 
 const q = (over: Partial<Question> = {}): Question => ({
-  id: "q1", question: "x", options: [], allowOther: true, depth: 0, calls: 0, ...over,
+  id: "q1", question: "x", options: [], allowOther: true, slot: "", depth: 0, calls: 0, ...over,
 });
 
 function customer(over: Record<string, unknown> = {}): Customer {

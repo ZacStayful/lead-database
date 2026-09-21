@@ -34,6 +34,7 @@ export function fallbackQuestionnaire(template: AdTemplate, resolution: Resoluti
       question: "Should the ad name a town or city, or run without one?",
       options: ["Name a town or city", "Run it without a place name"],
       allowOther: true,
+      slot: "city",
       depth: 0,
       calls: 0,
     });
@@ -47,6 +48,7 @@ export function fallbackQuestionnaire(template: AdTemplate, resolution: Resoluti
       question: q.question,
       options: q.options,
       allowOther: q.allowOther,
+      slot,
       depth: 0,
       calls: 0,
     });

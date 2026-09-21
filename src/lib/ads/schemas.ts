@@ -44,6 +44,25 @@ export type Question = {
   allowOther: boolean;
   depth: number;
   /**
+   * ⚠️ WHICH SLOT THIS ANSWER FILLS, AND IT IS THE ONLY LINK BETWEEN THE CHAT
+   * AND THE PROFILE. Without it an answer is prose nobody can file, so a
+   * second advert would ask every question again — which is exactly the
+   * promise the setup/ad slot split makes. `profile.ts` checks it against a
+   * closed list before writing anything, because this string came from a model.
+   */
+  slot: string;
+  /**
+   * ⚠️ WHAT THEY ANSWERED, STORED BESIDE THE QUESTION IT ANSWERS.
+   *
+   * Nothing else persists an answer, and without it "Rewrite the words" has
+   * nothing to rewrite from — it would have to ask every question again, which
+   * is not what that button says. One array means one compare-and-swap, so a
+   * simplify still in flight cannot resurrect a question over a filed answer.
+   * §50's simplify route already keeps the answer across a rewording for the
+   * same reason.
+   */
+  answer?: string;
+  /**
    * ⚠️ MODEL CALLS ACTUALLY MADE, NOT THE DEPTH. §50 spends its budget by
    * summing depth, which charges TWO UNITS FOR ZERO MODEL CALLS every time a
    * question drops straight to terminal — no key, a timeout, the budget
@@ -148,12 +167,22 @@ function cleanList(value: unknown, cap: number, max: number): string[] {
  * defensible because the bottom of the ladder is always answerable: a text box
  * needs no vocabulary and no certainty.
  */
-export function terminalQuestion(id: string, subject: string, calls: number): Question {
+export function terminalQuestion(
+  id: string,
+  subject: string,
+  calls: number,
+  slot = ""
+): Question {
   return {
     id,
     question: `In your own words: ${subject}`,
     options: [],
     allowOther: true,
+    // ⚠️ THE SLOT SURVIVES THE LADDER. An operator who could not follow the
+    // question still answers the same thing, and dropping it here would file
+    // their answer nowhere — so the people who needed help would be the ones
+    // asked again next time.
+    slot,
     depth: MAX_DEPTH,
     calls,
   };
@@ -188,6 +217,7 @@ export function normaliseQuestions(raw: unknown): { templateId: string | null; r
       question: text,
       options: options.length >= MIN_OPTIONS ? options : [],
       allowOther,
+      slot: clean(e.slot, 40),
       depth: 0,
       calls: 0,
     });
@@ -208,12 +238,13 @@ export function normaliseQuestions(raw: unknown): { templateId: string | null; r
 export function normaliseSimplified(raw: unknown, previous: Question, billed: boolean): Question {
   const calls = previous.calls + (billed ? 1 : 0);
   const depth = Math.min(previous.depth + 1, MAX_DEPTH);
-  if (depth >= MAX_DEPTH) return terminalQuestion(previous.id, previous.question, calls);
+  if (depth >= MAX_DEPTH) return terminalQuestion(previous.id, previous.question, calls, previous.slot);
 
-  if (!raw || typeof raw !== "object") return terminalQuestion(previous.id, previous.question, calls);
+  if (!raw || typeof raw !== "object")
+    return terminalQuestion(previous.id, previous.question, calls, previous.slot);
   const e = raw as Record<string, unknown>;
   const text = clean(e.question, 200);
-  if (!text) return terminalQuestion(previous.id, previous.question, calls);
+  if (!text) return terminalQuestion(previous.id, previous.question, calls, previous.slot);
 
   const options = cleanList(e.options, 80, MAX_OPTIONS);
   return {
@@ -221,6 +252,10 @@ export function normaliseSimplified(raw: unknown, previous: Question, billed: bo
     question: text,
     options: options.length >= MIN_OPTIONS ? options : [],
     allowOther: options.length < MIN_OPTIONS ? true : e.allow_other === true,
+    // ⚠️ NEVER FROM THE REWORDED OUTPUT. The simplify prompt is told it is the
+    // SAME question asked better; letting it re-declare the slot would let a
+    // rewording quietly file the answer somewhere else.
+    slot: previous.slot,
     depth,
     calls,
   };

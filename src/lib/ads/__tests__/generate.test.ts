@@ -39,7 +39,7 @@ const goodCopy = {
 };
 
 const fallbackQuestions = (): Question[] => [
-  { id: "q1", question: "Which town?", options: [], allowOther: true, depth: 0, calls: 0 },
+  { id: "q1", question: "Which town?", options: [], allowOther: true, slot: "city", depth: 0, calls: 0 },
 ];
 
 beforeEach(() => {

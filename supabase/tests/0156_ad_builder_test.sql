@@ -356,6 +356,186 @@ select test_util.assert_eq(
 
 
 -- ---------------------------------------------------------------------------
+-- 5b. Spending a budget — atomic, closed, and indistinguishable when refused
+-- ---------------------------------------------------------------------------
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','regenerate'),
+  1, 'the first spend returns the new count');
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','regenerate'),
+  2, 'and the second');
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','regenerate'),
+  3, 'and the third reaches the cap');
+
+-- ⚠️ THE FOURTH IS NULL, NOT AN EXCEPTION AND NOT A FOURTH SPEND. The row is
+-- read back as well, because a function that returns null while still having
+-- written is the failure this shape exists to prevent.
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','regenerate'),
+  null::integer, 'past the cap it returns null');
+select test_util.assert_eq(
+  (select regenerations from public.ad_drafts where id = 'd0000000-0000-0000-0000-000000000001'),
+  3, 'and the counter did not move past the cap');
+
+-- ⚠️ ANOTHER CUSTOMER GETS THE SAME NULL. Not a different error and not an
+-- exception — the route must not be able to tell "your cap is spent" from
+-- "that draft is not yours".
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a2','render'),
+  null::integer, 'a foreign draft is refused the same way a spent cap is');
+select test_util.assert_eq(
+  (select renders from public.ad_drafts where id = 'd0000000-0000-0000-0000-000000000001'),
+  0, 'and nothing was spent on it');
+
+-- The three budgets are independent.
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','template'),
+  1, 'template switches count separately');
+select test_util.assert_eq(
+  public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','render'),
+  1, 'and so do renders');
+
+-- ⚠️ THE VOCABULARY IS CLOSED IN SQL. A column name taken from a request would
+-- be §27.1's standing rule undone one layer down.
+select test_util.assert_raises($q$
+  select public.spend_ad_budget('d0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1','questions')
+$q$, 'an unknown budget kind raises rather than silently doing nothing');
+
+select test_util.assert_eq(
+  has_function_privilege('anon','public.spend_ad_budget(uuid,uuid,text)','execute'),
+  false, 'anon cannot spend a budget');
+select test_util.assert_eq(
+  has_function_privilege('authenticated','public.spend_ad_budget(uuid,uuid,text)','execute'),
+  false, 'nor can a signed-in browser');
+select test_util.assert_eq(
+  has_function_privilege('service_role','public.spend_ad_budget(uuid,uuid,text)','execute'),
+  true, 'the service role can');
+
+-- ---------------------------------------------------------------------------
+-- 5c. Merging the ad profile — atomic per key, and never an account column
+-- ---------------------------------------------------------------------------
+select public.merge_ad_profile('a0000000-0000-0000-0000-0000000000a1',
+  '{"company_name":"Adco","fee_pct":15}'::jsonb);
+select public.merge_ad_profile('a0000000-0000-0000-0000-0000000000a1',
+  '{"fee_pct":12,"fee_public":true}'::jsonb);
+
+-- ⚠️ THE KEY THE SECOND PATCH DID NOT MENTION SURVIVES. A read-modify-write
+-- from a stale tab is what loses it, and the fee is the value it loses.
+select test_util.assert_eq(
+  (select ad_profile->>'company_name' from public.customers where id = 'a0000000-0000-0000-0000-0000000000a1'),
+  'Adco', 'a key the patch did not mention survives the merge');
+select test_util.assert_eq(
+  (select ad_profile->>'fee_pct' from public.customers where id = 'a0000000-0000-0000-0000-0000000000a1'),
+  '12', 'and a key it did mention is replaced');
+select test_util.assert_eq(
+  (select ad_profile->>'fee_public' from public.customers where id = 'a0000000-0000-0000-0000-0000000000a1'),
+  'true', 'and a new key is added');
+
+-- ⚠️ SHALLOW, DELIBERATELY. Ticking two boxes after ticking three means two.
+select public.merge_ad_profile('a0000000-0000-0000-0000-0000000000a1',
+  '{"included":["cleaning","linen","pricing"]}'::jsonb);
+select public.merge_ad_profile('a0000000-0000-0000-0000-0000000000a1',
+  '{"included":["cleaning"]}'::jsonb);
+select test_util.assert_eq(
+  (select jsonb_array_length(ad_profile->'included') from public.customers where id = 'a0000000-0000-0000-0000-0000000000a1'),
+  1, 'an array REPLACES rather than merging, so unticking works');
+
+select test_util.assert_eq(
+  (select ad_profile_updated_at is not null from public.customers where id = 'a0000000-0000-0000-0000-0000000000a1'),
+  true, 'and the profile carries its own timestamp');
+
+-- ⚠️ IT NEVER WRITES AN ACCOUNT COLUMN. Every key is an override, so one value
+-- per fact and a difference only where somebody chose one.
+select test_util.assert_eq(
+  (select business_name from public.customers where id = 'a0000000-0000-0000-0000-0000000000a1'),
+  'Adco', 'merging a company_name leaves business_name alone');
+
+select test_util.assert_raises($q$
+  select public.merge_ad_profile('a0000000-0000-0000-0000-0000000000a1', '["not","an","object"]'::jsonb)
+$q$, 'an array patch is refused rather than stored');
+select test_util.assert_eq(
+  public.merge_ad_profile('a0000000-0000-0000-0000-00000000dead', '{"a":1}'::jsonb),
+  null::jsonb, 'an unknown customer returns null rather than raising');
+
+select test_util.assert_eq(
+  has_function_privilege('authenticated','public.merge_ad_profile(uuid,jsonb)','execute'),
+  false, 'a signed-in browser cannot merge a profile');
+select test_util.assert_eq(
+  has_function_privilege('service_role','public.merge_ad_profile(uuid,jsonb)','execute'),
+  true, 'the service role can');
+
+-- ---------------------------------------------------------------------------
+-- 5d. ⚠️ THE CLAIM — one winner, and a killed lambda does not strand a draft
+-- ---------------------------------------------------------------------------
+update public.ad_drafts set status = 'collecting', updated_at = now()
+ where id = 'd0000000-0000-0000-0000-000000000001';
+
+select test_util.assert_eq(
+  (select count(*)::integer from public.claim_ad_draft(
+     'd0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1')),
+  1, 'the first caller takes it');
+select test_util.assert_eq(
+  (select status from public.ad_drafts where id = 'd0000000-0000-0000-0000-000000000001'),
+  'generating', 'and the row says so');
+
+-- ⚠️ THE SECOND CALLER GETS NOTHING. This is the double-tapped Send, and
+-- without it both requests pay for a generation and race to store a different
+-- advert into the same row.
+select test_util.assert_eq(
+  (select count(*)::integer from public.claim_ad_draft(
+     'd0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1')),
+  0, 'a second caller gets nothing while the first is plausibly alive');
+
+-- ⚠️ BUT A KILLED LAMBDA MUST NOT STRAND IT. Six minutes is past the 60 + 45
+-- the copy path spends inside a 300-second ceiling.
+--
+-- ⚠️ THE WINDOW IS DRIVEN BY THE PARAMETER, NOT BY BACKDATING THE ROW. The
+-- updated_at trigger rewrites that column on EVERY update, so an
+-- `update ... set updated_at = now() - interval '10 minutes'` is silently
+-- undone and the assertion beneath it tests nothing. Found by this test
+-- failing; it is also why production works — the claim stamps updated_at once
+-- and a dead lambda writes nothing more, so the row ages on its own.
+select pg_sleep(1.2);
+select test_util.assert_eq(
+  (select count(*)::integer from public.claim_ad_draft(
+     'd0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1', 1)),
+  1, 'a draft abandoned past the stale window is reclaimable');
+select test_util.assert_eq(
+  (select count(*)::integer from public.claim_ad_draft(
+     'd0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1')),
+  0, 'and the DEFAULT window still protects a generation in flight');
+
+-- ready and failed are both re-runnable — Regenerate and Try again.
+update public.ad_drafts set status = 'failed', error = 'call_failed', updated_at = now()
+ where id = 'd0000000-0000-0000-0000-000000000001';
+select test_util.assert_eq(
+  (select count(*)::integer from public.claim_ad_draft(
+     'd0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a1')),
+  1, 'a failed draft can be retried');
+select test_util.assert_eq(
+  (select error from public.ad_drafts where id = 'd0000000-0000-0000-0000-000000000001'),
+  null::text, 'and the claim clears the previous failure');
+
+-- ⚠️ ANOTHER CUSTOMER CANNOT CLAIM IT, and gets the same nothing.
+update public.ad_drafts set status = 'collecting', updated_at = now()
+ where id = 'd0000000-0000-0000-0000-000000000001';
+select test_util.assert_eq(
+  (select count(*)::integer from public.claim_ad_draft(
+     'd0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000a2')),
+  0, 'a foreign draft cannot be claimed');
+select test_util.assert_eq(
+  (select status from public.ad_drafts where id = 'd0000000-0000-0000-0000-000000000001'),
+  'collecting', 'and the refused claim wrote nothing');
+
+select test_util.assert_eq(
+  has_function_privilege('authenticated','public.claim_ad_draft(uuid,uuid,integer)','execute'),
+  false, 'a signed-in browser cannot claim a draft');
+select test_util.assert_eq(
+  has_function_privilege('service_role','public.claim_ad_draft(uuid,uuid,integer)','execute'),
+  true, 'the service role can');
+
+-- ---------------------------------------------------------------------------
 -- 6. The updated_at trigger, asserted BEHAVIOURALLY
 --
 -- ⚠️ These are separate top-level statements on purpose. now() is transaction

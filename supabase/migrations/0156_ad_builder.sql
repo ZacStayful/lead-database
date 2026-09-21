@@ -487,3 +487,197 @@ on conflict (id) do update
   set public             = false,
       file_size_limit    = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
+
+
+-- ===========================================================================
+-- 9. Spending a budget
+--
+-- ⚠️ POSTGREST CANNOT DO `set x = x + 1`, so without this the routes would
+-- have to read a counter, add one and write it back — and two tabs both pass
+-- a TypeScript `if` while neither passes a WHERE clause. The plan for this
+-- feature states the rule as `set renders = renders + 1 where id = $1 and
+-- renders < 10 returning renders`, which is SQL, which means a function.
+--
+-- ⚠️ THE KIND IS A CLOSED VOCABULARY CHECKED IN HERE, NEVER A COLUMN NAME
+-- FROM A REQUEST. A function taking a column would be §27.1's standing rule
+-- undone one layer down: it is the shape that looks convenient the moment
+-- somebody wants one more counter.
+--
+-- ⚠️ NULL MEANS "no". Either the cap is reached or the draft is not this
+-- customer's, and the route must not be able to tell those apart — the same
+-- indistinguishable-404 discipline the read path uses.
+--
+-- The caps are stated twice, here and in ad_drafts_shape. That is deliberate
+-- and the direction is safe: the CHECK is the backstop, so a cap that drifted
+-- UPWARDS in this function raises 23514 rather than quietly over-spending.
+-- ===========================================================================
+
+create or replace function public.spend_ad_budget(
+  p_draft_id    uuid,
+  p_customer_id uuid,
+  p_kind        text
+)
+returns integer
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_new integer;
+begin
+  if p_kind = 'template' then
+    update public.ad_drafts
+       set template_switches = template_switches + 1
+     where id = p_draft_id
+       and customer_id = p_customer_id
+       and template_switches < 3
+    returning template_switches into v_new;
+
+  elsif p_kind = 'regenerate' then
+    update public.ad_drafts
+       set regenerations = regenerations + 1
+     where id = p_draft_id
+       and customer_id = p_customer_id
+       and regenerations < 3
+    returning regenerations into v_new;
+
+  elsif p_kind = 'render' then
+    update public.ad_drafts
+       set renders = renders + 1
+     where id = p_draft_id
+       and customer_id = p_customer_id
+       and renders < 10
+    returning renders into v_new;
+
+  else
+    -- Loudly, because a typo here would otherwise read as a spent budget and
+    -- the feature would simply stop working for one action.
+    raise exception 'spend_ad_budget: unknown kind %', p_kind;
+  end if;
+
+  return v_new;
+end $$;
+
+revoke all on function public.spend_ad_budget(uuid, uuid, text) from public;
+revoke all on function public.spend_ad_budget(uuid, uuid, text) from anon;
+revoke all on function public.spend_ad_budget(uuid, uuid, text) from authenticated;
+grant execute on function public.spend_ad_budget(uuid, uuid, text) to service_role;
+
+comment on function public.spend_ad_budget(uuid, uuid, text) is
+  'Atomically spend one unit of a draft''s template/regenerate/render budget. '
+  'Returns the new count, or NULL when the cap is reached or the draft is not '
+  'that customer''s. PostgREST cannot express the increment, and a '
+  'read-modify-write is passed by two tabs at once.';
+
+
+-- ===========================================================================
+-- 10. Merging the ad profile
+--
+-- ⚠️ TWO WRITERS EXIST — the answers route, which files what the operator just
+-- told the chat, and the profile form, where they edit it by hand. A
+-- read-modify-write loses whichever one landed first, and the edit most likely
+-- to be lost is the FEE, which decides whether a price appears on a published
+-- advert. `||` is atomic per key.
+--
+-- ⚠️ IT IS A SHALLOW MERGE. A nested object or array REPLACES wholesale rather
+-- than merging — which is what `included` and `councils` want (ticking two
+-- boxes after ticking three means two, not five) and is the §26.7 trap for
+-- anything that ever wants deep merging. Nothing here does.
+--
+-- ⚠️ AND IT NEVER WRITES AN ACCOUNT COLUMN. Every key in ad_profile is an
+-- OVERRIDE (§41.6): company_name does not touch business_name, the fee does
+-- not touch presentation_settings, the areas do not touch the lead filter. A
+-- NULL key means "use what the account already has", so a merge that wrote
+-- through would collapse one value per fact into two that drift.
+-- ===========================================================================
+
+create or replace function public.merge_ad_profile(
+  p_customer_id uuid,
+  p_patch       jsonb
+)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_profile jsonb;
+begin
+  if p_patch is null or jsonb_typeof(p_patch) <> 'object' then
+    raise exception 'merge_ad_profile: patch must be a json object';
+  end if;
+
+  update public.customers
+     set ad_profile            = coalesce(ad_profile, '{}'::jsonb) || p_patch,
+         ad_profile_updated_at = now()
+   where id = p_customer_id
+  returning ad_profile into v_profile;
+
+  return v_profile;  -- null when no such customer
+end $$;
+
+revoke all on function public.merge_ad_profile(uuid, jsonb) from public;
+revoke all on function public.merge_ad_profile(uuid, jsonb) from anon;
+revoke all on function public.merge_ad_profile(uuid, jsonb) from authenticated;
+grant execute on function public.merge_ad_profile(uuid, jsonb) to service_role;
+
+comment on function public.merge_ad_profile(uuid, jsonb) is
+  'Shallow-merge a patch into customers.ad_profile and stamp its own '
+  'timestamp. Atomic per key, because two writers exist and a lost fee edit '
+  'puts the wrong price on a live advert.';
+
+
+-- ===========================================================================
+-- 11. Claiming a draft for generation
+--
+-- ⚠️ THE SINGLE MOST IMPORTANT ATOMICITY PROPERTY IN THIS FEATURE. A
+-- double-tapped Send puts two requests in flight; both pass a TypeScript `if`,
+-- and only a WHERE clause stops both of them paying for a generation and
+-- racing to store a different advert.
+--
+-- ⚠️ AND IT IS A FUNCTION RATHER THAN A POSTGREST FILTER ON PURPOSE. The
+-- equivalent is `.or("status.neq.generating,updated_at.lt.<iso>")`, which
+-- rests on how PostgREST parses dots inside a timestamp — a thing that is easy
+-- to reason about wrongly and impossible to test without PostgREST running.
+-- In here it is ordinary SQL and supabase/tests/ci.sh proves it.
+--
+-- ⚠️ THE STALE WINDOW IS NOT OPTIONAL. The copy path spends 60 + 45 seconds
+-- inside a 300-second ceiling, so a draft still `generating` six minutes later
+-- belongs to a lambda that was killed. Without the window it is stuck in that
+-- state FOREVER and the operator's only recourse is Delete, which destroys the
+-- answers they just spent five minutes giving.
+--
+-- Returns the claimed row, or no rows at all — which is either "somebody else
+-- has it" or "there is no such draft", and the route asks separately because
+-- only one of those is worth a message.
+-- ===========================================================================
+
+create or replace function public.claim_ad_draft(
+  p_draft_id      uuid,
+  p_customer_id   uuid,
+  p_stale_seconds integer default 360
+)
+returns setof public.ad_drafts
+language sql
+set search_path = public
+as $$
+  update public.ad_drafts
+     set status = 'generating',
+         error  = null
+   where id = p_draft_id
+     and customer_id = p_customer_id
+     and (
+           status <> 'generating'
+           or updated_at < now() - make_interval(secs => greatest(p_stale_seconds, 1))
+         )
+  returning *;
+$$;
+
+revoke all on function public.claim_ad_draft(uuid, uuid, integer) from public;
+revoke all on function public.claim_ad_draft(uuid, uuid, integer) from anon;
+revoke all on function public.claim_ad_draft(uuid, uuid, integer) from authenticated;
+grant execute on function public.claim_ad_draft(uuid, uuid, integer) to service_role;
+
+comment on function public.claim_ad_draft(uuid, uuid, integer) is
+  'Atomically take a draft for generation. Returns the claimed row, or nothing '
+  'when another request holds it and its lambda is still plausibly alive. A '
+  'draft left generating past the stale window is reclaimable, or a killed '
+  'function would strand it with the operator''s answers inside.';

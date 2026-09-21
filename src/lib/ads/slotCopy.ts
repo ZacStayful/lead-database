@@ -107,3 +107,36 @@ export function questionForSlot(slot: AdSlotKey, t: AdTemplate): SlotQuestion | 
   if (t.services && slot === t.services.slot) return serviceQuestion(t);
   return SLOT_QUESTIONS[slot] ?? null;
 }
+
+/**
+ * A slot's name, as an operator would read it.
+ *
+ * ⚠️ NEVER SHOW THE RAW KEY. "We still need: landing_url, review_count" is a
+ * database column list in front of a customer, and the fix for it is a
+ * sentence rather than a snake_case string.
+ */
+export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
+  company_name: "the name the advert goes out under",
+  city: "a town or city to name",
+  areas: "the areas you cover",
+  landing_url: "a page for the button to point at",
+  fee_pct: "your fee",
+  fee_basis: "whether the fee is on gross or net",
+  fee_vat: "how VAT is treated",
+  fee_public: "whether the fee goes on the advert",
+  included: "what is included",
+  handled: "what you handle",
+  councils: "the councils you deal with",
+  property_types: "the property types you take on",
+  turnaround: "how quickly you reply",
+  years_trading: "how long you have been trading",
+  properties_managed: "how many properties you look after",
+  review_score: "your review score",
+  review_count: "how many reviews that is out of",
+  included_list: "what is included",
+  handled_list: "what you handle",
+};
+
+export function slotCopyLabel(slot: string): string {
+  return SLOT_LABELS[slot as AdSlotKey] ?? slot.replace(/_/g, " ");
+}
