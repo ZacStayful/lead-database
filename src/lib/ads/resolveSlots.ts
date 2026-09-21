@@ -1,6 +1,7 @@
 import type { Customer } from "@/lib/types";
 import { POSTCODE_AREA_CITY } from "@/lib/postcode";
 import type { AdSlotKey, AdTemplate } from "./templates";
+import { destinationNeedsLink, resolveDestination, type AdDestination } from "./destination";
 import { slotsForTemplate } from "./templates";
 
 /**
@@ -17,6 +18,8 @@ export type FeeVat = "inclusive" | "exclusive" | "not_stated";
 
 export type AdProfile = {
   company_name?: string | null;
+  /** Where the button sends them. Absent means nobody has been asked. */
+  destination?: AdDestination | null;
   city?: string | null;
   areas?: string | null;
   landing_url?: string | null;
@@ -196,6 +199,12 @@ export type Resolution = {
   targeting: TargetingState;
   /** True when no city is known, so the unlocated headline is the honest one. */
   unlocated: boolean;
+  /**
+   * ⚠️ RESOLVED HERE AND NOWHERE ELSE. `context.ts` and the routes read this
+   * rather than deriving it, so there is one answer to "does this ad need a
+   * page" — the §26.7 rule. `undefined` means the question has not been asked.
+   */
+  destination: AdDestination | undefined;
   warnings: string[];
 };
 
@@ -239,6 +248,10 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
   put("city", text(p.city));
   put("areas", areas);
   put("landing_url", landingUrl);
+
+  // After landing_url, because an already-resolved link implies `website`.
+  const destination = resolveDestination(p.destination, slots.landing_url !== undefined);
+  put("destination", destination ?? null);
   put("fee_pct", fee.ok && feePct !== null ? String(feePct) : null);
   put("fee_basis", text(p.fee_basis ?? (deckFee?.basis as string | undefined)));
   put("fee_vat", text(p.fee_vat));
@@ -267,6 +280,11 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
       return p.fee_public === true && slots[k] === undefined;
     }
     if (k === "review_quote" || k === "review_quote_source") return false; // optional by design
+    // ⚠️ ONLY A WEBSITE DESTINATION NEEDS A PAGE. This is the half of the
+    // blocker that lives in `missing`: without it the chat keeps asking for a
+    // URL an Instant Form ad will never use, which is how the question came to
+    // be reworded into one whose answer could not be stored.
+    if (k === "landing_url") return destinationNeedsLink(destination) && slots[k] === undefined;
     return slots[k] === undefined;
   });
 
@@ -275,6 +293,7 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
     missing,
     targeting,
     unlocated: slots.city === undefined,
+    destination,
     warnings,
   };
 }

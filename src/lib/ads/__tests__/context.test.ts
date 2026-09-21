@@ -55,9 +55,41 @@ describe("what is still unresolved", () => {
     expect(adContext(c, T8).unresolved).toEqual([]);
   });
 
-  /** The button has to point somewhere, whatever the headline needs. */
-  it("always names a missing landing page", () => {
-    expect(adContext(customer({ website_url: null }), T7).unresolved).toContain("landing_url");
+  /**
+   * ⚠️ THIS TEST USED TO ASSERT THE BUG. It read "always names a missing landing
+   * page", and "always" was exactly the defect: the button's page was demanded
+   * unconditionally, so an operator who wanted a Facebook form — and had said so
+   * — was refused for a page their ad would never use. Production ran one draft
+   * and never produced an ad because of it.
+   *
+   * The rule now: with nothing on file the gap is the QUESTION, not the page.
+   */
+  it("asks where the button goes before it asks for a page", () => {
+    const u = adContext(customer({ website_url: null }), T7).unresolved;
+    expect(u).toContain("destination");
+    expect(u).not.toContain("landing_url");
+  });
+
+  it("names the page only once they have chosen their own website", () => {
+    const c = customer({ website_url: null, ad_profile: { destination: "website" } });
+    expect(adContext(c, T7).unresolved).toContain("landing_url");
+  });
+
+  /** The case that unblocks an operator with no website at all. */
+  it("needs no page at all for a form inside Facebook", () => {
+    const c = customer({ website_url: null, ad_profile: { destination: "instant_form" } });
+    expect(adContext(c, T7).unresolved).toEqual([]);
+  });
+
+  /**
+   * ⚠️ NOT A REGRESSION FOR ANYBODY WHO ALREADY HAS A SITE. A resolved link
+   * implies `website`, so the ~30 customers carrying a website_url are never
+   * asked a question they would not have been asked before.
+   */
+  it("infers website from a link already on file, and asks nothing", () => {
+    const ctx = adContext(customer(), T7);
+    expect(ctx.resolution.destination).toBe("website");
+    expect(ctx.unresolved).toEqual([]);
   });
 
   it("is empty for a template whose patterns need nothing extra", () => {

@@ -31,6 +31,9 @@ export const AD_SLOT_KEYS = [
   "city",
   "areas",
   "landing_url",
+  // Where the button sends them. Decides whether `landing_url` is needed at
+  // all — see destination.ts, and §65 on the run this unblocks.
+  "destination",
   "fee_pct",
   "fee_basis",
   "fee_vat",
@@ -170,7 +173,7 @@ export const AD_TEMPLATES: AdTemplate[] = [
     audienceTokens: ["landlord", "host"],
     categoryLine: CATEGORY,
     categoryTokens: CATEGORY_TOKENS,
-    setupSlots: ["company_name", "fee_pct", "fee_basis", "fee_vat", "fee_public", "included", "landing_url"],
+    setupSlots: ["company_name", "fee_pct", "fee_basis", "fee_vat", "fee_public", "included", "landing_url", "destination"],
     adSlots: ["city"],
     headlineLocated: "Landlords in {city}: you’ll never see the *3am* message.",
     headlineUnlocated: "Landlords: you’ll never see the *3am* message.",
@@ -222,7 +225,7 @@ export const AD_TEMPLATES: AdTemplate[] = [
     audienceTokens: ["landlord"],
     categoryLine: CATEGORY,
     categoryTokens: CATEGORY_TOKENS,
-    setupSlots: ["company_name", "councils", "handled", "landing_url"],
+    setupSlots: ["company_name", "councils", "handled", "landing_url", "destination"],
     adSlots: ["city"],
     headlineLocated: "Landlords in {city}: short let rules, *handled*.",
     headlineUnlocated: "Landlords: short let rules, *handled*.",
@@ -273,7 +276,7 @@ export const AD_TEMPLATES: AdTemplate[] = [
     audienceTokens: ["landlord"],
     categoryLine: CATEGORY,
     categoryTokens: CATEGORY_TOKENS,
-    setupSlots: ["company_name", "property_types", "turnaround", "landing_url"],
+    setupSlots: ["company_name", "property_types", "turnaround", "landing_url", "destination"],
     adSlots: ["city"],
     headlineLocated: "Landlords in {city}: what would your property earn on *short lets*?",
     headlineUnlocated: "Landlords: what would your property earn on *short lets*?",
@@ -311,7 +314,7 @@ export const AD_TEMPLATES: AdTemplate[] = [
     categoryTokens: CATEGORY_TOKENS,
     setupSlots: [
       "company_name", "areas", "years_trading", "properties_managed",
-      "review_score", "review_count", "review_quote", "review_quote_source", "landing_url",
+      "review_score", "review_count", "review_quote", "review_quote_source", "landing_url", "destination",
     ],
     adSlots: ["city"],
     headlineLocated:

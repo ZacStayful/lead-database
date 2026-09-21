@@ -23,9 +23,14 @@ function ask(slot: string, answer: string): { questions: Question[]; answers: An
   return { questions: [q], answers: [{ id: "q1", question: q.question, answer, depth: 0 }] };
 }
 
+const mapping = (slot: string, answer: string, t = T7) => {
+  const { questions, answers } = ask(slot, answer);
+  return answersToProfile(questions, answers, t);
+};
+
 const map = (slot: string, answer: string, t = T7) => {
   const { questions, answers } = ask(slot, answer);
-  return answersToProfile(questions, answers, t) as Record<string, unknown>;
+  return answersToProfile(questions, answers, t).patch as Record<string, unknown>;
 };
 
 /**
@@ -167,14 +172,54 @@ describe("the landing page", () => {
     expect(map("landing_url", "adco.example/quote").landing_url).toBe("https://adco.example/quote");
   });
 
-  /** ⚠️ https only — the button on a live advert must not send anybody over http. */
-  it("refuses http", () => {
-    expect(map("landing_url", "http://adco.example")).not.toHaveProperty("landing_url");
+  /**
+   * ⚠️ WHAT IS STORED IS STILL ALWAYS https — the button on a live ad must not
+   * send anybody over http. What changed is that a typed `http://` is UPGRADED
+   * and said out loud, where it used to be binned in silence. That silence is
+   * what made the first real run look like it had lost an answer the operator
+   * had given.
+   */
+  it("upgrades http to https rather than binning it, and says so", () => {
+    const m = mapping("landing_url", "http://adco.example");
+    expect(m.patch.landing_url).toBe("https://adco.example/");
+    expect(m.notes).toEqual([{ slot: "landing_url", kind: "url_upgraded" }]);
+    expect(m.refusals).toEqual([]);
   });
 
-  it("refuses something that is not a URL at all", () => {
-    expect(map("landing_url", "our website")).not.toHaveProperty("landing_url");
-    expect(map("landing_url", "call me")).not.toHaveProperty("landing_url");
+  it("refuses something that is not a URL at all, WITH A REASON", () => {
+    const m = mapping("landing_url", "call me");
+    expect(m.patch).not.toHaveProperty("landing_url");
+    // ⚠️ The reason is the point. A bare `undefined` is what this replaced.
+    expect(m.refusals).toEqual([
+      { slot: "landing_url", reason: "not_a_url", answer: "call me" },
+    ]);
+  });
+
+  it("tells a dotless host apart from unparseable text", () => {
+    // Two different things to say: one is not an address at all, the other
+    // looks like one and could not be a public site.
+    expect(mapping("landing_url", "our website").refusals[0]?.reason).toBe("not_a_url");
+    expect(mapping("landing_url", "intranet").refusals[0]?.reason).toBe("no_dot");
+  });
+
+  it("refuses a scheme the button cannot open, checked before prefixing", () => {
+    // ⚠️ `new URL("https://javascript:alert(1)")` PARSES — it reads `javascript`
+    // as the host — so a check after the https prefix waves this through.
+    for (const bad of ["javascript:alert(1)", "mailto:me@adco.example", "data:text/html,x"]) {
+      expect(mapping("landing_url", bad).refusals[0]?.reason, bad).toBe("unsupported_scheme");
+    }
+  });
+
+  it("refuses a credential and a non-public host", () => {
+    expect(mapping("landing_url", "https://u:p@adco.example").refusals[0]?.reason)
+      .toBe("has_credentials");
+    expect(mapping("landing_url", "http://127.0.0.1:3000").refusals[0]?.reason)
+      .toBe("not_public");
+  });
+
+  it("strips the punctuation a paste picks up from prose", () => {
+    expect(mapping("landing_url", "adco.example/quote.").patch.landing_url)
+      .toBe("https://adco.example/quote");
   });
 });
 
@@ -255,7 +300,7 @@ describe("the patch", () => {
 
   it("ignores an answer to a question with no slot", () => {
     const { questions, answers } = ask("", "Leeds");
-    expect(answersToProfile(questions, answers, T7)).toEqual({});
+    expect(answersToProfile(questions, answers, T7).patch).toEqual({});
   });
 
   it("ignores an empty answer", () => {
@@ -271,6 +316,6 @@ describe("the patch", () => {
       { id: "q1", question: "a", answer: "Leeds", depth: 0 },
       { id: "q2", question: "b", answer: "Bradford", depth: 0 },
     ];
-    expect((answersToProfile(questions, answers, T7) as Record<string, unknown>).city).toBe("Leeds");
+    expect(answersToProfile(questions, answers, T7).patch.city).toBe("Leeds");
   });
 });

@@ -77,5 +77,12 @@ export const AD_COPY = {
     renders: "That’s as many image renders as this ad gets.",
     // A draft in `generating` is one somebody else (or another tab) has.
     busy: "This ad is already being written.",
+    /**
+     * ⚠️ ONE SENTENCE, TWO ROUTES. The answers route named what was missing and
+     * the render route showed only `generic` for the identical condition, so
+     * which explanation a customer met depended on where they were standing.
+     */
+    unresolved: (labels: string[]) =>
+      `Before I can write this I still need ${labels.join(", ")}.`,
   },
 } as const;

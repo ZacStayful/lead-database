@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { AD_COPY } from "@/lib/ads/copy";
-import { answersToProfile } from "@/lib/ads/profile";
+import { answersToProfile, mappingSentences } from "@/lib/ads/profile";
 import { answersComplete, collectAnswers } from "@/lib/ads/schemas";
 import {
   adJson,
@@ -62,8 +62,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // and the edit most likely to be lost is the fee. `writeAd` re-reads the
   // customer afterwards, because the row this request was handed is now stale.
   const template = templateById(existing.template_id ?? DEFAULT_TEMPLATE_ID)!;
-  const patch = answersToProfile(questions, answers, template);
-  const merged = await mergeAdProfile(admin, customer.id, patch);
+  const mapping = answersToProfile(questions, answers, template);
+  // ⚠️ THE REFUSALS TRAVEL WITH THE RESPONSE. Three of the five answers on the
+  // first real run wrote nothing and said nothing, and the operator was then
+  // refused for a value they believed they had given. Whatever we could not
+  // read is now said out loud, whether the write goes on to succeed or not.
+  const said = mappingSentences(mapping);
+  const merged = await mergeAdProfile(admin, customer.id, mapping.patch);
   if (!merged) {
     await releaseClaim(admin, existing.id, "collecting");
     return adJson({ error: AD_COPY.errors.generic }, 500);
@@ -90,9 +95,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return result.reason === "unresolved"
       ? adJson(
           {
-            error: `Before I can write this I still need ${result.labels.join(", ")}.`,
+            // The refusal comes FIRST: "I couldn't read that as a web address"
+            // explains the missing field, where naming the field alone reads as
+            // us asking for something that was already provided.
+            error: [...said, AD_COPY.errors.unresolved(result.labels)].join(" "),
             code: "unresolved",
             missing: result.missing,
+            refused: mapping.refusals,
           },
           400
         )

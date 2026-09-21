@@ -76,7 +76,7 @@ describe("⚠️ no barrel in src/lib/ads", () => {
 });
 
 describe("⚠️ the client-safe modules stay import-free", () => {
-  const IMPORT_FREE = ["copy.ts", "storagePaths.ts", "emphasis.ts", "metaFields.ts"];
+  const IMPORT_FREE = ["copy.ts", "storagePaths.ts", "emphasis.ts", "metaFields.ts", "url.ts", "destination.ts"];
 
   it("imports nothing at all, so a client component can use them", () => {
     // deadLeadCopy.ts and featureRequest.ts are the precedent: the moment one
@@ -284,5 +284,69 @@ describe("⚠️ the cached prefix cannot drift", () => {
   it("systemFor is the only thing that sets cache_control", () => {
     const setters = grepOrEmpty(["-rl", NOT_TESTS, "--include=*.ts", "-F", "cache_control", "src/lib/ads"]);
     expect(setters).toEqual(["src/lib/ads/prompts.ts"]);
+  });
+});
+
+/**
+ * ⚠️ THE ONE BUG IN THIS CHANGE THE COMPILER COULD NOT SEE.
+ *
+ * `answersToProfile` used to return a bare patch and now returns
+ * `{ patch, refusals, notes }`. The answers route broke loudly and tsc named it.
+ * The profile route did NOT: it spreads the result into a
+ * `Record<string, unknown>`, which type-checks perfectly against the new shape
+ * and would have written `refusals` and `notes` into `ad_profile` as keys —
+ * silently, on a column every ad surface reads.
+ *
+ * Nothing behavioural reaches it either, so it is guarded here or not at all.
+ */
+describe("the profile route takes the patch, not the whole mapping", () => {
+  const route = source("src/app/api/customer/ads/profile/route.ts");
+
+  it("never spreads answersToProfile directly", () => {
+    expect(route).not.toMatch(/\.\.\.\s*answersToProfile\(/);
+  });
+
+  it("names .patch explicitly", () => {
+    expect(route).toMatch(/answersToProfile\([^)]*\)/);
+    expect(route).toMatch(/\.\.\.\s*mapping\.patch/);
+  });
+
+  it("hands the refusals back to the caller", () => {
+    // A refusal the operator is never shown is the silence this replaced.
+    expect(route).toMatch(/refused:\s*mapping\.refusals/);
+  });
+});
+
+/**
+ * ⚠️ A DECLINED COERCION MUST RECORD WHY. `put` is the only place that decides,
+ * and a `put` that dropped the refusal would restore the original failure — an
+ * answer given, binned, and then reported missing — with every behavioural test
+ * still green for the slots that happen to parse.
+ */
+describe("no coercion fails in silence", () => {
+  const profile = source("src/lib/ads/profile.ts");
+
+  it("put records a refusal on the undefined branch", () => {
+    // ⚠️ ANCHORED ON CODE, NOT ON A COMMENT. The first version of this sliced
+    // up to "// Array.from" — which `source()` has already stripped — so
+    // indexOf returned -1, the slice ran to the end of the file, and it passed
+    // on the landing_url branch's own push while `put` recorded nothing. A
+    // mutation run caught it; nothing else would have. Sixth time this repo has
+    // recorded that shape (§50.9, §53, §55, §57, §65).
+    const from = profile.indexOf("const put =");
+    const to = profile.indexOf("for (const [slot, raw]");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    expect(profile.slice(from, to)).toMatch(/refusals\.push\(/);
+  });
+
+  it("the landing_url branch uses the verdict's own reason", () => {
+    // Flattening every URL failure to "unreadable" loses the three different
+    // things that need saying: a scheme, a credential, a sentence.
+    expect(profile).toMatch(/reason:\s*verdict\.reason/);
+  });
+
+  it("asUrl is gone, so there is one URL rule", () => {
+    expect(profile).not.toMatch(/function asUrl\b/);
   });
 });

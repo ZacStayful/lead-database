@@ -27,6 +27,12 @@ export const SLOT_QUESTIONS: Partial<Record<AdSlotKey, SlotQuestion>> = {
     options: [],
     allowOther: true,
   },
+  destination: {
+    question:
+      "When a landlord taps the button on your ad, where should they land — a page on your own website, or a form inside Facebook?",
+    options: ["A page on my own website", "A form inside Facebook"],
+    allowOther: true,
+  },
   landing_url: {
     question: "Where should the button send them?",
     options: [],
@@ -119,6 +125,7 @@ export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
   company_name: "the name the advert goes out under",
   city: "a town or city to name",
   areas: "the areas you cover",
+  destination: "where the button should send people",
   landing_url: "a page for the button to point at",
   fee_pct: "your fee",
   fee_basis: "whether the fee is on gross or net",

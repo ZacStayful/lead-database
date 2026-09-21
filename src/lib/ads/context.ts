@@ -1,6 +1,7 @@
 import type { Customer } from "@/lib/types";
 import { adBrief, figureList } from "./brief";
 import { adProfileOf, fillPattern, resolveSlots, type Resolution } from "./resolveSlots";
+import { destinationNeedsLink } from "./destination";
 import { AD_THEMES, AD_AMBER } from "./theme";
 import type { AdTemplate } from "./templates";
 import type { ValidationContext } from "./validateAdCopy";
@@ -70,7 +71,20 @@ export function adContext(customer: Customer, template: AdTemplate): AdContext {
         .filter((k) => resolution.slots[k as keyof typeof resolution.slots] === undefined)
     )
   );
-  if (!resolution.slots.landing_url) unresolved.push("landing_url");
+  // ⚠️ THIS LINE WAS THE BUG. It read
+  //   if (!resolution.slots.landing_url) unresolved.push("landing_url");
+  // unconditionally, and since `landing_url` appears in no headline, sub or CTA
+  // pattern it was the ONLY thing that could put it here — so every run the
+  // feature ever had was refused for a page an Instant Form ad never needed.
+  //
+  // The destination is resolved once, in `resolveSlots`. Unset means nobody has
+  // been asked, and the honest gap is the QUESTION, not the page: chasing a URL
+  // first is how that question came to be reworded into one whose answer could
+  // not be stored.
+  if (resolution.destination === undefined) unresolved.push("destination");
+  else if (destinationNeedsLink(resolution.destination) && !resolution.slots.landing_url) {
+    unresolved.push("landing_url");
+  }
 
   const selected =
     (template.services?.slot === "handled" ? profile.handled : profile.included) ?? [];

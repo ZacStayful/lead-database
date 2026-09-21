@@ -105,7 +105,11 @@ export async function PUT(request: NextRequest) {
   // The multi-selects arrive as real arrays from the form, so they skip the
   // prose coercion entirely and are matched against the template that owns
   // them — a service key nobody offered is not a tick.
-  const patch: Record<string, unknown> = { ...answersToProfile(asQuestions, asAnswers, template) };
+  // ⚠️ `.patch`, NOT THE WHOLE MAPPING. Spreading the mapping type-checks
+  // against Record<string, unknown> and would write `refusals` and `notes` into
+  // ad_profile as keys — a bug the compiler cannot see. Named deliberately.
+  const mapping = answersToProfile(asQuestions, asAnswers, template);
+  const patch: Record<string, unknown> = { ...mapping.patch };
   for (const t of AD_TEMPLATES) {
     if (!t.services) continue;
     const raw = body[t.services.slot];
@@ -132,5 +136,7 @@ export async function PUT(request: NextRequest) {
 
   const merged = await mergeAdProfile(admin, customer.id, patch);
   if (!merged) return adJson({ error: AD_COPY.errors.generic }, 500);
-  return adJson({ saved: true, profile: patch });
+    // ⚠️ 200, NOT 400. The rest of the form did save; a refused field is a
+  // sentence beside that field, not a failed request.
+  return adJson({ saved: true, profile: patch, refused: mapping.refusals, notes: mapping.notes });
 }

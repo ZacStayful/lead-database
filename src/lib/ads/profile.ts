@@ -1,6 +1,8 @@
 import type { AdProfile, FeeBasis, FeeVat } from "./resolveSlots";
 import type { AdSlotKey, AdTemplate } from "./templates";
 import type { Answer, Question } from "./schemas";
+import { asDestination, AD_DESTINATION_REFUSAL } from "./destination";
+import { parseAdUrl, URL_REFUSAL_COPY, URL_UPGRADED_NOTE, type UrlRefusal } from "./url";
 
 /**
  * Turning what the operator typed into the chat into `ad_profile` (§65).
@@ -44,6 +46,7 @@ export const CHAT_WRITABLE_SLOTS = [
   "city",
   "areas",
   "landing_url",
+  "destination",
   "fee_pct",
   "fee_basis",
   "fee_vat",
@@ -135,21 +138,6 @@ function asFeeVat(raw: string): FeeVat | undefined {
   return undefined;
 }
 
-function asUrl(raw: string): string | undefined {
-  const text = raw.trim();
-  if (!text) return undefined;
-  const withScheme = /^https?:\/\//i.test(text) ? text : `https://${text}`;
-  try {
-    const url = new URL(withScheme);
-    // ⚠️ https ONLY, the rule §21.5 already enforces on an admin's link. The
-    // button on a live advert must not be able to send somebody over http.
-    if (url.protocol !== "https:") return undefined;
-    if (!url.hostname.includes(".")) return undefined;
-    return url.toString().slice(0, 400);
-  } catch {
-    return undefined;
-  }
-}
 
 /** "Cleaning, linen" → the ticked keys, from the template's own vocabulary. */
 function asServiceKeys(raw: string, template: AdTemplate): string[] | undefined {
@@ -183,11 +171,42 @@ function asList(raw: string): string[] | undefined {
  * it with `||`, so a key this function omits keeps whatever was there — which
  * is the difference between "they did not answer that" and "they cleared it".
  */
+/**
+ * ⚠️ WHY THIS RETURNS REFUSALS RATHER THAN JUST A PATCH.
+ *
+ * Every coercion below still fails to `undefined` rather than to a guess — that
+ * rule is right and unchanged. What was missing is the other half: SAYING SO.
+ * The first real run had three of its five answers discarded in silence, and
+ * the operator was then refused for a value they believed they had given.
+ *
+ * So a coercion that declines now records what it saw and why, the profile PUT
+ * hands them back with a 200 (the rest did save), and the chat reads them out.
+ * `put` is the only place that decides, so a future slot cannot opt out of it
+ * by accident.
+ */
+export type SlotRefusalReason = UrlRefusal | "unreadable" | "not_a_destination";
+
+export type SlotRefusal = {
+  slot: ChatWritableSlot;
+  reason: SlotRefusalReason;
+  /** What they actually typed, so the message can quote it back. */
+  answer: string;
+};
+
+/** Something we changed rather than refused, which must not be silent either. */
+export type SlotNote = { slot: ChatWritableSlot; kind: "url_upgraded" };
+
+export type ProfileMapping = {
+  patch: Partial<AdProfile>;
+  refusals: SlotRefusal[];
+  notes: SlotNote[];
+};
+
 export function answersToProfile(
   questions: Question[],
   answers: Answer[],
   template: AdTemplate
-): Partial<AdProfile> {
+): ProfileMapping {
   const bySlot = new Map<string, string>();
   const slotOf = new Map(questions.map((q) => [q.id, q.slot ?? ""]));
   for (const a of answers) {
@@ -201,8 +220,19 @@ export function answersToProfile(
   }
 
   const patch: Record<string, unknown> = {};
-  const put = (key: string, value: unknown) => {
-    if (value !== undefined) patch[key] = value;
+  const refusals: SlotRefusal[] = [];
+  const notes: SlotNote[] = [];
+
+  const put = (key: string, value: unknown, reason: SlotRefusalReason = "unreadable") => {
+    if (value !== undefined) {
+      patch[key] = value;
+      return;
+    }
+    refusals.push({
+      slot: key as ChatWritableSlot,
+      reason,
+      answer: bySlot.get(key) ?? "",
+    });
   };
 
   // Array.from, not a bare for..of: this tsconfig predates downlevelIteration.
@@ -218,8 +248,21 @@ export function answersToProfile(
       case "turnaround":
         put(slot, clean(raw, 120) || undefined);
         break;
-      case "landing_url":
-        put(slot, asUrl(raw));
+      case "landing_url": {
+        // ⚠️ The verdict's OWN reason, never a flattened "unreadable". An
+        // operator who pasted an http:// link, a mailto: or a sentence needs
+        // three different things said to them.
+        const verdict = parseAdUrl(raw);
+        if (verdict.ok) {
+          patch[slot] = verdict.url;
+          if (verdict.upgraded) notes.push({ slot, kind: "url_upgraded" });
+        } else {
+          refusals.push({ slot, reason: verdict.reason, answer: raw });
+        }
+        break;
+      }
+      case "destination":
+        put(slot, asDestination(raw), "not_a_destination");
         break;
       case "fee_pct":
         put(slot, asCount(raw, { max: 99 }));
@@ -235,7 +278,9 @@ export function answersToProfile(
         break;
       case "included":
       case "handled":
-        // ⚠️ Only meaningful on the template that owns this multi-select.
+        // ⚠️ Only meaningful on the template that owns this multi-select — and a
+        // template that does not own it records NO refusal, because nothing was
+        // wrong with the answer. It was asked of the wrong ad.
         if (template.services?.slot === slot) put(slot, asServiceKeys(raw, template));
         break;
       case "councils":
@@ -258,5 +303,36 @@ export function answersToProfile(
         break;
     }
   }
-  return patch as Partial<AdProfile>;
+
+  return { patch: patch as Partial<AdProfile>, refusals, notes };
+}
+
+/**
+ * What the operator is told about an answer we could not use.
+ *
+ * ⚠️ NEVER NAMES THE SLOT KEY. §65's rule (`slotCopy.ts:114`): "We still need:
+ * landing_url" is not a sentence anybody should read. The label comes from
+ * `slotCopyLabel` at the call site if one is wanted; this is the reason.
+ */
+export function refusalMessage(refusal: SlotRefusal): string {
+  if (refusal.reason === "not_a_destination") return AD_DESTINATION_REFUSAL;
+  if (refusal.reason === "unreadable") {
+    return refusal.answer
+      ? `I couldn’t make sense of “${refusal.answer.slice(0, 60)}”, so I’ve left that off.`
+      : "I couldn’t make sense of that, so I’ve left it off.";
+  }
+  return URL_REFUSAL_COPY[refusal.reason];
+}
+
+/** What changed rather than what was refused — an http link stored as https. */
+export function noteMessage(note: SlotNote): string {
+  return note.kind === "url_upgraded" ? URL_UPGRADED_NOTE : "";
+}
+
+/** Every sentence for one mapping, in order, ready to append to a refusal. */
+export function mappingSentences(mapping: ProfileMapping): string[] {
+  return [
+    ...mapping.refusals.map(refusalMessage),
+    ...mapping.notes.map(noteMessage),
+  ].filter(Boolean);
 }
