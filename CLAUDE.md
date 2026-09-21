@@ -16615,7 +16615,7 @@ cascades, the unique index and its `on conflict` path, the trigger asserted
 the three functions' ACLs by `has_function_privilege`. Plus the regression that
 an ordinary lead still allocates and still spends exactly one credit.
 
-**2,707 vitest cases green**, `tsc` clean, lint at the four pre-existing
+**2,715 vitest cases green**, `tsc` clean, lint at the four pre-existing
 `@next/next/no-assign-module-variable` warnings, `next build` registering all
 nine routes with `ƒ Middleware` still present.
 
@@ -16650,15 +16650,52 @@ advert writes real rows and spends real tokens.
 
 ### Deployment order — migration BEFORE code
 
-0156 applied and verified against production **before the pull request merges**
-(§1.1). It is additive and inert: four new tables nothing reads, one new column
-defaulting to `{}`, three functions with no caller until the code ships, and a
-bucket row. Nothing touches a balance, counter, pacing or capacity column.
+✅ **0156 was applied to `znlfwbnvhlacwzgfalcf` on 2026-09-21, before the merge**
+(§1.1), and verified there rather than trusted. It is additive and inert: four
+new tables nothing reads, two new columns, five functions with no caller until
+the code ships, and a bucket row. No function is replaced, no constraint is
+widened, and nothing touches a balance, counter, pacing or capacity column.
 
-⚠️ **Before applying, confirm there is NO `storage.buckets` row with
-`id = 'ad-creative'`** — the insert is `on conflict (id) do update`, which would
-otherwise flip `public` and replace the mime list on somebody else's bucket. And
-capture the `storage.objects` policy list, which must be identical afterwards.
+⚠️ **The mandatory pre-condition held: there was NO `storage.buckets` row with
+`id = 'ad-creative'`.** The insert is `on conflict (id) do update`, so against
+an existing row it would have flipped `public` and replaced the mime list on
+somebody else's bucket. Nor did any of the four tables, five functions or two
+columns collide.
+
+- **Applied with comments stripped OUTSIDE function bodies only**, so every
+  `prosrc` matches the repo file and the next §11 audit is a straight
+  comparison (§48.9, §51.10). ⚠️ **That form was proved schema-identical
+  first**, on two scratch databases built from empty — one from the repo file,
+  one from the stripped form — over a fingerprint of all five function bodies
+  with their `prosecdef`, `proconfig` and four ACLs each, every column, every
+  constraint, every index, the RLS state and policy count of all four tables,
+  every trigger definition and the bucket row: **95 lines, md5
+  `5654dc650c825de4e9e433b94dcf94b3` both sides.**
+- **That same fingerprint, taken on production afterwards with the SAME
+  expression, is byte-identical to a scratch build from the repo file** —
+  `bc67f0312a8f7fe81739511cafe40b78`. ⚠️ Use one expression on both sides: a
+  before/after pair built from two different ones proves nothing, and the hash
+  is meaningless outside its own query.
+- **The five bodies**, for the next audit: `touch_ad_builder_updated_at`
+  `1c4318be…` (53 chars), `record_deleted_ad_creative` `524d3675…` (132),
+  `spend_ad_budget` `b9b39c4a…` (988), `merge_ad_profile` `5c8755e5…` (444),
+  `claim_ad_draft` `eb1191c1…` (302). All five pin `search_path`; all five are
+  `security invoker`. The three RPCs are `anon=false authenticated=false
+  service_role=true`; ⚠️ **the two trigger functions are executable by
+  everyone, deliberately** — a revoke/grant pair on a trigger function is inert,
+  because Postgres checks EXECUTE at `CREATE TRIGGER` time.
+- **Invariant 7 holds** — all four names still `authenticated`-executable.
+- **`get_advisors` reports no new finding.** The deny-all count goes **54 → 58**
+  with `ad_drafts`, `ad_creatives`, `ad_generation_requests` and
+  `deleted_storage_objects` named, which is the deliberate posture; the five
+  mutable-`search_path` functions and both auth warnings are all pre-existing,
+  and no 0156 function appears in either list.
+- **Nothing moved.** 57 customers, with an md5 of every customer's lead
+  balances, monthly counters and replacement balance identical before and after
+  (`c9fcbc3f4eae394fade7d0e5b47441a2`), and the `storage.objects` policy-name
+  md5 identical too (`6753fe8fdb1fbf0b4f0bf0e795fd784f`) — no storage policy was
+  touched. All four new tables at **0 rows**, and **0 of 57** customers carrying
+  a non-empty `ad_profile`.
 
 Code arriving first would fail every ads read on four missing tables and every
 budget spend on three missing functions.
