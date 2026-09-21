@@ -147,7 +147,7 @@ pause columns (0038 — see §21), goal columns (0051 — see §13), `pool_debit
 `gr_pool_debit` (0073 — see §19), `cancellation_feedback` /
 `cancellation_comment` (0084 — Stripe's cancellation reason, management-only,
 first cancellation wins like `cancelled_at`), `cancel_effective_at` /
-`gr_cancel_effective_at` and `pause_ending_notice_sent_at` (0101 — see §29), and the Monday link columns
+`gr_cancel_effective_at` and `pause_ending_notice_sent_at` (0101 — see §29), `ad_profile` / `ad_profile_updated_at` (0156 — see §65), and the Monday link columns
 (0086 — `monday_item_id` / `monday_board_id` / `monday_link_state` /
 `monday_link_matched_by` / `monday_status_label` / `monday_status_synced_at` /
 `monday_status_error`, see §23; `monday_item_id` is a pointer at the item
@@ -218,7 +218,8 @@ Other tables: `notifications`, `payments`, `lead_notes`, `lead_files`,
 `stripe_events`, `system_settings`, `post_call_offers`, `lead_topup_tokens`,
 `testimonials`, `public_activity_stats`, `lead_imports` (§30),
 `lead_analysis_jobs` / `lead_analysis_rows` / `lead_analysis_tokens` (§31),
-`support_tickets` / `support_ticket_notes` (§46).
+`support_tickets` / `support_ticket_notes` (§46), `ad_drafts` /
+`ad_creatives` / `ad_generation_requests` / `deleted_storage_objects` (§65).
 
 ---
 
@@ -379,7 +380,9 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/settings/release-hold` (§54 — "hold my leads until"),
 `/api/leads/pool/[id]/claim` (§19), `/api/leads/export`, `/api/billing/portal`,
 `/api/customer/my-leads` (+ `/import/preview`, `/import/commit`, and
-`DELETE /[id]`) — customer-owned leads (§30).
+`DELETE /[id]`) — customer-owned leads (§30),
+`/api/customer/ads` (+ `/[id]`, `/[id]/{simplify,template,answers,regenerate,render}`,
+`/[id]/image/[ratio]`, `/profile`) — the Facebook ad builder, owner-gated (§65).
 
 `/api/customer/goal` is the **only** customer route with no admin client at
 all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
@@ -16236,3 +16239,456 @@ production Supabase (§1.1), so a real run withdraws real assignments.
   `/admin/allocation`.
 - **The GR board** is never checked (decision 2). If GR ever gets its own
   Stayful pipeline the matcher takes a `lead_type` and a second board id.
+
+---
+
+## 65. A chat that makes the advert *(0156)*
+
+Customers are property managers who need landlord enquiries, and the only way
+they get one today is to buy a Stayful lead for £15. The *Landlord ad template
+pack* (spec v1, 2026-09-20) defines ten templates so they can generate their
+own, and its closing section sets out a four-stage path to running those adverts
+from the platform.
+
+**This is part 1, and it deliberately stops short of publishing.** It ships to
+the `zac@stayful.co.uk` portal alone as a demo surface. It behaves like a Claude
+chat: a pre-written prompt already in the box, the operator presses Send, the
+model picks a template and asks what it needs, and the finished advert comes
+back — copy plus three downloadable PNGs.
+
+Publishing needs `ads_management` App Review, which is "weeks, not days" — **and
+App Review needs a working demo to submit. This build is that demo.**
+
+`/dashboard/ads` · `POST /api/customer/ads` (+ eight more) · `src/lib/ads/*`
+
+### Settled with Zac
+
+| | |
+|---|---|
+| Deliverable | Copy **and** statics at 4:5, 9:16, 1:1. No video, no Meta publishing |
+| Gate | Demo-only, keyed on the owner email |
+| Templates | T3, T6, T7, T8 — the four whose claims gate is `none` |
+| Template choice | The chat picks, names which and why, one tap to switch |
+
+### 65.1 — ⚠️ The model does not write the headline
+
+The spec is explicit: *"Claude writes the five primary texts and the sub… never
+the headline pattern itself."* Every headline in `templates.ts` is pure slot
+substitution, and **that is what makes "no invented figure" and the
+located/unlocated split safe by construction** rather than by a rule somebody
+has to enforce. What the model does write is the primary text plus Meta's
+40-character `headline` and 30-character `description`, which the spec's
+authorship table assigned to nobody.
+
+⚠️ **T3's and T6's subs cannot be the fixed strings the spec prints.** T3's
+hardcodes *"Guest messaging, cleaning, linen, pricing and check-ins"* while
+`included` is a multi-select, and T6's claims note says **"Only items they tick
+may appear."** A fixed sub publishes services the customer does not provide —
+§51.11's failure, aimed at the customer. `serviceListPhrase()` builds both from
+the ticks.
+
+⚠️ **T8 can fabricate a testimonial.** Its third angle is *"what landlords say,
+in their words if a quote is supplied"*, and offered without one the model
+writes a plausible *"Best decision I made — Sarah, Leicester"* that passes every
+other rule. Three layers: the angle is **dropped from the prompt entirely**
+without `review_quote_confirmed`, the prompt forbids quoting, and
+`validateAdCopy` rejects any quoted span or dash-attributed first name.
+
+⚠️ **`addressed_to` belongs on the STATIC, not only in the primary text**, and
+**T8's headline names no audience at all** — so without a line on the card,
+nothing on it says who it is for.
+
+### 65.2 — Decidable rules and heuristics are not peers
+
+`validateAdCopy.ts` keeps them apart, and the file says why at the top.
+
+A figure check is decidable. "Is this an income claim" is not — and a keyword
+ban on `earn|income|revenue` **rejects T7's own headline**, while `\w+est\b`
+matches "interest", "request", "honest" and "invest".
+
+⚠️ **AN OVER-STRICT RULE DOES NOT ANNOUNCE ITSELF.** A rejection retries once
+and then collapses to the template's default text, so a bad rule produces no
+error anybody sees: every advert simply comes back generic and it reads as "the
+model is bad". Every heuristic is scoped to a subject plus a modal, and the
+template's own fixed headline and sub are **exempt**, because they are not
+model-written.
+
+⚠️ **125/40/30 are TRUNCATION MARKS, NOT LIMITS.** Rejecting on them fails
+nearly every generation — none of T3's angles fits 125 characters with the
+audience and the category in the first sentence as well. The UI draws them as
+marks; the validator ignores them. `AD_COPY_MAX` is labelled honestly as **our**
+bound, because `ads_create_creative`'s schema documents no character limit and
+an unverified number stated as Meta's would be §51.11's borrowed authority.
+
+⚠️ **The figure check runs over the IMAGE too.** Every other rule reads copy,
+but T7's static is a form card — and a "Current rent: £950/mo" put there to look
+concrete is a figure, in the creative, from nobody, which never passes through
+the model at all. The render flattens its layout spec and runs
+`figuresAreSupplied` over it.
+
+⚠️ **A review score is compared EXACTLY, not within the 5% tolerance.** That
+tolerance exists for honest rounding of a large number ("£83,000" for 83,260);
+5.0 sits 2% from 4.9 and would sail through while being a materially different
+claim about the business.
+
+⚠️ **The fee rules run BEFORE the generic figure check, and only when the
+percentage plausibly IS a fee.** With `fee_public` off there are no allowed
+percentages at all, so the figure check would reject "15%" first and file it as
+`figure_not_in_slots` — true, but it hides which guardrail fired, and the ledger
+exists to answer exactly that. And not every percentage is a fee: "booked 90% of
+the year" is an occupancy claim.
+
+### 65.3 — ⚠️ Satori is not a browser, and four of its traps cost real time
+
+`next/og` works on the Node runtime in 14.2.15 and vendors satori 0.10.9, resvg
+and yoga. Every item below was found by **running it**, not by reading:
+
+1. ⚠️ **The flex guard is `h === "div" && typeof children !== "string"`, and its
+   own error message lies.** It says "more than one child node"; in fact a div
+   holding ONE `<span>`, or two bare strings, throws. So
+   `<div>Landlords in {city}</div>` throws — children is an array. `<span>` is
+   exempt, and that exemption is what makes the emphasis renderer possible.
+   `renderSpec` sets `display: flex` on **every** non-text node unconditionally.
+2. ⚠️ **Satori applies GPOS kerning, and applies it wrongly**: the glyph shifts
+   but the run's measured width does not, so every kerned pair leaves visible
+   slack. `Talk to` renders `Talk  to` — which is T8's CTA, on every advert.
+   **Stripping `GPOS`/`GSUB`/`GDEF` from the subset fixes it exactly** and cuts
+   the fonts 37%.
+3. ⚠️ **A glyph outside the registered fonts makes a LIVE NETWORK CALL to
+   Google Fonts from inside the render**, gets a 400, and draws tofu — not the
+   emoji path, ordinary text. U+2713 is in none of the three faces, so the tick
+   is **drawn** (a rotated two-border div) and `sanitiseForFont()` strips
+   anything outside the cmap intersection, parsed from the shipped bytes at
+   module scope rather than from a table that could drift.
+4. ⚠️ **A failed render is a 200 WITH ZERO BYTES, not a throw.**
+   `ImageResponse` does its work inside the stream's `start()`, so the
+   constructor never throws and an empty body closes the stream cleanly —
+   which would upsert straight over a good render. The bytes are checked for
+   length and the PNG magic number before anything is uploaded, and
+   `ad_creatives.size_bytes > 0` is the second stop.
+
+Also: an SVG logo carrying `<text>` renders **genuinely blank** (resvg has no
+font database); `display: grid` throws; `var(--sf-*)` renders nothing because
+satori has no cascade, so `layoutSpec` carries resolved hex; and the **emphasis
+renderer** has two traps — bare runs inside `flexWrap` eat the space at every
+run boundary (`*4.9*` → `4.9on Google`), and `whiteSpace: 'pre'` fixes the
+spaces while killing wrapping entirely and silently overflowing the canvas. The
+working shape marks each character, splits on whitespace, and emits one
+`<span marginRight>` per word holding same-emphasis sub-spans.
+
+⚠️ **The fonts ship base64 in a module, with `scripts/fetch-ad-fonts.mjs` beside
+them.** A runtime `readFileSync` of an untraced path fails at FIRST INVOCATION
+rather than at deploy, and §45 records that a preview cannot test it. A
+committed binary with no recipe is the drift this file keeps recording.
+
+⚠️ **Two things `next/og` cannot be trusted with.** `fonts: options.fonts ||
+defaultFonts` — passing a bold **replaces** the default, so the regular must
+ship too. And an `ImageResponse` self-sets `cache-control: public, immutable,
+max-age=31536000`, so one returned from a regenerable route would have every
+proxy hold the first render for a year. The render route never returns one.
+
+### 65.4 — The prompt cache was measured, and the guess was wrong
+
+The plan for this feature said four templates plus guardrails "plausibly" fell
+under Anthropic's ~1024-token minimum, and half-wrote the argument for dropping
+the breakpoint. **Measured: 7,527 characters → a floor of 1,505 tokens** on a
+pessimistic five-characters-per-token divisor, against §50's 22,530 → 4,506. It
+clears.
+
+⚠️ **THE TEST ASSERTS THE FIGURE, NOT THE ATTRIBUTE.** The cache silently
+ignores a breakpoint below the minimum, so a test checking `cache_control` is
+present would read as a working cache while doing nothing whatever. Headroom is
+under 50%, which is not a lot of pack to lose.
+
+⚠️ **And a cache WRITE costs about 25% more than plain input.** So the pack pays
+from the second call inside the five-minute window and costs a quarter of a pack
+when nobody comes back. Whether real calls land inside that window is not
+answerable by argument, so `ad_generation_requests.cache_read_tokens` records it
+— **zero meaning a MISS and null meaning the provider said nothing**, kept apart
+because only one of them is a finding.
+
+### 65.5 — Four model call sites, and what each may not do
+
+⚠️ **`maxRetries: 0` on every client.** The SDK retries twice by default, so one
+"60-second" call is really three plus backoff — which walks through the function
+ceiling and gets killed mid-flight, leaving the draft in `generating` with
+nobody to clear it. We retry once, ourselves, with a shorter timeout.
+
+⚠️ **An explicit `max_tokens` on all four.** Truncation yields a null parse,
+which silently becomes the template's default text — so the failure presents as
+"the model wrote something generic" rather than as an error.
+
+`effort: "low"` for questions, simplify and the switch; **default effort for the
+copy only**, which is the deliverable and the one call where thinking earns its
+cost. `model_id` comes from `response.model`, never our constant.
+`prompt_version` is per shape.
+
+⚠️ **A THROWN CALL IS NOT RETRIED.** The first copy attempt has already spent 60
+of a 300-second ceiling and a provider that just timed out is the least likely
+to answer in 45. A **rejection** is retried, with the refusal fed back in plain
+English — our code never reaches the model and the model's sentence never
+reaches the ledger. A bare "try again" produces the same copy with different
+adjectives.
+
+⚠️ **An empty question list is SUCCESS in §50 and a DEAD END here.** A support
+ticket with no clarification still sends; an advert with no answers cannot be
+built at all. Every degraded path lands on `fallbackQuestionnaire`, which asks
+only what is missing and **shrinks as the profile fills** — the promise the
+setup/ad slot split makes.
+
+⚠️ **The simplify budget SCALES with the question count.** §50's flat
+`MAX_DEPTH * 3 = 6` breaks twice if copied: a template can ask eight slot
+questions, so six is exhausted by the first four rewordings. And §50 spends its
+budget by summing `depth`, which **charges two units for zero model calls** every
+time a question drops straight to terminal. `Question.calls` counts what was
+actually spent.
+
+⚠️ **§50's simplify does NOT discard the answer** — `simplify/route.ts:57` is
+`stored[index] = { ...next, answer: previous.answer }`, and only the browser
+clears it. That is a latent §50 bug, and this feature keeps the answer.
+
+### 65.6 — Three writes PostgREST cannot express
+
+The plan stated the budget rule as `set renders = renders + 1 where id = $1 and
+renders < 10 returning renders` — which is SQL. **PostgREST cannot do `x = x +
+1` at all**, so the only shapes available were a function or the
+read-modify-write the same paragraph forbids. Two tabs both pass a TypeScript
+`if`; neither passes a WHERE clause.
+
+| Function | Why it is one |
+|---|---|
+| `spend_ad_budget(draft, customer, kind)` | column arithmetic. ⚠️ The kind is a CLOSED vocabulary checked in SQL, never a column name from a request — §27.1 one layer down. Null means no, without saying whether the cap is spent or the draft is somebody else's |
+| `merge_ad_profile(customer, patch)` | `ad_profile \|\| $1`. ⚠️ Two writers exist — the answers route and the profile form — and the edit most likely lost in a tab race is the FEE, which decides whether a price appears on a live advert |
+| `claim_ad_draft(draft, customer, stale_seconds)` | ⚠️ The filter form is `.or("status.neq.generating,updated_at.lt.<iso>")`, whose correctness rests on how PostgREST parses the dots inside a timestamp — easy to reason about wrongly, and **impossible to test without PostgREST running** |
+
+⚠️ **THE STALE WINDOW IS NOT OPTIONAL.** Nothing else clears a draft left in
+`generating` by a killed lambda, so it is stuck there for ever and the
+operator's only recourse is Delete — which destroys the answers they just spent
+five minutes giving. Six minutes, past the 60 + 45 the copy path spends inside a
+300-second ceiling.
+
+⚠️ **The test could not backdate `updated_at` to prove it**, because the trigger
+rewrites that column on every update — so the window is driven through the
+function's own parameter. That is also why production works: the claim stamps
+`updated_at` once and a dead lambda writes nothing more, so the row ages on its
+own.
+
+### 65.7 — What a chat answer may write
+
+`ad_profile` is a column on `customers`, not a table, because
+`getCurrentCustomer()` reads that row with `select("*")` — §37's reason for
+`presentation_brand`. **Every key is an OVERRIDE, never a copy** (§41.6): NULL
+means "use what the account already has", so `company_name` falls back to
+`referral_business_name` then `business_name`, the fee to
+`presentation_settings`, the areas to the lead filter. One value per fact.
+
+⚠️ **`Question.slot` IS A STRING THE MODEL CHOSE**, so `profile.ts` checks it
+against a closed list before writing anything.
+
+⚠️ **THE TWO ATTESTATIONS ARE NOT ON THAT LIST.** `review_quote_confirmed`
+unlocks quoting a real person, and `stats_confirmed_at` records that the
+published figures are evidenceable — CAP Code 3.7 wants documentary evidence
+held **before** publication. Both are a deliberate tick by somebody attesting to
+something, settable on the form and nowhere else, and the route **stamps the
+date itself**: an attestation dated by its subject is not an attestation.
+
+⚠️ **An unparseable answer sets NOTHING**, and every guess declined fails
+towards a quieter advert: no fee published, no place named, no figure stated. A
+real bug lived here and a test found it — **`asYesNo` checked only the opening
+word, so "yes and no" published the operator's fee.** It now scans the whole
+answer for the other polarity and declines when both appear, which is safe
+because an unset `fee_public` reads as false everywhere.
+
+Also refused: `"No"`, `"none"`, `"anywhere"` as a town (storing a refusal puts
+"Landlords in None" on an advert); a service the template does not offer; `http`
+for the button; a review score outside 0–5.
+
+⚠️ **`ad_profile` is readable over PostgREST from apply time.** `customers_select_own`
+has existed since 0001, so a signed-in customer can read the column where before
+they got "column does not exist". It holds nothing secret — the boundary is
+`ad_drafts`/`ad_creatives`, both RLS-on with zero policies — but §3's posture is
+that the surface cannot be probed, and this is a door no route gate covers. It
+also ships in every customer's RSC payload via `SettingsPanel`, so the blob stays
+small; past a few hundred bytes it moves to its own table.
+
+### 65.8 — The gate, and the one place it departs from §62
+
+⚠️ **ONE FUNCTION, `adsEnabledFor(user, customer)`, CALLED EVERYWHERE.** The
+gate would otherwise sit at a dozen call sites, and the day a second customer is
+let in that is a dozen edits with any miss producing a 404 on a feature just
+enabled. `messagingActiveFor` is this codebase's answer to the same shape.
+
+⚠️ **IT KEYS ON THE SIGNED-IN USER'S EMAIL, NEVER THE CUSTOMER'S.**
+`VIEW_AS_MAX_AGE` is eight hours and `getCurrentCustomer()` returns the VIEWED
+customer while that cookie is set (§62) — so a customer-keyed gate locks Zac out
+of his own ad builder, unable even to read his own drafts, for eight hours after
+looking at somebody else's account.
+
+⚠️ **The accepted consequence: under a view-as of another customer, the builder
+renders on THEIR account.** That is a real departure from §62's "their dashboard
+as they see it", and it is the right trade against being locked out of the demo.
+Stated in `gate.ts` rather than left to be discovered.
+
+⚠️ **DO NOT ADD AN `is_active` GUARD.** §27.3 sets the precedent and the OAuth
+routes enforce it — but the `zac@stayful.co.uk` row is `is_active = false`
+(§18D, an archived duplicate), so following it here silently kills the demo.
+
+⚠️ **The segment gets its own layout** calling `notFound()`, because one
+`dashboard/layout.tsx` is a server component with no pathname and cannot gate
+one route — and a check in the page would leave a future
+`/dashboard/ads/[id]/preview` ungated.
+
+`adSession()` reads, `adWriteSession()` writes — **two functions rather than a
+flag**, because a flag is a thing a route can forget and a forgotten one is
+silent. §62's middleware already answers 403 to every ads write while the cookie
+is set, so the split is defence in depth; the client renders
+`code === "read_only_view"` as a banner, or every button looks live and fails
+with what reads like a product error.
+
+### 65.9 — The tables
+
+`ad_drafts` · `ad_creatives` · `ad_generation_requests` ·
+`deleted_storage_objects`, all RLS-on with **zero policies**, plus the private
+`ad-creative` bucket (PNG only, 2 MB, no `storage.objects` policy at all).
+
+⚠️ **THE DRAFT CAP COUNTS THE LEDGER, NOT `ad_drafts`.** A customer may delete a
+draft, so a cap counted there resets itself. `draft_id` therefore carries **no
+foreign key**, and the cap counts `kind = 'questions'` only — counting every row
+would charge an operator for their own simplifications and for our automatic
+retry, so somebody who could not follow a question and asked twice would get
+fewer adverts than somebody who followed it first time.
+
+⚠️ **The cap read FAILS CLOSED.** The whole point of counting an append-only
+table is that it cannot be reset; reading an error as zero hands out an
+unbounded number of adverts at the one moment we cannot see how many have gone.
+
+⚠️ **`ad-creative` IS THE FIRST BUCKET HERE WHERE AN OBJECT CAN OUTLIVE ITS ONLY
+POINTER.** 0092 and 0112 get "nothing to garbage-collect" from ONE OBJECT PER
+OWNER at a fixed path, not from determinism. Here objects accumulate per draft
+and `ad_creatives` cascades from `ad_drafts`, so deleting a draft destroys the
+only list of which objects exist. **The route ordering is the real fix —
+objects, then the row** — and `deleted_storage_objects` is a trigger-written
+tombstone that catches a delete failing halfway. Nothing drains it: deleting
+somebody's ad files on a timer is a decision, not a default.
+
+⚠️ **`ad_creatives` is unique on `(draft_id, ratio)` and a unique index does not
+overwrite, it raises 23505** — so the writer uses `on conflict do update`, or
+the second render of any draft fails AFTER its PNGs have uploaded.
+
+⚠️ **The upload needs an explicit `contentType`.** supabase-js defaults a Buffer
+to `text/plain`, which the bucket's allowlist rejects — and a failed upload
+degrades silently by design, so the symptom is "no images, ever". And 0112 is
+right that the allowlist is **not** a safety property: it checks the same
+client-supplied string. What guarantees PNG is the magic-number check.
+
+⚠️ **The trigger is SECURITY INVOKER with no ACL statements** — a verbatim copy
+of `touch_lead_analysis_updated_at` (0104). `security definer` on
+`new.updated_at := now()` buys nothing, and a revoke/grant pair on a trigger
+function is **inert**, because Postgres checks EXECUTE at `CREATE TRIGGER` time.
+The suite asserts it behaviourally instead.
+
+### 65.10 — AI disclosure, corrected
+
+⚠️ **AN EARLIER DRAFT OF THIS PLAN WOULD HAVE PUBLISHED A FALSE STATEMENT ON A
+CUSTOMER'S ADVERT.** Meta's creative carries `self_ai_disclosure`, and its
+schema says never to set or infer a value on the advertiser's behalf — but the
+field declares that the creative contains **media created or edited with a
+generative AI tool**. Our media is a Satori-rendered card with no AI in it; only
+the copy is model-written. Storing `OPT_IN` would put *"Media in this ad created
+or edited with AI"* on an advert where it is untrue — §51.11's exact failure,
+caused by us.
+
+**So no disclosure value is set in part 1 and there is no `ai_disclosure`
+column.** The result page says plainly that the copy was drafted by AI and
+should be read before publishing, which is honest and carries no Meta semantics.
+If part 2 ever sets the field it sets `OPT_OUT`, deliberately, citing the Graph
+API reference and version before it ships.
+
+### Verification
+
+**All 152 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0156 applied twice more on top of itself, and **all 18 SQL suites
+green**. 0156's own suite carries its assertions on every CHECK boundary, both
+cascades, the unique index and its `on conflict` path, the trigger asserted
+**behaviourally** (insert, sleep, update, compare), the tombstone invariant
+(delete a customer, get N rows naming N paths), the bucket row read back, and
+the three functions' ACLs by `has_function_privilege`. Plus the regression that
+an ordinary lead still allocates and still spends exactly one credit.
+
+**2,707 vitest cases green**, `tsc` clean, lint at the four pre-existing
+`@next/next/no-assign-module-variable` warnings, `next build` registering all
+nine routes with `ƒ Middleware` still present.
+
+⚠️ **Sixty-five mutations run across the four build steps.** Sixty-three caught
+first time. The two that were not are worth more than the rest:
+
+- **Dropping the review-count check from `brief.ts` left "refuses a score with
+  no count" green**, because the assertion matched a bare `must not appear` —
+  which the FEE block also says for every customer who has not published one.
+  §51.11's shape, one file over. **The seventh time this repository has recorded
+  a test written weak enough to survive its own mutation** (§50.9 twice, §53,
+  §55, §57, and §53's own suite).
+- **Deleting `isChatWritable` from the answer mapper changed nothing**, because
+  the `switch` beneath it has no `case` for an invented slot — two defences no
+  behavioural test can tell apart. Rather than pretend otherwise, the suite
+  asserts they **AGREE**: it reads the switch's cases out of the source and
+  requires set-equality with the list, which catches the drift that actually
+  happens. Both directions were then mutated and both fail.
+
+⚠️ **`npm run proof:ads` renders all four templates at all three ratios** to a
+gitignored directory, outside the CI config on purpose: `vitest.config.mts` is
+PURE UNITS ONLY and that constraint is what makes it safe to gate `next build`
+on. Byte counts are not proof — step 1 produced a valid PNG with a tofu box in
+it, and a valid PNG with the spaces eaten out of the headline. **Anybody
+changing a layout has to look at the result.**
+
+**Not yet exercised against anything live.** No model call has been made, no
+advert written, no PNG rendered on a real request. ⚠️ A Vercel preview cannot do
+it — Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50,
+§51, §52) — and a preview runs against **production** Supabase (§1.1), so a test
+advert writes real rows and spends real tokens.
+
+### Deployment order — migration BEFORE code
+
+0156 applied and verified against production **before the pull request merges**
+(§1.1). It is additive and inert: four new tables nothing reads, one new column
+defaulting to `{}`, three functions with no caller until the code ships, and a
+bucket row. Nothing touches a balance, counter, pacing or capacity column.
+
+⚠️ **Before applying, confirm there is NO `storage.buckets` row with
+`id = 'ad-creative'`** — the insert is `on conflict (id) do update`, which would
+otherwise flip `public` and replace the mime list on somebody else's bucket. And
+capture the `storage.objects` policy list, which must be identical afterwards.
+
+Code arriving first would fail every ads read on four missing tables and every
+budget spend on three missing functions.
+
+### Deferred
+
+- **A sweeper for the tombstones.** They are recorded and drainable; automatic
+  deletion of somebody's adverts is a decision, not a default.
+- **An `ad_creative_enabled` kill switch** — cheap now that `adsEnabledFor` is
+  one call site.
+- **Converging the two clarify ladders**, and fixing §50's stale-answer bug,
+  once both have actually run.
+- ⚠️ **The 9:16 insets (top 280, bottom 400) are ours, not Meta's.** Stories
+  reserve roughly the top 14% and bottom 20% for the profile chip, CTA sticker
+  and reply bar; a full-canvas layout puts the headline under the profile name.
+  Confirm against a real Stories preview.
+- ⚠️ **T7 writes a cheque the operator's landing page has to cash.** It is the
+  default and promises *"we'll run the numbers against your current rent"*.
+  Stayful can (the analyser, already sold at £3 a lead under §31); a customer may
+  not be able to. Either the advert warns them what they are committing to, or
+  the estimate becomes something we offer them.
+- **The four templates in scope answer NEITHER objection the spec names.**
+  Income consistency and setup cost belong to T1, T2 and T9. These work on
+  effort, risk, curiosity and trust — the right place to start, and the wrong
+  place to expect objection-template conversion.
+- **Stages 2–5** in the spec's order: video (clone §31's queue and self-chaining
+  worker), voiceover, the photo layer with T1/T2/T4/T5 and the
+  `customer_data_required` gate, then T9/T10.
+- **Publishing**, in the spec's order: read-only insights, then paused creation,
+  then Instant Form retrieval, then budget guidance. `copy jsonb` is shaped for
+  the mapping. **Start App Review as soon as this merges.**
+- The spec's two open questions: whether customer adverts carry a "powered by"
+  mark, and who owns a customer's ad files if they leave.

@@ -71,6 +71,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 62, title: "Seeing what a customer sees", migrations: "no migration" },
   { n: 63, title: "A lead lands within minutes, and the customer knows", migrations: "0154" },
   { n: 64, title: "A landlord Stayful is already working is never sold", migrations: "0155" },
+  { n: 65, title: "A chat that makes the advert", migrations: "0156" },
 ];
 
 /**

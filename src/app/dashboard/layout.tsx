@@ -7,6 +7,7 @@ import { AppShell } from "@/components/shell/AppShell";
 import { messagingActiveFor } from "@/lib/messaging/service";
 import { unreadReplyCount } from "@/lib/messaging/inbox";
 import { holdsProduct } from "@/lib/products";
+import { adsEnabledFor } from "@/lib/ads/gate";
 import { buildSidebar, type NavFlags } from "@/lib/dashboardNav";
 import { initials } from "@/lib/utils";
 
@@ -68,6 +69,10 @@ export default async function DashboardLayout({
 
   const flags: NavFlags = {
     messagingOn,
+    // ⚠️ THROUGH THE ONE GATE, never a second reading of the owner list. The
+    // segment layout under /dashboard/ads calls the same function, so the
+    // sidebar item and the page can never disagree about who may see it.
+    adsOn: adsEnabledFor(user, customer),
     holdsManagement,
     holdsAny: holdsMgmtProduct || holdsGr,
     isAdmin,
