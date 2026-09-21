@@ -199,6 +199,24 @@ export interface Customer {
    */
   presentation_brand_updated_at: string | null;
   /**
+   * The ad builder's own overrides (§65, 0156). `unknown` like its two
+   * siblings above: the shape lives in `src/lib/ads/resolveSlots.ts` as
+   * AdProfile, and adProfileOf() is the only reader.
+   *
+   * ⚠️ NULL KEYS MEAN "use the account value", never "empty". Nothing here is
+   * a copy of an account field — company_name falls back to
+   * referral_business_name then business_name, the fee to
+   * presentation_settings, the areas to the lead filter. One value per fact.
+   *
+   * ⚠️ Merged with `ad_profile || $1::jsonb` in SQL and never read-modify-
+   * write: two writers exist (the answers route and the profile PUT), and the
+   * edit most likely to be lost in a tab race is the fee, which decides
+   * whether a price appears on a published ad.
+   */
+  ad_profile: unknown;
+  /** Its own timestamp, for the reason the block above gives (§37.5). */
+  ad_profile_updated_at: string | null;
+  /**
    * The operator's own booking/calendar URL, inserted into a hand-written
    * follow-up as {{booking_link}} (§40.15, 0122).
    *

@@ -17,6 +17,14 @@
  * that gets the operator's own number restricted.
  */
 import type { DraftContext } from "./draftContext";
+// ⚠️ Moved to src/lib/copyFigures.ts so the ad builder shares them rather than
+// copying them — the mistake this file's own PRICE_RE comment records.
+import {
+  MONEY_RE,
+  PERCENT_RE,
+  closeEnough,
+  parseMoney,
+} from "../copyFigures";
 
 export type DraftRejection =
   | "empty"
@@ -34,8 +42,6 @@ export type DraftVerdict =
 
 const MAX_CHARS = 480;
 const MAX_SENTENCES = 5;
-/** Within 5% covers honest rounding ("£83,000" for 83,260), not a new number. */
-const FIGURE_TOLERANCE = 0.05;
 
 /**
  * Pricing language. The report states Stayful's 15%; the operator's own fee has
@@ -53,25 +59,6 @@ export const PRICE_RE =
   /\b(fees?|commission|percentages?|per cent|percent|we charge|our charge|charges?|pricing|price list|rate card|cut of|% of)\b/i;
 
 const LINK_RE = /(https?:\/\/|www\.|\b[a-z0-9-]+\.(com|co\.uk|net|org|io|app)\b)/i;
-
-/** £83,260 / £83k / £180 */
-const MONEY_RE = /£\s?([\d,]+(?:\.\d+)?)\s?(k|m)?/gi;
-/** 62% */
-const PERCENT_RE = /(\d+(?:\.\d+)?)\s?%/g;
-
-function parseMoney(raw: string, suffix?: string): number {
-  const n = Number(raw.replace(/,/g, ""));
-  if (!Number.isFinite(n)) return NaN;
-  if (suffix?.toLowerCase() === "k") return n * 1_000;
-  if (suffix?.toLowerCase() === "m") return n * 1_000_000;
-  return n;
-}
-
-function closeEnough(value: number, allowed: number[]): boolean {
-  return allowed.some(
-    (a) => a > 0 && Math.abs(value - a) / a <= FIGURE_TOLERANCE
-  );
-}
 
 export function validateDraft(raw: unknown, ctx: DraftContext): DraftVerdict {
   if (typeof raw !== "string") return { ok: false, reason: "empty" };

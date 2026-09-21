@@ -151,6 +151,60 @@ export const ROUTES: RouteEntry[] = [
     section: 19,
   },
   {
+    path: "/dashboard/ads",
+    purpose:
+      "Makes a Facebook advert: a pre-written prompt, a template the chat " +
+      "picks and names, a few questions, then the copy and three statics to " +
+      "download. Demo-only — the owner account alone can reach it, and " +
+      "nothing is published to Meta from here (§65).",
+    files: [
+      "src/app/dashboard/ads/page.tsx",
+      "src/app/dashboard/ads/[id]/page.tsx",
+      "src/components/dashboard/ads/AdChat.tsx",
+      "src/app/api/customer/ads/route.ts",
+      "src/app/api/customer/ads/[id]/answers/route.ts",
+      "src/lib/ads/templates.ts",
+      "src/lib/ads/validateAdCopy.ts",
+    ],
+    tests: [
+      "src/lib/ads/__tests__/validateAdCopy.test.ts",
+      "src/lib/ads/__tests__/routes.test.ts",
+    ],
+    section: 65,
+  },
+  {
+    path: "/dashboard/ads/[id]",
+    purpose:
+      "One advert: the questions while it is being collected, the words once " +
+      "it is written, and the three statics underneath. Rewrite, delete, and " +
+      "one tap to switch to a different angle (§65).",
+    files: [
+      "src/app/dashboard/ads/[id]/page.tsx",
+      "src/components/dashboard/ads/AdChat.tsx",
+      "src/components/dashboard/ads/AdCreatives.tsx",
+      "src/app/api/customer/ads/[id]/render/route.ts",
+      "src/lib/ads/layout.ts",
+    ],
+    tests: ["src/lib/ads/__tests__/layout.test.ts"],
+    section: 65,
+  },
+  {
+    path: "/dashboard/ads/profile",
+    purpose:
+      "The business details every advert is built from — trading name, fee " +
+      "and how VAT is treated, what they actually do, their numbers. Every " +
+      "field is an OVERRIDE: blank means use what the account already has, " +
+      "and nothing here is written back onto an account column (§65).",
+    files: [
+      "src/app/dashboard/ads/profile/page.tsx",
+      "src/components/dashboard/ads/AdProfileForm.tsx",
+      "src/app/api/customer/ads/profile/route.ts",
+      "src/lib/ads/profile.ts",
+    ],
+    tests: ["src/lib/ads/__tests__/profile.test.ts"],
+    section: 65,
+  },
+  {
     path: "/dashboard/replacements",
     purpose:
       "Leads the operator rang where the landlord had already gone, with a " +

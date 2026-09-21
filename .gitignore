@@ -33,3 +33,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Render proofs from `npm run proof:ads` — look at them, do not commit them.
+ad-proof/

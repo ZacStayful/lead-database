@@ -25,12 +25,14 @@
 /** Restated, not imported (see header). */
 export const REPLACEMENTS_HREF = "/dashboard/replacements";
 export const FEATURE_REQUEST_HREF = "/feedback?type=feature&page=Header";
+export const ADS_HREF = "/dashboard/ads";
 
 export type SidebarIconKey =
   | "dashboard"
   | "conversations"
   | "leads"
   | "replacements"
+  | "ads"
   | "followups"
   | "filtering"
   | "insights"
@@ -72,6 +74,12 @@ export interface Tabset {
 
 export interface NavFlags {
   messagingOn: boolean;
+  /**
+   * ⚠️ ADDING A FIELD HERE IS A `tsc` CHANGE, NOT A `vitest` ONE. Vitest
+   * transpiles through esbuild and does not typecheck, so an object-literal
+   * fixture missing this passes the suite and fails `next build` with TS2741.
+   */
+  adsOn: boolean;
   holdsManagement: boolean;
   holdsAny: boolean;
   isAdmin: boolean;
@@ -101,6 +109,10 @@ export function buildSidebar(f: NavFlags): SidebarModel {
       href: REPLACEMENTS_HREF,
       icon: "replacements",
     },
+    // Demo-only today (§65), which is why it is a flag rather than a constant.
+    ...(f.adsOn
+      ? [{ key: "ads", label: "Facebook adverts", href: ADS_HREF, icon: "ads" as const }]
+      : []),
     ...(f.messagingOn
       ? [
           {
@@ -230,6 +242,15 @@ export function tabsetFor(pathname: string, f: NavFlags): Tabset | null {
       ],
     };
   }
+  if (f.adsOn && under(ADS_HREF)) {
+    return {
+      title: "Facebook adverts",
+      tabs: [
+        { label: "Make an advert", href: ADS_HREF },
+        { label: "Business details", href: `${ADS_HREF}/profile` },
+      ],
+    };
+  }
   if (under("/dashboard/packages")) {
     return {
       title: "Packages & top up",
@@ -261,6 +282,10 @@ export function sectionTitle(pathname: string): string {
   if (p.startsWith("/dashboard/support")) return "Support";
   if (p.startsWith("/dashboard/notifications")) return "Notifications";
   if (p.startsWith("/dashboard/replacements")) return "Replace a lead";
+  // ⚠️ Without this the top bar reads "Lead Database" on a page that is
+  // plainly about something else, which an existing test encodes as a rule
+  // without tripping on it.
+  if (p.startsWith(ADS_HREF)) return "Facebook adverts";
   return "Lead Database";
 }
 

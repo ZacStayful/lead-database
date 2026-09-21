@@ -16,6 +16,7 @@ import { REPLACEMENT_PATH } from "../quality/replacementEntitlement";
 
 const ALL: NavFlags = {
   messagingOn: true,
+  adsOn: true,
   holdsManagement: true,
   holdsAny: true,
   isAdmin: true,
@@ -23,6 +24,7 @@ const ALL: NavFlags = {
 };
 const NONE: NavFlags = {
   messagingOn: false,
+  adsOn: false,
   holdsManagement: false,
   holdsAny: false,
   isAdmin: false,
@@ -122,6 +124,9 @@ describe("tabsetFor", () => {
   });
 
   it("every tab href resolves to a page on disk", () => {
+    // ⚠️ HARDCODED, so a new section has to be added here by hand — which is
+    // the point: a list derived from tabsetFor would grow with it and check
+    // nothing new.
     const paths = [
       "/dashboard/conversations",
       "/dashboard/leads",
@@ -129,11 +134,31 @@ describe("tabsetFor", () => {
       "/dashboard/training",
       "/dashboard/packages",
       "/dashboard/settings",
+      "/dashboard/ads",
     ];
     for (const p of paths) {
       const t = tabsetFor(p, ALL)!;
       for (const tab of t.tabs) expect(pageExists(tab.href), tab.href).toBe(true);
     }
+  });
+
+  /**
+   * ⚠️ WITHOUT A CASE HERE THE TOP BAR READS "Lead Database" on a page that is
+   * plainly about something else — a rule the suite already encodes for every
+   * other section without tripping on a new one.
+   */
+  it("titles the ads section rather than falling back to the product name", () => {
+    expect(sectionTitle("/dashboard/ads")).toBe("Facebook adverts");
+    expect(sectionTitle("/dashboard/ads/profile")).toBe("Facebook adverts");
+    expect(tabsetFor("/dashboard/ads", ALL)?.title).toBe("Facebook adverts");
+  });
+
+  /** Demo-only today: off, and it is off everywhere at once. */
+  it("hides the ads section entirely when the flag is off", () => {
+    expect(tabsetFor("/dashboard/ads", NONE)).toBeNull();
+    const sidebar = buildSidebar(NONE);
+    expect(sidebar.main.some((i) => i.key === "ads")).toBe(false);
+    expect(buildSidebar(ALL).main.some((i) => i.key === "ads")).toBe(true);
   });
 
   it("marks the active tab by longest prefix and rests on the first hash tab", () => {
