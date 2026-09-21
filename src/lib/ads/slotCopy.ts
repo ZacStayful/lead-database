@@ -147,3 +147,34 @@ export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
 export function slotCopyLabel(slot: string): string {
   return SLOT_LABELS[slot as AdSlotKey] ?? slot.replace(/_/g, " ");
 }
+
+// ---------------------------------------------------------------------------
+// Flags
+// ---------------------------------------------------------------------------
+
+/**
+ * `Resolution.warnings` in English.
+ *
+ * ⚠️ THE ARRAY WAS COMPUTED AND RENDERED NOWHERE. `resolveSlots` has always
+ * flagged a fee outside the usual range, and the only reader was `brief.ts`,
+ * which writes the raw key into the model's prompt. So an operator whose deck
+ * fee is 45% had it dropped off every ad, and the one place that said why was
+ * a string the model read and they never saw.
+ *
+ * ⚠️ NEVER THE RAW KEY, for the reason above `SLOT_LABELS`. An unknown flag
+ * yields NOTHING rather than `fee_not_a_number` — a warning we cannot word is
+ * one nobody can act on, and it is not worth showing a column name to say so.
+ */
+export const AD_WARNING_COPY: Record<string, string> = {
+  fee_outside_usual_range:
+    "Your saved fee is outside the 8% to 30% most managers charge. It'll still be used — worth a look if that wasn't intended.",
+  fee_looks_like_a_typo:
+    "The fee on file is outside the 8% to 30% most managers charge, so it's being left off the ad in case it was a typo.",
+  fee_out_of_range: "The fee on file isn't a percentage anyone can charge, so it's being left off the ad.",
+  fee_not_a_number: "The fee on file isn't a number, so it's being left off the ad.",
+};
+
+/** The sentences for a resolution's flags, in order, skipping any we cannot word. */
+export function warningSentences(warnings: string[]): string[] {
+  return warnings.map((w) => AD_WARNING_COPY[w]).filter(Boolean);
+}

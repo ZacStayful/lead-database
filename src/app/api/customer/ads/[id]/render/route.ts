@@ -1,5 +1,5 @@
 import { AD_COPY } from "@/lib/ads/copy";
-import { adContext } from "@/lib/ads/context";
+import { adContext, preflight } from "@/lib/ads/context";
 import { validatePresentationBrand } from "@/lib/presentationBrand";
 import { brandLogoDataUrl } from "@/lib/presentationBrandStorage";
 import { figuresAreSupplied, allowedFigures } from "@/lib/ads/validateAdCopy";
@@ -36,8 +36,15 @@ export async function POST(_request: Request, { params }: { params: { id: string
 
   const template = templateById(draft.template_id ?? DEFAULT_TEMPLATE_ID)!;
   const context = adContext(customer, template);
-  if (context.unresolved.length) {
-    return adJson({ error: AD_COPY.errors.generic, code: "unresolved" }, 409);
+  // ⚠️ THE SAME SENTENCE THE ANSWERS ROUTE GIVES. This showed only `generic`
+  // for the identical condition, so which explanation a customer met depended
+  // on where they were standing — and neither said what to do about it.
+  const check = preflight(context);
+  if (!check.ok) {
+    return adJson(
+      { error: AD_COPY.errors.unresolved(check.labels), code: "unresolved", missing: check.missing },
+      409
+    );
   }
 
   const spent = await spendBudget(admin, customer.id, draft.id, "render");

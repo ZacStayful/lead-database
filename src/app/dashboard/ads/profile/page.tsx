@@ -7,6 +7,7 @@ import { adProfileOf, citySuggestions, resolveSlots, targetingFor } from "@/lib/
 import { validatePresentationBrand } from "@/lib/presentationBrand";
 import { brandLogoDataUrl } from "@/lib/presentationBrandStorage";
 import { AD_TEMPLATES, DEFAULT_TEMPLATE_ID, templateById } from "@/lib/ads/templates";
+import { warningSentences } from "@/lib/ads/slotCopy";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,7 @@ export default async function AdProfilePage() {
           options: t.services!.options.map((o) => ({ key: o.key, label: o.label })),
         }))}
         citySuggestions={targeting.kind === "areas" ? citySuggestions(targeting.areas) : []}
+        warnings={warningSentences(resolution.warnings)}
         readOnly={viewAs !== null}
       />
     </div>

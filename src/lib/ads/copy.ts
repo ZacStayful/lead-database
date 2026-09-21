@@ -78,9 +78,11 @@ export const AD_COPY = {
     // A draft in `generating` is one somebody else (or another tab) has.
     busy: "This ad is already being written.",
     /**
-     * ⚠️ ONE SENTENCE, TWO ROUTES. The answers route named what was missing and
-     * the render route showed only `generic` for the identical condition, so
-     * which explanation a customer met depended on where they were standing.
+     * ⚠️ ONE SENTENCE, THREE ROUTES. The answers route named what was missing,
+     * Regenerate wrote its own wording inline, and the render route showed only
+     * `generic` for the identical condition — so which explanation a customer
+     * met depended on where they were standing, and one of the three said
+     * nothing at all.
      */
     unresolved: (labels: string[]) =>
       `Before I can write this I still need ${labels.join(", ")}.`,

@@ -1,4 +1,4 @@
-import type { AdProfile, FeeBasis, FeeVat } from "./resolveSlots";
+import { feeVerdict, type AdProfile, type FeeBasis, type FeeVat } from "./resolveSlots";
 import { AD_TEMPLATES, type AdSlotKey, type AdTemplate } from "./templates";
 import type { Answer, Question } from "./schemas";
 import { asDestination, AD_DESTINATION_REFUSAL } from "./destination";
@@ -184,7 +184,12 @@ function asList(raw: string): string[] | undefined {
  * `put` is the only place that decides, so a future slot cannot opt out of it
  * by accident.
  */
-export type SlotRefusalReason = UrlRefusal | "unreadable" | "not_a_destination";
+export type SlotRefusalReason =
+  | UrlRefusal
+  | "unreadable"
+  | "not_a_destination"
+  | "fee_looks_like_a_typo"
+  | "fee_out_of_range";
 
 export type SlotRefusal = {
   slot: ChatWritableSlot;
@@ -264,9 +269,32 @@ export function answersToProfile(
       case "destination":
         put(slot, asDestination(raw), "not_a_destination");
         break;
-      case "fee_pct":
-        put(slot, asCount(raw, { max: 99 }));
+      case "fee_pct": {
+        // ⚠️ THROUGH `feeVerdict`, WHICH EXISTED AND WAS NEVER CONSULTED HERE.
+        // The spec is blunt that "under 8% or over 30% is almost certainly a
+        // typo, and a wrong fee in a live ad is worse than no ad" — and storing
+        // it anyway was not merely permissive: `resolveSlots` then refuses the
+        // same number, so the fee vanished off the ad with the reason recorded
+        // in a `warnings` array nothing rendered. Refused at the point of
+        // typing, it is a sentence the operator can act on.
+        const n = asCount(raw, { max: 99 });
+        if (n === undefined) {
+          put(slot, undefined);
+          break;
+        }
+        const verdict = feeVerdict(n, { fresh: true });
+        if (verdict.ok) patch[slot] = n;
+        else {
+          refusals.push({
+            slot: slot as ChatWritableSlot,
+            reason: verdict.reason === "fee_looks_like_a_typo"
+              ? "fee_looks_like_a_typo"
+              : "fee_out_of_range",
+            answer: raw,
+          });
+        }
         break;
+      }
       case "fee_basis":
         put(slot, asFeeBasis(raw));
         break;
@@ -316,6 +344,14 @@ export function answersToProfile(
  */
 export function refusalMessage(refusal: SlotRefusal): string {
   if (refusal.reason === "not_a_destination") return AD_DESTINATION_REFUSAL;
+  // ⚠️ THE NUMBER IS QUOTED BACK. "That doesn't look right" about a fee they
+  // cannot see is the shape of refusal this whole change exists to remove.
+  if (refusal.reason === "fee_looks_like_a_typo") {
+    return `A fee of ${refusal.answer.trim()} is outside the 8% to 30% most managers charge, so I've left it off in case it was a typo. Send it again if that really is your fee and I'll use it.`;
+  }
+  if (refusal.reason === "fee_out_of_range") {
+    return `I couldn't use ${refusal.answer.trim()} as a percentage fee, so I've left it off.`;
+  }
   if (refusal.reason === "unreadable") {
     return refusal.answer
       ? `I couldn’t make sense of “${refusal.answer.slice(0, 60)}”, so I’ve left that off.`

@@ -5,6 +5,8 @@ import { destinationNeedsLink } from "./destination";
 import { AD_THEMES, AD_AMBER } from "./theme";
 import type { AdTemplate } from "./templates";
 import type { ValidationContext } from "./validateAdCopy";
+import { slotCopyLabel } from "./slotCopy";
+import type { AdSlotKey } from "./templates";
 
 /**
  * One reading of "what does this customer's advert look like right now" (§65).
@@ -104,5 +106,34 @@ export function adContext(customer: Customer, template: AdTemplate): AdContext {
     unresolved: Array.from(new Set(unresolved)),
     accent: adAccentFor(customer, template),
     selected,
+  };
+}
+
+/**
+ * Everything that must be true before a generation is worth paying for.
+ *
+ * ⚠️ THIS EXISTS TO RUN BEFORE THE CLAIM. The answers route used to claim the
+ * draft, merge the profile, and only then let `writeAd` discover the gap,
+ * refuse, and release the claim it had just taken — so an operator burned a
+ * generation slot to be told what was missing. The check is cheap and pure;
+ * the thing it guards is not.
+ *
+ * `writeAd` keeps its own copy of this check as the second stop, because it is
+ * the ONLY stop for the regenerate route, which never passes through here.
+ */
+export type PreflightVerdict =
+  | { ok: true; warnings: string[] }
+  | { ok: false; missing: AdSlotKey[]; labels: string[]; warnings: string[] };
+
+export function preflight(context: AdContext): PreflightVerdict {
+  const warnings = context.resolution.warnings;
+  if (!context.unresolved.length) return { ok: true, warnings };
+  return {
+    ok: false,
+    missing: context.unresolved as AdSlotKey[],
+    // ⚠️ Never the raw key — `slotCopy.ts:114`. "We still need: landing_url" is
+    // not a sentence anybody should read.
+    labels: context.unresolved.map(slotCopyLabel),
+    warnings,
   };
 }

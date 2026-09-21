@@ -8,6 +8,7 @@ import {
   answerableQuestions,
   answersToProfile,
   isChatWritable,
+  refusalMessage,
 } from "../profile";
 import { templateById } from "../templates";
 import type { Answer, Question } from "../schemas";
@@ -126,6 +127,61 @@ describe("the fee", () => {
   it("refuses a percentage that cannot be one", () => {
     expect(map("fee_pct", "a hundred and fifty")).not.toHaveProperty("fee_pct");
     expect(map("fee_pct", "150%")).not.toHaveProperty("fee_pct");
+  });
+
+  /**
+   * ⚠️ THE SPEC'S OWN RULE, AT THE POINT OF TYPING. "Under 8% or over 30% is
+   * almost certainly a typo, and a wrong fee in a live ad is worse than no
+   * ad." `feeVerdict` has implemented it since 0156 and the write path never
+   * asked it — so the number was stored, `resolveSlots` then refused the same
+   * number, and the fee vanished off the ad with the reason recorded in a
+   * `warnings` array nothing rendered.
+   */
+  it.each(["3%", "we charge 4 per cent", "45%", "31%"])(
+    "refuses %s as a likely typo rather than storing it",
+    (answer) => {
+      const m = mapping("fee_pct", answer);
+      expect(m.patch).not.toHaveProperty("fee_pct");
+      expect(m.refusals[0]?.reason).toBe("fee_looks_like_a_typo");
+    }
+  );
+
+  it.each(["8%", "30%", "15%", "12.5%"])("takes %s, which is an ordinary fee", (answer) => {
+    expect(mapping("fee_pct", answer).patch).toHaveProperty("fee_pct");
+    expect(mapping("fee_pct", answer).refusals).toHaveLength(0);
+  });
+
+  /**
+   * ⚠️ AND IT SAYS WHY, QUOTING THE NUMBER BACK. "That doesn't look right"
+   * about a fee they cannot see is the shape of refusal this whole change
+   * exists to remove — an operator answering exactly what was asked and being
+   * told they had not.
+   */
+  it("says what it refused and how to insist", () => {
+    const [refusal] = mapping("fee_pct", "45%").refusals;
+    const said = refusalMessage(refusal);
+    expect(said).toContain("45%");
+    expect(said).toContain("8% to 30%");
+    expect(said.toLowerCase()).toContain("send it again");
+    expect(said).not.toContain("fee_pct");
+    expect(said).not.toContain("fee_looks_like_a_typo");
+  });
+
+  /**
+   * Unreadable is still unreadable, and must not be dressed as a typo — the
+   * two want opposite sentences, one asking them to insist and one asking them
+   * to try again.
+   *
+   * ⚠️ "45ish" IS A TYPO AND "15ish" IS A FEE. `asCount` reads a number out of
+   * prose deliberately, and that forgiveness is right: an operator who writes
+   * "about 15" means 15. Only the value decides.
+   */
+  it("keeps an unreadable fee separate from an out-of-range one", () => {
+    expect(mapping("fee_pct", "45ish or so, depends").refusals[0]?.reason).toBe(
+      "fee_looks_like_a_typo"
+    );
+    expect(mapping("fee_pct", "15ish or so, depends").patch.fee_pct).toBe(15);
+    expect(mapping("fee_pct", "whatever the market does").refusals[0]?.reason).toBe("unreadable");
   });
 
   it.each([

@@ -54,7 +54,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
   if (!result.ok) {
     if (result.reason === "unresolved") {
       return adJson(
-        { error: `I still need ${result.labels.join(", ")}.`, code: "unresolved", missing: result.missing },
+        {
+          error: AD_COPY.errors.unresolved(result.labels),
+          code: "unresolved",
+          missing: result.missing,
+        },
         400
       );
     }

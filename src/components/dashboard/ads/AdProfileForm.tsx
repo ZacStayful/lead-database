@@ -25,6 +25,13 @@ export type AdProfileFormProps = {
   inherited: Record<string, string | null>;
   services: AdProfileService[];
   citySuggestions: string[];
+  /**
+   * ⚠️ SENTENCES, NEVER FLAG KEYS. `resolveSlots` has always produced
+   * `fee_outside_usual_range` and the only reader was the model's prompt, so a
+   * fee being dropped off every ad was explained to Claude and to nobody else.
+   * The route words them (`warningSentences`) so this file needs no copy.
+   */
+  warnings: string[];
   readOnly: boolean;
 };
 
@@ -34,6 +41,14 @@ export function AdProfileForm(props: AdProfileFormProps) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * ⚠️ WHAT WE COULD NOT STORE, AND WHAT WE STORED BUT QUESTION. Saving used to
+   * say only "Saved." — so a fee of 45%, or a link we could not read, was
+   * dropped in silence and the operator found out when an ad refused to
+   * generate. Seeded from the server render and replaced by each save.
+   */
+  const [said, setSaid] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>(props.warnings);
 
   const set = (key: string, value: unknown) => setForm((f) => ({ ...f, [key]: value }));
   const str = (key: string) => (form[key] == null ? "" : String(form[key]));
@@ -47,6 +62,7 @@ export function AdProfileForm(props: AdProfileFormProps) {
     setBusy(true);
     setError(null);
     setNote(null);
+    setSaid([]);
     const res = await fetch("/api/customer/ads/profile", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -54,6 +70,10 @@ export function AdProfileForm(props: AdProfileFormProps) {
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     setBusy(false);
+    const strings = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    setSaid(strings(json.said));
+    setWarnings(strings(json.warnings));
     if (!res.ok) {
       setError(
         json.code === "read_only_view"
@@ -74,6 +94,14 @@ export function AdProfileForm(props: AdProfileFormProps) {
         <p className="rounded-lg border border-[#f0d9b8] bg-[#fdf8ef] px-3 py-2 text-xs text-[#7a5312]">
           {AD_COPY.gate.readOnly}
         </p>
+      ) : null}
+
+      {said.length || warnings.length ? (
+        <ul className="space-y-1 rounded-lg border border-[#f0d9b8] bg-[#fdf8ef] px-3 py-2 text-xs text-[#7a5312]">
+          {[...said, ...warnings].map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
       ) : null}
 
       <Card title="Who the advert is from">

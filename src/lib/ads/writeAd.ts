@@ -1,13 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Customer } from "@/lib/types";
-import { adContext } from "./context";
+import { adContext, preflight } from "./context";
 import { generateCopy } from "./generate";
 import { PROMPT_VERSIONS } from "./prompts";
 import { recordGenerations } from "./ledger";
 import { failDraft, finishDraft, releaseClaim, type AdDraftRow } from "./session";
 import { templateById, DEFAULT_TEMPLATE_ID } from "./templates";
 import type { Answer } from "./schemas";
-import { slotCopyLabel } from "./slotCopy";
 
 /**
  * Writing the advert, shared verbatim by the answers route and Regenerate
@@ -54,18 +53,20 @@ export async function writeAd(params: {
   const template = templateById(draft.template_id ?? DEFAULT_TEMPLATE_ID)!;
   const context = adContext(customer, template);
 
-  // ⚠️ A TEMPLATE WHOSE HEADLINE CANNOT BE FILLED CANNOT RENDER. Returning the
-  // half-filled string would put "Landlords in : 8 years" on an advert, so the
+  // ⚠️ THE SECOND STOP, AND THE ONLY STOP FOR REGENERATE. The answers route
+  // pre-flights before it claims, so an operator never burns a generation slot
+  // to be told what is missing — but it re-reads the customer here, so a
+  // profile edited between that check and this one is caught, and
+  // `regenerate/route.ts` never passes through the first check at all.
+  //
+  // A template whose headline cannot be filled cannot render: returning the
+  // half-filled string would put "Landlords in : 8 years" on an ad, so the
   // draft goes back to collecting and the chat asks for what is missing rather
   // than paying for copy that has nowhere to sit.
-  if (context.unresolved.length) {
+  const check = preflight(context);
+  if (!check.ok) {
     await releaseClaim(admin, draft.id, "collecting");
-    return {
-      ok: false,
-      reason: "unresolved",
-      missing: context.unresolved,
-      labels: context.unresolved.map(slotCopyLabel),
-    };
+    return { ok: false, reason: "unresolved", missing: check.missing, labels: check.labels };
   }
 
   const result = await generateCopy({
