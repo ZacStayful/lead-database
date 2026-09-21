@@ -296,6 +296,12 @@ create table if not exists public.ad_generation_requests (
   model_id       text,
   prompt_version text,
   attempt        integer not null default 1,
+  -- ⚠️ usage.cache_read_input_tokens, so the prompt cache is a MEASUREMENT
+  -- rather than an argument. The pack carries a cache breakpoint and clears
+  -- the ~1024-token minimum on paper; whether a real customer's calls land
+  -- inside the five-minute window is a question only live rows can answer,
+  -- and a write costs 25% more than plain input when they do not.
+  cache_read_tokens integer,
   created_at     timestamptz not null default now()
 );
 
@@ -320,6 +326,7 @@ alter table public.ad_generation_requests
     and (reject_reason  is null or length(btrim(reject_reason))  between 1 and 200)
     and (model_id       is null or length(btrim(model_id))       between 1 and 80)
     and (prompt_version is null or length(btrim(prompt_version)) between 1 and 40)
+    and (cache_read_tokens is null or cache_read_tokens >= 0)
   );
 
 -- Serves the 24-hour draft cap, which is the read on the request path.
@@ -334,6 +341,11 @@ comment on table public.ad_generation_requests is
 comment on column public.ad_generation_requests.draft_id is
   'No foreign key on purpose: the record of a spend must survive the draft it '
   'was spent on.';
+
+comment on column public.ad_generation_requests.cache_read_tokens is
+  'Tokens served from the prompt cache on this call. Null means the provider '
+  'reported none. The pack clears the cache minimum on paper; this is how we '
+  'find out whether real calls land inside the window.';
 
 
 -- ===========================================================================

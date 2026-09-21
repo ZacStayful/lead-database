@@ -330,6 +330,21 @@ select test_util.assert_raises($$
   values ('a0000000-0000-0000-0000-0000000000a1','copy','ok',6)
 $$, 'attempt is bounded');
 
+-- The prompt cache, as a measurement rather than an argument. Zero is a real
+-- reading — it is what a cache MISS reports — so it must be storable and must
+-- stay distinguishable from the null that means the provider said nothing.
+insert into public.ad_generation_requests (customer_id, kind, outcome, cache_read_tokens)
+values ('a0000000-0000-0000-0000-0000000000a1','questions','ok',0);
+select test_util.assert_eq(
+  (select cache_read_tokens from public.ad_generation_requests
+    where customer_id = 'a0000000-0000-0000-0000-0000000000a1' and kind = 'questions'
+      and cache_read_tokens is not null),
+  0, 'a cache MISS stores zero, which is not the same as null');
+select test_util.assert_raises($$
+  insert into public.ad_generation_requests (customer_id, kind, outcome, cache_read_tokens)
+  values ('a0000000-0000-0000-0000-0000000000a1','copy','ok',-1)
+$$, 'a negative cache read is refused');
+
 -- ⚠️ draft_id carries NO FOREIGN KEY. It must be insertable against a draft
 -- that never existed, because the record of a spend has to outlive the draft.
 insert into public.ad_generation_requests (customer_id, draft_id, kind, outcome)
