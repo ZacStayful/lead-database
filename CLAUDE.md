@@ -17113,7 +17113,7 @@ operator five things to read. It is the shape fifteen will inherit.
 #### Verification
 
 `npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
-`module` warnings, `npm run build` passes, **2,843 vitest cases green**.
+`module` warnings, `npm run build` passes, **2,845 vitest cases green**.
 
 ⚠️ **`npm run proof:ads` now renders each template TWICE at every ratio** — once
 from the spec's example and once from a model-written headline AT
@@ -17128,6 +17128,34 @@ byte counts are not proof.
 the three default fields with a line-range delete swallowed T6's `footerLine`
 and its comment, which sit between them — and that line is required by the
 spec's claims note. `templates.test.ts` failed on it.
+
+⚠️ **Thirty-five mutations were run across two passes, and FIVE SURVIVED THE
+FIRST ONE.** Each was applied, watched, and either the guard or the mutation was
+fixed before the assertion was kept. Caught first time, among twenty-two others:
+accepting an `angle_key` outside the closed list; letting a zero-survivor
+response through; stamping `model_id` on a failed generation; dropping the spec
+prose from the copy turn; leaving `{properties_managed}` unsubstituted; putting
+`located_without_targeting` back in the validator; reverting `opening()`,
+`QUOTED_RE`, `ATTRIBUTION_RE`, the superlative and the service check to their
+over-broad forms; dropping the image length bound, the image charset bound, the
+figure check over the image, and the repeated-copy check; flattening the
+`max_tokens` ceiling; restoring the fee phrase with no VAT treatment; and
+un-folding the degradation from the stored reason.
+
+| Survived | Why, and what changed |
+|---|---|
+| ask for ONE variant instead of every angle | **a weak guard** — nothing asserted the contents of the first call's prompt at all. `generate.test.ts` now asserts it names every key `angleListFor` offered |
+| show the AI notice over a partial ad | **a weak guard** — it matched `AD_COPY.result.someAngles`, which still appears inside a `{false ? …}` dead branch. It asserts the **condition** now, not the symbol |
+| drop the `--check` guard on the generator | **a weak guard, and the sharpest of the three** — ⚠️ `if (false)` makes `--check` *write*, which produces identical bytes and exits 0, so a staleness guard that has stopped comparing looks exactly like one that passed. `specProse.test.ts` reads the branch and requires `current !== next`, `process.exit(1)` and **no** `writeFileSync` |
+| revert the legal lookaheads | **a broken mutation** — `(?=` → `(?:` keeps the same requirement, so nothing was reverted. ⚠️ Check what a surviving mutation actually changed before writing a test for it (§65.11 records two of these) |
+| revert `INCOME_CLAIM[1]` to the `take` form | **a wrong test case** — mine read *"an answer takes 24 hours"* where the rule it was meant to distinguish was `take ` with a literal space and never matched the inflected form. The case is *"can take 24 hours"* now, which the old rule does reject |
+
+⚠️ **Three of the five are the shape this file has recorded seven times
+already** — §42.8, §50.9 twice, §53, §55, §57 and §65.11, which called itself
+the seventh. These are the eighth, ninth and tenth: an assertion written weak
+enough to survive its own mutation. Two of them passed against a symbol that was
+present for an unrelated reason, which is the recurring mechanism — anchor on
+the **condition** or on the real file, never on a name that appears elsewhere.
 
 **Not exercised against a real model.** No five-variant generation has been
 made. That needs the key on a deployment, and then: five distinct angles each
