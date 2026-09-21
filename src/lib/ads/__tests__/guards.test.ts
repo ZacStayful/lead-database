@@ -381,3 +381,199 @@ describe("the model's options are filtered on every rung", () => {
     expect(callers).toEqual(["src/lib/ads/generate.ts"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ⚠️ Five variants, and the model writing the image lines
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠️ THE RULE THIS PR EXISTS FOR, AND IT IS STRUCTURAL RATHER THAN BEHAVIOURAL:
+ * IF THE MODEL DID NOT WRITE IT, IT IS NOT AN AD.
+ *
+ * The ad the owner judged as terrible contained no model output at all.
+ * Production's ledger shows both calls recording `not_configured` — the key was
+ * unset on that deployment — and the stored copy byte-identical to T7's three
+ * `default*` fields, with `aiNotice` ("the words were drafted by AI from what
+ * you told us") rendered over it, and `model_id` stamped on the row.
+ *
+ * So the three fields are gone, and so is every path that could reinstate them.
+ */
+describe("⚠️ canned text can never be stored as an ad", () => {
+  it("no template carries a default primary text, headline or description", () => {
+    const t = source("src/lib/ads/templates.ts");
+    for (const field of ["defaultPrimaryText", "defaultHeadline", "defaultDescription"]) {
+      expect(t, field).not.toContain(`${field}:`);
+    }
+  });
+
+  it("nothing outside templates.ts's own tombstone comment names one", () => {
+    // templates.ts explains why they are gone, and `source()` strips comments —
+    // so it is the file that must not name them in CODE, checked above.
+    expect(
+      grepOrEmpty([
+        "-rl", "--include=*.ts", "--include=*.tsx", NOT_TESTS,
+        "-E", "default(PrimaryText|Headline|Description)", "src",
+      ])
+    ).toEqual(["src/lib/ads/templates.ts"]);
+  });
+
+  it("⚠️ generate.ts has no fallback copy builder at all", () => {
+    const g = source("src/lib/ads/generate.ts");
+    expect(g).not.toContain("defaultCopyFor");
+    // The one shape it may return on failure carries no copy.
+    expect(g).toContain('reason: "not_configured"');
+    expect(g).toContain('reason: "rejected"');
+  });
+
+  /**
+   * ⚠️ `finishDraft` IS WHAT STAMPS `model_id`. Reaching it on a failed
+   * generation is how the record came to name a model beside words it never
+   * produced — so the failure path must return BEFORE it, and release the
+   * draft rather than failing it, so the answers survive for a retry.
+   */
+  it("writeAd returns before finishDraft when nothing was written", () => {
+    const w = source("src/lib/ads/writeAd.ts");
+    const guard = w.indexOf("if (!result.ok)");
+    const finish = w.indexOf("finishDraft(admin, draft.id");
+    expect(guard).toBeGreaterThan(-1);
+    expect(finish).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(finish);
+    expect(w).toContain('return { ok: false, reason: "not_written"');
+    // Released to `collecting`, so Retry costs the operator nothing but the wait.
+    expect(w.slice(guard, finish)).toContain('releaseClaim(admin, draft.id, "collecting")');
+  });
+
+  /**
+   * ⚠️ AND THE LEDGER IS WRITTEN ON BOTH PATHS. A generation that cost two model
+   * calls and produced nothing is exactly the run somebody comes looking for,
+   * and it used to be recorded only where copy was stored.
+   */
+  it("records the generations before it decides whether there is an ad", () => {
+    const w = source("src/lib/ads/writeAd.ts");
+    expect(w.indexOf("recordGenerations")).toBeLessThan(w.indexOf("if (!result.ok)"));
+  });
+
+  /**
+   * ⚠️ THE CONDITION, NOT THE SYMBOL. The first version of this asserted that
+   * `AD_COPY.result.someAngles` appeared in the file — and a mutation replacing
+   * the condition with `false` left the symbol sitting inside a dead branch and
+   * survived the whole suite. That is the shape CLAUDE.md has now recorded
+   * eight times: a test that matches a name rather than the thing the name is
+   * guarded by.
+   */
+  it("⚠️ the chat shows the AI notice only over model-written words", () => {
+    const c = source("src/components/dashboard/ads/AdChat.tsx");
+    expect(c).toContain("const provenance = copy.provenance ?? null;");
+    expect(c).toContain("provenance && provenance.written < provenance.offered");
+    expect(c).toContain('provenance?.image === "example"');
+    expect(c).toContain("AD_COPY.result.someAngles(provenance.written, provenance.offered)");
+    expect(c).toContain("AD_COPY.result.imageFromTemplate");
+  });
+
+  /**
+   * ⚠️ `provenance` IS STORED IN `copy`, NOT RETURNED IN A ROUTE'S BODY. The
+   * chat renders from the server-rendered `draft.copy`, so anything handed back
+   * in JSON is gone the moment `router.refresh()` runs — which is what happened
+   * to `degraded`, returned by three routes and read by none.
+   */
+  /**
+   * ⚠️ NO ROUTE HANDS BACK A `degraded` FLAG, ON EITHER PATH. It was returned by
+   * three of them and read by none — and it could not have been read, because
+   * both the create and switch routes navigate and re-render from the row.
+   *
+   * The copy path stores `provenance` inside `copy`; the questions path folds
+   * its sentence into `template_reason`, which was already stored and already
+   * rendered. Both survive a `router.refresh()`, which is the whole test.
+   */
+  it("no route hands back a degraded flag any more", () => {
+    for (const f of grepOrEmpty([
+      "-rl", "--include=*.ts", NOT_TESTS, "-F", "degraded", "src/app/api/customer/ads",
+    ])) {
+      expect(source(f), f).not.toMatch(/degraded:\s*(set|result)/);
+    }
+    expect(source("src/lib/ads/metaFields.ts")).toContain("provenance");
+    expect(source("src/app/api/customer/ads/route.ts")).toContain("AD_COPY.chat.standardQuestions");
+    expect(source("src/app/api/customer/ads/[id]/template/route.ts")).toContain(
+      "AD_COPY.chat.standardQuestions"
+    );
+  });
+});
+
+describe("⚠️ the retry asks only for the angles it lost", () => {
+  it("filters the offered list by what survived", () => {
+    const g = source("src/lib/ads/generate.ts");
+    expect(g).toContain("wanted = offered.filter");
+    expect(g).toContain("copyMaxTokens(wanted.length)");
+    // The rejection reaches the prompt per angle, not as one response-level code.
+    expect(g).toContain("rejected: attempt === 1 ? null : rejected");
+  });
+
+  it("the prompt names the angle beside the reason", () => {
+    const p = source("src/lib/ads/prompts.ts");
+    expect(p).toContain("r.angleKey");
+    expect(p).toContain("rejectionAdvice(r.reason)");
+  });
+
+  /**
+   * ⚠️ NEVER A REGEX SOURCE IN A PROMPT. Four rejection codes used to hand the
+   * retry a truncated regular expression as an explanation of what it had done
+   * wrong — `(\b(?:earn|make|generate|bring in|take) (?:up)`. A model given that
+   * writes the same sentence again with different adjectives.
+   */
+  it("the detail is a matched span, never re.source", () => {
+    const v = source("src/lib/ads/validateAdCopy.ts");
+    expect(v).not.toContain("re.source");
+    expect(v).toContain("m[0].trim().slice(0, 60)");
+  });
+});
+
+describe("⚠️ the image is bounded because the canvas is", () => {
+  it("the validator checks both the length and the charset", () => {
+    const v = source("src/lib/ads/validateAdCopy.ts");
+    expect(v).toContain("AD_IMAGE_MAX.headline");
+    expect(v).toContain("AD_IMAGE_MAX.sub");
+    expect(v).toContain("AD_IMAGE_CHARSET.test");
+  });
+
+  /**
+   * ⚠️ THE RENDER DRAWS WHAT WAS STORED, NOT THE TEMPLATE'S EXAMPLE. Falling
+   * back here would draw a different card from the one the chat showed, on the
+   * same draft, with nothing saying which.
+   */
+  it("the render route draws the stored lines", () => {
+    const r = source("src/app/api/customer/ads/[id]/render/route.ts");
+    expect(r).toContain("headline: draft.copy.image.headline");
+    expect(r).toContain("sub: draft.copy.image.sub");
+    expect(r).not.toContain("ctx.example");
+  });
+});
+
+/**
+ * ⚠️ `located_without_targeting` WAS A VALIDATOR RULE READING NOTHING THE MODEL
+ * WROTE, so it failed both paid attempts identically and guaranteed the canned
+ * text — for anybody whose lead filter is off, which is most of the book.
+ */
+describe("⚠️ a model-independent condition is not a validator rule", () => {
+  it("the validator no longer knows about targeting at all", () => {
+    const v = source("src/lib/ads/validateAdCopy.ts");
+    expect(v).not.toContain("located_without_targeting");
+    expect(v).not.toContain("targeting.kind");
+  });
+
+  it("it is a warning the operator can read, with a sentence for it", () => {
+    expect(source("src/lib/ads/resolveSlots.ts")).toContain('warnings.push("located_without_targeting")');
+    expect(source("src/lib/ads/slotCopy.ts")).toContain("located_without_targeting:");
+  });
+});
+
+/**
+ * ⚠️ THE PROMPT AND THE VALIDATOR MUST NOT CONTRADICT EACH OTHER. `brief.ts`
+ * handed the model a bare "15% of gross" and told it to state the fee "exactly
+ * that way"; `fee_without_vat_treatment` then rejected exactly that. The
+ * customer most likely to hit it was the one who had bothered to publish a fee.
+ */
+describe("⚠️ no fee phrase is offered that the validator refuses", () => {
+  it("feePhrase withholds a fee with no VAT treatment recorded", () => {
+    expect(source("src/lib/ads/resolveSlots.ts")).toContain("if (!p.fee_vat) return null;");
+  });
+});

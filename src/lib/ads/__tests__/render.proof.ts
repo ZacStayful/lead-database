@@ -5,6 +5,7 @@ import { flattenSpecText, layoutInputFrom, layoutSpec } from "../layout";
 import { renderAdImage } from "../render";
 import { fillPattern, serviceListPhrase } from "../resolveSlots";
 import { AD_RATIOS } from "../storagePaths";
+import { AD_IMAGE_CHARSET, AD_IMAGE_MAX } from "../metaFields";
 
 /**
  * Render every template at every ratio and write the PNGs out, so a human can
@@ -37,8 +38,8 @@ it("renders every template at every ratio", async () => {
     const selected = SELECTED[t.id] ?? [];
     const list = serviceListPhrase(t, selected) ?? undefined;
     const slots = { ...SLOTS, included_list: list, handled_list: list };
-    const headline = fillPattern(t.headlineLocated, slots as never)!;
-    const sub = fillPattern(t.subLocated, slots as never)!;
+    const headline = fillPattern(t.exampleHeadlineLocated, slots as never)!;
+    const sub = fillPattern(t.exampleSubLocated, slots as never)!;
     const cta = fillPattern(t.ctaPattern, slots as never)!;
 
     for (const ratio of AD_RATIOS) {
@@ -50,6 +51,42 @@ it("renders every template at every ratio", async () => {
       if (res.ok) writeFileSync(`${OUT}/${t.id}-${ratio}.png`, res.bytes);
     }
 
+    /**
+     * ⚠️ AND AGAIN WITH A MODEL-WRITTEN HEADLINE, WHICH IS THE NEW RISK.
+     *
+     * The card used to carry a string from `templates.ts` — ours, ASCII, and
+     * length-checked by the eye that wrote it. It now carries whatever the model
+     * returns, so the two things that can go wrong are length (neither the
+     * headline nor the sub has a `lineClamp`, and `fontStep` stops shrinking at
+     * the third step) and glyphs (`sanitiseForFont` DELETES an uncovered
+     * character and closes the gap, which renders as a missing word).
+     *
+     * `AD_IMAGE_MAX` is the bound; this renders AT it, with the punctuation a
+     * model actually writes. LOOK AT THESE — a valid PNG with a headline off
+     * the bottom of the card is exactly what a byte count cannot tell you.
+     */
+    const modelHeadline =
+      "Landlords in Leeds \u2014 you\u2019ll never see the *3am message*, the Friday " +
+      "cancellation, or the \u201Ccheck in early?\u201D";
+    const modelSub =
+      "Full short let management, run by people who answer \u2026 so you can stop being the one who does.";
+    expect(modelHeadline.length).toBeLessThanOrEqual(AD_IMAGE_MAX.headline);
+    expect(modelSub.length).toBeLessThanOrEqual(AD_IMAGE_MAX.sub);
+    expect(AD_IMAGE_CHARSET.test(modelHeadline)).toBe(true);
+    expect(AD_IMAGE_CHARSET.test(modelSub)).toBe(true);
+
+    for (const ratio of AD_RATIOS) {
+      const spec = layoutSpec(
+        layoutInputFrom({
+          template: t, ratio, accent: "#2f6fed", logo: null, slots, selected,
+          headline: modelHeadline, sub: modelSub, cta,
+        })
+      );
+      const res = await renderAdImage(spec);
+      expect(res.ok, `${t.id} ${ratio} model: ${JSON.stringify(res)}`).toBe(true);
+      if (res.ok) writeFileSync(`${OUT}/${t.id}-${ratio}-model.png`, res.bytes);
+    }
+
     // The flattened text is what the figure check reads. Writing it out makes
     // "is there a number on the card that nobody supplied" a thing you can see.
     const flat = flattenSpecText(
@@ -58,5 +95,5 @@ it("renders every template at every ratio", async () => {
     writeFileSync(`${OUT}/${t.id}.txt`, flat);
   }
   // eslint-disable-next-line no-console
-  console.log(`wrote ${AD_TEMPLATES.length * AD_RATIOS.length} PNGs to ${OUT}/`);
+  console.log(`wrote ${AD_TEMPLATES.length * AD_RATIOS.length * 2} PNGs to ${OUT}/`);
 });

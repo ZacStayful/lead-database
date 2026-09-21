@@ -142,13 +142,24 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
           },
           400
         )
-      : adJson({ error: AD_COPY.errors.generic }, 500);
+      : result.reason === "not_written"
+        // ⚠️ 200, NOT 500, AND THE DRAFT IS BACK IN `collecting`. Nothing went
+        // wrong with the request: the questions and the answers are intact and
+        // Send works again. A 500 would have the chat render its own generic
+        // error over a form that is perfectly usable.
+        ? adJson({
+            status: "collecting",
+            error: AD_COPY.errors.notWritten[result.failure] ?? AD_COPY.errors.generic,
+            code: "not_written",
+            refused: mapping.refusals,
+            notes: mapping.notes,
+          })
+        : adJson({ error: AD_COPY.errors.generic }, 500);
   }
 
   return adJson({
     status: "ready",
     copy: result.copy,
-    degraded: result.degraded,
     refused: mapping.refusals,
     notes: mapping.notes,
   });

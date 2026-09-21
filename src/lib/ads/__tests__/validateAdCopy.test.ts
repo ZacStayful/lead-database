@@ -6,7 +6,7 @@ import {
   type ValidationContext,
 } from "../validateAdCopy";
 import { AD_TEMPLATES, templateById } from "../templates";
-import { AD_COPY_MAX, META_TRUNCATION_MARKS } from "../metaFields";
+import { AD_COPY_MAX, AD_IMAGE_MAX, META_TRUNCATION_MARKS } from "../metaFields";
 import { stripEmphasis } from "../emphasis";
 import type { AdProfile, SlotValues, TargetingState } from "../resolveSlots";
 
@@ -33,7 +33,7 @@ function ctx(over: Partial<ValidationContext> = {}): ValidationContext {
     } as SlotValues,
     profile: { review_quote_confirmed: false, ...(over.profile ?? {}) } as AdProfile,
     targeting: over.targeting ?? AREAS,
-    fixed: over.fixed ?? { headline: "x", sub: "y" },
+    example: over.example ?? { headline: "x", sub: "y" },
   };
 }
 
@@ -44,18 +44,41 @@ const GOOD = {
   headline: "Years, properties, reviews",
   description: "Talk to us",
 };
-const ok = (over: Partial<typeof GOOD> = {}, c = ctx()) => validateAdCopy({ ...GOOD, ...over }, c);
+
+/** Two lines that pass every claims rule, so an image failure is never the subject. */
+const IMAGE = {
+  image_headline: "Landlords: here is what we actually are.",
+  image_sub: "Short let management, run by people who answer.",
+};
+
+const key = (c: ValidationContext) => c.template.angleKeys[0];
+
+/**
+ * One variant of the template's first angle, with the verdict flattened so the
+ * per-variant rejections read the way they did when one text was the whole ad.
+ *
+ * ⚠️ A SINGLE-VARIANT RESPONSE WHOSE ONLY VARIANT IS REFUSED COMES BACK
+ * `ok: false` WITH `reason: "empty"`, because zero survivors is not an ad. The
+ * rule that actually fired is in `rejected[0]` — which is the thing these
+ * assertions are about, and what the retry is told.
+ */
+function ok(over: Partial<typeof GOOD> = {}, c = ctx()) {
+  const v = validateAdCopy({ ...IMAGE, variants: [{ angle_key: key(c), ...GOOD, ...over }] }, c, [key(c)]);
+  if (v.ok) return v;
+  const first = v.rejected[0];
+  return first ? { ...v, reason: first.reason, detail: first.detail } : v;
+}
 
 describe("the shape", () => {
-  it("accepts a clean generation and returns Meta's five fields", () => {
+  it("accepts a clean generation and returns Meta's fields", () => {
     const v = ok();
     expect(v.ok).toBe(true);
     if (!v.ok) return;
-    expect(v.copy).toEqual({
-      ...GOOD,
-      call_to_action_type: "CONTACT_US",
-      link_url: "https://northside.example",
-    });
+    expect(v.copy.variants).toEqual([{ angle_key: key(ctx()), angle: T8.angles[0], ...GOOD }]);
+    expect(v.copy.call_to_action_type).toBe("CONTACT_US");
+    expect(v.copy.link_url).toBe("https://northside.example");
+    expect(v.copy.image).toEqual({ headline: IMAGE.image_headline, sub: IMAGE.image_sub });
+    expect(v.copy.provenance).toEqual({ written: 1, offered: 1, image: "model" });
   });
 
   it("refuses a missing field rather than publishing a blank one", () => {
@@ -64,8 +87,8 @@ describe("the shape", () => {
       expect(v.ok).toBe(false);
       if (!v.ok) expect(v.reason).toBe("missing_field");
     }
-    expect(validateAdCopy(null, ctx())).toMatchObject({ reason: "empty" });
-    expect(validateAdCopy("a string", ctx())).toMatchObject({ reason: "empty" });
+    expect(validateAdCopy(null, ctx(), [])).toMatchObject({ reason: "empty" });
+    expect(validateAdCopy("a string", ctx(), [])).toMatchObject({ reason: "empty" });
   });
 
   it("refuses when there is nowhere for the ad to click to", () => {
@@ -301,18 +324,25 @@ describe("the heuristics, and what they must NOT reject", () => {
   });
 });
 
-describe("⚠️ a located headline needs targeting behind it", () => {
-  it("refuses a city with no targeting set", () => {
-    expect(ok({}, ctx({ targeting: { kind: "unset" } }))).toMatchObject({ reason: "located_without_targeting" });
-  });
-
-  it("allows an unlocated ad with no targeting", () => {
-    const v = ok({}, ctx({ targeting: { kind: "unset" }, slots: { city: undefined } as SlotValues }));
-    expect(v.ok).toBe(true);
-  });
-
-  it("allows a city against 'anywhere' — they set a filter and chose a city", () => {
+/**
+ * ⚠️ `located_without_targeting` WAS THE WORST RULE IN THIS FILE AND IS NO
+ * LONGER HERE. It read NOTHING the model wrote — true or false before the first
+ * call was made — so for a customer with a town and no lead filter it failed
+ * BOTH paid attempts identically and guaranteed the canned text. `filter_status`
+ * is `off` on most of the book, so anybody who answered a question about where
+ * they work could reach it, and a rejection retries once and then collapses
+ * silently.
+ *
+ * It was never a reason to refuse an ad either. Nothing here publishes: the
+ * operator sets the audience in Meta. It is a warning now — `resolveSlots`
+ * raises it and `context.test.ts` pins it.
+ */
+describe("⚠️ a town with no targeting is no longer a rejection", () => {
+  it("writes the ad, and does not care about targeting at all", () => {
+    expect(ok({}, ctx({ targeting: { kind: "unset" } })).ok).toBe(true);
     expect(ok({}, ctx({ targeting: { kind: "anywhere" } })).ok).toBe(true);
+    const unlocated = ctx({ targeting: { kind: "unset" }, slots: { city: undefined } as SlotValues });
+    expect(ok({}, unlocated).ok).toBe(true);
   });
 });
 
@@ -339,21 +369,363 @@ describe("⚠️ the figure check runs over the IMAGE too", () => {
   });
 });
 
-describe("⚠️ our own fallback copy must survive our own rules", () => {
-  it("every template's default passes the validator it will be published under", () => {
-    // This is the one that matters. The default is what we publish when the
-    // model has been rejected twice — a rule that rejects it would leave no
-    // ad at all, and nothing anywhere would say why.
-    for (const t of AD_TEMPLATES) {
-      const v = validateAdCopy(
-        {
-          message: t.defaultPrimaryText,
-          headline: t.defaultHeadline,
-          description: t.defaultDescription,
-        },
-        ctx({ template: t, profile: {}, slots: { city: undefined } as SlotValues, targeting: { kind: "unset" } })
-      );
-      expect(v.ok, `${t.id}: ${(v as { reason?: string }).reason} ${(v as { detail?: string }).detail}`).toBe(true);
+
+// ---------------------------------------------------------------------------
+// Five variants
+// ---------------------------------------------------------------------------
+
+const other = (n: number) =>
+  `Landlords comparing managers: short let management, and here is angle ${n}. ` +
+  `A different way in, a different detail, and nothing the others already said.`;
+
+/** A full response over the template's real angle keys. */
+function many(c: ValidationContext, texts: Array<Partial<typeof GOOD> & { angle_key?: string }>) {
+  const keys = c.template.angleKeys.slice(0, texts.length);
+  return validateAdCopy(
+    {
+      ...IMAGE,
+      variants: texts.map((t, i) => ({
+        angle_key: t.angle_key ?? keys[i],
+        message: t.message ?? other(i),
+        headline: t.headline ?? `Angle ${i}`,
+        description: t.description ?? `Ask about angle ${i}`,
+      })),
+    },
+    c,
+    keys
+  );
+}
+
+describe("⚠️ one bad variant loses one variant, not the ad", () => {
+  it("keeps the good three when two break a rule", () => {
+    const c = ctx();
+    const v = many(c, [
+      {},
+      { message: "Landlords, short let management. We look after 400 properties." },
+      {},
+      { description: "Powered by Stayful" },
+      {},
+    ]);
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.variants).toHaveLength(3);
+    expect(v.copy.provenance).toEqual({ written: 3, offered: 5, image: "model" });
+    expect(v.rejected.map((r) => r.reason)).toEqual(["figure_not_in_slots", "mentions_stayful"]);
+    // ⚠️ THE RETRY IS TOLD WHICH ANGLES IT LOST, so it never re-earns the rest.
+    expect(v.rejected.map((r) => r.angleKey)).toEqual([c.template.angleKeys[1], c.template.angleKeys[3]]);
+  });
+
+  it("⚠️ zero survivors is not an ad", () => {
+    const v = many(ctx(), [
+      { description: "Powered by Stayful" },
+      { message: "Landlords, short let management. Double your rent with us." },
+    ]);
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toBe("empty");
+    expect(v.rejected).toHaveLength(2);
+  });
+
+  it("⚠️ four of four is complete, not degraded — T8 without a quote offers four", () => {
+    const c = ctx();
+    const keys = c.template.angleKeys.slice(0, 4);
+    const v = validateAdCopy(
+      { ...IMAGE, variants: keys.map((k, i) => ({ angle_key: k, message: other(i), headline: `H${i}`, description: `D${i}` })) },
+      c,
+      keys
+    );
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.provenance.written).toBe(4);
+    expect(v.copy.provenance.offered).toBe(4);
+  });
+});
+
+describe("⚠️ the angle key is a closed list — it came from a model", () => {
+  it("refuses a key nobody offered", () => {
+    const v = many(ctx(), [{ angle_key: "totally_made_up" }]);
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.rejected[0]).toMatchObject({ reason: "unknown_angle", angleKey: "totally_made_up" });
+  });
+
+  it("refuses a real key that was not offered THIS time", () => {
+    const c = ctx();
+    // The second key exists on the template but only the first was asked for.
+    const v = validateAdCopy(
+      { ...IMAGE, variants: [{ angle_key: c.template.angleKeys[1], ...GOOD }] },
+      c,
+      [c.template.angleKeys[0]]
+    );
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.rejected[0].reason).toBe("unknown_angle");
+  });
+
+  it("refuses the same angle twice, keeping the first", () => {
+    const c = ctx();
+    const v = validateAdCopy(
+      {
+        ...IMAGE,
+        variants: [
+          { angle_key: c.template.angleKeys[0], ...GOOD },
+          { angle_key: c.template.angleKeys[0], message: other(9), headline: "H", description: "D" },
+        ],
+      },
+      c,
+      [c.template.angleKeys[0]]
+    );
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.variants).toHaveLength(1);
+    expect(v.rejected[0].reason).toBe("duplicate_angle");
+  });
+
+  it("resolves the angle's prose name from the key, so the page can label it", () => {
+    const v = ok();
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.variants[0].angle).toBe(T8.angles[0]);
+  });
+});
+
+describe("⚠️ five texts that say one thing are one text billed as five", () => {
+  it("refuses a second variant whose message repeats the first", () => {
+    const c = ctx();
+    const v = many(c, [{}, { message: other(0) }]);
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.variants).toHaveLength(1);
+    expect(v.rejected[0].reason).toBe("copy_repeats_itself");
+  });
+
+  it("refuses a headline identical to its own description", () => {
+    expect(ok({ headline: "Talk to us", description: "Talk to us." }))
+      .toMatchObject({ reason: "copy_repeats_itself" });
+  });
+
+  it("⚠️ but a headline echoing a phrase from its own text is good writing", () => {
+    expect(ok({ headline: "Here is what we actually are", description: "Have a look" }).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The image, which the model writes now
+// ---------------------------------------------------------------------------
+
+describe("⚠️ the image falls back, it never fails the response", () => {
+  const example = { headline: "Landlords: the *spec's* line.", sub: "And the spec's sub." };
+
+  const withImage = (image: Record<string, unknown>, c = ctx({ example })) =>
+    validateAdCopy({ ...image, variants: [{ angle_key: key(c), ...GOOD }] }, c, [key(c)]);
+
+  it("takes the model's lines when they are usable", () => {
+    const v = withImage(IMAGE);
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.image.headline).toBe(IMAGE.image_headline);
+    expect(v.copy.provenance.image).toBe("model");
+  });
+
+  it("falls back to the template's example rather than losing five good texts", () => {
+    for (const bad of [
+      {},
+      { image_headline: "x", image_sub: "" },
+      // ⚠️ `layout.ts` has NO lineClamp on either line, so a long headline
+      // renders at the smallest step and runs off the card, silently.
+      { image_headline: "x".repeat(AD_IMAGE_MAX.headline + 1), image_sub: "ok" },
+      { image_headline: "ok", image_sub: "x".repeat(AD_IMAGE_MAX.sub + 1) },
+      // ⚠️ An invented figure ON THE CARD is the one place a number could reach
+      // a rendered PNG without passing a copy rule.
+      { image_headline: "We look after 400 properties.", image_sub: "ok" },
+      // ⚠️ `sanitiseForFont` DELETES an uncovered glyph and closes the gap, so
+      // this would render as a missing word rather than as an error.
+      { image_headline: "Landlords ✓ sorted", image_sub: "ok" },
+    ]) {
+      const v = withImage(bad);
+      expect(v.ok, JSON.stringify(bad)).toBe(true);
+      if (!v.ok) continue;
+      expect(v.copy.image, JSON.stringify(bad)).toEqual({ headline: example.headline, sub: example.sub });
+      expect(v.copy.provenance.image).toBe("example");
+      // The variants are untouched by any of it.
+      expect(v.copy.variants).toHaveLength(1);
     }
+  });
+
+  it("accepts the punctuation a model actually writes", () => {
+    const v = withImage({
+      image_headline: "Landlords — you’ll never see the *3am* message",
+      // ⚠️ NO CURRENCY FIGURE. `allowedFigures().money` is empty in part 1, so
+      // a pound amount on the card is `figure_not_in_slots` however it is
+      // punctuated — which is the rule working, not the charset.
+      image_sub: "“Full” short let management … cafés and all → sorted.",
+    });
+    expect(v.ok).toBe(true);
+    if (!v.ok) return;
+    expect(v.copy.provenance.image).toBe("model");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ⚠️ The repairs: each rule gets a case that USED to be rejected and must now
+// pass, and a case that must still be rejected. A loosened rule that stopped
+// catching anything would be worse than the over-strict one it replaced.
+// ---------------------------------------------------------------------------
+
+describe("⚠️ the rules that were rejecting good English", () => {
+  it("⚠️ a T8 opener stating the review score is not truncated at the decimal", () => {
+    // `firstSentence` split on any ".", so "4.9" ended the sentence at "4." and
+    // the category check then failed — USING THE FIGURE THE BRIEF INVITES WAS
+    // AN AUTOMATIC REJECTION.
+    expect(
+      ok({
+        message:
+          "4.9 on Google from 63 reviews. Landlords comparing short let management: " +
+          "here is what we are rather than what we promise.",
+      }).ok
+    ).toBe(true);
+  });
+
+  it("⚠️ a hook opener is allowed — the audience may arrive in sentence two", () => {
+    expect(
+      ok({
+        message:
+          "Your cleaner just cancelled, and it is Friday. Landlords doing short let " +
+          "management themselves know the feeling.",
+      }).ok
+    ).toBe(true);
+  });
+
+  it("but still refuses both when they are absent from the whole preview", () => {
+    expect(ok({ message: "We are quite good at what we do, and have been for a while. " + "x".repeat(200) }))
+      .toMatchObject({ reason: "first_sentence_missing_audience" });
+  });
+
+  it("⚠️ an apostrophe no longer opens a fabricated quotation", () => {
+    // `["“”'‘’]` as the OPENING class meant one apostrophe followed twelve
+    // characters later by any double quote was a testimonial. Here the only
+    // genuine quoted span is one short word, so the old rule matched on the
+    // apostrophe in "That's" and the new one matches nothing at all.
+    const line =
+      'Landlords, short let management. That’s the whole point. We call it "management".';
+    expect(/["“”'‘’]([^"“”]{12,})["“”]/.test(line)).toBe(true);
+    expect(ok({ message: line }).ok).toBe(true);
+  });
+
+  it("but still refuses a real quoted span", () => {
+    expect(
+      ok({ message: 'Landlords, short let management. One said "best decision I made about the flat".' })
+    ).toMatchObject({ reason: "quote_without_provenance" });
+  });
+
+  it("⚠️ an em dash mid-headline is punctuation, not an attribution", () => {
+    expect(ok({ headline: "Short let management — Leeds" }).ok).toBe(true);
+  });
+
+  it("but still refuses a dash-attributed name on its own line", () => {
+    expect(ok({ message: "Landlords, short let management. It works.\n— Sarah, Leicester" }))
+      .toMatchObject({ reason: "quote_without_provenance" });
+  });
+
+  it("⚠️ 'you must' and 'we ensure' are ordinary English on T6 too", () => {
+    const t6 = ctx({ template: T6, profile: { handled: [] } });
+    for (const line of [
+      "You must be tired of chasing it all yourself.",
+      "We ensure the place is spotless before every guest.",
+      "You must have better things to do on a Sunday.",
+    ]) {
+      expect(ok({ message: `Landlords, short let management. ${line}` }, t6).ok, line).toBe(true);
+    }
+  });
+
+  it("but still refuses the compliance sentences the spec forbids", () => {
+    const t6 = ctx({ template: T6, profile: { handled: [] } });
+    for (const line of [
+      "You must register with the council first.",
+      "We ensure you are compliant.",
+      "We ensure the paperwork is right.",
+    ]) {
+      expect(ok({ message: `Landlords, short let management. ${line}` }, t6), line)
+        .toMatchObject({ reason: "legal_assurance" });
+    }
+  });
+
+  it("⚠️ 'takes 24 hours' is a turnaround, not an income claim", () => {
+    // T7's fourth angle is how long an answer takes, with the turnaround in
+    // the brief — and `take (?:up to )?[\d,]+` matched it.
+    expect(
+      ok(
+        // ⚠️ "take 24 hours", NOT "takes". The old rule was `take ` with a
+        // literal space, so the inflected form never matched it and a test
+        // using it could not tell the two rules apart — the mutation reverting
+        // this regex survived on exactly that.
+        { message: "Landlords, short let management. An answer can take 24 hours, usually less." },
+        ctx({ template: T7, profile: {} })
+      ).ok
+    ).toBe(true);
+  });
+
+  it("⚠️ but 'you'll earn' is caught, which the old alternation could not match", () => {
+    // `you(?:'| w)ill` wanted "you'ill" or "you will" — the commonest phrasing
+    // of the claim walked straight past it.
+    expect(ok({ message: "Landlords, short let management. You’ll earn far more this way." }))
+      .toMatchObject({ reason: "income_claim" });
+    expect(ok({ message: "Landlords, short let management. You'll make more than you do now." }))
+      .toMatchObject({ reason: "income_claim" });
+  });
+
+  it("and a bare number with a period word is still an income claim", () => {
+    expect(ok({ message: "Landlords, short let management. Earn 4000 a month on short lets." }))
+      .toMatchObject({ reason: "income_claim" });
+  });
+
+  it("⚠️ 'what works best in Leeds' is not a market superlative", () => {
+    expect(ok({ message: "Landlords, short let management. We know what works best in Leeds." }).ok)
+      .toBe(true);
+  });
+
+  it("⚠️ nor is T3's own premise about being awake at 3am", () => {
+    const t3 = ctx({ template: T3, profile: { included: [] } });
+    expect(
+      ok({ message: "Landlords and hosts, short let management. Nobody else is awake at 3am." }, t3).ok
+    ).toBe(true);
+  });
+
+  it("but still refuses a ranking of the business", () => {
+    expect(ok({ message: "Landlords, short let management. Nobody else comes close." }))
+      .toMatchObject({ reason: "market_superlative" });
+    expect(ok({ message: "Landlords, short let management. We are the best in the city." }))
+      .toMatchObject({ reason: "market_superlative" });
+  });
+
+  it("⚠️ a licensed operator is not a licensing claim, and a cleaner is not cleaning", () => {
+    // `lowered.includes("license")` rejected "a licensed operator", and
+    // `includes("cleaning")` was reached by nothing — but the CLAIM scoping is
+    // what lets T3's own second angle be written by a customer who has not
+    // ticked cleaning.
+    const t6 = ctx({ template: T6, profile: { handled: [] } });
+    expect(ok({ message: "Landlords, short let management. A licensed operator, on your side." }, t6).ok)
+      .toBe(true);
+    const t3 = ctx({ template: T3, profile: { included: ["linen"] } });
+    expect(
+      ok(
+        { message: "Landlords and hosts, short let management. The cleaner who cancels on a Friday? Not your problem." },
+        t3
+      ).ok
+    ).toBe(true);
+  });
+
+  it("but still refuses a service CLAIMED without the tick", () => {
+    const t3 = ctx({ template: T3, profile: { included: ["linen"] } });
+    expect(ok({ message: "Landlords and hosts, short let management. We handle the cleaning." }, t3))
+      .toMatchObject({ reason: "service_not_selected", detail: "cleaning" });
+  });
+
+  it("⚠️ the detail is the model's own words, never a truncated regex", () => {
+    const v = ok({ message: "Landlords, short let management. Double your rent with us." });
+    expect(v).toMatchObject({ reason: "income_claim" });
+    expect((v as { detail: string }).detail).toContain("Double your rent");
+    expect((v as { detail: string }).detail).not.toContain("?:");
+    expect((v as { detail: string }).detail).not.toContain("\\b");
   });
 });

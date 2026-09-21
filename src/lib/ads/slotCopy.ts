@@ -172,6 +172,8 @@ export const AD_WARNING_COPY: Record<string, string> = {
     "The fee on file is outside the 8% to 30% most managers charge, so it's being left off the ad in case it was a typo.",
   fee_out_of_range: "The fee on file isn't a percentage anyone can charge, so it's being left off the ad.",
   fee_not_a_number: "The fee on file isn't a number, so it's being left off the ad.",
+  located_without_targeting:
+    "The ad names a town, and nothing on your account says which areas you cover — so set the audience to that town when you put it live, or you'll be paying to show it everywhere.",
 };
 
 /** The sentences for a resolution's flags, in order, skipping any we cannot word. */

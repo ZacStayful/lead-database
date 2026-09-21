@@ -59,11 +59,20 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
   const questions = set?.questions ?? fallbackQuestionnaire(template, context.resolution);
 
+  // ⚠️ STORED, NOT RETURNED — see AD_COPY.chat.standardQuestions. `set.degraded`
+  // went back in the JSON and was read by nobody, so the operator had no way of
+  // knowing these were our own questions rather than ones picked for their
+  // account. `template_reason` is already stored and already rendered.
+  const reason = [set?.reason || draft.template_reason || ""]
+    .concat(set?.degraded ?? true ? [AD_COPY.chat.standardQuestions] : [])
+    .filter(Boolean)
+    .join(" ");
+
   const { error } = await admin
     .from("ad_drafts")
     .update({
       template_id: template.id,
-      template_reason: set?.reason || draft.template_reason,
+      template_reason: reason,
       questions,
       // ⚠️ A NEW LADDER IS A NEW VERSION. A simplify request still in flight
       // against the old array must lose its compare-and-swap rather than
@@ -87,10 +96,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
   return adJson({
     template_id: template.id,
-    template_reason: set?.reason || draft.template_reason,
+    template_reason: reason,
     questions,
     questions_version: draft.questions_version + 1,
     switches_used: spent,
-    degraded: set?.degraded ?? true,
   });
 }

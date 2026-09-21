@@ -1,3 +1,4 @@
+import { AD_IMAGE_CHARSET } from "../metaFields";
 import { describe, expect, it } from "vitest";
 import { AD_FONTS, AD_FONT_COVERAGE, fullyCovered, sanitiseForFont } from "../fonts";
 import { AD_TEMPLATES } from "../templates";
@@ -76,14 +77,56 @@ describe("sanitiseForFont", () => {
   });
 });
 
+/**
+ * ⚠️ THIS IS WHAT STOPS `AD_IMAGE_CHARSET` BECOMING A SECOND COPY OF THE
+ * COVERAGE SET. `metaFields.ts` is import-free — a client component renders the
+ * truncation marks — so it cannot read the font bytes, and the runtime charset
+ * is therefore a whitelist written by hand. A character allowed there but
+ * missing from the shipped fonts is SILENTLY DELETED by `sanitiseForFont` and
+ * the gap closed up, which renders as a missing word rather than as an error.
+ *
+ * So the drift fails here instead, on every build — the arrangement §37.1 uses
+ * to pin the derived palette against the hexes it replaced.
+ */
+describe("the image charset is a subset of what the fonts can draw", () => {
+  it("every character the validator will admit onto a card is covered", () => {
+    const uncovered: string[] = [];
+    // Every codepoint the regex admits, enumerated rather than sampled.
+    const ranges: Array<[number, number]> = [
+      [0x20, 0x7e], [0xa3, 0xa3], [0xa9, 0xa9], [0xae, 0xae], [0xb0, 0xb0],
+      [0xb7, 0xb7], [0xbd, 0xbd], [0xe0, 0xff], [0x2013, 0x2014],
+      [0x2018, 0x2019], [0x201c, 0x201d], [0x2022, 0x2022], [0x2026, 0x2026],
+      [0x2192, 0x2192], [0x20ac, 0x20ac],
+    ];
+    for (const [lo, hi] of ranges) {
+      for (let cp = lo; cp <= hi; cp += 1) {
+        const ch = String.fromCodePoint(cp);
+        // Guard against the two drifting apart in EITHER direction.
+        expect(AD_IMAGE_CHARSET.test(ch), `charset should admit U+${cp.toString(16)}`).toBe(true);
+        if (!fullyCovered(ch)) uncovered.push(`U+${cp.toString(16).toUpperCase()} ${ch}`);
+      }
+    }
+    expect(uncovered).toEqual([]);
+  });
+
+  it("⚠️ refuses the two glyphs the layout draws as shapes rather than type", () => {
+    // Measured on the real bytes: ★ and ✓ are the only common marks missing,
+    // and §65.3 records what an uncovered glyph costs — satori fetches a font
+    // from Google mid-render, gets a 400, and draws tofu.
+    for (const ch of ["\u2605", "\u2713"]) {
+      expect(fullyCovered(ch)).toBe(false);
+      expect(AD_IMAGE_CHARSET.test(ch)).toBe(false);
+    }
+  });
+});
+
 describe("every shipped string renders", () => {
   it("no template's own copy loses a character", () => {
     for (const t of AD_TEMPLATES) {
       for (const s of [
-        t.addressedTo, t.categoryLine, t.ctaPattern, t.defaultPrimaryText,
-        t.defaultHeadline, t.defaultDescription, t.footerLine ?? "",
-        stripEmphasis(t.headlineLocated), stripEmphasis(t.headlineUnlocated),
-        stripEmphasis(t.subLocated), stripEmphasis(t.subUnlocated),
+        t.addressedTo, t.categoryLine, t.ctaPattern, t.footerLine ?? "",
+        stripEmphasis(t.exampleHeadlineLocated), stripEmphasis(t.exampleHeadlineUnlocated),
+        stripEmphasis(t.exampleSubLocated), stripEmphasis(t.exampleSubUnlocated),
       ]) {
         expect(fullyCovered(s), `${t.id}: ${s}`).toBe(true);
       }

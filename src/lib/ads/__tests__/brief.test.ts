@@ -161,7 +161,31 @@ describe("the fee", () => {
 
   it("is withheld when they agreed but we do not have the number", () => {
     const text = brief(customer({ ad_profile: { fee_public: true } }));
-    expect(text).toContain("do not have the number");
+    expect(text).toContain("not appear");
+  });
+
+  /**
+   * ⚠️ THE PROMPT USED TO INVITE THE ONE SENTENCE THE VALIDATOR REFUSES.
+   *
+   * `feePhrase` returned "15% of gross" with the VAT treatment unrecorded, the
+   * brief told the model to state the fee "exactly that way", and
+   * `fee_without_vat_treatment` then rejected exactly that — because a bare
+   * "15%" is a different price with and without VAT and the landlord reading it
+   * cannot tell which. A rejection retries once and then collapses, so the
+   * customer most likely to hit it was the one who had bothered to publish a
+   * fee.
+   */
+  it("⚠️ offers no fee phrase when nobody recorded the VAT treatment", () => {
+    const text = brief(customer({ ad_profile: { fee_public: true, fee_pct: 15, fee_basis: "gross" } }));
+    expect(text).not.toContain("15%");
+    expect(text).toContain("not appear");
+  });
+
+  it("⚠️ but \"not stated\" is an answer, not a gap", () => {
+    const text = brief(
+      customer({ ad_profile: { fee_public: true, fee_pct: 15, fee_basis: "gross", fee_vat: "not_stated" } })
+    );
+    expect(text).toContain("15% of gross");
   });
 });
 
@@ -268,7 +292,7 @@ describe("the figure list agrees with the validator", () => {
       slots: r.slots,
       profile: (c as unknown as { ad_profile: Record<string, unknown> }).ad_profile,
       targeting: r.targeting,
-      fixed: { headline: "", sub: "" },
+      example: { headline: "", sub: "" },
     };
   };
 

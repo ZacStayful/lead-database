@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Customer } from "@/lib/types";
 import { adContext, preflight } from "./context";
-import { generateCopy } from "./generate";
+import { generateCopy, type CopyFailure } from "./generate";
 import { PROMPT_VERSIONS } from "./prompts";
 import { recordGenerations } from "./ledger";
 import { failDraft, finishDraft, releaseClaim, type AdDraftRow } from "./session";
@@ -19,8 +19,10 @@ import type { Answer } from "./schemas";
  */
 
 export type WriteOutcome =
-  | { ok: true; copy: AdDraftRow["copy"]; degraded: boolean }
+  | { ok: true; copy: AdDraftRow["copy"] }
   | { ok: false; reason: "unresolved"; missing: string[]; labels: string[] }
+  /** The model was not reachable, refused twice, or is not configured here. */
+  | { ok: false; reason: "not_written"; failure: CopyFailure }
   | { ok: false; reason: "not_stored" };
 
 /**
@@ -78,17 +80,35 @@ export async function writeAd(params: {
     previousMessage: params.previousMessage ?? null,
   });
 
-  const stored = await finishDraft(admin, draft.id, {
-    copy: result.copy,
-    slots: context.resolution.slots,
-    modelId: result.entries.find((e) => e.modelId)?.modelId ?? null,
-    promptVersion: PROMPT_VERSIONS.copy,
-  });
-
+  // ⚠️ THE LEDGER IS WRITTEN WHETHER OR NOT THERE IS AN AD, AND BEFORE THE
+  // BRANCH. A generation that cost two model calls and produced nothing is
+  // exactly the run somebody will come looking for, and it used to be recorded
+  // only on the path that stored copy.
   await recordGenerations(admin, {
     customerId,
     draftId: draft.id,
     entries: result.entries,
+  });
+
+  if (!result.ok) {
+    // ⚠️ RELEASED TO `collecting`, NOT FAILED, AND NOT STORED. §65: if the
+    // model did not write it, it is not an ad. The draft keeps its questions
+    // and its answers, so Retry costs the operator nothing but the wait — and
+    // `finishDraft` is never reached, so no row can carry a `model_id` beside
+    // words a model never produced.
+    await releaseClaim(admin, draft.id, "collecting");
+    return { ok: false, reason: "not_written", failure: result.reason };
+  }
+
+  const stored = await finishDraft(admin, draft.id, {
+    copy: result.copy,
+    slots: context.resolution.slots,
+    // ⚠️ ONLY EVER A MODEL THAT ACTUALLY ANSWERED. `result.ok` now guarantees
+    // at least one variant the model wrote, so this can no longer stamp a model
+    // id onto the template's own text — which is what the record did on the run
+    // the owner judged.
+    modelId: result.entries.find((e) => e.modelId)?.modelId ?? null,
+    promptVersion: PROMPT_VERSIONS.copy,
   });
 
   if (!stored) {
@@ -99,5 +119,5 @@ export async function writeAd(params: {
     return { ok: false, reason: "not_stored" };
   }
 
-  return { ok: true, copy: result.copy, degraded: result.degraded };
+  return { ok: true, copy: result.copy };
 }

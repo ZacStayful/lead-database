@@ -120,21 +120,54 @@ export const SimplifiedQuestionSchema = z.object({
 });
 
 /**
- * ⚠️ NO HEADLINE FIELD BEYOND META'S OWN. The spec is explicit that the model
- * never writes the headline PATTERN — that is slot substitution. What it does
- * write is Meta's 40-character `headline` and 30-character `description`,
- * which the authorship table assigned to nobody.
+ * ⚠️ THE MODEL WRITES THE ON-IMAGE HEADLINE NOW TOO.
+ *
+ * It used to be slot substitution and the model was told, in capitals, that it
+ * did not write it. That made "no invented figure" structurally impossible
+ * rather than merely checked — but it also meant every "what would it earn" ad
+ * in the country carried the identical sub-line, and the model, handed four
+ * fixed fields and asked for three more, had nowhere to go but restating them.
+ * The first real ad said the same thing four times over.
+ *
+ * The figure rules run over these two as well, so an invented number is still
+ * refused; the safety is a check rather than an impossibility. The spec's own
+ * headline and sub are shown as the register to write in, and remain the
+ * fallback.
  */
-export const AdCopySchema = z.object({
+export const AdVariantSchema = z.object({
+  angle_key: z
+    .string()
+    .describe("The key of the angle this text takes, exactly as listed in the brief."),
   message: z
     .string()
-    .describe("The primary text. First sentence must name the audience and say what the service is."),
+    .describe("The primary text, above the image. Name the audience and the service early."),
   headline: z
     .string()
     .describe("Meta's headline, under the image. Aim for 40 characters so it is not shortened."),
   description: z
     .string()
     .describe("Meta's description, beneath the headline. Aim for 30 characters."),
+});
+
+export const AdCopySchema = z.object({
+  image_headline: z
+    .string()
+    .describe(
+      "The headline drawn ON the image. Wrap one short span in *asterisks* to emphasise it."
+    ),
+  image_sub: z
+    .string()
+    .describe("The line under it on the image. One sentence, concrete."),
+  /**
+   * ⚠️ NOT `.length(5)`. `angleListFor()` drops T8's quote angle when no review
+   * has been confirmed, so a template can legitimately offer four — and a
+   * schema demanding five would fail every T8 run for a customer without a
+   * quote. The count is checked against what was actually OFFERED, in the
+   * validator, where the template is in hand.
+   */
+  variants: z
+    .array(AdVariantSchema)
+    .describe("One primary text per angle offered, each committing to that angle alone."),
 });
 
 // ---------------------------------------------------------------------------

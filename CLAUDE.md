@@ -16925,6 +16925,232 @@ account, and the override chain puts it on the ad as the trading name.
 applied to the database. Nothing here touches a balance, counter, pacing or
 capacity column.
 
+### 65.12 — Five angles, and the model writes the card *(no migration)*
+
+§65.11 made the builder produce something. What it produced, the owner's words,
+was *"terrible"* — and *"this file creates really good ads on my claude yet I
+copy it here the ads are so bad"*.
+
+#### ⚠️ THE AD HE JUDGED CONTAINED NO MODEL OUTPUT AT ALL
+
+Production, draft `b056b6f8` (21 Sep 12:56):
+
+| call | outcome | reject_reason | model_id |
+|---|---|---|---|
+| questions | **error** | `not_configured` | null |
+| copy | **error** | `not_configured` | null |
+
+`not_configured` is `isAdModelConfigured()` returning false —
+**`ANTHROPIC_API_KEY` unset on that deployment**. `generate.ts` then returned
+`fallback()`, and the stored copy was **byte-identical** to `templates.ts`'s T7
+`defaultPrimaryText` / `defaultHeadline` / `defaultDescription`. The 10:41 run
+on production *did* reach Opus (`model_id: claude-opus-5`, `outcome: ok`), and
+the 12:56 draft carries `destination: "instant_form"` — a key only §65.11's code
+writes — so he was on the **PR preview**, which has no key.
+
+⚠️ **AND `AD_COPY.result.aiNotice` — "The words were drafted by AI from what you
+told us" — WAS RENDERED OVER IT.** The app told him a model wrote words it never
+saw, and `writeAd` stamped `model_id` on the row beside them. One sentence is
+why he concluded the model is bad at this.
+
+**Zac sets `ANTHROPIC_API_KEY` for the Preview environment in Vercel and
+redeploys; the Vercel API returns 403 to a session.** That is not a code change.
+Everything below is.
+
+#### The rule that replaces the fallback
+
+⚠️ **IF THE MODEL DID NOT WRITE IT, IT IS NOT AN AD.**
+
+`defaultPrimaryText`, `defaultHeadline` and `defaultDescription` are **deleted
+from `AdTemplate` and from all four templates**, and so is `defaultCopyFor`.
+Zero surviving variants releases the draft to `collecting` — the questions and
+the answers survive, so Retry costs the wait and nothing else — and the chat
+says which of three things happened. `writeAd` returns **before** `finishDraft`,
+so no row can carry a `model_id` beside words a model never produced, and the
+ledger is written on **both** paths, because a generation that cost two calls
+and produced nothing is exactly the run somebody comes looking for.
+
+⚠️ **`provenance` IS STORED INSIDE `copy`, NOT RETURNED IN A ROUTE'S BODY.**
+`degraded` was returned by three routes and read by none — and could not have
+been, because `AdChat` re-renders from `draft.copy` after `router.refresh()`.
+It carries `{written, offered, image}`, so "4 of 5 angles came back usable" and
+"the line on the image is our standard one" survive a reload. The questions path
+had the identical fault one step earlier; its sentence is folded into
+`template_reason`, which was already stored and already rendered, so it needs no
+column either. With no key that is now the **first** thing an operator sees
+rather than the last.
+
+#### Five texts, one per angle
+
+`AdCopySchema` becomes `{ image_headline, image_sub, variants[] }`, one variant
+per angle offered, each `{angle_key, message, headline, description}`. The spec
+asks for `primary_text: 5 variants` and names five angles per template; the
+prompt said *"Pick ONE angle and commit to it."*
+
+- ⚠️ **PAIRED, NOT THREE LISTS.** One bad variant loses one variant, and Meta is
+  handed a whole ad rather than a text and a headline never written for each
+  other.
+- ⚠️ **NOT `.length(5)`.** `angleListFor` drops T8's quote angle without a
+  confirmed quote, so four can be complete. `provenance.written < offered` is
+  honest, not a failure — and **padding to five with the default is the current
+  fault with the volume up**.
+- ⚠️ **`angle_key` IS A STRING A MODEL CHOSE**, so it is checked against the
+  keys actually offered *this call* — §27.1's rule one layer down, and the
+  discipline `isChatWritable` already applies to `Question.slot`.
+- ⚠️ **THE RETRY ASKS ONLY FOR WHAT IT LOST.** Re-asking for all five pays twice
+  for the four that were good and risks losing them, which is why the rejection
+  is per angle. `copyMaxTokens(n)` scales with the count: at a flat 8,000 five
+  texts at default effort **truncate**, `messages.parse` yields null, and the
+  failure presents as "the model wrote something generic".
+- `copy_repeats_itself` refuses two variants saying one thing, by **decidable
+  equality after normalisation** — never containment, because a headline echoing
+  its own text is good writing.
+
+#### ⚠️ The model writes the on-image headline and sub — the spec's rule, reversed
+
+The spec is explicit that *"Claude writes the five primary texts and the sub…
+never the headline pattern itself"*, and substitution made "no invented figure"
+safe **by construction**, which is strictly stronger than a check. It was given
+up deliberately: every "what would it earn" ad in the country carried the
+identical sub-line, and a model handed four fixed fields and asked for three
+more restated them — the first real ad said the same thing four times.
+
+The four patterns are **`exampleHeadline*` / `exampleSub*`** now: shown as the
+register to write in, and kept as the fallback. The figure rules run over the
+model's two lines as well, so an invented number is still refused.
+
+Two bounds exist because the card is a canvas and nothing else would enforce
+them. `layout.ts` sizes the headline down in three steps and stops, and neither
+line carries a `lineClamp` — so `AD_IMAGE_MAX` (110 / 140) is what stops a long
+headline running off the bottom and returning a perfectly valid PNG. And
+`AD_IMAGE_CHARSET` bounds the glyphs, because ⚠️ **`sanitiseForFont` DELETES an
+uncovered character and closes the gap**, which renders as a missing word.
+It is **not** a second copy of the coverage set: `metaFields.ts` is import-free
+and cannot read the font bytes, so `fonts.test.ts` asserts every character it
+admits is in `AD_FONT_COVERAGE` — §37.1's arrangement.
+
+⚠️ **A FAILURE HERE FALLS BACK, IT NEVER FAILS THE RESPONSE.** The image is one
+pair shared by every variant, so rejecting over it would throw away five good
+texts for one line; `provenance.image` is what stops that being silent. And the
+**render route draws the stored lines**, never the example — falling back there
+would draw a different card from the one the chat showed, on the same draft.
+
+#### ⚠️ `unresolved` had nothing left to measure
+
+It was the `{}` a headline pattern could not fill. With the model writing the
+headline there is no pattern to half-fill, so it becomes a declared
+**`requiredSlots`** per template — a subset of `setupSlots`, and a better test:
+T8 is unofferable without its four figures because it cannot be **argued**
+without them, not because a brace would render empty. It also closes a gap the
+derivation had — `review_count` is required by the spec's claims note and
+appears in no pattern.
+
+⚠️ **`requiredSlots` IS NOT `resolution.missing`.** `missing` is what to ASK
+about and drives the questionnaire; this is what makes the ad impossible and
+drives `preflight`. And `review_quote` is deliberately NOT in it — a quote is a
+bonus angle, not a precondition.
+
+#### The prompt gets the spec's own prose
+
+`AD_PACK` keeps the twenty angle **names** verbatim and drops every rationale
+paragraph, so the model is told T7's fourth angle is "how long an answer takes"
+and never told that the template *"offers a calculation rather than a claim,
+which is why it can talk about income without triggering the gate"*. **That is
+why the same document pasted into claude.ai writes better ads than this app
+did.**
+
+`scripts/generate-ad-spec-prose.mjs` extracts each template's rationale and
+claims note into `src/lib/ads/specProse.ts` — generated, because §65 records
+four errors that came from paraphrasing this spec, and committed, because docs/
+is not traced into the Vercel bundle (§50.5). `specProse.test.ts` re-runs it
+with `--check` and asserts the text is verbatim **against the document**.
+
+⚠️ **IT GOES IN THE USER TURN, NOT IN `AD_PACK`, AND THAT IS A CACHING
+DECISION.** The pack's measured floor is ~1,500 tokens against a 1,024 minimum —
+under 50% headroom — and the cache **silently ignores** a breakpoint below it.
+~400 uncached tokens on the copy call is a fraction of a penny.
+
+Three prompt faults went with it: the copy call described all four templates,
+T8 was shown five angles in the system block and four in the user turn, and
+⚠️ **the angle list printed raw, so the model literally read
+`what {properties_managed} properties means day to day`**. `readableAngle`
+handles the catalogue; `copyUser` fills it for real.
+
+#### The rules that were rejecting good English
+
+⚠️ **AN OVER-STRICT RULE DOES NOT ANNOUNCE ITSELF** — `validateAdCopy.ts` says
+so at the top, and predicted this exactly: a rejection retries once and collapses
+to the canned text, so every ad simply comes back generic and it reads as "the
+model is bad". Each repair has a must-pass case AND a must-still-reject case:
+
+| Rule | Was rejecting | Now |
+|---|---|---|
+| `firstSentence` | split on any `.`, so a T8 opener stating **4.9** truncated at "4." and failed the category check — **using the figure the brief invites was an automatic rejection** | `opening()`: the 125-character preview Meta actually shows, which also permits a hook opener |
+| `QUOTED_RE` | opened on `'`, so ONE APOSTROPHE plus any later double quote was a fabricated testimonial | double quotes only, no newline |
+| `ATTRIBUTION_RE` | plain hyphen anywhere before end-of-line, so the headline `Short let management — Leeds` was a testimonial | an em/en dash **opening a line**, alone |
+| `LEGAL_ASSURANCE` | bare `you must` / `we ensure` — ordinary English, and T6's own register | narrowed with a lookahead to a compliance subject in the same clause. ⚠️ **Narrowed, not deleted**: the spec forbids implying compliance is guaranteed, and "we ensure the paperwork is right" says it with no legal word in it |
+| `INCOME_CLAIM[0]` | `you(?:'\| w)ill` could not match `you'll` at all — **under**-strict | the apostrophe forms |
+| `INCOME_CLAIM[1]` | `take [\d,]+` matched "takes 24 hours", which is T7's fourth angle | `take` dropped; a bare number needs a period word. The currency form is the figure check's job |
+| `MARKET_SUPERLATIVE` | `best in` matched "what works best in Leeds"; `nobody else` is T3's own premise | anchored to a claim about the business. ⚠️ `[0]`'s empty alternative is doing its job — leave it |
+| `service_not_selected` | bare substring, so `license` rejected "a licensed operator" | whole words, **and scoped to CLAIMING clauses** — without which T3's own second angle is unwritable for a customer who has not ticked cleaning |
+| `located_without_targeting` | ⚠️ **read NOTHING the model wrote**, so it failed both paid attempts identically and GUARANTEED the canned text — for anybody whose lead filter is off, which is most of the book | a **warning** on `resolveSlots`. Nothing here publishes; the audience is set in Meta afterwards |
+| the retry's `detail` | a truncated regex source — `(\b(?:earn\|make\|generate\|bring in\|take) (?:up)` — as the explanation | the matched span of the model's own text |
+| `feePhrase` | ⚠️ **the prompt and the validator contradicted each other**: `brief.ts` told the model to state the fee "exactly as `15% of gross`" and `fee_without_vat_treatment` rejected exactly that | withheld when no VAT treatment is recorded. `"not_stated"` is an answer, not a gap |
+
+⚠️ **THERE IS DELIBERATELY NO SERVICE-VOCABULARY FILTER ON THE ANGLE LIST.** The
+plan called for one; checked against the real registries, **not one of the
+twenty angle names contains a service token as a whole word**, so it would be
+dead code. `templates.test.ts` pins that measurement, so the day an angle is
+written that does name one, the filter has to exist.
+
+#### Showing five without burying the operator
+
+One variant in full, labelled with **the angle's own name from the spec** —
+never "Variant 2", because the name is the reason to prefer one — and the rest
+behind "Other angles". They exist to give Facebook something to test, not the
+operator five things to read. It is the shape fifteen will inherit.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
+`module` warnings, `npm run build` passes, **2,843 vitest cases green**.
+
+⚠️ **`npm run proof:ads` now renders each template TWICE at every ratio** — once
+from the spec's example and once from a model-written headline AT
+`AD_IMAGE_MAX`, carrying the punctuation a model actually writes. **They were
+looked at**: em dash, curly apostrophe, curly quotes and ellipsis all render,
+the emphasised span is in the accent colour, three lines of headline fit at the
+smallest step on all three ratios, and nothing overflows. §65.3 records a valid
+PNG with a tofu box and a valid PNG with the spaces eaten out of the headline;
+byte counts are not proof.
+
+⚠️ **One collateral loss was caught by a test rather than by review.** Removing
+the three default fields with a line-range delete swallowed T6's `footerLine`
+and its comment, which sit between them — and that line is required by the
+spec's claims note. `templates.test.ts` failed on it.
+
+**Not exercised against a real model.** No five-variant generation has been
+made. That needs the key on a deployment, and then: five distinct angles each
+naming its own, no two reading alike, the on-image headline differing from
+Meta's headline and from the sub, and `ad_generation_requests` showing
+`outcome = 'ok'` with a real `model_id`.
+⚠️ **Clear `referral_business_name` first** — it reads `"test"` on the owner's
+row, and the override chain puts it on the ad as the trading name.
+
+#### Deployment order — code only
+
+**No migration**, and that was verified rather than assumed:
+`0156_ad_builder.sql:181` constrains `copy` to `jsonb_typeof(copy) = 'object'`,
+so the variants store as `{ variants: [...] }` and never as a bare array.
+`status` already admits `collecting` and `failed`, so the honest-failure path
+needs no new state. Nothing here touches a balance, counter, pacing or capacity
+column.
+
+⚠️ **A draft stored before this carries `copy.message` and no `variants`.**
+`AdResult` renders the generic error rather than a blank screen for one; nothing
+in production is in that state (one draft, and it is T7's canned text), and
+Delete or Rewrite clears it.
+
 ### Deferred
 
 - **A sweeper for the tombstones.** They are recorded and drainable; automatic

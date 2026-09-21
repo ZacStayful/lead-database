@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "gen:context": "node scripts/generate-section-index.mjs",
+    "gen:ads": "node scripts/generate-ad-spec-prose.mjs",
     "proof:ads": "vitest run --config vitest.proof.config.mts"
   },
   "dependencies": {

@@ -74,8 +74,13 @@ function feeLines(customer: Customer): string[] {
   return phrase
     ? [`Fee, which they HAVE agreed to publish: ${phrase}. State it exactly that way or not at all.`]
     : [
-        "Fee: they are happy to publish one but we do not have the number, " +
-          "so it must not appear.",
+        // ⚠️ TWO REASONS, ONE SENTENCE, DELIBERATELY. `feePhrase` now also
+        // withholds a fee whose VAT treatment nobody recorded — because a bare
+        // "15%" is a different price with and without it, and the validator
+        // refuses one. Either way the instruction to the model is identical,
+        // and the operator is told which it was by the questionnaire asking.
+        "Fee: they are happy to publish one, but we do not have it in a form " +
+          "that can go on an ad, so it must not appear.",
       ];
 }
 

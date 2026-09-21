@@ -62,8 +62,10 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     template: template
       ? { id: template.id, name: template.name, audience: template.audience }
       : null,
-    // What the image will say, so the chat can show it before it is rendered.
-    fixed: template ? adContext(customer, template).ctx.fixed : null,
+    // ⚠️ THE EXAMPLE, AND SAID SO. It is what the card WOULD say before the
+    // model has written one; once there is copy, `draft.copy.image` is what
+    // will actually be drawn and the chat reads that instead.
+    example: template ? adContext(customer, template).ctx.example : null,
     creatives,
   });
 }

@@ -75,13 +75,22 @@ export async function POST(request: NextRequest) {
       ? fallbackQuestionnaire(set.template, adContext(customer, set.template).resolution)
       : set.questions;
 
+  // ⚠️ THE DEGRADATION IS STORED, NOT RETURNED. `set.degraded` was handed back
+  // in the JSON and read by nobody — and it could not have been, because the
+  // chat navigates to the draft page and re-renders from the row. Folding it
+  // into `template_reason`, which is already stored and already rendered, is
+  // what makes it survive; see AD_COPY.chat.standardQuestions.
+  const reason = [set.reason || fallbackTemplate().reason]
+    .concat(set.degraded ? [AD_COPY.chat.standardQuestions] : [])
+    .join(" ");
+
   const { data, error } = await admin
     .from("ad_drafts")
     .insert({
       customer_id: customer.id,
       prompt,
       template_id: set.template.id,
-      template_reason: set.reason || fallbackTemplate().reason,
+      template_reason: reason,
       status: "collecting",
       questions,
     })
@@ -104,9 +113,8 @@ export async function POST(request: NextRequest) {
     {
       id: draftId,
       template_id: set.template.id,
-      template_reason: set.reason || fallbackTemplate().reason,
+      template_reason: reason,
       questions,
-      degraded: set.degraded,
     },
     201
   );

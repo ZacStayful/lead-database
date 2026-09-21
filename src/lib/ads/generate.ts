@@ -24,8 +24,8 @@ import {
 import { fallbackTemplate } from "./fallback";
 import { answerableQuestion, answerableQuestions } from "./profile";
 import { templateById, type AdTemplate } from "./templates";
-import { validateAdCopy, type AdRejection, type ValidationContext } from "./validateAdCopy";
-import type { AdCopy } from "./metaFields";
+import { validateAdCopy, type AdVariantRejection, type ValidationContext } from "./validateAdCopy";
+import type { AdCopy, AdVariant } from "./metaFields";
 import type { GenerationKind, LedgerEntry } from "./ledger";
 
 /**
@@ -37,10 +37,14 @@ import type { GenerationKind, LedgerEntry } from "./ledger";
  *   1. IT ONLY EVER PROPOSES. Questions are shown to the operator, who answers
  *      them. Copy is shown to the operator, who reads it before publishing.
  *      Nothing here decides anything and nothing here publishes anything.
- *   2. IT ALWAYS DEGRADES. No API key, a timeout, malformed output, two
- *      rejections in a row — every one of them ends with a real questionnaire
- *      or the template's own default text, which is an ad we are content
- *      to have written.
+ *   2. THE QUESTIONS ALWAYS DEGRADE. No API key, a timeout, malformed output —
+ *      every one ends with a real questionnaire, asked in our own words,
+ *      because an ad with no answers cannot be built at all.
+ *   2b. ⚠️ THE COPY DOES NOT, AND THAT IS A DELIBERATE REVERSAL. It used to
+ *      fall back to the template's own default text, described here as "an ad
+ *      we are content to have written". It was not: the ad the owner judged as
+ *      terrible was that fallback, rendered under a line saying the words were
+ *      drafted by AI. A failed generation now says so and offers a retry.
  *   3. NOTHING IT RETURNS IS TRUSTED VERBATIM. Questions go through
  *      `normaliseQuestions`; copy goes through `validateAdCopy`, which
  *      REJECTS rather than repairs.
@@ -73,12 +77,17 @@ const QUESTIONS_TIMEOUT_MS = 25_000;
 /** One question, a much smaller prompt, and they are mid-form. */
 const SIMPLIFY_TIMEOUT_MS = 15_000;
 /**
- * Runs on a 300-second route, after they have committed. The budget is
- * 60 + 45 with room to persist a failure well before the ceiling — a draft
- * stuck in `generating` because the lambda died is worse than a failed one.
+ * Runs on a 300-second route, after they have committed.
+ *
+ * ⚠️ RAISED FROM 60 + 45 WITH THE VARIANT COUNT. One primary text became five,
+ * at default effort, so the same ceiling now cuts off a call that is doing five
+ * times the writing — and a cut-off call is `call_failed`, which does not
+ * retry, so the whole ad is lost. The sum must stay comfortably under
+ * `GENERATION_STALE_MS` (6 minutes), or a killed lambda leaves the draft in
+ * `generating` with nobody able to reclaim it; `generate.test.ts` pins that.
  */
-const COPY_TIMEOUT_MS = 60_000;
-const COPY_RETRY_TIMEOUT_MS = 45_000;
+const COPY_TIMEOUT_MS = 120_000;
+const COPY_RETRY_TIMEOUT_MS = 75_000;
 
 /**
  * ⚠️ EXPLICIT ON EVERY CALL. Left to the SDK's default a long answer is
@@ -90,9 +99,20 @@ const COPY_RETRY_TIMEOUT_MS = 45_000;
 const MAX_TOKENS = {
   questions: 4_000,
   simplify: 1_500,
-  /** Default effort, so this has to cover the thinking as well as the output. */
-  copy: 8_000,
 } as const;
+
+/**
+ * ⚠️ IT SCALES WITH THE VARIANT COUNT, and a flat ceiling is how five angles
+ * become one. Default effort means this covers the thinking as well as the
+ * output, and five primary texts is roughly five times the output of one — at
+ * a flat 8,000 the answer is TRUNCATED, `messages.parse` yields null, and the
+ * failure presents as "the model wrote something generic" rather than as an
+ * error. Generous on purpose: an unnecessary ceiling costs nothing, truncation
+ * costs the whole ad.
+ */
+export function copyMaxTokens(variants: number): number {
+  return 8_000 + 3_000 * Math.max(1, variants);
+}
 
 export function isAdModelConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY);
@@ -331,44 +351,37 @@ export async function simplifyQuestion(params: {
 // The copy
 // ---------------------------------------------------------------------------
 
-export type CopyResult = {
-  copy: AdCopy;
-  /** True when both attempts were refused and this is the template's own text. */
-  degraded: boolean;
-  entries: LedgerEntry[];
-};
-
 /**
- * The template's own words, run through the same validator that refused the
- * model's.
+ * ⚠️ THERE IS NO `degraded: true` COPY ANY MORE, AND NO `defaultCopyFor`.
  *
- * ⚠️ IT MUST PASS. `defaultPrimaryText`, `defaultHeadline` and
- * `defaultDescription` are written to name no service and state no figure
- * precisely so they survive a customer who has ticked nothing — and the unit
- * suite drives every default through `validateAdCopy` against an empty
- * selection. If one ever fails, this returns it anyway: an ad the operator
- * reads before publishing beats a blank page, and the ledger says it happened.
+ * Both attempts failing used to return the template's own three default texts,
+ * which the route stored as an ad and the result page rendered under "the words
+ * were drafted by AI from what you told us". That is exactly what the owner
+ * judged as terrible: production shows both calls recording `not_configured`
+ * (the key was unset on that deployment) and copy byte-identical to T7's
+ * defaults. The app told him a model wrote words it never saw.
+ *
+ * If the model did not write it, it is not an ad.
  */
-export function defaultCopyFor(ctx: ValidationContext): AdCopy {
-  const t = ctx.template;
-  return {
-    message: t.defaultPrimaryText,
-    headline: t.defaultHeadline,
-    description: t.defaultDescription,
-    call_to_action_type: t.metaCta,
-    link_url: ctx.slots.landing_url ?? "",
-  };
-}
+export type CopyResult =
+  | { ok: true; copy: AdCopy; entries: LedgerEntry[] }
+  | { ok: false; reason: CopyFailure; entries: LedgerEntry[] };
+
+/** Why nothing was written, in the terms the chat has a sentence for. */
+export type CopyFailure = "not_configured" | "call_failed" | "rejected";
 
 /**
- * Write the ad: one attempt, one retry with the refusal fed back, then the
- * template's own text.
+ * Write the ad: one attempt, then one retry for the angles that were refused.
  *
- * ⚠️ THE RETRY IS TOLD WHY, IN ITS OWN TERMS. A bare "try again" produces the
- * same copy with different adjectives; "it stated a number the customer never
- * gave us" produces copy without the number. The mapping from our rejection
- * codes to that sentence lives in `prompts.ts`, so the code never reaches the
- * model and the sentence never reaches the ledger.
+ * ⚠️ THE RETRY ASKS ONLY FOR WHAT IT LOST. A retry that re-asks for all five
+ * pays a second time for the four that were already good and risks losing them
+ * — the reason the rejection is per angle rather than per response.
+ *
+ * ⚠️ AND IT IS TOLD WHY, IN ITS OWN TERMS. A bare "try again" produces the same
+ * copy with different adjectives; "it stated a number the customer never gave
+ * us" produces copy without the number. The mapping from our rejection codes to
+ * that sentence lives in `prompts.ts`, so the code never reaches the model and
+ * the model's sentence never reaches the ledger.
  */
 export async function generateCopy(params: {
   ctx: ValidationContext;
@@ -378,30 +391,36 @@ export async function generateCopy(params: {
   figures: string[];
   previousMessage?: string | null;
 }): Promise<CopyResult> {
-  const fallback = (entries: LedgerEntry[]): CopyResult => ({
-    copy: defaultCopyFor(params.ctx),
-    degraded: true,
-    entries,
+  const offered = angleListFor(params.ctx.template, {
+    profile: params.ctx.profile,
+    slots: params.ctx.slots,
   });
 
   if (!isAdModelConfigured()) {
-    return fallback([
-      entry("copy", "error", {
-        promptVersion: PROMPT_VERSIONS.copy,
-        rejectReason: "not_configured",
-      }),
-    ]);
+    return {
+      ok: false,
+      reason: "not_configured",
+      entries: [
+        entry("copy", "error", {
+          promptVersion: PROMPT_VERSIONS.copy,
+          rejectReason: "not_configured",
+        }),
+      ],
+    };
   }
 
   const entries: LedgerEntry[] = [];
-  let lastRejection: { reason: AdRejection; detail: string } | null = null;
+  /** Survivors from attempt 1, so the retry never has to re-earn them. */
+  let kept: AdCopy | null = null;
+  let wanted = offered;
+  let rejected: AdVariantRejection[] = [];
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const timeout = attempt === 1 ? COPY_TIMEOUT_MS : COPY_RETRY_TIMEOUT_MS;
     try {
       const response = await client(timeout).messages.parse({
         model: AD_MODEL,
-        max_tokens: MAX_TOKENS.copy,
+        max_tokens: copyMaxTokens(wanted.length),
         system: systemFor(COPY_INSTRUCTIONS),
         // ⚠️ DEFAULT EFFORT, and the only call here that gets it. This is the
         // deliverable, it runs after the operator has committed, and it is the
@@ -414,11 +433,12 @@ export async function generateCopy(params: {
               template: params.ctx.template,
               account: params.account,
               answers: params.answers,
-              fixed: params.ctx.fixed,
+              example: params.ctx.example,
               cta: params.cta,
               figures: params.figures,
+              angles: wanted,
               previousMessage: params.previousMessage ?? null,
-              rejection: lastRejection,
+              rejected: attempt === 1 ? null : rejected,
             }),
           },
         ],
@@ -430,15 +450,35 @@ export async function generateCopy(params: {
         promptVersion: PROMPT_VERSIONS.copy,
         cacheReadTokens: cacheRead(response.usage),
       };
-      const verdict = validateAdCopy(response.parsed_output, params.ctx);
+      const verdict = validateAdCopy(
+        response.parsed_output,
+        params.ctx,
+        wanted.map((a) => a.key)
+      );
 
       if (verdict.ok) {
-        entries.push(entry("copy", "ok", common));
-        return { copy: verdict.copy, degraded: false, entries };
+        const copy: AdCopy = kept ? mergeCopy(kept, verdict.copy, offered.length) : verdict.copy;
+        // ⚠️ `ok` EVEN WHEN SOME ANGLES WERE LOST, and `provenance` is what
+        // makes that honest rather than hidden: four of five written is an ad
+        // with four texts in it, which is four more than the operator had.
+        entries.push(entry("copy", verdict.rejected.length ? "rejected" : "ok", {
+          ...common,
+          rejectReason: verdict.rejected[0]?.reason ?? null,
+        }));
+        if (copy.provenance.written >= offered.length || attempt === 2) {
+          return { ok: true, copy, entries };
+        }
+        kept = copy;
+        rejected = verdict.rejected;
+        wanted = offered.filter((a) => !copy.variants.some((v: AdVariant) => v.angle_key === a.key));
+        continue;
       }
 
       entries.push(entry("copy", "rejected", { ...common, rejectReason: verdict.reason }));
-      lastRejection = { reason: verdict.reason, detail: verdict.detail };
+      // A response-level failure (a bad object, no variants at all) leaves the
+      // survivors from attempt 1 standing — there is still an ad to return.
+      if (kept) return { ok: true, copy: kept, entries };
+      rejected = verdict.rejected;
     } catch (error) {
       swallow(`generateCopy attempt ${attempt}`, error);
       entries.push(
@@ -448,14 +488,37 @@ export async function generateCopy(params: {
           rejectReason: "call_failed",
         })
       );
-      // ⚠️ A TIMEOUT IS NOT RETRIED. The first call has already spent 60 of a
-      // 300-second ceiling and a provider that just timed out is the least
-      // likely to answer in 45. Falling back leaves an ad on the screen.
-      return fallback(entries);
+      // ⚠️ A TIMEOUT IS NOT RETRIED. The first call has already spent two
+      // minutes of a five-minute ceiling and a provider that just timed out is
+      // the least likely to answer in seventy-five seconds.
+      if (kept) return { ok: true, copy: kept, entries };
+      return { ok: false, reason: "call_failed", entries };
     }
   }
 
-  return fallback(entries);
+  if (kept) return { ok: true, copy: kept, entries };
+  return { ok: false, reason: "rejected", entries };
+}
+
+/**
+ * Attempt 1's survivors plus attempt 2's, in the order the angles were offered.
+ *
+ * ⚠️ THE IMAGE COMES FROM WHICHEVER ATTEMPT THE MODEL ACTUALLY WROTE ONE IN. A
+ * retry asked for one angle still returns an image pair, and taking the later
+ * one unconditionally would let a second-attempt fallback overwrite a perfectly
+ * good first-attempt headline.
+ */
+function mergeCopy(first: AdCopy, second: AdCopy, offeredCount: number): AdCopy {
+  const seen = new Set(first.variants.map((v) => v.angle_key));
+  const variants = [...first.variants, ...second.variants.filter((v) => !seen.has(v.angle_key))];
+  const image = first.provenance.image === "model" ? first.image : second.image;
+  const from = first.provenance.image === "model" ? "model" : second.provenance.image;
+  return {
+    ...first,
+    image,
+    variants,
+    provenance: { written: variants.length, offered: offeredCount, image: from },
+  };
 }
 
 /** The angles this template may take, for the UI to echo back. */

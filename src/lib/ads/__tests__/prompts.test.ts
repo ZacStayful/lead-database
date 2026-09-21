@@ -67,7 +67,12 @@ describe("what the pack says", () => {
   it("names every template and every angle, from the registry", () => {
     for (const t of AD_TEMPLATES) {
       expect(AD_PACK).toContain(t.id);
-      for (const angle of t.angles) expect(AD_PACK).toContain(angle);
+      // ⚠️ THE READABLE FORM, because exactly one angle carries a slot the
+      // pack has no customer to fill. Asserting the raw string would pass only
+      // while the brace was printed, which is the bug.
+      for (const angle of t.angles) {
+        expect(AD_PACK).toContain(angle.replace(/\{(\w+)\}/g, (_, k) => `[their ${k.replace(/_/g, " ")}]`));
+      }
     }
   });
 
@@ -99,8 +104,27 @@ describe("what the pack says", () => {
     }
   });
 
-  it("says the headline is not the model's to write", () => {
-    expect(AD_PACK).toContain("YOU DO NOT WRITE THE HEADLINE");
+  /**
+   * ⚠️ THE OPPOSITE OF WHAT THIS USED TO ASSERT, AND THE REVERSAL IS THE POINT.
+   * It pinned "YOU DO NOT WRITE THE HEADLINE" — the spec's own rule, which made
+   * an invented figure impossible by construction. The cost was that every ad
+   * from a template carried an identical sub-line, and a model handed four
+   * fixed fields and asked for three more restated them. The figure rules now
+   * run over the model's headline and sub too, so the safety is a check.
+   */
+  it("tells the model the image lines are its to write", () => {
+    expect(AD_PACK).not.toContain("YOU DO NOT WRITE THE HEADLINE");
+    expect(AD_PACK).toContain("You write everything");
+  });
+
+  /**
+   * ⚠️ THE PACK CANNOT FILL A SLOT. It is built once at module scope with no
+   * customer in hand, so a raw pattern means the model literally reads
+   * "what {properties_managed} properties means day to day".
+   */
+  it("never shows a raw slot brace in the catalogue", () => {
+    expect(AD_PACK).not.toMatch(/\{\w+\}/);
+    expect(AD_PACK).toContain("[their properties managed]");
   });
 
   it("gives T6 its legal warning where T6 is described", () => {
@@ -164,15 +188,39 @@ describe("the copy turn", () => {
   const base = {
     account: "BRIEF",
     answers: [{ id: "q1", question: "How many?", answer: "140", depth: 0 }],
-    fixed: { headline: "H", sub: "S" },
+    example: { headline: "H", sub: "S" },
     cta: "Talk to us",
     figures: ["140 properties managed."],
+    angles: angleListFor(t7),
   };
 
-  it("shows the fixed headline and sub so they are not repeated", () => {
+  it("shows the example headline and sub as the register to aim at", () => {
     const text = copyUser({ template: t7, ...base });
     expect(text).toContain("Headline: H");
     expect(text).toContain("Sub-line: S");
+    expect(text).toContain("writing your own");
+  });
+
+  /**
+   * ⚠️ THE RATIONALE IS THE WHOLE REASON THE SAME DOCUMENT WRITES BETTER ADS
+   * IN A CHAT THAN IT DOES HERE. `AD_PACK` keeps the angle names verbatim and
+   * drops every paragraph around them, so the model was never told what makes
+   * T7 able to talk about income at all.
+   */
+  it("carries the spec's own words about this template, and only this one", () => {
+    const text = copyUser({ template: t7, ...base });
+    expect(text).toContain("offers a calculation rather than a claim");
+    expect(text).toContain("must never show an example estimate");
+    // T8's rationale is not in a T7 turn.
+    expect(text).not.toContain("The trust template");
+  });
+
+  it("names every offered angle with the key the model must return", () => {
+    const text = copyUser({ template: t7, ...base });
+    for (const a of angleListFor(t7)) {
+      expect(text).toContain(a.key);
+      expect(text).toContain(a.angle);
+    }
   });
 
   it("states the figures, or states that there are none", () => {
@@ -189,17 +237,32 @@ describe("the copy turn", () => {
     const text = copyUser({
       template: t7,
       ...base,
-      rejection: { reason: "figure_not_in_slots", detail: "money 950" },
+      rejected: [{ angleKey: "question_plainly", reason: "figure_not_in_slots", detail: "money 950" }],
     });
-    expect(text).toContain("last attempt was refused");
+    expect(text).toContain("refused last time");
     expect(text).toContain("stated a number the customer never gave us");
     expect(text).not.toContain("figure_not_in_slots");
   });
 
-  it("asks a rewrite for a different angle, showing the last one", () => {
-    const text = copyUser({ template: t7, ...base, previousMessage: "The old advert." });
-    expect(text).toContain("The old advert.");
-    expect(text).toContain("DIFFERENT angle");
+  /**
+   * ⚠️ THE RETRY NAMES WHICH ANGLE IT LOST. A retry that re-asks for all five
+   * pays a second time for the four that were already good, and risks losing
+   * them — which is why the rejection is per variant rather than per response.
+   */
+  it("names the angle that was refused, not just the reason", () => {
+    const text = copyUser({
+      template: t7,
+      ...base,
+      rejected: [{ angleKey: "answer_speed", reason: "income_claim", detail: "earn 4000 a month" }],
+    });
+    expect(text).toContain("answer_speed");
+    expect(text).toContain("earn 4000 a month");
+  });
+
+  it("asks a rewrite to say it differently, showing the last one", () => {
+    const text = copyUser({ template: t7, ...base, previousMessage: "The old ad." });
+    expect(text).toContain("The old ad.");
+    expect(text).toContain("Say it differently");
   });
 });
 
@@ -210,16 +273,38 @@ describe("the copy turn", () => {
  * passes every other rule in the file.
  */
 describe("T8's quote angle", () => {
+  const t8Slots = { properties_managed: "140" } as Record<string, string>;
+
   it("is not in the list a template is asked to choose from", () => {
-    expect(angleListFor(t8)).toHaveLength(t8.angles.length - 1);
-    expect(angleListFor(t8).join(" ")).not.toContain("in their words");
+    const offered = angleListFor(t8, { slots: t8Slots });
+    expect(offered).toHaveLength(t8.angles.length - 1);
+    expect(offered.map((a) => a.angle).join(" ")).not.toContain("in their words");
+  });
+
+  it("is offered once the customer has confirmed a real quote", () => {
+    const offered = angleListFor(t8, {
+      slots: t8Slots,
+      profile: { review_quote_confirmed: true },
+    });
+    expect(offered).toHaveLength(t8.angles.length);
   });
 
   it("leaves the other templates' angles alone", () => {
     for (const t of AD_TEMPLATES) {
       if (t.id === "years-properties-review") continue;
-      expect(angleListFor(t)).toEqual([...t.angles]);
+      expect(angleListFor(t).map((a) => a.angle)).toEqual([...t.angles]);
     }
+  });
+
+  /**
+   * ⚠️ AN ANGLE WHOSE SLOT IS MISSING IS DROPPED, NOT HALF-FILLED. T8's second
+   * angle is a pattern; offered unfilled, the model reads a literal brace.
+   */
+  it("fills the one angle that carries a slot, and drops it when it cannot", () => {
+    expect(angleListFor(t8, { slots: t8Slots }).map((a) => a.angle).join(" "))
+      .toContain("what 140 properties means");
+    expect(angleListFor(t8).map((a) => a.angle).join(" ")).not.toContain("{");
+    expect(angleListFor(t8)).toHaveLength(t8.angles.length - 2);
   });
 
   it("is what the copy turn actually offers", () => {
@@ -227,9 +312,10 @@ describe("T8's quote angle", () => {
       template: t8,
       account: "a",
       answers: [],
-      fixed: { headline: "H", sub: "S" },
+      example: { headline: "H", sub: "S" },
       cta: "c",
       figures: [],
+      angles: angleListFor(t8, { slots: t8Slots }),
     });
     expect(text).not.toContain("in their words");
   });

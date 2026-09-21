@@ -68,7 +68,7 @@ export default async function AdsPage() {
         questionsVersion={0}
         status="new"
         copy={null}
-        fixed={null}
+        example={null}
         canSimplify={false}
         templates={AD_TEMPLATES.map((t) => ({ id: t.id, name: t.name, audience: t.audience }))}
         readOnly={viewAs !== null}

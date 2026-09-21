@@ -59,19 +59,43 @@ export function adContext(customer: Customer, template: AdTemplate): AdContext {
   const profile = adProfileOf(customer);
 
   const located = resolution.slots.city !== undefined;
-  const headlinePattern = located ? template.headlineLocated : template.headlineUnlocated;
-  const subPattern = located ? template.subLocated : template.subUnlocated;
 
-  const headline = fillPattern(headlinePattern, resolution.slots);
-  const sub = fillPattern(subPattern, resolution.slots);
+  // ⚠️ THE FALLBACK TRIES LOCATED, THEN UNLOCATED. T8's located sub names
+  // {areas}, which is unresolvable for a customer who declined to narrow — and
+  // under "a pattern whose slots are not all resolved cannot render" that used
+  // to make `areas` a hard requirement for a located T8. Degrading to the
+  // unlocated form is the honest answer and takes `areas` off the blocking
+  // list, where the old derivation put it by accident.
+  const example = {
+    headline:
+      (located ? fillPattern(template.exampleHeadlineLocated, resolution.slots) : null) ??
+      fillPattern(template.exampleHeadlineUnlocated, resolution.slots) ??
+      "",
+    sub:
+      (located ? fillPattern(template.exampleSubLocated, resolution.slots) : null) ??
+      fillPattern(template.exampleSubUnlocated, resolution.slots) ??
+      "",
+  };
   const cta = fillPattern(template.ctaPattern, resolution.slots);
 
-  const unresolved = Array.from(
-    new Set(
-      [headlinePattern, subPattern, template.ctaPattern]
-        .flatMap((p) => Array.from(p.matchAll(/\{(\w+)\}/g)).map((m) => m[1]))
-        .filter((k) => resolution.slots[k as keyof typeof resolution.slots] === undefined)
-    )
+  // ⚠️ DECLARED, NOT DERIVED FROM THE PATTERNS, AND THAT HAD TO CHANGE.
+  //
+  // This read the `{slot}` placeholders the headline, sub and CTA patterns
+  // could not fill. The model writes the headline and the sub now, so there is
+  // no pattern left to half-fill and that derivation has nothing to measure.
+  //
+  // `template.requiredSlots` is the replacement and it is a better test anyway:
+  // T8 is unofferable without its four figures because it cannot be ARGUED
+  // without them, not because a brace would render empty. It also closes a gap
+  // the derivation had — `review_count` is required by the spec's claims note
+  // ("the score always renders with its count") and appears in no pattern, so
+  // nothing used to check for it.
+  //
+  // ⚠️ The CTA is still a pattern, so its slots still block.
+  const needed = new Set<string>(template.requiredSlots);
+  for (const m of Array.from(template.ctaPattern.matchAll(/\{(\w+)\}/g))) needed.add(m[1]);
+  const unresolved = Array.from(needed).filter(
+    (k) => resolution.slots[k as keyof typeof resolution.slots] === undefined
   );
   // ⚠️ THIS LINE WAS THE BUG. It read
   //   if (!resolution.slots.landing_url) unresolved.push("landing_url");
@@ -98,7 +122,10 @@ export function adContext(customer: Customer, template: AdTemplate): AdContext {
       slots: resolution.slots,
       profile,
       targeting: resolution.targeting,
-      fixed: { headline: headline ?? "", sub: sub ?? "" },
+      // ⚠️ `example`, NOT `fixed`. These are what the spec would have written,
+      // shown to the model as the register and kept as the fallback — they are
+      // no longer what gets rendered.
+      example,
     },
     brief: adBrief(customer, template, resolution),
     figures: figureList(customer, resolution),

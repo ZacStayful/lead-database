@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Customer } from "@/lib/types";
-import { adAccentFor, adContext } from "../context";
+import { adAccentFor, adContext, preflight } from "../context";
 import { STAYFUL_ACCENT } from "@/lib/presentationBrand";
 import { templateById } from "../templates";
 
@@ -97,16 +97,16 @@ describe("what is still unresolved", () => {
   });
 });
 
-describe("the fixed headline and sub", () => {
+describe("the example headline and sub", () => {
   it("uses the unlocated form when no town is set", () => {
     const { ctx } = adContext(customer(), T7);
-    expect(ctx.fixed.headline).toBe(T7.headlineUnlocated);
-    expect(ctx.fixed.headline).not.toContain("{");
+    expect(ctx.example.headline).toBe(T7.exampleHeadlineUnlocated);
+    expect(ctx.example.headline).not.toContain("{");
   });
 
   it("uses the located form once one is", () => {
     const c = customer({ filter_status: "active", filter_areas: ["LS"], ad_profile: { city: "Leeds" } });
-    expect(adContext(c, T7).ctx.fixed.headline).toContain("Leeds");
+    expect(adContext(c, T7).ctx.example.headline).toContain("Leeds");
   });
 
   /**
@@ -117,13 +117,42 @@ describe("the fixed headline and sub", () => {
   it("names only the services they ticked", () => {
     const c = customer({ ad_profile: { included: ["cleaning", "linen"] } });
     const { ctx } = adContext(c, T3);
-    expect(ctx.fixed.sub).toContain("Cleaning and linen");
-    expect(ctx.fixed.sub).not.toContain("pricing");
-    expect(ctx.fixed.sub).not.toContain("check-in");
+    expect(ctx.example.sub).toContain("Cleaning and linen");
+    expect(ctx.example.sub).not.toContain("pricing");
+    expect(ctx.example.sub).not.toContain("check-in");
   });
 
+  /**
+   * ⚠️ IT NAMES THE SLOT THEY WOULD BE ASKED ABOUT, NOT THE DERIVED ONE.
+   * `unresolved` used to be the `{}` the sub pattern could not fill, which is
+   * `included_list` — a derived key nobody is ever asked for, and one
+   * `slotCopyLabel` has no sentence for. `requiredSlots` names `included`,
+   * which is the question.
+   */
   it("leaves T3 unrenderable while nothing is ticked, rather than inventing a list", () => {
-    expect(adContext(customer(), T3).unresolved).toContain("included_list");
+    expect(adContext(customer(), T3).unresolved).toContain("included");
+    expect(adContext(customer(), T3).unresolved).not.toContain("included_list");
+  });
+
+  /**
+   * ⚠️ THE REPLACEMENT FOR A HARD REJECTION THAT COULD NOT BE RECOVERED FROM.
+   * `located_without_targeting` was a validator rule reading nothing the model
+   * wrote, so it failed both paid attempts identically and guaranteed the
+   * canned text — for anybody whose lead filter is off, which is most of the
+   * book. Nothing here publishes; the audience is set in Meta afterwards.
+   */
+  it("⚠️ a town with no targeting behind it warns rather than refusing", () => {
+    const c = customer({ ad_profile: { city: "Leeds" } });
+    const out = adContext(c, T7);
+    expect(out.resolution.targeting.kind).toBe("unset");
+    expect(out.unresolved).not.toContain("city");
+    expect(preflight(out).ok).toBe(true);
+    expect(preflight(out).warnings).toContain("located_without_targeting");
+  });
+
+  it("says nothing when the town came from their own areas", () => {
+    const c = customer({ filter_status: "active", filter_areas: ["LS"], ad_profile: { city: "Leeds" } });
+    expect(preflight(adContext(c, T7)).warnings).not.toContain("located_without_targeting");
   });
 });
 
@@ -159,12 +188,12 @@ describe("the accent", () => {
 describe("what the routes share", () => {
   /**
    * The copy is validated against the fixed headline that the image then
-   * draws. Two readings would eventually produce an advert whose words were
+   * draws. Two readings would eventually produce an ad whose words were
    * checked against a headline it is not carrying.
    */
-  it("gives the same fixed copy to every caller", () => {
+  it("gives the same example copy to every caller", () => {
     const c = customer({ ad_profile: { city: "Leeds" }, filter_status: "active", filter_areas: ["LS"] });
-    expect(adContext(c, T7).ctx.fixed).toEqual(adContext(c, T7).ctx.fixed);
+    expect(adContext(c, T7).ctx.example).toEqual(adContext(c, T7).ctx.example);
   });
 
   it("carries the brief and the figures the model is allowed", () => {

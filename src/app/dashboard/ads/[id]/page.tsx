@@ -58,7 +58,7 @@ export default async function AdDraftPage({ params }: { params: { id: string } }
         questionsVersion={draft.questions_version}
         status={draft.status}
         copy={draft.copy}
-        fixed={template ? adContext(customer, template).ctx.fixed : null}
+        example={template ? adContext(customer, template).ctx.example : null}
         canSimplify={canSimplify(draft.questions ?? [])}
         templates={AD_TEMPLATES.map((t) => ({ id: t.id, name: t.name, audience: t.audience }))}
         readOnly={viewAs !== null}

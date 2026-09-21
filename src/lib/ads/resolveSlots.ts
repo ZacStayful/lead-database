@@ -151,10 +151,26 @@ export function feeVerdict(pct: number | null | undefined, opts: { fresh: boolea
   return { ok: true, warn: "fee_outside_usual_range" };
 }
 
-/** "15% of gross, plus VAT" — never a bare number. */
+/**
+ * "15% of gross, plus VAT" — never a bare number.
+ *
+ * ⚠️ NULL WHEN NOBODY HAS RECORDED THE VAT TREATMENT, AND THAT CLOSES A
+ * CONTRADICTION BETWEEN THE PROMPT AND THE VALIDATOR. `brief.ts` handed the
+ * model the phrase and told it to state the fee "exactly that way"; the
+ * validator then rejected exactly that as `fee_without_vat_treatment`, because
+ * a bare "15%" is a different price with and without VAT and the landlord
+ * reading it cannot tell which. So the model was invited to write the one
+ * sentence guaranteed to lose the generation.
+ *
+ * ⚠️ `"not_stated"` IS NOT THE SAME AS MISSING. It is a deliberate answer —
+ * "I would rather not say" — and it is what the validator's own truthiness
+ * check already admits. Only an unasked, unrecorded treatment suppresses the
+ * phrase, and the brief then says the fee must not appear at all.
+ */
 export function feePhrase(p: AdProfile): string | null {
   if (p.fee_public !== true) return null;
   if (p.fee_pct === null || p.fee_pct === undefined || !Number.isFinite(p.fee_pct)) return null;
+  if (!p.fee_vat) return null;
   const basis = p.fee_basis === "net" ? "of net" : "of gross";
   const vat =
     p.fee_vat === "inclusive" ? ", including VAT"
@@ -238,6 +254,26 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
   if (!fee.ok) warnings.push(fee.reason);
 
   const areas = text(p.areas) ?? (targeting.kind === "areas" ? areasPhrase(targeting.areas) : null);
+
+  /**
+   * ⚠️ A WARNING, AND IT USED TO BE A HARD REJECTION IN THE VALIDATOR — where
+   * it was the single worst rule in the file.
+   *
+   * `located_without_targeting` reads NOTHING the model wrote: it is true or
+   * false before the first call is made. So for a customer with a city and no
+   * lead filter it failed BOTH attempts identically, burned two paid calls, and
+   * guaranteed the canned text — silently, because a rejection retries once and
+   * then collapses. `filter_status` is `off` on most of the book, so this was
+   * reachable by anybody who answered a question about where they work.
+   *
+   * It was never a reason to refuse an ad either. Nothing here publishes: the
+   * operator takes the copy and the cards to Meta and sets the audience
+   * themselves. Naming Leeds on an ad shown nationwide is advice we owe them,
+   * not something to stop them doing.
+   */
+  if (text(p.city) !== null && targeting.kind === "unset") {
+    warnings.push("located_without_targeting");
+  }
 
   const slots: SlotValues = {};
   const put = (k: AdSlotKey, v: string | null) => {

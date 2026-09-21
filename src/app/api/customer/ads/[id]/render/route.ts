@@ -68,8 +68,13 @@ export async function POST(_request: Request, { params }: { params: { id: string
         logo,
         slots: context.resolution.slots,
         selected: context.selected,
-        headline: context.ctx.fixed.headline,
-        sub: context.ctx.fixed.sub,
+        // ⚠️ THE STORED LINES, NOT THE TEMPLATE'S EXAMPLE. The model writes the
+        // two on-image lines now, and `validateAdCopy` has already decided
+        // whether what it wrote is drawable — falling back to the example here
+        // would draw a different card from the one the chat showed, on the same
+        // draft, with nothing saying which.
+        headline: draft.copy.image.headline,
+        sub: draft.copy.image.sub,
         cta: context.cta,
       })
     );
