@@ -16869,25 +16869,43 @@ arrives on a layout change.
 #### Verification
 
 `npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
-`@next/next/no-assign-module-variable` warnings, **2,764 vitest cases green**.
+`@next/next/no-assign-module-variable` warnings, **2,780 vitest cases green**.
 
-⚠️ **Twenty-three mutations were run and all twenty-three caught**, each broken
+⚠️ **Thirty-two mutations were run and all thirty-two caught**, each broken
 deliberately and watched to fail before the assertion was kept — §50.9 records
 two assertions in this repo already written weak enough to survive their own
 mutation, and §53 made it three. Among them: restoring the unconditional
-`landing_url`; claiming before the pre-flight; merging after it; pre-flighting
+`landing_url`; `instant_form` still demanding a link; the brief still chasing a
+page for one; claiming before the pre-flight; merging after it; pre-flighting
 the stale row; testing `merged` rather than `merged.ok`; filing the answers
 after the refusal; writing the fee straight from `asCount`; sending the flags as
 raw keys; the form dropping the block; the render route back to `generic`;
-Regenerate writing its own sentence; `writeAd` re-deriving the refusal; and
-`parseAdUrl` going silent again.
+Regenerate writing its own sentence; `writeAd` re-deriving the refusal; the
+options offered unchecked on either rung; and `parseAdUrl` going silent,
+accepting credentials, treating `localhost` as public, and truncating rather
+than refusing.
 
-⚠️ **One guard of my own was written weak and only the mutation run found it.**
-It sliced `profile.ts` between `const put =` and a `// Array.from` comment — and
-`source()` strips comments, so `indexOf` returned −1, the slice ran to
-end-of-file, and it passed on an unrelated `refusals.push`. Anchored on code
-rather than a comment now. That is the **seventh** instance of this shape
-recorded here.
+⚠️ **FOUR OF THOSE SURVIVED THE FIRST RUN, AND THAT IS THE PART WORTH KEEPING.**
+Every one had a plausible-looking test next to it:
+
+| Survived | Because |
+|---|---|
+| `too_long` truncating | no case exercised the cap at all |
+| `localhost` reading as public | the one non-public case used an IPv4 literal, which a **different** branch catches |
+| the refusal sentences never sent | asserted in neither route |
+| **a question with ONE survivor offered rather than freed** | the case that existed guttered to **zero** survivors, so it passes whether the floor is one or two — `0 >= 1` is false either way |
+
+⚠️ **And one guard of my own was written weak.** It sliced `profile.ts` between
+`const put =` and a `// Array.from` comment — and `source()` strips comments, so
+`indexOf` returned −1, the slice ran to end-of-file, and it passed on an
+unrelated `refusals.push`. Anchored on code rather than a comment now. That is
+the **seventh** instance of this shape recorded here.
+
+⚠️ **Two apparent survivors were broken MUTATIONS, not weak guards**, which is
+its own trap: the first `claimsGate` mutation hit the **type declaration** at
+`templates.ts:109` rather than a value, and a second attempt added an unrelated
+key. Changing a real `claimsGate` value fails the suite. **Check what a
+surviving mutation actually changed before writing a test for it.**
 
 **Not yet exercised in a browser or against the live model.** No run has
 completed end to end. ⚠️ A Vercel preview cannot do it — Deployment Protection

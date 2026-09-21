@@ -138,7 +138,6 @@ function asFeeVat(raw: string): FeeVat | undefined {
   return undefined;
 }
 
-
 /** "Cleaning, linen" → the ticked keys, from the template's own vocabulary. */
 function asServiceKeys(raw: string, template: AdTemplate): string[] | undefined {
   if (!template.services) return undefined;
@@ -170,9 +169,8 @@ function asList(raw: string): string[] | undefined {
  * ⚠️ IT RETURNS A PATCH, NEVER THE WHOLE PROFILE. `merge_ad_profile` applies
  * it with `||`, so a key this function omits keeps whatever was there — which
  * is the difference between "they did not answer that" and "they cleared it".
- */
-/**
- * ⚠️ WHY THIS RETURNS REFUSALS RATHER THAN JUST A PATCH.
+ *
+ * ⚠️ WHY IT RETURNS REFUSALS RATHER THAN JUST A PATCH.
  *
  * Every coercion below still fails to `undefined` rather than to a guess — that
  * rule is right and unchanged. What was missing is the other half: SAYING SO.

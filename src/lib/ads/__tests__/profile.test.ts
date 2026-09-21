@@ -11,6 +11,7 @@ import {
   refusalMessage,
 } from "../profile";
 import { templateById } from "../templates";
+import { MAX_AD_URL_LENGTH } from "../url";
 import type { Answer, Question } from "../schemas";
 
 const T3 = templateById("never-see-the-messages")!;
@@ -273,11 +274,41 @@ describe("the landing page", () => {
     }
   });
 
-  it("refuses a credential and a non-public host", () => {
-    expect(mapping("landing_url", "https://u:p@adco.example").refusals[0]?.reason)
-      .toBe("has_credentials");
-    expect(mapping("landing_url", "http://127.0.0.1:3000").refusals[0]?.reason)
-      .toBe("not_public");
+  /**
+   * ⚠️ EACH NON-PUBLIC SHAPE HAS ITS OWN CASE, because they are separate
+   * branches and a mutation run found that out: with only the IPv4 case here,
+   * deleting the localhost branch left the suite green.
+   */
+  it.each([
+    ["https://u:p@adco.example", "has_credentials"],
+    ["http://127.0.0.1:3000", "not_public"],
+    ["http://localhost:3000", "not_public"],
+    ["http://app.localhost/quote", "not_public"],
+    ["http://adco.local", "not_public"],
+    ["http://[::1]:3000", "not_public"],
+  ])("refuses %s", (answer, reason) => {
+    expect(mapping("landing_url", answer).refusals[0]?.reason, answer).toBe(reason);
+  });
+
+  /**
+   * ⚠️ REFUSED, NEVER TRUNCATED. Slicing a long URL to the cap yields a
+   * DIFFERENT, possibly still-valid address — silent corruption pointing a paid
+   * ad somewhere the operator never chose.
+   */
+  it("refuses a url past the cap rather than cutting it down to one", () => {
+    const long = `https://adco.example/${"a".repeat(MAX_AD_URL_LENGTH)}`;
+    const m = mapping("landing_url", long);
+    expect(m.patch).not.toHaveProperty("landing_url");
+    expect(m.refusals[0]?.reason).toBe("too_long");
+    // The shape a truncation would have produced, asserted absent.
+    expect(m.patch.landing_url).not.toBe(long.slice(0, MAX_AD_URL_LENGTH));
+  });
+
+  it("takes one right on the cap", () => {
+    const head = "https://adco.example/";
+    const exact = head + "a".repeat(MAX_AD_URL_LENGTH - head.length);
+    expect(exact).toHaveLength(MAX_AD_URL_LENGTH);
+    expect(mapping("landing_url", exact).patch.landing_url).toBe(exact);
   });
 
   it("strips the punctuation a paste picks up from prose", () => {
@@ -427,22 +458,44 @@ describe("an option the slot cannot store is never offered", () => {
    * plain text box, so the honest degradation when the options are gutted is to
    * ask in words — not to offer the one survivor as though it were a choice.
    */
-  it("falls back to free text rather than offering one option", () => {
-    const q = {
-      id: "q1",
-      question: "Where should the button send them?",
-      options: [REAL, "Ring me instead"],
-      allowOther: false,
-      slot: "landing_url",
-      depth: 1,
-      calls: 1,
-    };
+  const question = (options: string[], slot = "landing_url"): Question => ({
+    id: "q1",
+    question: "Where should the button send them?",
+    options,
+    allowOther: false,
+    slot,
+    depth: 1,
+    calls: 1,
+  });
+
+  it("falls back to free text when nothing survives", () => {
+    const q = question([REAL, "Ring me instead"]);
     const [out] = answerableQuestions([q]);
     expect(out.options).toEqual([]);
     expect(out.allowOther).toBe(true);
     // The question itself is untouched — only what it offered.
     expect(out.question).toBe(q.question);
     expect(out.depth).toBe(1);
+  });
+
+  /**
+   * ⚠️ THE BOUNDARY, AND IT SURVIVED A MUTATION UNTIL THIS WAS WRITTEN. The case
+   * above gutters to ZERO survivors, so it passes whether the floor is one or
+   * two — `0 >= 1` is false either way. Exactly one survivor is the case the
+   * rule is actually about.
+   */
+  it("falls back to free text rather than offering the one survivor", () => {
+    const [out] = answerableQuestions([question(["https://adco.example", REAL])]);
+    expect(out.options).toEqual([]);
+    expect(out.allowOther).toBe(true);
+  });
+
+  it("offers the survivors when two or more are left", () => {
+    const [out] = answerableQuestions([
+      question(["https://adco.example", "adco.example/quote", REAL]),
+    ]);
+    expect(out.options).toEqual(["https://adco.example", "adco.example/quote"]);
+    expect(out.allowOther).toBe(false);
   });
 
   it("leaves a question whose options all survive exactly as it was", () => {

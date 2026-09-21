@@ -331,8 +331,9 @@ describe("no coercion fails in silence", () => {
     // up to "// Array.from" — which `source()` has already stripped — so
     // indexOf returned -1, the slice ran to the end of the file, and it passed
     // on the landing_url branch's own push while `put` recorded nothing. A
-    // mutation run caught it; nothing else would have. Sixth time this repo has
-    // recorded that shape (§50.9, §53, §55, §57, §65).
+    // mutation run caught it; nothing else would have. SEVENTH time this repo
+    // has recorded that shape — §50.9 holds two of them, then §53, §55, §57 and
+    // §65's own.
     const from = profile.indexOf("const put =");
     const to = profile.indexOf("for (const [slot, raw]");
     expect(from).toBeGreaterThan(-1);

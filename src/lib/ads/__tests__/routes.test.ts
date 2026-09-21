@@ -346,6 +346,31 @@ describe("the answers route", () => {
   it("takes no claim it has to release", () => {
     expect(text).not.toContain("releaseClaim");
   });
+
+  /**
+   * ⚠️ AND IT SAYS WHAT IT COULD NOT READ, WHICH IS THE WHOLE COMPLAINT.
+   *
+   * Three of the five answers on the first real run wrote nothing and said
+   * nothing, and the operator was then refused for a value they believed they
+   * had given. The sentences lead the refusal: "I couldn't read that as a web
+   * address" explains the gap, where naming the field alone reads as us asking
+   * for something already provided.
+   *
+   * Found by a mutation — blanking `said` left the suite green.
+   */
+  it("leads every refusal with what it could not read", () => {
+    expect(text).toContain("mappingSentences(mapping)");
+    // Both refusal paths, the pre-flight's and writeAd's.
+    expect(text.match(/\[\.\.\.said, AD_COPY\.errors\.unresolved\(/g) ?? []).toHaveLength(2);
+    expect(text).toContain("refused: mapping.refusals");
+  });
+
+  /** And on the way out too, so a note is not lost to a successful run. */
+  it("reports them on success as well as on a refusal", () => {
+    const ok = text.slice(text.lastIndexOf('status: "ready"'));
+    expect(ok).toContain("refused: mapping.refusals");
+    expect(ok).toContain("notes: mapping.notes");
+  });
 });
 
 /**
@@ -375,6 +400,11 @@ describe("the fee", () => {
     const text = source("src/components/dashboard/ads/AdProfileForm.tsx");
     expect(text).toContain("props.warnings");
     expect(text).toMatch(/\[\.\.\.said, \.\.\.warnings\]/);
+  });
+
+  /** The form has no copy of its own, so the route has to send the sentences. */
+  it("is sent as sentences by the profile route, not only as reasons", () => {
+    expect(source(`${ADS_API}/profile/route.ts`)).toContain("said: mappingSentences(mapping)");
   });
 });
 
