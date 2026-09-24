@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { hashTopupToken } from "@/lib/topup";
+import { hashTopupToken, topupFilterWarning } from "@/lib/topup";
 import { chargeClaimedTopup, topupIneligibilityReason } from "@/lib/topupCharge";
 import type { ClaimedTopup } from "@/lib/topupCharge";
 import type { Customer } from "@/lib/types";
@@ -22,9 +22,18 @@ export const dynamic = "force-dynamic";
  * 3. Charge + credit via the shared path in lib/topupCharge.
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: { token: string } }
 ) {
+  // A body is optional: older clients sent none, and this must not start
+  // failing them for it. Only the acknowledgement is read from it.
+  let body: { acknowledge_filter?: boolean } = {};
+  try {
+    body = (await request.json()) as { acknowledge_filter?: boolean };
+  } catch {
+    body = {};
+  }
+
   const supabase = createAdminClient();
   const stripe = getStripe();
 
@@ -59,8 +68,10 @@ export async function POST(
   // once the customer resumes — this is not a spent attempt.
   const { data: customerRow } = await supabase
     .from("customers")
+    // ⚠️ ONE STRING LITERAL — see the note in lib/topup.ts. A concatenated
+    // select string collapses supabase-js's inferred row type.
     .select(
-      "account_status, paused_at, subscription_status, gr_subscription_status"
+      "account_status, paused_at, subscription_status, gr_subscription_status, filter_status, gr_filter_status, filter_expected_leads, gr_filter_expected_leads, monthly_allocation, gr_monthly_allocation, lead_balance, gr_lead_balance"
     )
     .eq("id", claim.customer_id)
     .maybeSingle();
@@ -83,6 +94,35 @@ export async function POST(
       return NextResponse.json(
         { status: "failed", message: reason },
         { status: 409 }
+      );
+    }
+
+    // ⚠️ §69. The figure-specific warning now reaches THIS page — the one a
+    // short customer actually follows, because the link is emailed and texted
+    // BECAUSE their balance ran out — so the purchase needs the same explicit
+    // tick the in-portal panel requires. It refuses an UN-ACKNOWLEDGED
+    // purchase, never the purchase (§16).
+    //
+    // ⚠️ RELEASE THE CLAIM, exactly as the eligibility gate above does. This is
+    // not a spent attempt: the customer ticks the box and the same link must
+    // still work. Returning without releasing would burn a single-use token on
+    // a refusal we invited.
+    const filterWarning = topupFilterWarning(
+      customerRow as Parameters<typeof topupFilterWarning>[0],
+      claim.lead_type,
+      claim.credits
+    );
+    if (filterWarning && body.acknowledge_filter !== true) {
+      await supabase.rpc("release_lead_topup_token", {
+        p_token_id: claim.token_id,
+      });
+      return NextResponse.json(
+        {
+          status: "failed",
+          code: "topup_not_acknowledged",
+          message: filterWarning,
+        },
+        { status: 400 }
       );
     }
   }

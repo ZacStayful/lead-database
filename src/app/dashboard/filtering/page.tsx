@@ -129,6 +129,7 @@ function panelPropsFor(
       // Raw allocation, deliberately not the pool-debit-adjusted effective
       // figure: the prediction is compared against what the plan owes.
       monthlyAllocation: customer.monthly_allocation ?? 0,
+      leadBalance: customer.lead_balance ?? 0,
       contention: contention.management,
       // What the customer was SHOWN. The panel renders these rather than a fresh
       // forecast — a recomputed one drifts with ingest and would display a
@@ -160,6 +161,7 @@ function panelPropsFor(
       maxAreaCount,
       volume: volumeAggregate.guaranteed_rent,
       monthlyAllocation: customer.gr_monthly_allocation ?? 0,
+      leadBalance: customer.gr_lead_balance ?? 0,
       contention: contention.guaranteed_rent,
       expectedLeads: customer.gr_filter_expected_leads,
       forecastLikelihoodPct: customer.gr_filter_forecast_likelihood_pct,

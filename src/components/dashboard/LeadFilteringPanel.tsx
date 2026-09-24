@@ -39,8 +39,15 @@ import {
 import {
   forecastVolume,
   recommendedDowngrade,
+  HIGH_COST_PER_LEAD_PENCE,
   type VolumeForecast,
 } from "@/lib/filterForecast";
+import {
+  bankedCreditSentence,
+  downgradeRelief,
+  planGapSentence,
+  planVsFilter,
+} from "@/lib/planVsFilter";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export type { AreaOption } from "@/components/filtering/AreaPicker";
@@ -84,6 +91,17 @@ export interface FilterPanelProps {
   // The plan's monthly lead allocation for this product — what a selection is
   // judged "too small" against.
   monthlyAllocation: number;
+  /**
+   * Unspent credit for this product.
+   *
+   * ⚠️ Read ONLY to compare against the forecast (§69), never to decide
+   * anything: `(gr_)lead_balance` is the allocation gate (invariant 1) and the
+   * gate lives in SQL. On production the filtered customers hold 94 credits
+   * between them while the unfiltered ones hold TWO, because ordinary routing
+   * drains a balance as fast as it is granted — the filter is the mechanism
+   * that banks it, and no screen said so.
+   */
+  leadBalance: number;
   // How many other filtered customers already compete for each area, so the
   // draft forecast matches what routing will actually deliver.
   contention?: AreaContention | null;
@@ -305,6 +323,60 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
         : null,
     [shownLeads, props.monthlyAllocation, product]
   );
+
+  // What they pay for, beside what this filter can actually deliver (§69).
+  //
+  // ⚠️ BUILT FROM `shownLeads`, NOT `props.expectedLeads`, so it inherits the
+  // stored-vs-live fallback resolved above rather than writing a second copy of
+  // it — a customer whose figure predates 0100 has no stored number and must
+  // still get a truthful comparison, not silence.
+  const savedGap = useMemo(
+    () =>
+      planVsFilter({
+        allocation: props.monthlyAllocation,
+        expected: shownLeads,
+        balance: props.leadBalance,
+        costPerLeadPence: shownCostPence,
+        acknowledged: props.forecastAcknowledgedAt != null,
+      }),
+    [
+      props.monthlyAllocation,
+      shownLeads,
+      props.leadBalance,
+      shownCostPence,
+      props.forecastAcknowledgedAt,
+    ]
+  );
+
+  // Both sentences computed ONCE, rather than called in the gate and again in
+  // the body.
+  //
+  // ⚠️ THIS SHAPE IS THE POINT, not a micro-optimisation. Written as
+  // `{bankedCreditSentence(x) && <p>{bankedCreditSentence(x)}</p>}` the gate and
+  // the render are the same string, so a file-text guard cannot tell them apart
+  // — and deleting the gate leaves the guard green while the line stops
+  // rendering entirely. That mutation survived on the first pass here, which is
+  // the twelfth time this repository has recorded an assertion weak enough to
+  // survive its own mutation (§42.8, §50.9, §53, §55, §57, §65, §66, §68).
+  const savedGapLines =
+    savedGap.kind === "under_plan"
+      ? {
+          gap: planGapSentence(savedGap),
+          banked: bankedCreditSentence(savedGap),
+        }
+      : null;
+
+  // ⚠️ A CHEAPER PLAN IS NOT AUTOMATICALLY A FIX. `recommendedDowngrade` returns
+  // the cheapest plan whose leads >= expected, so a customer forecast at 1 lead
+  // a month on a £300/20 plan is offered the £150/10 plan — which is £150 A
+  // LEAD. §28.3 calls that advice "the only thing between them and paying twice
+  // the going rate indefinitely", so it keeps being offered; what it must not
+  // do is read as a solution when the price per lead is still absurd.
+  const savedDowngradeRelief = useMemo(() => {
+    if (!savedDowngrade || shownLeads == null || shownLeads <= 0) return null;
+    const pence = Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads);
+    return { pence, relief: downgradeRelief(pence, HIGH_COST_PER_LEAD_PENCE) };
+  }, [savedDowngrade, shownLeads]);
 
   // The two fetches, the debounce and the memos live in useRadiusSearch; the
   // rules live in parseRadiusCentre/resolveRadius, which are plain functions.
@@ -572,15 +644,37 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                       )
                     )}
                   </p>
-                  {savedDowngrade && (
+                  {/*
+                    What they pay for, beside what this filter delivers (§69).
+                    Amber, never red: this is a choice the customer made and can
+                    unmake, not an error. And it never offers the difference
+                    back — nothing settles a shortfall (§28.0, §28.4), and
+                    types.ts says of these columns that no copy reading them
+                    may offer to.
+                  */}
+                  {savedGapLines && (
+                    <p className="text-xs text-amber-700">
+                      {savedGapLines.gap}
+                    </p>
+                  )}
+                  {savedGapLines?.banked && (
+                    <p className="text-xs text-amber-700">
+                      {savedGapLines.banked}
+                    </p>
+                  )}
+                  {savedDowngrade && savedDowngradeRelief && (
                     <p className="text-xs text-amber-700">
                       On the {poundsFromPence(savedDowngrade.priceGbp * 100)}{" "}
                       plan you would expect the same {shownLeads} lead
                       {shownLeads === 1 ? "" : "s"} at{" "}
-                      {poundsFromPence(
-                        Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads)
-                      )}{" "}
-                      each.{" "}
+                      {poundsFromPence(savedDowngradeRelief.pence)} each.{" "}
+                      {savedDowngradeRelief.relief ===
+                        "cheaper_but_still_poor" && (
+                        <>
+                          That is cheaper, but still a high price for each lead
+                          — widening this filter is the better move of the two.{" "}
+                        </>
+                      )}
                       <a href="/dashboard/settings" className="underline">
                         Change your plan
                       </a>

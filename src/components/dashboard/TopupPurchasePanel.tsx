@@ -43,6 +43,9 @@ export function TopupPurchasePanel({
   const router = useRouter();
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
+  // ⚠️ Re-checked SERVER-SIDE (§69). This control is a courtesy; the route owns
+  // the gate, and it refuses an UN-ACKNOWLEDGED purchase, never the purchase.
+  const [acknowledged, setAcknowledged] = useState(false);
 
   async function buy() {
     setStatus("loading");
@@ -51,7 +54,10 @@ export function TopupPurchasePanel({
       const res = await fetch("/api/customer/topup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_type: leadType }),
+        body: JSON.stringify({
+          lead_type: leadType,
+          acknowledge_filter: acknowledged,
+        }),
       });
       const data = await res.json();
 
@@ -107,15 +113,26 @@ export function TopupPurchasePanel({
           It warns and still allows: §16's rule is never to refuse a sale, and
           the credits do carry forward. */}
       {filterWarning && !blockedReason && status !== "success" && (
-        <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-          {filterWarning}{" "}
-          <Link
-            href="/dashboard/filtering"
-            className="font-medium underline underline-offset-2"
-          >
-            Review your filter
-          </Link>
-        </p>
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+          <p>
+            {filterWarning}{" "}
+            <Link
+              href="/dashboard/filtering"
+              className="font-medium underline underline-offset-2"
+            >
+              Review your filter
+            </Link>
+          </p>
+          <label className="mt-2 flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>I have read this and want to buy the extra leads anyway.</span>
+          </label>
+        </div>
       )}
 
       {blockedReason ? (
@@ -169,7 +186,9 @@ export function TopupPurchasePanel({
           )}
           <Button
             onClick={() => setStatus("confirming")}
-            disabled={status === "loading"}
+            disabled={
+              status === "loading" || (filterWarning != null && !acknowledged)
+            }
             className="w-full"
           >
             {status === "loading" ? "Processing…" : `Buy ${credits} leads`}

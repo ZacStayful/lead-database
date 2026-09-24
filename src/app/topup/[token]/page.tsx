@@ -119,6 +119,7 @@ export default async function TopupPage({
         credits={view.credits}
         priceLabel={price}
         deliveryNote={topupDeliveryNote(view.filterInForce)}
+        filterWarning={view.filterWarning}
       />
       <p className="mt-4 text-center text-xs text-[#8a8f88]">
         Single-use link · expires 48 hours after it was sent

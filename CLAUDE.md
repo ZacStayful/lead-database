@@ -17713,3 +17713,222 @@ landing pages (**zero** geojson requests on load).
 - **Diagnosing WHICH constraint is costing the volume.** With three dimensions
   in play, "add more areas" is often the wrong advice: the culprit may be a
   3-bedroom minimum or a £75k floor, and adding areas fixes neither.
+
+---
+
+## 69. What you pay for, beside what your filter delivers *(no migration)*
+
+A customer pays for a monthly allocation; their filter decides what can reach
+them; their unspent credit accrues in between. Those are three separate truths
+on three separate screens and **nothing in the product had ever compared any two
+of them.**
+
+⚠️ **`filter_forecast_plan_price_pence` — the plan price the forecast was quoted
+against — is written by three code paths and READ BY NONE**
+(`forecastBackfill.ts`, `api/customer/filter/route.ts` twice, `planChanges.ts`
+twice). That one fact is this section in miniature: the comparison was computed,
+stored, and never shown to anybody.
+
+`src/lib/planVsFilter.ts` · the saved-filter box · the dashboard home caption ·
+both top-up surfaces and both charge routes.
+
+### 69.1 — Measured on production 2026-09-24, and the contrast is the finding
+
+| | |
+|---|---|
+| Live filtered customers (active, unpaused, unarchived) | **8** |
+| …forecast **below** their own plan | **6 of 8** |
+| …carrying a forecast they never acknowledged | **2** — §58.3's backfill wrote it |
+| …carrying no forecast at all | **0**, the backfill closed this |
+| Unspent credit held by those 8 | **94 leads · £1,410** |
+| Held by the 6 under-plan | **78 leads · £1,170** |
+| Monthly forecast shortfall across the 6 | **57 leads/month · £855/month** |
+
+⚠️ **Ten live customers with NO filter hold TWO credits between them.** Ordinary
+routing drains a balance as fast as it is granted, so an unfiltered book cannot
+accumulate one. *The filter is the mechanism that banks the credit*, and not one
+screen said so.
+
+The case in one row — **Allan Carmichael**: £300/20 plan, filter forecast **1
+lead a month at £300 a lead**, **32 credits banked**. He acknowledged that
+forecast. Beside it his dashboard tile reads **"0 of 20"**.
+
+### 69.2 — ⚠️ The home caption is why nobody noticed
+
+`dashboard/page.tsx` builds the tile caption as:
+
+```ts
+product === "management" && filterActive
+  ? filterMessage(customer)
+  : balance === 0 && renewalDate ? "No lead credit left. …" : pacingMessage(…)
+```
+
+So a filtered management customer takes the **first** branch and can therefore
+*never* reach a balance sentence — while the tile beside it renders
+`value: received`, `unit: "of 20"`. **They are the one population on the platform
+that reads nothing about their balance**, and they are exactly the population
+whose balance has gone wrong. Both ends are now folded into `filterMessage`: the
+banked-credit line when there is far too much, the no-credit line when there is
+none. They are mutually exclusive, so only one ever renders.
+
+⚠️ **`filterMessage` also did not know about the revenue floor.** §68 shipped
+`filter_min_gross` and this sentence named areas and bedrooms only, so a customer
+filtering on £50k+ was read back a description of a filter they had not set. The
+THRESHOLD FORMATTING is shared (`formatGrossThreshold`) because that is the half
+which would drift; the prose is local, exactly as `bedroomPhrase` already is
+there — that file deliberately keeps a second, prose-register copy
+("any bedroom size", "3+ bedrooms") against `leadFilter.ts`'s compact table form
+("Any", "3+"). Those are registers, not drift; do not "deduplicate" them.
+
+### 69.3 — One pure function, and five copy rules that are tested not reviewed
+
+`planVsFilter.ts` returns `no_figure | covered | under_plan`. ⚠️ **Import-free**
+— the `featureRequest.ts` (§21.8) / `deadLeadCopy.ts` (§51.6) rule — because both
+consumers sit inside `"use client"` components and `vitest.config.mts` is PURE
+UNITS ONLY with no React.
+
+It takes **resolved figures, not a `Customer` row**, so §58.3's stored-vs-live
+fallback stays in the one place that already does it and is never written twice.
+
+⚠️ **Three outcomes, never two** (§18.3): "we cannot put a number on this filter"
+and "this filter covers your plan" are opposite facts, and collapsing them would
+reassure precisely the customer we cannot reassure.
+
+| # | rule | why |
+|---|---|---|
+| 1 | **Never offer or imply a refund** | `types.ts` says of these very columns: *"nothing settles a shortfall against it, and no copy reading these may offer to"* (§28.0, §28.4) |
+| 2 | **Never "you agreed"** unless they ticked | 2 of 8 carry a backfilled figure; `forecastBackfill.ts` is explicit they did not |
+| 3 | **Always "at least"** | a lower bound at 0.83, missed one month in six by construction (§28.0) |
+| 4 | **Two options, never one instruction** | widening and changing plan are both honest (§28.3) |
+| 5 | **A cheaper plan is not automatically a fix** | below |
+
+⚠️ **RULE 5 IS THE NON-OBVIOUS ONE.** `recommendedDowngrade` returns the cheapest
+plan whose `leads >= expected`, so for Allan it offers the £150/10 plan — which
+is **£150 a lead**. §28.3 calls that advice "the only thing between them and
+paying twice the going rate indefinitely", so it keeps being offered; what it
+must not do is read as a solution. `downgradeRelief()` answers `fix` or
+`cheaper_but_still_poor` against `HIGH_COST_PER_LEAD_PENCE`, which is a
+**parameter** rather than a copied constant so the module stays import-free with
+nothing to drift.
+
+⚠️ **`monthsBanked` is a COMPARISON, never a delivery estimate**, and the
+direction matters: `expected` is a lower bound, so the real time to drain a
+balance is at MOST that figure. "At this filter's forecast rate that is about 32
+months' worth" is defensible; "it will take 32 months" is a promise we never
+made, and a floor phrased as a ceiling is arithmetically backwards.
+
+### 69.4 — The top-up: the warning existed and reached one surface
+
+`topupFilterWarning` (§66.3) already encoded this exact case — its own comment
+names *"32 unspent credits against a plan of 20"*. It was never missing. What was
+missing is everywhere it did not reach:
+
+- ⚠️ **The emailed `/topup/[token]` page had no figure-specific warning at all** —
+  and that link is emailed and texted **because the balance ran out**, so the
+  surface most likely to be used at the worst moment was the one saying least.
+  `TopupTokenView` carried only `filterInForce: boolean` and `describeTopupToken`
+  selected only the two `filter_status` columns.
+- ⚠️ **Neither charge route consulted the filter or the balance**, so the server
+  charged regardless of what the screen had said. §40.10's rule: *a stated safety
+  limit that does nothing is worse than none.*
+
+**Should it ever refuse? NO, and the reason is worth writing down.** §16's rule
+is never to turn away a sale, and the credit here is genuinely spendable the
+moment the filter widens. The one existing refusal, §59.8's `past_due` block, is
+**categorically different**: there routing is structurally off and the credit can
+*never* be spent. Here routing is on and the credit drains, just slowly.
+
+**Instead, an acknowledgement**, §39.8's pattern one surface over: when the
+warning applies the charge requires an explicit tick and both routes answer
+**400 `topup_not_acknowledged`** without it. That refuses an *un-acknowledged*
+purchase, never the purchase.
+
+⚠️ **The emailed route RELEASES the claim before refusing**, exactly as its
+eligibility gate does. The token is single-use; refusing without releasing burns
+the customer's only link on a refusal we invited them to clear by ticking a box.
+
+⚠️ **`describeTopupToken` still fails OPEN.** Widening the select widened what can
+fail, so the direction matters more than it did: an unreadable customer row
+yields the unfiltered wording and **no warning**, never a refusal. A blip must
+cost a sentence, never a sale.
+
+⚠️ **AND THE SELECT MUST BE ONE STRING LITERAL.** supabase-js infers the row type
+from that literal; splitting it across `+` for readability collapses the result
+to `GenericStringError` and every field read below stops typechecking. `tsc`
+caught it, which is the only reason it is a note rather than an incident.
+
+### Verification
+
+**3,014 vitest cases green** (59 new), `npx tsc --noEmit` clean, `npm run lint`
+clean bar the four pre-existing `no-assign-module-variable` warnings,
+`npm run build` clean with `/`, `/enquiry`, `/guaranteed-rent` and
+`/privacy-policy` all still **Static** and `ƒ Middleware` present.
+
+⚠️ **The fixtures are the real production rows, and the list is chosen to defeat
+the UNIFORM-FIXTURE TRAP.** Every fixture being under plan lets a mutation that
+returns `under_plan` unconditionally survive untouched. **Simon Brint is in the
+list because he is `covered`, and James because he is under plan WITHOUT being
+banked** (6 credits against 9 a month — 0.7 months, silent). Those two separate
+the three verdicts and the two halves of the threshold. Do not trim the list.
+
+**Twenty-seven mutations run, twenty-seven caught.** Seven on the module
+(collapsing `no_figure` into `covered`, returning `under_plan` unconditionally,
+dropping the threshold, claiming they agreed, dropping "at least", calling every
+downgrade a fix, dividing by zero) and sixteen on the wiring (the panel reading
+the raw stored column, dropping the balance, both render gates, the home
+reverting to a one-argument caption, dropping the revenue clause, the token page
+dropping the warning, the button un-gated, both routes dropping the 400, the
+emailed route refusing without releasing the claim, `describeTopupToken` failing
+closed, and `planVsFilter.ts` gaining an import), and four on the criteria
+phrase — which was **extracted from the home page for exactly that reason**: the
+join is arithmetic on a list, the regression it invites is "areas, and beds" or
+a dropped criterion, and that sentence is read by every filtered customer on
+every dashboard load while being invisible to a React-free suite. Its first
+assertion pins the no-floor output **byte-identical to the pre-§69 sentence**.
+
+⚠️ **ONE SURVIVED THE FIRST PASS, AND IT IS THE TWELFTH TIME THIS REPOSITORY HAS
+RECORDED THAT SHAPE** (§42.8, §50.9 ×2, §53, §55, §57, §65, §66, §68 ×3). The
+render was written `{f(x) && <p>{f(x)}</p>}`, so the GATE and the RENDER are the
+same string — a file-text guard cannot tell them apart, and deleting the gate
+left the guard green while the line stopped rendering entirely. **The fix was to
+the code, not the test**: both sentences are computed once into `savedGapLines`,
+so the gate and the body are now distinguishable strings and all three mutations
+against them fail.
+
+⚠️ **Not yet exercised in a browser.** A Vercel preview answers 302 to
+`vercel.com/sso-api` (§45, §46) and runs against **production** Supabase (§1.1),
+so a test top-up would take real money. After merge, on `leads.stayful.co.uk`:
+Allan's saved filter shows the gap and the banked line in amber; his home tile
+caption names the unspent credit beside "0 of 20"; a management filter with a
+floor names it in that sentence; the emailed top-up link shows the warning with
+the tick; and the charge is refused with `topup_not_acknowledged` until it is
+ticked **and the link still works afterwards** — that last one is the released
+claim, and it is the failure that would cost a customer their only link.
+
+### Deployment order — none
+
+No migration: every column already exists and
+`filter_forecast_plan_price_pence` merely stops being write-only. Nothing here
+touches a balance, counter, pacing or capacity column, and §1.1's
+migration-before-merge rule does not apply.
+
+### Deferred
+
+- **The monthly re-forecast.** §28.7's named gap is unchanged: nothing recomputes
+  a stored figure between applies, so the number is what the volumes supported
+  the day they applied. ⚠️ Whatever does it must **not** re-stamp
+  `filter_forecast_acknowledged_at` — a machine refresh is not an
+  acknowledgement.
+- ⚠️ **The rule change — credits ceasing to roll over — REVERSES INVARIANT 2 and
+  is deliberately not built.** It needs its own migration, a `credit_invoice`
+  change, a written spend-order rule, corrections to **nine** published
+  "carries forward / never expires" promises (seven on `app/page.tsx`, plus the
+  guide and `topup.ts`), and one customer told first that they are losing 12
+  credits.
+- **`filter_forecast_estimate` is still write-only and goes stale.**
+  `repriceFilterForecast` caps `expected` downward and never updates `estimate`,
+  so the two disagree after a plan change. This section reads `expected` and
+  never `estimate`. Noted, not fixed.
+- **A near-national filter reads as `covered` while still being thin.** The
+  verdict is plan-vs-forecast only; *which* constraint is costing the volume is
+  the diagnosis still listed in §68's Deferred.
