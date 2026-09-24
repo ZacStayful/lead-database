@@ -16802,6 +16802,29 @@ of the two is not a customer error:
 
 "Widen the radius" for a BT postcode is advice that cannot work.
 
+⚠️ **AND FOR TWO WEEKS IT WAS THE ONLY ADVICE THE PUBLIC ESTIMATOR GAVE.** The
+predicate above was right and its unit tests passed; `RadiusControls` carried
+both wordings and branched on `coverageUnavailable`; `LeadFilteringPanel`
+passed it. **`LeadEstimator` never called `radiusCoverage` at all**, so the
+prop fell to its `= false` default and every Northern Ireland postcode on both
+landing pages read "widen the radius before applying". Found by driving BT1
+against production after §67 merged — not by any test.
+
+Two things worth keeping from it. **A correct pure function whose caller never
+reads it is invisible to this entire suite**, because `vitest.config.mts` is
+PURE UNITS ONLY with no React — the seam §42.8 and §65 both record, and the
+reason the repair is a file-text guard in `radiusGuards.test.ts` rather than a
+behavioural test. And the blast radius was bounded by something structural
+rather than lucky: **the estimator applies no filter**, so §66.2's actual
+safety bug — a radius covering nothing applying as an ANYWHERE filter — was
+never reachable from it. Only the dashboard writes a filter, and the dashboard
+was correct throughout.
+
+⚠️ The guard asserts the estimator passes a REAL `knownAreas`, not just that it
+passes the prop. `knownAreas: null` is the documented "still loading" state and
+makes `areaUncovered` false by design, so a call passing a literal null would
+satisfy a naive assertion while restoring the exact defect.
+
 ### 66.3 — A £75 top-up sold for leads the filter cannot deliver
 
 ⚠️ **NOTHING IN THE TOP-UP PATH READ THE FILTER FOR ANY DECISION** — confirmed
