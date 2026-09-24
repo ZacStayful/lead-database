@@ -17991,3 +17991,320 @@ migration-before-merge rule does not apply.
 - **A near-national filter reads as `covered` while still being thin.** The
   verdict is plan-vs-forecast only; *which* constraint is costing the volume is
   the diagnosis still listed in §68's Deferred.
+
+---
+
+## 70. Where customers drop off, and how stable the income is *(no migration)*
+
+`/admin` reports live capacity and a days-since-activity churn *risk* band;
+`/admin/outcomes` reports what happened to the leads. Nothing measured a
+customer's **tenure**, nothing plotted **drop-off over time**, and nothing put a
+cancellation reason next to the month it happened in.
+
+⚠️ `get_customer_risk()`'s header says it is stated rules rather than a model
+because *"zero customers have ever cancelled, so there is nothing to fit"* —
+that stopped being true in September. Worse, its `WHERE` clause requires an
+active subscription, so **it structurally cannot see a single customer who has
+left.** Any retention question needed its own query.
+
+`/admin/retention` · `src/lib/retention.ts` (pure) ·
+`src/lib/retentionData.ts` (the reads) ·
+`src/components/admin/RetentionChart.tsx`
+
+### 70.1 — What the live data says, which reshaped the design
+
+Measured read-only before anything was built, and re-measured through the
+shipped code afterwards:
+
+| | |
+|---|---|
+| Customers / lifecycle rows (customer × product) | 62 / **31** |
+| Paid subscription invoices ever | 41 |
+| First paid invoice ever | **2026-07-24** — the book is 12 weeks old |
+| Monthly cohorts | **3** — 7 / 14 / 7 |
+| Longest tenure any customer has reached | **2.00 months** |
+| Churn events | **4**, of which **1 never paid an invoice** |
+| Paused | **6 live subscriptions**, £990/mo not being billed |
+| MRR in force | **£3,945** (management £3,795 + GR £150) |
+
+⚠️ **THE DROP-OFF IS A CLIFF, NOT A CURVE.** All three churns with a paid
+history cancelled at **exactly 31.0 days**, to the minute — every one at the
+moment their second invoice came due, each having paid exactly one. Three of the
+four stated reasons are lead quality.
+
+⚠️ **6- and 12-month retention are NOT COMPUTABLE and will not be until
+2027-01-24 and 2027-07-24.** The page computes those dates and prints them, so
+the rows read as a countdown rather than a blank or a confident zero.
+
+### 70.2 — No migration, and that is the whole risk profile
+
+Every one of the ten inputs already existed: `payments` (tenure, revenue),
+`customers.cancelled_at`/`lapsed_at` (the churn event),
+`subscription_cancellations` (our reasons), `customers.cancellation_feedback`
+(Stripe's), `subscription_pauses`, `subscription_plan_changes`,
+`support_tickets`, and `customer_engagement_snapshots` — which already carries
+`tenure_days`, `paying_days`, `worked_rate` and `days_since_last_activity`
+captured daily per customer per product.
+
+So this ships with **no schema change, no production apply, no
+migration-before-merge step (§1.1)** and nothing that can touch a balance,
+counter, pacing or capacity column.
+
+**No snapshot table either, and that is not an oversight.** Every other trend
+here (`service_capacity_snapshots`, `customer_engagement_snapshots`,
+`operator_proof_snapshots`) cannot be backfilled because it captures live state,
+and all three carry a real 3-day hole from the §18.3 outage. This one is
+different: `payments` is a ledger of cleared invoices and cancellation dates are
+stamped once and never moved, so the whole history recomputes from scratch on
+every render, with no capture job and no hole.
+
+⚠️ **WHAT IS NOT RECONSTRUCTABLE IS ALLOCATION-DERIVED MRR.**
+`monthly_allocation` is current state *and is a lead count, not currency* — a
+customer who downgraded reads at today's tier for their whole history. MRR here
+is always **the latest paid invoice's `amount_pence`**, which is also strictly
+better than `/admin`'s existing `planForAllocation()` inference, the thing §33
+records as having hidden a £150/mo leak. Do not add a historical
+allocation-derived line.
+
+### 70.3 — Retention is counted in INVOICES, which is what kills the boundary bug
+
+All three measurable churns sit at exactly 31.0 days — **one day past the
+1-month line**. A month-based band flips the headline on the boundary: defined
+as "up to 1 month" it reports 3 churns in month 1; defined as "under 1 month" it
+reports 0 there and 3 in the 1–3 band. Neither is wrong and a reader cannot tell
+which they are looking at.
+
+Counting invoices has one answer. *Did they pay a 2nd invoice? a 4th? a 7th? a
+13th?* — which are months 1, 3, 6 and 12. Months stay as the labels because that
+is how the business thinks; the arithmetic underneath is the invoice count.
+
+Every checkpoint reports **five** numbers, not two:
+
+| | |
+|---|---|
+| `eligible` | first paid invoice is at least *N−1* months ago — they had the chance |
+| `renewed` | actually paid invoice *N* |
+| `churned` | has an end date and never paid it |
+| `unclear` | eligible, still here, invoice has not cleared — a failed or in-flight payment |
+| `paused` | reached the date while paused without having already cleared it — **out of `eligible`** |
+
+⚠️ **`unclear` must never be folded into `renewed`.** Seven failed subscription
+payments exist in the book; hiding them inflates retention.
+
+### 70.4 — ⚠️ A PAUSED CUSTOMER IS NOT A MISSED RENEWAL, and getting this wrong cost 22 points
+
+The first cut counted paused customers as `unclear`, and running the real
+functions over the real book is what caught it: **Management 1-month retention
+read 65% (13 of 20) when the honest figure is 87% (13 of 15).** All five
+"unclear" were paused.
+
+Stripe **voids** a paused subscription's invoices, so *we* are the reason the
+renewal never landed. Calling it unclear blames a payment failure that never
+happened and understates retention by the size of the paused book — six of
+nineteen live management subscriptions on the day it shipped. The wrong version
+would have had an owner believing a third of customers fail to renew when it is
+an eighth.
+
+⚠️ **The pause test sits AFTER the `cleared` test, not before.** Somebody who
+paid invoice 2 and then paused has renewed; the pause only removes a checkpoint
+they had not already reached. Both orderings are mutation-pinned.
+
+### 70.5 — Three more rules the page rests on
+
+**Every percentage prints its eligible denominator, and is withheld below
+five.** `13 of 15`, never a bare `87%`. `MIN_COHORT = 5` mirrors
+`get_engagement_benchmarks`'s existing suppression rule (§10) — fewer than that
+is a report on named individuals with the names removed, and it reads as a rate
+when it is not one. `pct` is **`null`, never `0`**, when suppressed.
+
+⚠️ **`payments` is known-incomplete and the page says so, first.** 0064's header
+records 17 payment rows against 20 subscribers at the time; today **two**
+nominally-active subscriptions have no paid invoice and **one churner has none
+at all**. Every row carries `tenureBasis: "invoice" | "signup_estimated" |
+"never_paid"`, the header states the count of each, and a never-paid churn is
+excluded from every checkpoint (it never entered the renewal funnel) and
+reported apart rather than lost.
+
+**Reason mentions exceed churn events, on purpose.**
+`subscription_cancellations.reasons` is a `text[]`; each reason counts once, so
+columns total higher than the number who left — the §18A discipline.
+
+### 70.6 — The reason taxonomy
+
+Most of it already existed: `cancelOptions.ts:11-15` records that the four
+overlapping pause/cancel keys are **deliberately identical** so the two signals
+can be counted together. The map only adds Stripe's vocabulary and the write-off.
+
+⚠️ **Stripe's `low_quality` gets its OWN theme and must never be collapsed into
+`lead_quality`.** `CANCEL_REASON_TO_STRIPE_FEEDBACK` sends **both** our
+`lead_quality` and our `not_enough_leads` to Stripe as `low_quality`, so a
+Stripe-only row genuinely cannot say which the customer meant. Collapsing it
+invents a sourcing problem out of a supply problem. It renders as *"lead quality
+or volume — from Stripe, cannot tell which"*.
+
+⚠️ **Precedence, because a portal cancellation writes no row of ours.**
+`src/lib/cancellations.ts:105-106`: only the in-app flow inserts
+`subscription_cancellations`. In production that table holds **4 of the 6**
+cancellation events, so the ladder is: our row → `cancellation_feedback` → a
+pause taken within 120 days before the end → `payment_failed` →
+`not_recorded`. Each row keeps `reasonSource`, and the drill-down shows the
+customer's own words and raw keys, never only the mapped theme. Live today: 3
+resolved from our form, 1 from Stripe's feedback.
+
+⚠️ **A write-off is churn with no stated reason, and that IS the finding.**
+`payment_failed` is its own theme rather than folded into `not_recorded`, which
+would file a billing failure as a silent departure. Zero rows today, and it will
+stay zero until the gap in 70.9 is fixed.
+
+### 70.7 — The chart
+
+Daily **MRR in force**, banded by tenure: for each London day, every live
+subscription contributes its most recent paid invoice, bucketed by how old that
+customer was *that day*. 63 points today, one more daily, every one exactly
+reconstructable — which is why no snapshot table is needed. ⚠️ A paused
+subscription contributes **nothing**; counting it would put revenue in the
+series that nobody collected.
+
+Recharts, **already a dependency at `^3.9.1`** — no new package. Follows
+`BucketChart.tsx`: `height="100%"` inside a height-setting parent,
+`isAnimationActive={false}`, `dot={false}`, stripped axes, typed tooltip.
+
+- ⚠️ **Five `Line`s, not a stacked area.** Trend-over-time with several series is
+  a line chart; a stacked area makes any middle band unreadable, because you are
+  measuring it by eye against a moving floor.
+- ⚠️ **ONE y-axis, always.** The obvious next request is the stable-share
+  percentage on a right-hand axis. Never: with two y-scales the crossing point of
+  the lines is an artefact of the scales rather than a fact. The share is a stat
+  tile. Mutation-pinned, along with the stacked-area ban.
+- ⚠️ **Colour is an ORDINAL ramp — one hue, monotone lightness — not five
+  categorical hues.** Swapping the band order would change the meaning, so the
+  reader has to see the order in the colour. Five distinct hues would spend the
+  identity channel re-encoding what the labels already say. Validated rather than
+  eyeballed: monotone L, adjacent ΔL ≥ 0.06, 3° hue spread, and every step
+  clearing 2:1 on the page surface (`#fcfcfb`) — 2.07, 3.14, 4.99, 8.60,
+  13.56:1. Steps: `#9cba93 #74996b #52774b #365132 #1e3119`.
+- ⚠️ **The lightest step is 2.07:1, which obligates a relief channel** — the
+  banded £ tiles and the retention table on the same page are it, and must ship
+  with the chart rather than after it.
+- ⚠️ **A DARK RAMP IS DELIBERATELY NOT WIRED UP.** `tailwind.config.ts` sets
+  `darkMode: ["class"]` but `globals.css` defines **no dark token block** and only
+  four files in `src/` use a `dark:` variant — the app is light-only in practice,
+  so a dark ramp could only fire on a page that stayed white. The validated steps,
+  for the day dark mode lands, are in the component's docblock, with the anchor
+  **flipped** so lighter means more stable; a straight inversion would sink the
+  stable band into the background.
+
+Milestones are a hand-maintained constant drawn as `ReferenceLine`s, filtered to
+the series range so none can sit off the axis.
+
+### 70.8 — Where the arithmetic lives, and two read traps
+
+⚠️ **Every figure is an exported pure function in `src/lib/retention.ts`.**
+`vitest.config.mts` is *"PURE UNITS ONLY — no network, no database, no React"*
+and gates `next build`, so anything inlined in the page or the chart is
+untestable — the split `oversupplyShortfall` (`serviceHealth.ts:253`) and
+`withdrawalBasisOf` already make, for the same stated reason.
+
+⚠️ **The product comes from `payment_type`, never `payments.lead_type`**, which
+is **null on 37 of 39** paid subscription rows: 0041's backfill covered the two
+rows that existed and the Stripe webhook has never set it since. Reading it would
+attribute almost all revenue to neither product.
+
+⚠️ **Support tickets are read and ordered on `submitted_at`, never
+`created_at`** — 9 of the 10 rows are backfilled to one identical `created_at`,
+which makes a customer look like they filed tickets *after* they cancelled. The
+guard for this is **scoped to the tickets read**, because `payments` orders on
+`created_at` legitimately (that column IS a payment's clock, there being no
+`paid_at`), and a file-wide ban would fail on correct code — which is how a guard
+ends up deleted.
+
+⚠️ **Both spellings of cancelled are checked**: `account_status` uses British
+`cancelled`, the Stripe-mirrored `subscription_status` uses American `canceled`.
+Testing one silently drops every customer recorded in the other.
+
+`customer_engagement_snapshots` is the only unbounded table on the page, so the
+read is bounded to churn in the last `ENGAGEMENT_CHURN_LOOKBACK_DAYS` (180) plus
+7 days for everyone else. ⚠️ **Snapshots do not stop at cancellation** — all six
+churned customers have rows through today — so a churner is read from their last
+snapshot **before** they left; taking their latest row would read zero and make
+every churner look disengaged. If that window ever needs widening, the
+replacement is a `SECURITY DEFINER` function returning one row per (customer,
+product), not a bigger number.
+
+### 70.9 — ⚠️ Four wiring gaps this surfaced, reported and NOT fixed here
+
+Each is a separate change with its own blast radius, and one touches the Stripe
+webhook:
+
+1. **Seven failed subscription payments exist and `past_due_since` is null on
+   all 62 customers.** So §59's write-off cron has never had anything to act on
+   and involuntary churn is untracked. `lapsed_at` is null everywhere.
+2. **`payments.lead_type` is null on 37 of 39 paid subscription rows** (above).
+3. **`subscription_cancellations` holds 4 of the 6 cancellation events** —
+   portal cancellations write no row.
+4. **Two nominally-active subscriptions have no paid invoice**, and one
+   `is_active = false` row is billing on both products.
+
+The page states 1, 2 and 4 in its own header rather than hiding them, because
+each one makes a figure on it less certain.
+
+### Verification
+
+`npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
+`module` warnings, `npm run build` passes and registers `ƒ /admin/retention`.
+**3,112 vitest cases green**, 98 of them new — 75 on the arithmetic and 23
+file-text guards on the wiring.
+
+⚠️ **TWENTY MUTATIONS RUN, ALL TWENTY CAUGHT**, each broken deliberately and
+watched to fail before the assertion was kept (this file records seven
+assertions once written weak enough to survive the very mutation they existed to
+catch — §50.9 twice, §53, §55, §57, §65):
+
+| | |
+|---|---|
+| Arithmetic | drop the eligible filter · drop `MIN_COHORT` suppression · fold `unclear` into `renewed` · collapse `low_quality` into `lead_quality` · fold `payment_failed` into `not_recorded` · let top-ups into a band · `monthsBetween` in 30.44-day steps · count a paused day in the series · churner engagement reads the latest snapshot · delete the paused branch · paused counted as paying · paused counted as `unclear` again · pause tested before `cleared` |
+| Wiring | second y-axis · stacked area · non-London `formatDate` · tickets ordered on `created_at` · top-ups in the payments read · nav entry removed · bare `createClient` |
+
+⚠️ One further mutation (removing the paused branch's `continue`) turned out to
+be a **no-op** rather than a missed assertion — the `isPaying` guard below it
+already excludes a paused row — so it was replaced with two that genuinely
+change behaviour. A mutation that cannot change the answer proves nothing about
+the test.
+
+**Against production, read-only.** The shipped functions were run over the real
+62 customers, 41 invoices, 4 cancellations and 7 pauses, and every figure ties:
+cohorts **7 / 14 / 7**; earliest first paid **2026-07-24**; max tenure **2.00
+months**; MRR in force **£3,945** with **£990 paused reported apart** (the two
+sum to £4,935, which is the figure a naive "latest invoice per active
+subscription" query returns — the difference IS the paused exclusion);
+collected per month **£1,410 / £3,420 / £3,345**; 6- and 12-month rows
+suppressed naming **2027-01-24** and **2027-07-24**; three churns at exactly
+1.00 month with one invoice each; the never-paid churner appearing once as
+`never_paid`.
+
+⚠️ The collected-August figure is **£3,420, not the £3,495** an earlier
+whole-table query returned. The £75 difference is exactly the one `topup` row,
+which this page excludes by design — so the discrepancy is the exclusion
+working, not a fault.
+
+**Not yet exercised in a browser.** ⚠️ A Vercel preview cannot be used —
+Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51,
+§52) — and a preview runs against **production** Supabase (§1.1). After merge,
+on `leads.stayful.co.uk`: Retention appears under Insights and highlights on the
+page (`DesktopNav` matches longest prefix, so it will not light `/admin`); five
+lines render with the milestone markers and a working crosshair; every
+percentage shows its denominator; the 6- and 12-month rows name their dates; and
+the paused section lists all six with their resume dates.
+
+### Deferred
+
+- **The four gaps in 70.9**, each on its own.
+- **Cohort survival curves** — one line per first-paid month. Worth building
+  once three or more cohorts have two or more points each; today every line
+  would stop after two.
+- **An editable milestone table.** A code constant until it hurts.
+- **A per-customer drill-down page.** Today the departure table carries the
+  reason, the words and the tickets inline, which is enough at four events.
+- **`revenueMovement` renders nothing**, because `subscription_plan_changes` has
+  no `applied_at` row yet. The section is conditional, so it appears the day one
+  lands — worth checking it looks right then rather than assuming.
