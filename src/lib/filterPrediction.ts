@@ -63,6 +63,28 @@ export const GROSS_THRESHOLDS = [25000, 30000, 40000, 50000, 75000] as const;
 export type GrossThreshold = (typeof GROSS_THRESHOLDS)[number];
 
 /**
+ * Is this a floor we actually offer?
+ *
+ * ⚠️ THE ONE VALIDATOR, and the apply route must use it rather than a range
+ * check. The list is a fixed set precisely so `>= £40k` is EXACTLY the union
+ * of the bands from 40k up (above); a free number between two thresholds would
+ * be banded at the wrong edge and quoted against stock it does not admit, and
+ * the SQL CHECK would refuse the write afterwards with a 500 rather than a
+ * sentence the customer can act on.
+ */
+export function isGrossThreshold(v: unknown): v is GrossThreshold {
+  return (
+    typeof v === "number" &&
+    (GROSS_THRESHOLDS as readonly number[]).includes(v)
+  );
+}
+
+/** "£50k" from 50000 — the label the control and every summary line use. */
+export function formatGrossThreshold(gross: number): string {
+  return `£${Math.round(gross / 1000)}k`;
+}
+
+/**
  * The band a lead's gross figure falls in.
  *
  * `"none"` is a lead with NO figure — 29 of 273 management leads (10.6%), and

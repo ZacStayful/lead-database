@@ -1,4 +1,5 @@
 import { cityForArea } from "@/lib/postcode";
+import { formatGrossThreshold } from "@/lib/filterPrediction";
 import type { Customer, LeadType } from "@/lib/types";
 
 /**
@@ -184,7 +185,18 @@ export function filterSummary(f: LeadFilterView, maxAreas = 3): string {
     places = shown.join(", ") + (rest > 0 ? ` +${rest} more` : "");
   }
 
-  return beds ? `${beds} · ${places}` : places;
+  // ⚠️ The floor is its OWN segment, never folded into the bedroom phrase.
+  // "3+ beds" and "£50k+" are different dimensions of the filter, and an
+  // admin reading a thin forecast needs to see which of the two is narrow.
+  const parts = [beds, revenuePhrase(f.minGross), places].filter(
+    (x): x is string => Boolean(x)
+  );
+  return parts.join(" · ");
+}
+
+/** "£50k+ revenue", or null when no floor is set. */
+export function revenuePhrase(minGross: number | null): string | null {
+  return minGross == null ? null : `${formatGrossThreshold(minGross)}+ revenue`;
 }
 
 /**
@@ -217,6 +229,14 @@ export function filterTooltip(f: LeadFilterView): string {
     `${f.label} lead filter`,
     `Bedrooms: ${bedroomPhrase(f.minBedrooms, f.maxBedrooms)}`,
     `Locations: ${locationText(f.areas)}`,
+    // ⚠️ Named as the PROPERTY's projected revenue, never "revenue" alone: the
+    // customer's own income is the other thing an admin could read that as,
+    // and §25's figure is Stayful's projection for the property.
+    `Minimum property revenue: ${
+      f.minGross == null
+        ? "Any"
+        : `${formatGrossThreshold(f.minGross)} a year projected gross`
+    }`,
     `Set by: ${filterKindLabel(f)}`,
   ];
   if (f.expectedLeads != null && f.forecastCostPerLeadPence != null) {

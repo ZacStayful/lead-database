@@ -169,22 +169,31 @@ begin
     1, 'and still moves the monthly counter');
 end $$;
 
--- ⚠️ A floor set on the row changes NOTHING until the predicate reads it.
--- This is what "inert" means, asserted rather than asserted-in-prose.
-update public.customers set filter_min_gross = 75000
-  where id = 'b2222222-2222-2222-2222-222222222222';
+-- ⚠️ WHAT "INERT" MEANS HERE, stated so it survives 0159.
+--
+-- The first draft of this asserted that the predicate IGNORES a floor set on
+-- the row — true of 0158 alone, and false the moment 0159 teaches the
+-- predicate to read one. A suite that runs after every migration cannot
+-- assert the absence of a later migration's behaviour, so it asserts the
+-- property that ACTUALLY made this apply safe and is true for ever: a
+-- customer with NO floor — which is all 61 of them at apply time — matches
+-- exactly what they matched before the column existed.
 update public.customers set filter_status = 'active', filter_areas = array['BS']
   where id = 'b2222222-2222-2222-2222-222222222222';
 
 do $$
 begin
   perform test_util.assert_eq(
+    (select filter_min_gross from public.customers
+      where id = 'b2222222-2222-2222-2222-222222222222'),
+    null::integer, 'the column defaults to NULL on every existing row');
+  perform test_util.assert_eq(
     public.lead_matches_customer_filter(
       'c3333333-3333-3333-3333-333333333333'::uuid,
       'b2222222-2222-2222-2222-222222222222'::uuid,
       'management'),
     true,
-    '⚠️ 0158 is INERT: the filter predicate does not yet read the floor');
+    '⚠️ and a customer with no floor matches exactly as they did before it existed');
 end $$;
 
 delete from public.lead_assignments;
