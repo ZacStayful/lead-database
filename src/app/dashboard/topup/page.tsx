@@ -6,6 +6,7 @@ import {
   productLabel,
   leadFilterInForce,
   topupDeliveryNote,
+  topupFilterWarning,
 } from "@/lib/topup";
 import { holdsTopupProduct, topupIneligibilityReason } from "@/lib/topupCharge";
 import { TopupPurchasePanel } from "@/components/dashboard/TopupPurchasePanel";
@@ -64,6 +65,7 @@ export default async function TopupTabPage() {
       blockedReason: topupIneligibilityReason(customer, leadType),
       filterInForce,
       deliveryNote: topupDeliveryNote(filterInForce),
+      filterWarning: topupFilterWarning(customer, leadType, TOPUP_CREDITS),
     };
   });
 
@@ -103,6 +105,7 @@ export default async function TopupTabPage() {
               blockedReason={card.blockedReason}
               deliveryNote={card.deliveryNote}
               filterInForce={card.filterInForce}
+              filterWarning={card.filterWarning}
             />
           ))}
         </div>

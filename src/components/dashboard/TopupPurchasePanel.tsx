@@ -24,6 +24,7 @@ export function TopupPurchasePanel({
   blockedReason,
   deliveryNote,
   filterInForce,
+  filterWarning,
 }: {
   leadType: LeadType;
   productLabel: string;
@@ -34,6 +35,10 @@ export function TopupPurchasePanel({
   /** Delivery expectation shown before and after purchase (see topupDeliveryNote). */
   deliveryNote: string;
   filterInForce: boolean;
+  /** Shown BEFORE the charge when the filter, not the balance, is the
+   *  constraint — see topupFilterWarning. Null when we have nothing
+   *  specific and true to say. */
+  filterWarning: string | null;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>("idle");
@@ -95,6 +100,23 @@ export function TopupPurchasePanel({
           {priceLabel} one-off
         </div>
       </div>
+
+      {/* ⚠️ BEFORE the charge, not after. When the FILTER rather than the
+          balance is what is holding delivery back, buying more credit does not
+          help — and nothing in this path used to say so (topupFilterWarning).
+          It warns and still allows: §16's rule is never to refuse a sale, and
+          the credits do carry forward. */}
+      {filterWarning && !blockedReason && status !== "success" && (
+        <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+          {filterWarning}{" "}
+          <Link
+            href="/dashboard/filtering"
+            className="font-medium underline underline-offset-2"
+          >
+            Review your filter
+          </Link>
+        </p>
+      )}
 
       {blockedReason ? (
         <p className="text-sm text-muted-foreground">{blockedReason}</p>
