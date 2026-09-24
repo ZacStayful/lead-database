@@ -72,6 +72,8 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 63, title: "A lead lands within minutes, and the customer knows", migrations: "0154" },
   { n: 64, title: "A landlord Stayful is already working is never sold", migrations: "0155" },
   { n: 65, title: "A chat that makes the advert", migrations: "0156" },
+  { n: 66, title: "Five things that were already broken", migrations: "no migration" },
+  { n: 67, title: "A radius around a town, and out to 100 miles", migrations: "0157" },
 ];
 
 /**
@@ -119,7 +121,7 @@ export const DEFERRED: string[] = [
 ];
 
 /** Highest committed migration, from the directory rather than the prose. */
-export const LATEST_MIGRATION = 156;
+export const LATEST_MIGRATION = 157;
 
 /** The number a new migration must take. Migrations deploy BEFORE the code that reads them. */
-export const NEXT_MIGRATION = "0157";
+export const NEXT_MIGRATION = "0158";

@@ -39,6 +39,10 @@ function filterBlock(customer: Customer, leadType: LeadType) {
     radius_miles: gr
       ? customer.gr_filter_radius_miles
       : customer.filter_radius_miles,
+    // A derived list, never a spread (§27.2) — so this is a deliberate line.
+    radius_place: gr
+      ? customer.gr_filter_radius_place
+      : customer.filter_radius_place,
     min_bedrooms: gr
       ? customer.gr_filter_min_bedrooms
       : customer.filter_min_bedrooms,

@@ -46,6 +46,7 @@ import {
 import { emailForStep, whatsappForStep } from "@/lib/prospect/copy";
 import { prospectFirstName } from "@/lib/prospect/name";
 import { sendProspectWhatsapp } from "@/lib/prospect/sendProspectWhatsapp";
+import { describeError } from "@/lib/logError";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -144,13 +145,16 @@ async function run(request: Request) {
   // The cap counts CLAIMS, not successes: a claim means the provider was
   // called, which is what the cap is protecting the number's reputation from.
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { count: sentToday, error: countError } = await admin
+  const { count: sentToday, error: countError, status } = await admin
     .from("prospect_nudge_sends")
     .select("id", { count: "exact", head: true })
     .gte("claimed_at", since);
 
   if (countError) {
-    console.error("[prospect-nudges] cap read failed", countError);
+    console.error(
+      "[prospect-nudges] cap read failed",
+      describeError(countError, status)
+    );
     return NextResponse.json(
       { ok: false, error: "cap_read_failed" },
       { status: 500 }

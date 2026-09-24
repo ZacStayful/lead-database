@@ -85,6 +85,72 @@ export function topupDeliveryNote(filterInForce: boolean): string {
   return `${base} You currently have a lead filter applied, so only enquiries matching your criteria can be assigned to you. That usually means fewer matches and a longer wait — widening or lifting your filter is the quickest way to receive them sooner.`;
 }
 
+/**
+ * What a filtered customer is told BEFORE they are charged £75.
+ *
+ * ⚠️ NOTHING IN THE TOP-UP PATH READ THE FILTER FOR ANY DECISION. Filter state
+ * affected copy only, and only the generic "fewer matches and a longer wait"
+ * sentence in topupDeliveryNote. So a customer whose filter is forecast at one
+ * lead a month, and who already held 32 unspent credits against a plan of 20,
+ * could buy five more — money taken for leads the filter guarantees we will
+ * not deliver. That is the hole §59.8 closed for past_due customers
+ * ("charged £75 for credit routing would never spend"), reached by a
+ * different route.
+ *
+ * It WARNS, it does not refuse: §16's rule is never to turn away a sale, the
+ * credits do carry forward, and a customer may have every intention of
+ * widening. What they must not be is uninformed.
+ *
+ * Null whenever we cannot say something true and specific:
+ *   - no filter in force for that product
+ *   - no stored forecast (a filter too thin to forecast stores null, and
+ *     §58.3 measured 5 of 11 filtered customers carrying nulls) — saying
+ *     nothing beats inventing a figure
+ *   - the forecast already covers the plan, so the balance really is the
+ *     constraint and a top-up is exactly the right purchase
+ *
+ * Pure, so the wording is unit-tested rather than read off a screen.
+ */
+export function topupFilterWarning(
+  customer: Pick<
+    Customer,
+    | "filter_status"
+    | "gr_filter_status"
+    | "filter_expected_leads"
+    | "gr_filter_expected_leads"
+    | "monthly_allocation"
+    | "gr_monthly_allocation"
+    | "lead_balance"
+    | "gr_lead_balance"
+  >,
+  leadType: LeadType,
+  credits: number
+): string | null {
+  if (!leadFilterInForce(customer, leadType)) return null;
+  const gr = leadType === "guaranteed_rent";
+  const expected = gr
+    ? customer.gr_filter_expected_leads
+    : customer.filter_expected_leads;
+  const allocation = gr
+    ? customer.gr_monthly_allocation
+    : customer.monthly_allocation;
+  const balance = gr ? customer.gr_lead_balance : customer.lead_balance;
+  if (expected == null || allocation == null) return null;
+  if (expected >= allocation) return null;
+
+  const lead = (n: number) => `${n} lead${n === 1 ? "" : "s"}`;
+  const unspent =
+    balance > 0
+      ? ` You already have ${lead(balance)} of credit unspent.`
+      : "";
+  return (
+    `Your filter is forecast to deliver at least ${lead(expected)} a month, ` +
+    `against a plan of ${allocation}.${unspent} A top-up adds ${credits} more to ` +
+    `the leads we owe you — widening your filter is the quickest way to actually ` +
+    `receive them.`
+  );
+}
+
 /** View state of a top-up token for the read-only confirmation page. */
 export type TopupTokenView =
   | { status: "invalid" }

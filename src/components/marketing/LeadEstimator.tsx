@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { areaLabel } from "@/lib/postcode";
-import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
 import type { AreaFeature } from "@/lib/geoRadius";
 import {
   predictMonthlyVolume,
@@ -23,11 +22,8 @@ import { PredictionBox } from "@/components/filtering/PredictionBox";
 import { AreaPicker, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
-import {
-  resolveRadius,
-  UNRESOLVED_RADIUS,
-  type RadiusResolution,
-} from "@/components/filtering/radiusSearch";
+import { RADIUS_DEFAULT_MILES } from "@/components/filtering/radiusSearch";
+import { useRadiusSearch } from "@/components/filtering/useRadiusSearch";
 import {
   formatPence,
   formatPlanPrice,
@@ -61,15 +57,13 @@ export function LeadEstimator({
   const [payload, setPayload] = useState<PublicFilterVolume | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [mode, setMode] = useState<"radius" | "areas">("radius");
-  const [postcode, setPostcode] = useState("");
-  const [miles, setMiles] = useState(20);
+  const [query, setQuery] = useState("");
+  const [miles, setMiles] = useState<number>(RADIUS_DEFAULT_MILES);
   const [picked, setPicked] = useState<string[]>([]);
   const [areaQuery, setAreaQuery] = useState("");
   const [minBeds, setMinBeds] = useState("");
   const [maxBeds, setMaxBeds] = useState("");
   const [showMap, setShowMap] = useState(false);
-  const [features, setFeatures] = useState<AreaFeature[] | null>(null);
-  const [geoFailed, setGeoFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -83,33 +77,22 @@ export function LeadEstimator({
   }, []);
 
   /**
-   * ⚠️ THE BOUNDARY FILE IS ~562 KB AND MUST NOT LOAD ON MOUNT.
+   * ⚠️ THE BOUNDARY FILE IS ~562 KB AND THE GAZETTEER ~250 KB, AND NEITHER MAY
+   * LOAD ON MOUNT.
    *
-   * A previous version gated this on `mode !== "radius"` and commented that it
-   * was "fetched only if the visitor actually uses radius mode" — but radius IS
-   * the default mode, so it fired for every visitor to the landing page whether
-   * or not they touched the estimator. A marketing page must not spend half a
-   * megabyte on something nobody asked for.
+   * A previous version gated the boundaries on `mode !== "radius"` and
+   * commented that they were "fetched only if the visitor actually uses radius
+   * mode" — but radius IS the default mode, so it fired for every visitor to
+   * the landing page whether or not they touched the estimator. A marketing
+   * page must not spend half a megabyte on something nobody asked for.
    *
-   * The gate is genuine INTENT: a postcode typed, the map opened, or a switch
+   * The gate is genuine INTENT: something typed, the map opened, or a switch
    * to hand-picking (whose map button is the next thing they will reach for).
-   * The dashboard keeps its old behaviour — a customer who opened the filtering
-   * page is already committed.
+   * It is passed INTO useRadiusSearch rather than decided inside it, so it
+   * stays visible here — the dashboard's own gate is different and correct for
+   * a customer who already opened the filtering page.
    */
-  const wantsGeo = postcode.trim() !== "" || showMap || mode === "areas";
-  useEffect(() => {
-    if (!wantsGeo || features || geoFailed) return;
-    let alive = true;
-    fetch("/data/uk-postcode-areas.geojson")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => alive && setFeatures(d.features as AreaFeature[]))
-      // Surfaced, not swallowed: RadiusControls has a state for this, and a
-      // silent failure looks to the visitor like a postcode we do not know.
-      .catch(() => alive && setGeoFailed(true));
-    return () => {
-      alive = false;
-    };
-  }, [wantsGeo, features, geoFailed]);
+  const wantsGeo = query.trim() !== "" || showMap || mode === "areas";
 
   const volume = useMemo(
     () => (payload ? toProductVolume(payload, product) : null),
@@ -161,21 +144,18 @@ export function LeadEstimator({
     [minBeds, maxBeds]
   );
 
-  const radius: RadiusResolution | null = useMemo(() => {
-    if (mode !== "radius" || !features || !volume) return null;
-    const outcode = parseOutcode(postcode);
-    if (!outcode) return UNRESOLVED_RADIUS;
-    const centre = outcodeCentroid(outcode);
-    if (!centre) return UNRESOLVED_RADIUS;
-    const { covered, upside } = resolveRadius(
-      features,
-      centre,
-      miles,
-      volume,
-      bedrooms
-    );
-    return { outcode, covered, upside };
-  }, [mode, features, volume, postcode, miles, bedrooms]);
+  const {
+    resolution: radius,
+    features,
+    loading: radiusLoading,
+    failed: geoFailed,
+  } = useRadiusSearch({
+    enabled: wantsGeo,
+    query,
+    miles,
+    volume,
+    bedrooms,
+  });
 
   // Memoised so the forecast below is not recomputed on every render — the
   // conditional would otherwise produce a fresh array identity each time.
@@ -265,7 +245,7 @@ export function LeadEstimator({
           onClick={() => setMode("radius")}
           className={`rounded-md px-3 py-1.5 ${mode === "radius" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
         >
-          Around a postcode
+          Around a postcode or town
         </button>
         <button
           type="button"
@@ -301,12 +281,12 @@ export function LeadEstimator({
       {mode === "radius" ? (
         <RadiusControls
           idPrefix={`est-${product}`}
-          postcode={postcode}
+          query={query}
           miles={miles}
-          onPostcodeChange={setPostcode}
+          onQueryChange={setQuery}
           onMilesChange={setMiles}
           geoFailed={geoFailed}
-          geoLoading={!features && wantsGeo}
+          loading={radiusLoading}
           resolution={radius}
         />
       ) : availableAreas.length > 0 ? (
