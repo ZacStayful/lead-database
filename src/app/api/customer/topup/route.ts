@@ -2,7 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { generateTopupToken, TOPUP_CREDITS, TOPUP_AMOUNT_PENCE } from "@/lib/topup";
+import {
+  generateTopupToken,
+  topupFilterWarning,
+  TOPUP_CREDITS,
+  TOPUP_AMOUNT_PENCE,
+} from "@/lib/topup";
 import { chargeClaimedTopup, topupIneligibilityReason } from "@/lib/topupCharge";
 import type { ClaimedTopup } from "@/lib/topupCharge";
 import type { Customer, LeadType } from "@/lib/types";
@@ -43,7 +48,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { lead_type?: string };
+  let body: { lead_type?: string; acknowledge_filter?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -71,6 +76,33 @@ export async function POST(request: NextRequest) {
   const reason = topupIneligibilityReason(typedCustomer, leadType);
   if (reason) {
     return NextResponse.json({ status: "failed", message: reason }, { status: 409 });
+  }
+
+  // ⚠️ §69. When the FILTER rather than the balance is what holds delivery
+  // back, the purchase needs an explicit tick — §39.8's forecast
+  // acknowledgement, one surface over. Until this existed the warning was
+  // COSMETIC: neither charge route consulted the filter or the balance, so the
+  // server charged regardless of what the screen had said, and §40.10's rule
+  // is that a stated safety limit which does nothing is worse than none.
+  //
+  // It refuses an UN-ACKNOWLEDGED purchase, never the purchase. §16's rule is
+  // never to turn away a sale, and unlike §59.8's past_due refusal — where
+  // routing is structurally off and the credit can NEVER be spent — routing
+  // here is on and the credit drains, just slowly.
+  const filterWarning = topupFilterWarning(
+    typedCustomer,
+    leadType,
+    TOPUP_CREDITS
+  );
+  if (filterWarning && body.acknowledge_filter !== true) {
+    return NextResponse.json(
+      {
+        status: "failed",
+        code: "topup_not_acknowledged",
+        message: filterWarning,
+      },
+      { status: 400 }
+    );
   }
 
   if (!typedCustomer.stripe_customer_id) {

@@ -127,26 +127,26 @@ describe("predictMonthlyVolume", () => {
   const vol = agg.management;
 
   it("empty areas means anywhere", () => {
-    const p = predictMonthlyVolume(vol, { areas: [], minBedrooms: null, maxBedrooms: null });
+    const p = predictMonthlyVolume(vol, { areas: [], minBedrooms: null, maxBedrooms: null, minGross: null });
     expect(p.matchingLeads).toBe(14);
   });
 
   it("restricts by area, case-insensitively", () => {
-    const p = predictMonthlyVolume(vol, { areas: ["ls"], minBedrooms: null, maxBedrooms: null });
+    const p = predictMonthlyVolume(vol, { areas: ["ls"], minBedrooms: null, maxBedrooms: null, minGross: null });
     expect(p.matchingLeads).toBe(10);
   });
 
   it("applies open-ended bedroom bounds", () => {
     expect(
-      predictMonthlyVolume(vol, { areas: [], minBedrooms: 2, maxBedrooms: null }).matchingLeads
+      predictMonthlyVolume(vol, { areas: [], minBedrooms: 2, maxBedrooms: null, minGross: null }).matchingLeads
     ).toBe(10);
     expect(
-      predictMonthlyVolume(vol, { areas: [], minBedrooms: null, maxBedrooms: 2 }).matchingLeads
+      predictMonthlyVolume(vol, { areas: [], minBedrooms: null, maxBedrooms: 2, minGross: null }).matchingLeads
     ).toBe(4);
   });
 
   it("derives the monthly rate from the elapsed window", () => {
-    const p = predictMonthlyVolume(vol, { areas: ["LS"], minBedrooms: null, maxBedrooms: null });
+    const p = predictMonthlyVolume(vol, { areas: ["LS"], minBedrooms: null, maxBedrooms: null, minGross: null });
     expect(p.monthlyRate).toBeCloseTo((10 / vol.weeksElapsed) * WEEKS_PER_MONTH, 6);
     expect(p.displayRate).toBe(Math.round(p.monthlyRate));
   });
@@ -154,7 +154,7 @@ describe("predictMonthlyVolume", () => {
   it("flags a thin sample as unreliable", () => {
     const thin = buildLeadVolumeAggregate([row(), row()], NOW).management;
     expect(
-      predictMonthlyVolume(thin, { areas: [], minBedrooms: null, maxBedrooms: null }).reliable
+      predictMonthlyVolume(thin, { areas: [], minBedrooms: null, maxBedrooms: null, minGross: null }).reliable
     ).toBe(false);
   });
 });

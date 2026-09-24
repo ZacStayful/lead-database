@@ -68,6 +68,7 @@ export default async function AdminCustomersPage() {
           areas: f.areas,
           minBedrooms: f.minBedrooms,
           maxBedrooms: f.maxBedrooms,
+          minGross: f.minGross,
         });
         const allocation =
           f.leadType === "guaranteed_rent"

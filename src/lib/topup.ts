@@ -164,6 +164,16 @@ export type TopupTokenView =
       amountPence: number;
       /** Whether a filter is in force for this product (drives the delivery note). */
       filterInForce: boolean;
+      /**
+       * The figure-specific warning, or null.
+       *
+       * ⚠️ THIS PAGE IS THE ONE A SHORT CUSTOMER ACTUALLY REACHES, because the
+       * link is emailed and texted BECAUSE their balance ran out — and until
+       * §69 it carried only the generic delivery note. The in-portal panel had
+       * the warning and this did not, so the surface most likely to be used at
+       * the worst moment was the one saying least.
+       */
+      filterWarning: string | null;
     };
 
 /**
@@ -192,18 +202,29 @@ export async function describeTopupToken(
 
   const leadType = data.lead_type as LeadType;
 
-  // Filter state drives the delivery expectation shown on the page. A failed
-  // read must not block the purchase — default to the unfiltered wording.
+  // Filter state drives the delivery expectation shown on the page, and the
+  // forecast/allocation/balance trio drives the figure-specific warning.
+  //
+  // ⚠️ A FAILED READ MUST NOT BLOCK THE PURCHASE — it falls back to the
+  // unfiltered wording and NO warning, never to a refusal. Widening the select
+  // widened what can fail, so this direction matters more than it did: a
+  // transient blip must cost a sentence, never a sale (§16).
   const { data: customer } = await supabase
     .from("customers")
-    .select("filter_status, gr_filter_status")
+    // ⚠️ ONE STRING LITERAL, never a concatenation: supabase-js infers the row
+    // type from this literal, and splitting it across `+` collapses the result
+    // to GenericStringError and every field read below stops typechecking.
+    .select(
+      "filter_status, gr_filter_status, filter_expected_leads, gr_filter_expected_leads, monthly_allocation, gr_monthly_allocation, lead_balance, gr_lead_balance"
+    )
     .eq("id", data.customer_id)
     .maybeSingle();
 
+  const credits = data.credits as number;
   return {
     status: "valid",
     leadType,
-    credits: data.credits as number,
+    credits,
     amountPence: data.amount_pence as number,
     filterInForce: customer
       ? leadFilterInForce(
@@ -211,6 +232,13 @@ export async function describeTopupToken(
           leadType
         )
       : false,
+    filterWarning: customer
+      ? topupFilterWarning(
+          customer as Parameters<typeof topupFilterWarning>[0],
+          leadType,
+          credits
+        )
+      : null,
   };
 }
 

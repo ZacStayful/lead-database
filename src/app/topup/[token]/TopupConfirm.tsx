@@ -17,15 +17,28 @@ export function TopupConfirm({
   credits,
   priceLabel,
   deliveryNote,
+  filterWarning,
 }: {
   token: string;
   credits: number;
   priceLabel: string;
   /** Delivery expectation — shown before purchase and repeated after. */
   deliveryNote: string;
+  /**
+   * The figure-specific filter warning, or null (§69).
+   *
+   * ⚠️ When it is present the purchase needs an explicit tick, mirroring
+   * §39.8's forecast acknowledgement — and the tick is re-checked SERVER-SIDE,
+   * so this control is a courtesy rather than the gate. It refuses an
+   * UN-ACKNOWLEDGED purchase, never the purchase: §16's rule is never to turn
+   * away a sale, and the credit here is genuinely spendable the moment the
+   * filter widens.
+   */
+  filterWarning: string | null;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
 
   async function confirm() {
     setStatus("loading");
@@ -33,6 +46,8 @@ export function TopupConfirm({
     try {
       const res = await fetch(`/api/topup/${encodeURIComponent(token)}`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acknowledge_filter: acknowledged }),
       });
       const data = await res.json();
 
@@ -90,12 +105,30 @@ export function TopupConfirm({
       {status === "error" && (
         <p className="mb-3 text-center text-sm text-destructive">{message}</p>
       )}
+      {filterWarning && (
+        <div className="mb-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-3 py-2">
+          <p className="text-xs leading-relaxed text-amber-800">
+            {filterWarning}
+          </p>
+          <label className="mt-2 flex items-start gap-2 text-xs text-amber-800">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              I have read this and want to buy the extra leads anyway.
+            </span>
+          </label>
+        </div>
+      )}
       <p className="mb-3 text-xs leading-relaxed text-[#8a8f88]">
         {deliveryNote}
       </p>
       <Button
         onClick={confirm}
-        disabled={status === "loading"}
+        disabled={status === "loading" || (filterWarning != null && !acknowledged)}
         className="w-full"
       >
         {status === "loading"

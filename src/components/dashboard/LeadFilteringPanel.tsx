@@ -15,6 +15,7 @@ import { VolumeBar } from "@/components/filtering/VolumeBar";
 import { AreaPicker, labelFor, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
+import { RevenueFloor } from "@/components/filtering/RevenueFloor";
 import {
   RADIUS_DEFAULT_MILES,
   radiusCoverage,
@@ -38,8 +39,15 @@ import {
 import {
   forecastVolume,
   recommendedDowngrade,
+  HIGH_COST_PER_LEAD_PENCE,
   type VolumeForecast,
 } from "@/lib/filterForecast";
+import {
+  bankedCreditSentence,
+  downgradeRelief,
+  planGapSentence,
+  planVsFilter,
+} from "@/lib/planVsFilter";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export type { AreaOption } from "@/components/filtering/AreaPicker";
@@ -68,6 +76,11 @@ export interface FilterPanelProps {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+  /**
+   * The saved revenue floor in POUNDS, or null. Management only — the GR page
+   * passes null because guaranteed rent has no lead carrying a gross figure.
+   */
+  minGross: number | null;
   liftEffectiveDate: string | null;
   availableAreas: AreaOption[];
   // Lead volume per postcode area (national), for the map + list hints.
@@ -78,6 +91,17 @@ export interface FilterPanelProps {
   // The plan's monthly lead allocation for this product — what a selection is
   // judged "too small" against.
   monthlyAllocation: number;
+  /**
+   * Unspent credit for this product.
+   *
+   * ⚠️ Read ONLY to compare against the forecast (§69), never to decide
+   * anything: `(gr_)lead_balance` is the allocation gate (invariant 1) and the
+   * gate lives in SQL. On production the filtered customers hold 94 credits
+   * between them while the unfiltered ones hold TWO, because ordinary routing
+   * drains a balance as fast as it is granted — the filter is the mechanism
+   * that banks it, and no screen said so.
+   */
+  leadBalance: number;
   // How many other filtered customers already compete for each area, so the
   // draft forecast matches what routing will actually deliver.
   contention?: AreaContention | null;
@@ -129,6 +153,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [minBeds, setMinBeds] = useState<string>(
     props.minBedrooms != null ? String(props.minBedrooms) : ""
   );
+  const [minGross, setMinGross] = useState<number | null>(props.minGross);
   const [maxBeds, setMaxBeds] = useState<string>(
     props.maxBedrooms != null ? String(props.maxBedrooms) : ""
   );
@@ -166,8 +191,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       areas: selectedAreas,
       minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      // ⚠️ THE DRAFT FLOOR, AND IT IS IN THE DEPS BELOW.
+      // `react-hooks/exhaustive-deps` is NOT running — §11 records there is no
+      // ESLint config — so dropping it from either list does not warn. It
+      // simply makes the effect below stop voiding the forecast
+      // acknowledgement when the floor changes, and the customer then
+      // acknowledges one forecast and applies against a different one, which
+      // is precisely what §39.8's fixed refusal order exists to prevent.
+      minGross,
     }),
-    [selectedAreas, minBeds, maxBeds]
+    [selectedAreas, minBeds, maxBeds, minGross]
   );
   const prediction = useMemo(
     () => predictMonthlyVolume(props.volume, draftSelection, props.contention),
@@ -216,7 +249,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     // selection. Change the selection and a different set is excluded, so the
     // answer they gave no longer refers to anything.
     setReleaseDecision(null);
-  }, [selectedAreas, minBeds, maxBeds]);
+    // ⚠️ `minGross` is here for the reason the memo above states. A floor is
+    // a selection change like any other: it excludes a different set of leads,
+    // so the forecast they acknowledged and the release decision they gave no
+    // longer refer to anything.
+  }, [selectedAreas, minBeds, maxBeds, minGross]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
   // number the admin surfaces show for this customer.
@@ -228,10 +265,18 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
           areas: props.areas,
           minBedrooms: props.minBedrooms,
           maxBedrooms: props.maxBedrooms,
+          minGross: props.minGross,
         },
         props.contention
       ),
-    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms, props.contention]
+    [
+      props.volume,
+      props.areas,
+      props.minBedrooms,
+      props.maxBedrooms,
+      props.minGross,
+      props.contention,
+    ]
   );
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
   // What the customer was SHOWN, not what today's data would quote. The two
@@ -279,17 +324,74 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [shownLeads, props.monthlyAllocation, product]
   );
 
+  // What they pay for, beside what this filter can actually deliver (§69).
+  //
+  // ⚠️ BUILT FROM `shownLeads`, NOT `props.expectedLeads`, so it inherits the
+  // stored-vs-live fallback resolved above rather than writing a second copy of
+  // it — a customer whose figure predates 0100 has no stored number and must
+  // still get a truthful comparison, not silence.
+  const savedGap = useMemo(
+    () =>
+      planVsFilter({
+        allocation: props.monthlyAllocation,
+        expected: shownLeads,
+        balance: props.leadBalance,
+        costPerLeadPence: shownCostPence,
+        acknowledged: props.forecastAcknowledgedAt != null,
+      }),
+    [
+      props.monthlyAllocation,
+      shownLeads,
+      props.leadBalance,
+      shownCostPence,
+      props.forecastAcknowledgedAt,
+    ]
+  );
+
+  // Both sentences computed ONCE, rather than called in the gate and again in
+  // the body.
+  //
+  // ⚠️ THIS SHAPE IS THE POINT, not a micro-optimisation. Written as
+  // `{bankedCreditSentence(x) && <p>{bankedCreditSentence(x)}</p>}` the gate and
+  // the render are the same string, so a file-text guard cannot tell them apart
+  // — and deleting the gate leaves the guard green while the line stops
+  // rendering entirely. That mutation survived on the first pass here, which is
+  // the twelfth time this repository has recorded an assertion weak enough to
+  // survive its own mutation (§42.8, §50.9, §53, §55, §57, §65, §66, §68).
+  const savedGapLines =
+    savedGap.kind === "under_plan"
+      ? {
+          gap: planGapSentence(savedGap),
+          banked: bankedCreditSentence(savedGap),
+        }
+      : null;
+
+  // ⚠️ A CHEAPER PLAN IS NOT AUTOMATICALLY A FIX. `recommendedDowngrade` returns
+  // the cheapest plan whose leads >= expected, so a customer forecast at 1 lead
+  // a month on a £300/20 plan is offered the £150/10 plan — which is £150 A
+  // LEAD. §28.3 calls that advice "the only thing between them and paying twice
+  // the going rate indefinitely", so it keeps being offered; what it must not
+  // do is read as a solution when the price per lead is still absurd.
+  const savedDowngradeRelief = useMemo(() => {
+    if (!savedDowngrade || shownLeads == null || shownLeads <= 0) return null;
+    const pence = Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads);
+    return { pence, relief: downgradeRelief(pence, HIGH_COST_PER_LEAD_PENCE) };
+  }, [savedDowngrade, shownLeads]);
+
   // The two fetches, the debounce and the memos live in useRadiusSearch; the
   // rules live in parseRadiusCentre/resolveRadius, which are plain functions.
   // ⚠️ `enabled` is passed from here on purpose — §28.6 records a geojson
   // fetch that ran for every visitor because its gate lived inside and named
   // the wrong thing.
-  const radiusBedrooms = useMemo(
+  const radiusConstraints = useMemo(
     () => ({
       minBedrooms: bedroomInputValue(minBeds),
       maxBedrooms: bedroomInputValue(maxBeds),
+      // ⚠️ The widening scan must see the floor, or it offers "widen to 40
+      // miles for 8 more a month" computed over stock the floor excludes.
+      minGross: draftSelection.minGross,
     }),
-    [minBeds, maxBeds]
+    [minBeds, maxBeds, draftSelection.minGross]
   );
   const {
     resolution: radius,
@@ -301,7 +403,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     query: radiusQuery,
     miles: radiusMiles,
     volume: props.volume,
-    bedrooms: radiusBedrooms,
+    constraints: radiusConstraints,
     contention: props.contention,
   });
 
@@ -407,6 +509,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       areas: selectedAreas,
       min_bedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       max_bedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      min_gross: minGross,
       selection_mode: fromRadius ? "radius" : "areas",
       radius_outcode: centre ? centre.outcode : null,
       radius_place: centre && centre.kind === "place" ? centre.name : null,
@@ -541,15 +644,37 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                       )
                     )}
                   </p>
-                  {savedDowngrade && (
+                  {/*
+                    What they pay for, beside what this filter delivers (§69).
+                    Amber, never red: this is a choice the customer made and can
+                    unmake, not an error. And it never offers the difference
+                    back — nothing settles a shortfall (§28.0, §28.4), and
+                    types.ts says of these columns that no copy reading them
+                    may offer to.
+                  */}
+                  {savedGapLines && (
+                    <p className="text-xs text-amber-700">
+                      {savedGapLines.gap}
+                    </p>
+                  )}
+                  {savedGapLines?.banked && (
+                    <p className="text-xs text-amber-700">
+                      {savedGapLines.banked}
+                    </p>
+                  )}
+                  {savedDowngrade && savedDowngradeRelief && (
                     <p className="text-xs text-amber-700">
                       On the {poundsFromPence(savedDowngrade.priceGbp * 100)}{" "}
                       plan you would expect the same {shownLeads} lead
                       {shownLeads === 1 ? "" : "s"} at{" "}
-                      {poundsFromPence(
-                        Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads)
-                      )}{" "}
-                      each.{" "}
+                      {poundsFromPence(savedDowngradeRelief.pence)} each.{" "}
+                      {savedDowngradeRelief.relief ===
+                        "cheaper_but_still_poor" && (
+                        <>
+                          That is cheaper, but still a high price for each lead
+                          — widening this filter is the better move of the two.{" "}
+                        </>
+                      )}
                       <a href="/dashboard/settings" className="underline">
                         Change your plan
                       </a>
@@ -713,6 +838,14 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               onMaxChange={setMaxBeds}
             />
 
+            <RevenueFloor
+              idPrefix={`filter-${product}`}
+              product={product}
+              volume={props.volume}
+              value={minGross}
+              onChange={setMinGross}
+            />
+
             {!props.volumeUnavailable && (
             <PredictionBox
               prediction={prediction}
@@ -721,7 +854,10 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               productLabel={productLabel}
               isBelow={isBelow}
               nothingSelected={
-                selectedAreas.length === 0 && minBeds === "" && maxBeds === ""
+                selectedAreas.length === 0 &&
+                minBeds === "" &&
+                maxBeds === "" &&
+                minGross === null
               }
               suggestions={suggestions}
               onAddArea={toggleArea}

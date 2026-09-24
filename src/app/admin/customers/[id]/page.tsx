@@ -344,6 +344,7 @@ function FilterCard({
           areas: f.areas,
           minBedrooms: f.minBedrooms,
           maxBedrooms: f.maxBedrooms,
+          minGross: f.minGross,
         })
       : null;
     const balance =

@@ -16,6 +16,8 @@ function pred(m: number, over: Partial<VolumePrediction> = {}): VolumePrediction
   const monthlyRate = (m / W) * WEEKS_PER_MONTH;
   return {
     matchingLeads: m,
+    rawMatching: m,
+    grossFilterApplied: true,
     monthlyRate,
     displayRate: Math.round(monthlyRate),
     reliable: m >= 5,

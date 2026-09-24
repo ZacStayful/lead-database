@@ -21,6 +21,7 @@ import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import { PredictionBox } from "@/components/filtering/PredictionBox";
 import { AreaPicker, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
+import { RevenueFloor } from "@/components/filtering/RevenueFloor";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
 import {
   RADIUS_DEFAULT_MILES,
@@ -66,6 +67,7 @@ export function LeadEstimator({
   const [areaQuery, setAreaQuery] = useState("");
   const [minBeds, setMinBeds] = useState("");
   const [maxBeds, setMaxBeds] = useState("");
+  const [minGross, setMinGross] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
 
   useEffect(() => {
@@ -139,12 +141,17 @@ export function LeadEstimator({
     [availableAreas]
   );
 
-  const bedrooms = useMemo(
+  const constraints = useMemo(
     () => ({
       minBedrooms: bedroomInputValue(minBeds),
       maxBedrooms: bedroomInputValue(maxBeds),
+      // ⚠️ The control itself renders nothing unless `canFilterByGross` says
+      // the cached payload can answer a revenue question — so on an old-shape
+      // payload this stays null and the estimate is byte-identical to the
+      // behaviour before revenue banding existed.
+      minGross,
     }),
-    [minBeds, maxBeds]
+    [minBeds, maxBeds, minGross]
   );
 
   const {
@@ -157,7 +164,7 @@ export function LeadEstimator({
     query,
     miles,
     volume,
-    bedrooms,
+    constraints,
   });
 
   // ⚠️ THE ESTIMATOR MUST ASK THIS TOO, and shipping without it is why a
@@ -193,12 +200,13 @@ export function LeadEstimator({
   );
   const hasSelection =
     selectedAreas.length > 0 ||
-    bedrooms.minBedrooms != null ||
-    bedrooms.maxBedrooms != null;
+    constraints.minBedrooms != null ||
+    constraints.maxBedrooms != null ||
+    constraints.minGross != null;
 
   const selection = useMemo(
-    () => ({ areas: selectedAreas, ...bedrooms }),
-    [selectedAreas, bedrooms]
+    () => ({ areas: selectedAreas, ...constraints }),
+    [selectedAreas, constraints]
   );
 
   const prediction = useMemo(
@@ -341,6 +349,17 @@ export function LeadEstimator({
           onMinChange={setMinBeds}
           onMaxChange={setMaxBeds}
         />
+        {volume && (
+          <div className="mt-4">
+            <RevenueFloor
+              idPrefix={`est-${product}`}
+              product={product}
+              volume={volume}
+              value={minGross}
+              onChange={setMinGross}
+            />
+          </div>
+        )}
       </div>
 
       {prediction && volume && hasSelection && (
