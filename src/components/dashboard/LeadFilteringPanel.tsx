@@ -15,6 +15,7 @@ import { VolumeBar } from "@/components/filtering/VolumeBar";
 import { AreaPicker, labelFor, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
+import { RevenueFloor } from "@/components/filtering/RevenueFloor";
 import {
   RADIUS_DEFAULT_MILES,
   radiusCoverage,
@@ -134,6 +135,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [minBeds, setMinBeds] = useState<string>(
     props.minBedrooms != null ? String(props.minBedrooms) : ""
   );
+  const [minGross, setMinGross] = useState<number | null>(props.minGross);
   const [maxBeds, setMaxBeds] = useState<string>(
     props.maxBedrooms != null ? String(props.maxBedrooms) : ""
   );
@@ -171,19 +173,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       areas: selectedAreas,
       minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
-      // Inherits the saved floor: there is no control to change it yet, so the
-      // draft and the saved filter agree by construction.
-      //
-      // ⚠️ WHEN THAT CONTROL LANDS, ITS STATE GOES IN THIS MEMO AND IN THESE
-      // DEPS. `react-hooks/exhaustive-deps` is NOT running — §11 records there
-      // is no ESLint config — so an omitted dep does not warn, it just makes
-      // the effect below stop voiding the forecast acknowledgement when the
-      // floor changes. The customer then acknowledges one forecast and applies
-      // against a different one, which is precisely what §39.8's fixed refusal
-      // order exists to prevent.
-      minGross: props.minGross,
+      // ⚠️ THE DRAFT FLOOR, AND IT IS IN THE DEPS BELOW.
+      // `react-hooks/exhaustive-deps` is NOT running — §11 records there is no
+      // ESLint config — so dropping it from either list does not warn. It
+      // simply makes the effect below stop voiding the forecast
+      // acknowledgement when the floor changes, and the customer then
+      // acknowledges one forecast and applies against a different one, which
+      // is precisely what §39.8's fixed refusal order exists to prevent.
+      minGross,
     }),
-    [selectedAreas, minBeds, maxBeds, props.minGross]
+    [selectedAreas, minBeds, maxBeds, minGross]
   );
   const prediction = useMemo(
     () => predictMonthlyVolume(props.volume, draftSelection, props.contention),
@@ -232,7 +231,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     // selection. Change the selection and a different set is excluded, so the
     // answer they gave no longer refers to anything.
     setReleaseDecision(null);
-  }, [selectedAreas, minBeds, maxBeds]);
+    // ⚠️ `minGross` is here for the reason the memo above states. A floor is
+    // a selection change like any other: it excludes a different set of leads,
+    // so the forecast they acknowledged and the release decision they gave no
+    // longer refer to anything.
+  }, [selectedAreas, minBeds, maxBeds, minGross]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
   // number the admin surfaces show for this customer.
@@ -434,6 +437,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       areas: selectedAreas,
       min_bedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       max_bedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      min_gross: minGross,
       selection_mode: fromRadius ? "radius" : "areas",
       radius_outcode: centre ? centre.outcode : null,
       radius_place: centre && centre.kind === "place" ? centre.name : null,
@@ -740,6 +744,14 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               onMaxChange={setMaxBeds}
             />
 
+            <RevenueFloor
+              idPrefix={`filter-${product}`}
+              product={product}
+              volume={props.volume}
+              value={minGross}
+              onChange={setMinGross}
+            />
+
             {!props.volumeUnavailable && (
             <PredictionBox
               prediction={prediction}
@@ -748,7 +760,10 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               productLabel={productLabel}
               isBelow={isBelow}
               nothingSelected={
-                selectedAreas.length === 0 && minBeds === "" && maxBeds === ""
+                selectedAreas.length === 0 &&
+                minBeds === "" &&
+                maxBeds === "" &&
+                minGross === null
               }
               suggestions={suggestions}
               onAddArea={toggleArea}

@@ -21,6 +21,7 @@ import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import { PredictionBox } from "@/components/filtering/PredictionBox";
 import { AreaPicker, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
+import { RevenueFloor } from "@/components/filtering/RevenueFloor";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
 import {
   RADIUS_DEFAULT_MILES,
@@ -66,6 +67,7 @@ export function LeadEstimator({
   const [areaQuery, setAreaQuery] = useState("");
   const [minBeds, setMinBeds] = useState("");
   const [maxBeds, setMaxBeds] = useState("");
+  const [minGross, setMinGross] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
 
   useEffect(() => {
@@ -143,13 +145,13 @@ export function LeadEstimator({
     () => ({
       minBedrooms: bedroomInputValue(minBeds),
       maxBedrooms: bedroomInputValue(maxBeds),
-      // No revenue control here yet, and the cached public payload cannot
-      // answer one until it carries bands — `canFilterByGross` is the gate
-      // that decides whether to offer it at all. Null means "no floor", which
-      // is byte-identical to the behaviour before revenue banding existed.
-      minGross: null,
+      // ⚠️ The control itself renders nothing unless `canFilterByGross` says
+      // the cached payload can answer a revenue question — so on an old-shape
+      // payload this stays null and the estimate is byte-identical to the
+      // behaviour before revenue banding existed.
+      minGross,
     }),
-    [minBeds, maxBeds]
+    [minBeds, maxBeds, minGross]
   );
 
   const {
@@ -199,7 +201,8 @@ export function LeadEstimator({
   const hasSelection =
     selectedAreas.length > 0 ||
     constraints.minBedrooms != null ||
-    constraints.maxBedrooms != null;
+    constraints.maxBedrooms != null ||
+    constraints.minGross != null;
 
   const selection = useMemo(
     () => ({ areas: selectedAreas, ...constraints }),
@@ -346,6 +349,17 @@ export function LeadEstimator({
           onMinChange={setMinBeds}
           onMaxChange={setMaxBeds}
         />
+        {volume && (
+          <div className="mt-4">
+            <RevenueFloor
+              idPrefix={`est-${product}`}
+              product={product}
+              volume={volume}
+              value={minGross}
+              onChange={setMinGross}
+            />
+          </div>
+        )}
       </div>
 
       {prediction && volume && hasSelection && (
