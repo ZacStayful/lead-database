@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
   buildPublicFilterVolume,
+  PUBLIC_VOLUME_SCHEMA_VERSION,
   PUBLIC_VOLUME_STALE_AFTER_MS,
 } from "@/lib/publicFilterVolume";
 
@@ -36,11 +37,27 @@ export async function GET() {
     Date.now() - PUBLIC_VOLUME_STALE_AFTER_MS
   ).toISOString();
 
+  // ⚠️ THE VERSION IS PART OF THE CLAIM, not a check beside it. Folded in, a
+  // deploy that changes the payload shape forces exactly ONE rebuild on the
+  // first request; left out, `toProductVolume` defaults the new field away
+  // and every revenue-floored estimate on both landing pages quotes ZERO
+  // until the six-hour window expires — §58.2's failure, self-inflicted, on a
+  // marketing page, and it would recur on every future shape change.
+  //
+  // The claim stays atomic and serialising: the first request through flips
+  // BOTH fields, so every concurrent request fails all four disjuncts exactly
+  // as it did with two.
   const { data: claimed, error: claimError } = await supabase
     .from("public_filter_volume")
-    .update({ generated_at: new Date().toISOString() })
+    .update({
+      generated_at: new Date().toISOString(),
+      schema_version: PUBLIC_VOLUME_SCHEMA_VERSION,
+    })
     .eq("id", 1)
-    .or(`generated_at.is.null,generated_at.lt.${staleBefore}`)
+    .or(
+      `generated_at.is.null,generated_at.lt.${staleBefore},` +
+        `schema_version.is.null,schema_version.neq.${PUBLIC_VOLUME_SCHEMA_VERSION}`
+    )
     .select("id");
 
   if (!claimError && claimed && claimed.length > 0) {
@@ -48,7 +65,11 @@ export async function GET() {
       const payload = await buildPublicFilterVolume(supabase);
       await supabase
         .from("public_filter_volume")
-        .update({ payload, generated_at: payload.generatedAt })
+        .update({
+          payload,
+          generated_at: payload.generatedAt,
+          schema_version: PUBLIC_VOLUME_SCHEMA_VERSION,
+        })
         .eq("id", 1);
       return NextResponse.json(payload, { headers: NO_STORE });
     } catch (err) {

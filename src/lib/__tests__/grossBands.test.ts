@@ -404,6 +404,10 @@ describe("rawMatching — the unfloored count Phase 3 ranks on", () => {
     // Five filtered customers against a ceiling of four: share = 4/5.
     const contention = {
       filteredCustomers: { LS: 4 },
+      byBand: {
+        LS: Object.fromEntries(GROSS_BAND_KEYS.map((k) => [k, 4])),
+      },
+      everywhereByBand: {},
       maxPerLead: 4,
     };
     const p = predictMonthlyVolume(

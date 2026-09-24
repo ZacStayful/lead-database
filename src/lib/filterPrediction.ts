@@ -230,7 +230,14 @@ export function canFilterByGross(volume: ProductVolume): boolean {
  * by that demand at all.
  */
 export interface AreaContention {
-  /** Uppercase postcode area -> number of filtered customers covering it. */
+  /**
+   * Uppercase postcode area -> number of filtered customers covering it.
+   *
+   * ⚠️ BAND-BLIND, AND FOR DISPLAY ONLY — the admin density map asks "how many
+   * customers cover this area", which is a headcount question. The forecast
+   * must not read it: a competitor eligible for a tenth of an area's leads is
+   * not a whole competitor for any of them. Use `byBand`.
+   */
   filteredCustomers: Record<string, number>;
   /** CONTENDED_FILTERED_CUSTOMERS — the assignment ceiling for one lead. */
   maxPerLead: number;
@@ -240,6 +247,24 @@ export interface AreaContention {
    * a floor under areas absent from `filteredCustomers` too.
    */
   everywhere?: number;
+  /**
+   * area -> band -> competitors for a lead IN THAT BAND.
+   *
+   * ⚠️ THE ROUTING-ACCURATE ONE, and §28.5 is why it has to exist: "the
+   * estimate must agree with the router, or the number quoted is one the
+   * engine was never going to deliver." The router shares a SPECIFIC lead
+   * among the customers who match THAT lead — which now includes its revenue.
+   * Keyed area-only, a £75k-floor competitor counts as a full competitor in an
+   * area where they are eligible for a twelfth of the leads, deflating
+   * everyone else's quote; and four customers with DISJOINT floors do not
+   * contend at all, yet would trip the ceiling and each be quoted 4/5.
+   *
+   * Always fully populated — a floor-less customer counts under every band —
+   * so there is one code path rather than a "has floors?" branch.
+   */
+  byBand: Record<string, Partial<Record<GrossBand, number>>>;
+  /** The bedroom-only filters of `everywhere`, split the same way. */
+  everywhereByBand: Partial<Record<GrossBand, number>>;
 }
 
 /**
@@ -252,13 +277,18 @@ export interface AreaContention {
  */
 export function contentionShare(
   area: string,
+  band: GrossBand,
   contention: AreaContention | null | undefined,
   includeSelf = true
 ): number {
   if (!contention) return 1;
   const key = area.toUpperCase();
+  // ⚠️ `band` is REQUIRED, never optional. An optional band silently gives
+  // band-blind contention to any caller that forgets it, which is the §G trap
+  // in miniature — and the symptom is a quote that is wrong by the sharing
+  // factor with nothing erroring.
   const existing =
-    contention.filteredCustomers[key] ?? contention.everywhere ?? 0;
+    contention.byBand[key]?.[band] ?? contention.everywhereByBand[band] ?? 0;
   const competitors = existing + (includeSelf ? 1 : 0);
   if (competitors <= contention.maxPerLead) return 1;
   return contention.maxPerLead / competitors;
@@ -365,17 +395,17 @@ export function predictMonthlyVolume(
   let rawMatching = 0;
   for (const [area, beds] of Object.entries(bandView)) {
     if (wantedAreas && !wantedAreas.has(area)) continue;
-    // Applied per AREA, not to the total: a filter spanning a crowded city and
-    // an empty county is only contended in the city, and averaging the two
-    // would understate one and overstate the other.
-    const share = contentionShare(area, contention);
     for (const [bed, byBand] of Object.entries(beds)) {
       const b = Number(bed);
       if (sel.minBedrooms != null && b < sel.minBedrooms) continue;
       if (sel.maxBedrooms != null && b > sel.maxBedrooms) continue;
       for (const [band, count] of Object.entries(byBand)) {
         if (!allowed.has(band as GrossBand)) continue;
-        rawMatching += (count ?? 0) * share;
+        // Applied per (AREA, BAND), not to the total and not per area: a
+        // filter spanning a crowded city and an empty county is only contended
+        // in the city, and within one area a £75k lead is contended only by
+        // the customers whose own floor admits it.
+        rawMatching += (count ?? 0) * contentionShare(area, band as GrossBand, contention);
       }
     }
   }
@@ -741,9 +771,17 @@ export async function fetchAreaContention(
     ? { status: "gr_filter_status", areas: "gr_filter_areas" }
     : { status: "filter_status", areas: "filter_areas" };
 
+  // ⚠️ THE FLOOR IS READ ON THE MANAGEMENT SIDE ONLY, and there is no gr_
+  // column to read even by mistake (0158) — invariant 6 satisfied
+  // structurally. A GR competitor therefore always counts under every band,
+  // which is correct: no GR lead carries a gross figure at all.
+  const select = isGr
+    ? `id, ${cols.areas}, ${cols.status}`
+    : `id, ${cols.areas}, ${cols.status}, filter_min_gross`;
+
   let query = admin
     .from("customers")
-    .select(`id, ${cols.areas}, ${cols.status}`)
+    .select(select)
     .in(cols.status, ["active", "pending_lift"]);
 
   query = isGr
@@ -754,13 +792,20 @@ export async function fetchAreaContention(
 
   const { data, error } = await query;
   const filteredCustomers: Record<string, number> = {};
+  const byBand: Record<string, Partial<Record<GrossBand, number>>> = {};
+  const everywhereByBand: Partial<Record<GrossBand, number>> = {};
   if (error || !data) {
     // Fail OPEN, deliberately. An empty contention map quotes the UNSHARED
     // volume, which is the number this feature showed before contention
     // existed — optimistic by at most the sharing factor. Failing closed would
     // quote zero and refuse to forecast at all on a transient read error.
     console.error("area contention read failed; quoting unshared", error);
-    return { filteredCustomers, maxPerLead: CONTENDED_FILTERED_CUSTOMERS };
+    return {
+      filteredCustomers,
+      byBand,
+      everywhereByBand,
+      maxPerLead: CONTENDED_FILTERED_CUSTOMERS,
+    };
   }
 
   // A filter with no areas is a bedroom-only filter: that customer is eligible
@@ -770,23 +815,47 @@ export async function fetchAreaContention(
   const rows = data as unknown as Record<string, unknown>[];
   for (const row of rows) {
     const areas = row[cols.areas] as string[] | null;
+    // A competitor contends only for the bands their OWN floor admits. No
+    // floor (every GR customer, and every management customer today) admits
+    // all of them, so this reduces to the old headcount by construction.
+    const floor = isGr ? null : ((row.filter_min_gross as number | null) ?? null);
+    const bands = allowedBands(floor);
+
     if (!areas || areas.length === 0) {
       everywhere += 1;
+      for (const band of Array.from(bands)) {
+        everywhereByBand[band] = (everywhereByBand[band] ?? 0) + 1;
+      }
       continue;
     }
     for (const a of areas) {
       const key = a?.trim().toUpperCase();
-      if (key) filteredCustomers[key] = (filteredCustomers[key] ?? 0) + 1;
+      if (!key) continue;
+      filteredCustomers[key] = (filteredCustomers[key] ?? 0) + 1;
+      const perBand = (byBand[key] ??= {});
+      for (const band of Array.from(bands)) {
+        perBand[band] = (perBand[band] ?? 0) + 1;
+      }
     }
   }
   if (everywhere > 0) {
     for (const key of Object.keys(filteredCustomers)) {
       filteredCustomers[key] += everywhere;
     }
+    // The same floor under every NAMED area, band by band. Areas nobody names
+    // fall back to `everywhereByBand` in contentionShare.
+    for (const key of Object.keys(byBand)) {
+      for (const [band, n] of Object.entries(everywhereByBand)) {
+        byBand[key][band as GrossBand] =
+          (byBand[key][band as GrossBand] ?? 0) + (n ?? 0);
+      }
+    }
   }
 
   return {
     filteredCustomers,
+    byBand,
+    everywhereByBand,
     maxPerLead: CONTENDED_FILTERED_CUSTOMERS,
     everywhere,
   };

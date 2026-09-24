@@ -1,10 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   contentionShare,
+  deriveAreaBedCounts,
   fetchAreaContention,
   fetchLeadVolumeData,
   weeksElapsedSince,
   INGEST_EPOCH_ISO,
+  type AreaBedBandCounts,
+  type GrossBand,
   type LeadVolumeAggregate,
   type ProductVolume,
 } from "@/lib/filterPrediction";
@@ -32,18 +35,47 @@ import type { LeadType } from "@/lib/types";
 /** Rebuild at most this often. Lead volume moves slowly; quotes need not. */
 export const PUBLIC_VOLUME_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * The shape of `payload`. Bump this whenever a field the estimator READS is
+ * added, removed or changes meaning.
+ *
+ * ⚠️ WITHOUT IT, SHIPPING A NEW SHAPE QUOTES THE OLD ONE FOR SIX HOURS.
+ * `toProductVolume` defaults every field, deliberately — the row genuinely
+ * ships as `{}` (0099) and a landing page can render against an un-primed
+ * cache — which makes an OLD-SHAPE payload indistinguishable from an
+ * un-primed one. Folded into the staleness claim, the first request after a
+ * deploy forces exactly ONE rebuild; without it, every revenue-floored
+ * estimate on both landing pages reads zero until the window expires, which
+ * is §58.2's failure self-inflicted on a marketing page.
+ *
+ * 1 = the original areas/bedrooms payload. 2 = adds `areaBedBandCounts`.
+ */
+export const PUBLIC_VOLUME_SCHEMA_VERSION = 2;
+
 export interface PublicProductVolume {
   windowStart: string;
   weeksElapsed: number;
   totalLeads: number;
   matchableLeads: number;
   areaBedCounts: Record<string, Record<string, number>>;
+  /**
+   * The same counts split by revenue band, contention already applied per
+   * (area, band). Present from schema version 2.
+   *
+   * ⚠️ This publishes how much high-value stock we hold, by area — a knowing
+   * extension of the exposure §28.6 already accepts, and bounded by the fact
+   * that the bands ARE the threshold list, so nothing finer than the
+   * estimator needs is published.
+   */
+  areaBedBandCounts?: AreaBedBandCounts;
 }
 
 export interface PublicFilterVolume {
   management: PublicProductVolume;
   guaranteed_rent: PublicProductVolume;
   generatedAt: string;
+  /** Mirrors the row's `schema_version`, so a served payload is self-describing. */
+  schemaVersion?: number;
 }
 
 /**
@@ -55,26 +87,35 @@ export interface PublicFilterVolume {
  * four-fifths of its volume, and quoting the unshared figure would promise a
  * prospect leads that routing would hand to somebody else.
  */
-function applyContention(
+export function applyContention(
   volume: ProductVolume,
   contention: Awaited<ReturnType<typeof fetchAreaContention>>
 ): PublicProductVolume {
-  const areaBedCounts: Record<string, Record<string, number>> = {};
+  // ⚠️ SCALED PER (AREA, BAND), AND `areaBedCounts` DERIVED FROM THE RESULT.
+  // Each band scales by a different factor now, so a separately-scaled
+  // bedroom total could not be reconciled with the sum of its own bands — a
+  // customer would see one figure at the lowest floor and another with no
+  // floor over the same stock. Deriving makes them agree structurally.
+  const bands: AreaBedBandCounts = {};
   let matchableLeads = 0;
 
-  for (const [area, beds] of Object.entries(volume.areaBedCounts)) {
-    const share = contentionShare(area, contention, true);
-    const scaled: Record<string, number> = {};
-    for (const [bed, count] of Object.entries(beds)) {
-      // Floor per bucket: a fractional lead is not a lead, and rounding up
-      // would let a heavily-shared area quote volume nobody will receive.
-      const n = Math.floor(count * share);
-      if (n > 0) {
-        scaled[bed] = n;
-        matchableLeads += n;
+  for (const [area, beds] of Object.entries(volume.areaBedBandCounts ?? {})) {
+    const scaledBeds: Record<string, Partial<Record<GrossBand, number>>> = {};
+    for (const [bed, byBand] of Object.entries(beds)) {
+      const scaled: Partial<Record<GrossBand, number>> = {};
+      for (const [band, count] of Object.entries(byBand)) {
+        const share = contentionShare(area, band as GrossBand, contention, true);
+        // Floor per bucket: a fractional lead is not a lead, and rounding up
+        // would let a heavily-shared area quote volume nobody will receive.
+        const n = Math.floor((count ?? 0) * share);
+        if (n > 0) {
+          scaled[band as GrossBand] = n;
+          matchableLeads += n;
+        }
       }
+      if (Object.keys(scaled).length > 0) scaledBeds[bed] = scaled;
     }
-    if (Object.keys(scaled).length > 0) areaBedCounts[area] = scaled;
+    if (Object.keys(scaledBeds).length > 0) bands[area] = scaledBeds;
   }
 
   return {
@@ -89,7 +130,8 @@ function applyContention(
           )
         : volume.totalLeads,
     matchableLeads,
-    areaBedCounts,
+    areaBedCounts: deriveAreaBedCounts(bands),
+    areaBedBandCounts: bands,
   };
 }
 
@@ -107,6 +149,7 @@ export async function buildPublicFilterVolume(
     management: applyContention(aggregate.management, mgmt),
     guaranteed_rent: applyContention(aggregate.guaranteed_rent, gr),
     generatedAt: new Date().toISOString(),
+    schemaVersion: PUBLIC_VOLUME_SCHEMA_VERSION,
   };
 }
 
@@ -136,13 +179,12 @@ export function toProductVolume(
     totalLeads: p.totalLeads ?? 0,
     matchableLeads: p.matchableLeads ?? 0,
     areaBedCounts: p.areaBedCounts ?? {},
-    // ⚠️ NULL, NEVER {} — §18.3's three outcomes. This payload predates
-    // revenue banding, so it cannot answer a revenue question; `{}` would
-    // read as "no lead clears any floor" and quote ZERO on a marketing page,
-    // which is §58.2's failure self-inflicted. `canFilterByGross` turns this
-    // null into a hidden control instead. Step 2 publishes real bands behind
-    // a schema version, and this becomes `p.areaBedBandCounts ?? null`.
-    areaBedBandCounts: null,
+    // ⚠️ NULL, NEVER {} — §18.3's three outcomes, and the whole reason the
+    // schema version exists. A payload written before banding cannot answer a
+    // revenue question; `{}` would read as "no lead clears any floor" and
+    // quote ZERO on a marketing page. `canFilterByGross` turns this null into
+    // a HIDDEN control instead, which is honest and needs no 503.
+    areaBedBandCounts: p.areaBedBandCounts ?? null,
   };
 }
 
