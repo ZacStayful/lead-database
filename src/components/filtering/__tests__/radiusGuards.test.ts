@@ -172,3 +172,61 @@ describe("one list, one box", () => {
     expect(expr).toContain('selectionMode === "radius"');
   });
 });
+
+describe("both surfaces tell a BT postcode the truth", () => {
+  /**
+   * ⚠️ THE BUG THIS FILE EXISTS FOR, SECOND INSTANCE — and it shipped.
+   *
+   * `radiusCoverage` computed `areaUncovered` correctly and its unit tests
+   * passed. `RadiusControls` carried both wordings and branched on
+   * `coverageUnavailable`. The dashboard passed it. The ESTIMATOR never called
+   * `radiusCoverage` at all, so the prop fell to its `= false` default and
+   * every Northern Ireland postcode on both landing pages read "widen the
+   * radius before applying" — advice §66.2 records as one that can never work,
+   * because OUTCODE_CENTROIDS carries 80 BT outcodes and the boundary file has
+   * no BT feature.
+   *
+   * Confirmed live on production with BT1 before this was written, so it is a
+   * measured defect rather than a hypothetical one.
+   *
+   * A correct pure function whose caller never reads it is invisible to every
+   * test in this repo — the seam §42.8 and §65 both record. These assertions
+   * are the substitute for the browser test the suite cannot run.
+   */
+  it("⚠️ the estimator computes the verdict and passes it", () => {
+    const src = source(ESTIMATOR);
+    expect(src).toContain("radiusCoverage({");
+    expect(src).toContain("areaUncovered: radiusAreaUncovered");
+    expect(src).toContain("coverageUnavailable={radiusAreaUncovered}");
+  });
+
+  it("the dashboard still passes it", () => {
+    // The surface that was already right. Asserted so a later tidy-up of the
+    // shared component cannot quietly drop the working half too.
+    expect(source(PANEL)).toContain("coverageUnavailable={radiusAreaUncovered}");
+  });
+
+  it("⚠️ the estimator feeds it real boundaries, not a null placeholder", () => {
+    // `knownAreas: null` is the "still loading" state and makes
+    // areaUncovered false by design, so a call passing a literal null would
+    // satisfy the assertion above while restoring the exact bug.
+    const src = source(ESTIMATOR);
+    const at = src.indexOf("radiusCoverage({");
+    const call = src.slice(at, src.indexOf("})", at));
+    expect(call).toContain("knownAreas: features?.map(");
+    expect(call).not.toContain("knownAreas: null");
+  });
+
+  it("⚠️ RadiusControls keeps two distinct wordings, and only one says widen", () => {
+    // Collapsing them is the other way back to the same defect: one sentence
+    // cannot be right for both, because widening is the fix for exactly one.
+    const src = source(CONTROLS);
+    expect(src).toContain("coverageUnavailable ?");
+    expect(src).toContain("widen the radius before applying");
+    expect(src).toMatch(/cover that part of the UK yet/);
+    // The coverage wording must NOT tell them to widen.
+    const at = src.indexOf("cover that part of the UK yet");
+    const sentence = src.slice(at, at + 200);
+    expect(sentence).toContain("won&apos;t help");
+  });
+});

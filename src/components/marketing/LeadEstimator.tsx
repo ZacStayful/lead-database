@@ -22,7 +22,10 @@ import { PredictionBox } from "@/components/filtering/PredictionBox";
 import { AreaPicker, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
-import { RADIUS_DEFAULT_MILES } from "@/components/filtering/radiusSearch";
+import {
+  RADIUS_DEFAULT_MILES,
+  radiusCoverage,
+} from "@/components/filtering/radiusSearch";
 import { useRadiusSearch } from "@/components/filtering/useRadiusSearch";
 import {
   formatPence,
@@ -157,6 +160,31 @@ export function LeadEstimator({
     bedrooms,
   });
 
+  // ⚠️ THE ESTIMATOR MUST ASK THIS TOO, and shipping without it is why a
+  // Northern Ireland postcode read "widen the radius before applying" on both
+  // landing pages — advice §66.2 records as one that can never work, because
+  // OUTCODE_CENTROIDS carries 80 BT outcodes and the boundary file has no BT
+  // feature at all.
+  //
+  // `radiusCoverage` was right and its unit tests passed; the defect was that
+  // nothing here called it, so `coverageUnavailable` fell to its `= false`
+  // default and RadiusControls took the other branch. A correct pure function
+  // whose caller never reads it is invisible to this repo's whole suite —
+  // `vitest.config.mts` is PURE UNITS ONLY, no React — which is the seam §42.8
+  // and §65 both record. The file-text guards in `radiusGuards.test.ts` stand
+  // in for the browser test nothing here can run, and all five were
+  // mutation-checked (including that they do not pass on this comment).
+  //
+  // Only `areaUncovered` is taken: the other two verdicts gate Apply, and the
+  // estimator has no Apply — it quotes, it never writes a filter. That is also
+  // why the "anywhere filter" half of §66.2 was never reachable from here.
+  const { areaUncovered: radiusAreaUncovered } = radiusCoverage({
+    isRadiusMode: mode === "radius",
+    resolvedOutcode: radius?.centre?.outcode ?? null,
+    covered: radius?.covered ?? [],
+    knownAreas: features?.map((f) => f.properties.area) ?? null,
+  });
+
   // Memoised so the forecast below is not recomputed on every render — the
   // conditional would otherwise produce a fresh array identity each time.
   const selectedAreas = useMemo(
@@ -288,6 +316,7 @@ export function LeadEstimator({
           geoFailed={geoFailed}
           loading={radiusLoading}
           resolution={radius}
+          coverageUnavailable={radiusAreaUncovered}
         />
       ) : availableAreas.length > 0 ? (
         <AreaPicker
