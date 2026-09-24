@@ -17685,11 +17685,56 @@ for 0141. Not worth a second apply.
 fires for them at their next `invoice.paid`. Both carry a null floor, so the
 added line is a no-op for them.
 
-**Not yet exercised in a browser.** ⚠️ A Vercel preview cannot do it —
-Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51)
-— and a preview runs against **production** Supabase (§1.1), so a test apply
-would move a real customer's filter. After merge, on `leads.stayful.co.uk`: the
-control appears on a management filter and **not** on a GR one; a £50k floor
+### Verified live after the merge — the payload versioning, end to end
+
+Merged as `dd9a344` on 2026-09-24; production deploy **READY**, **no runtime
+errors** in the hour after.
+
+⚠️ **The merge exercised design decision B for real, by luck of timing.** The
+cache was in exactly the state the version column exists to survive:
+`schema_version` **null**, **7.04 hours old** (past the 6-hour window), carrying
+no band counts. So the first `/api/filter-estimate/public` call after the deploy
+rebuilt it:
+
+| | |
+|---|---|
+| version stamped | **null → 2** |
+| payload shape | `areaBedBandCounts` on **both** products |
+| ⚠️ derived `areaBedCounts` == the sum of its own bands | **0 mismatches across 112 areas** |
+| a second call | served from cache, no rebuild, content identical |
+
+**That third row is the one that mattered.** The band-first decision's whole
+claim is that the consistency invariant is structural rather than asserted —
+there is no second number to disagree with — and this is it holding on the live
+book rather than on a fixture.
+
+⚠️ **The live bands also confirm the management-only decision on real rows, which
+no fixture could**: management sampled `B`/1-bed → `{'0': 1}`, a real figure
+below the lowest threshold; guaranteed rent sampled `AL`/4-bed → `{'none': 1}`,
+no figure at all. That is why there is no `gr_filter_min_gross` column for it to
+write to.
+
+⚠️ **One false alarm worth keeping.** Comparing the two API responses by **md5**
+said they differed, which reads as the cache rebuilding twice. A structural diff
+showed **zero differing leaves** — the gap was only JSON key ordering. The md5
+was the weak check; never conclude a rebuild from a hash.
+
+### Still not exercised in a browser — and now WHY, not just that
+
+⚠️ **Two things block it from a session like this one**, both worth knowing
+before anyone spends the time again:
+
+- there is **no customer or admin credential** here, and every check below needs
+  a signed-in session;
+- **Chromium cannot reach the site at all.** The agent proxy's NSS store is
+  **empty** (0 certs) and `certutil` is not installed to import the CA, so every
+  navigation fails `ERR_CERT_AUTHORITY_INVALID`. Disabling TLS verification is
+  forbidden, so that is a hard stop rather than something to work around.
+
+What remains, on `leads.stayful.co.uk` and ⚠️ never a preview (302 to
+`vercel.com/sso-api` — §45, §46, §50, §51 — and a preview runs against
+**production** Supabase, §1.1, so a test apply moves a real customer's filter):
+the control appears on a management filter and **not** on a GR one; a £50k floor
 quotes a smaller figure than Any; applying one stores it and the admin summary
 reads "£50k+ revenue"; and §28.6's lazy-fetch invariant still holds on both
 landing pages (**zero** geojson requests on load).
@@ -17895,15 +17940,29 @@ the code, not the test**: both sentences are computed once into `savedGapLines`,
 so the gate and the body are now distinguishable strings and all three mutations
 against them fail.
 
-⚠️ **Not yet exercised in a browser.** A Vercel preview answers 302 to
-`vercel.com/sso-api` (§45, §46) and runs against **production** Supabase (§1.1),
-so a test top-up would take real money. After merge, on `leads.stayful.co.uk`:
-Allan's saved filter shows the gap and the banked line in amber; his home tile
-caption names the unspent credit beside "0 of 20"; a management filter with a
-floor names it in that sentence; the emailed top-up link shows the warning with
-the tick; and the charge is refused with `topup_not_acknowledged` until it is
-ticked **and the link still works afterwards** — that last one is the released
-claim, and it is the failure that would cost a customer their only link.
+⚠️ **Not yet exercised in a browser, and the reason is now recorded rather than
+left as a to-do.** Merged as `dd9a344` on 2026-09-24 alongside §68; production
+deploy **READY**, **no runtime errors** in the hour after — which says the routes
+and the render did not throw, and says **nothing** about whether the sentences
+read correctly, which is the whole point of the five copy rules above.
+
+⚠️ **Two things block it from a session like this one:**
+
+- there is **no customer or admin credential** here, and every check below needs
+  a signed-in session;
+- **Chromium cannot reach the site.** The agent proxy's NSS store is **empty**
+  (0 certs) with no `certutil` to import the CA, so every navigation fails
+  `ERR_CERT_AUTHORITY_INVALID`, and disabling TLS verification is forbidden.
+
+What remains, on `leads.stayful.co.uk` and ⚠️ never a preview (302 to
+`vercel.com/sso-api` — §45, §46 — and a preview runs against **production**
+Supabase, §1.1, so a test top-up takes real money): Allan's saved filter shows
+the gap and the banked line in amber; his home tile caption names the unspent
+credit beside "0 of 20"; a management filter with a floor names it in that
+sentence; the emailed top-up link shows the warning with the tick; and the charge
+is refused with `topup_not_acknowledged` until it is ticked **and the link still
+works afterwards** — that last one is the released claim, and it is the failure
+that would cost a customer their only link.
 
 ### Deployment order — none
 
