@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   GROSS_THRESHOLDS,
   GROSS_BAND_KEYS,
@@ -412,5 +414,38 @@ describe("rawMatching — the unfloored count Phase 3 ranks on", () => {
     expect(p.rawMatching).toBeCloseTo(263 * 0.8, 6);
     expect(p.matchingLeads).toBe(Math.floor(263 * 0.8));
     expect(p.rawMatching).toBeGreaterThan(p.matchingLeads);
+  });
+});
+
+describe("⚠️ the migration's CHECK and GROSS_THRESHOLDS are ONE list", () => {
+  /**
+   * The `cancelOptions.ts` arrangement (§29): asserted mechanically, against
+   * the migration's own text, rather than trusted to review.
+   *
+   * If the two diverge, the database admits a floor the prediction has no
+   * band edge for — so every quote at that floor is computed at the WRONG
+   * EDGE, and half the directions overstate. Nothing else would notice.
+   */
+  const sql = readFileSync(
+    resolve(__dirname, "../../../supabase/migrations/0158_filter_min_gross.sql"),
+    "utf8"
+  );
+
+  it("the CHECK lists exactly the TypeScript thresholds, in order", () => {
+    const m = /filter_min_gross in \(([^)]*)\)/.exec(sql);
+    expect(m).not.toBeNull();
+    const fromSql = m![1].split(",").map((v) => parseInt(v.trim(), 10));
+    expect(fromSql).toEqual([...GROSS_THRESHOLDS]);
+  });
+
+  it("⚠️ and there is no gr_ mirror in the migration", () => {
+    // Guaranteed rent has zero leads carrying a gross figure, so a gr_ column
+    // could never hold a meaningful value. Pinned here so "completing the
+    // symmetry" fails a test rather than reading as a tidy-up.
+    expect(sql).not.toMatch(/gr_filter_min_gross/);
+  });
+
+  it("names the unit, because it is the one money column in POUNDS", () => {
+    expect(sql).toMatch(/POUNDS, NOT PENCE/);
   });
 });
