@@ -40,6 +40,7 @@ function cols(product: LeadType) {
       selectionMode: "gr_filter_selection_mode",
       radiusOutcode: "gr_filter_radius_outcode",
       radiusMiles: "gr_filter_radius_miles",
+      radiusPlace: "gr_filter_radius_place",
       expectedLeads: "gr_filter_expected_leads",
       forecastEstimate: "gr_filter_forecast_estimate",
       forecastLikelihood: "gr_filter_forecast_likelihood_pct",
@@ -62,6 +63,7 @@ function cols(product: LeadType) {
     selectionMode: "filter_selection_mode",
     radiusOutcode: "filter_radius_outcode",
     radiusMiles: "filter_radius_miles",
+    radiusPlace: "filter_radius_place",
     expectedLeads: "filter_expected_leads",
     forecastEstimate: "filter_forecast_estimate",
     forecastLikelihood: "filter_forecast_likelihood_pct",
@@ -111,6 +113,7 @@ export async function POST(req: NextRequest) {
     selection_mode?: unknown;
     radius_outcode?: unknown;
     radius_miles?: unknown;
+    radius_place?: unknown;
     acknowledge_forecast?: unknown;
     quoted_expected_leads?: unknown;
     existing_leads?: unknown;
@@ -173,6 +176,16 @@ export async function POST(req: NextRequest) {
         : null;
     const radiusMiles =
       selectionMode === "radius" ? toIntOrNull(body.radius_miles) : null;
+    // The town, when they typed one (0157). Trimmed and capped to the CHECK,
+    // and kept only when the outcode was also accepted — a place name with no
+    // centre behind it would render "Radius: 20 mi from Salisbury (null)".
+    const radiusPlace =
+      selectionMode === "radius" &&
+      radiusOutcode !== null &&
+      typeof body.radius_place === "string" &&
+      body.radius_place.trim() !== ""
+        ? body.radius_place.trim().slice(0, 120)
+        : null;
 
     // ---------------------------------------------------------------------
     // Re-derive the forecast HERE. The client sends intent; the server sends
@@ -341,6 +354,7 @@ export async function POST(req: NextRequest) {
       [c.liftDate]: null, // applying/editing cancels any scheduled lift
       [c.selectionMode]: selectionMode,
       [c.radiusOutcode]: radiusOutcode,
+      [c.radiusPlace]: radiusPlace,
       [c.radiusMiles]:
         radiusMiles !== null && radiusMiles > 0 && radiusMiles <= 200
           ? radiusMiles

@@ -88,16 +88,29 @@ describe("wideningStepsFrom", () => {
   });
 
   it("widens an off-list value onto the list", () => {
-    // A radius saved before the list changed must still be able to widen.
-    expect(wideningStepsFrom(35)).toEqual([5, 15]);
+    // A radius saved before the list was re-scaled must still widen — and one
+    // customer is on 25 miles today, which is no longer an option.
+    expect(wideningStepsFrom(35)).toEqual([5, 15, 25]);
+    expect(wideningStepsFrom(25)).toEqual([5, 15, 25]);
+  });
+
+  it("⚠️ offers at most three steps", () => {
+    // From 10 there are nine larger options. Naming the ninety-mile jump when
+    // ten would do buys volume the operator cannot service.
+    for (const from of [...RADIUS_MILE_OPTIONS, 1, 7, 35]) {
+      expect(wideningStepsFrom(from).length, String(from)).toBeLessThanOrEqual(3);
+    }
   });
 
   it("offers every larger option, smallest first", () => {
     // ⚠️ Deliberately literal, against TODAY's list. Re-scaling the distances
-    // should fail here and be re-read, not quietly pass.
-    expect(wideningStepsFrom(30)).toEqual([10, 20]);
-    expect(wideningStepsFrom(5)).toEqual([5, 10, 15, 20, 25, 35, 45]);
-    expect([...RADIUS_MILE_OPTIONS]).toEqual([5, 10, 15, 20, 25, 30, 40, 50]);
+    // should fail here and be re-read, not quietly pass — which is exactly
+    // what it did when 5–50 became 10–100.
+    expect(wideningStepsFrom(30)).toEqual([10, 20, 30]);
+    expect(wideningStepsFrom(10)).toEqual([10, 20, 30]);
+    expect([...RADIUS_MILE_OPTIONS]).toEqual([
+      10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
+    ]);
   });
 
   it("every step is a real increase", () => {
@@ -114,8 +127,9 @@ describe("resolveRadius uses the option list", () => {
     areaAtMiles("CC", 28),
     areaAtMiles("DD", 45),
     areaAtMiles("EE", 70),
+    areaAtMiles("FF", 130),
   ];
-  const volume = volumeFor(["AA", "BB", "CC", "DD", "EE"]);
+  const volume = volumeFor(["AA", "BB", "CC", "DD", "EE", "FF"]);
   const run = (miles: number) =>
     resolveRadius(features, CENTRE, miles, volume, ANY_BEDS);
 
@@ -128,8 +142,8 @@ describe("resolveRadius uses the option list", () => {
   });
 
   it("stops at the FIRST gaining step, not the best one", () => {
-    // From 5 miles BB sits at 12, so 15 is the smallest option that gains.
-    const { upside } = run(5);
+    // From 10 miles BB sits at 12, so 20 is the smallest option that gains.
+    const { upside } = run(10);
     expect(upside?.extraMiles).toBe(10);
     expect(upside?.newAreas).toEqual(["BB"]);
   });
@@ -142,10 +156,21 @@ describe("resolveRadius uses the option list", () => {
   });
 
   it("⚠️ offers nothing from the largest option, even with leads beyond it", () => {
-    // EE sits at 70 miles and is genuinely there. Offering it would have named
-    // 55–80, which is exactly the defect.
-    expect(run(50).covered).toEqual(["AA", "BB", "CC", "DD"]);
-    expect(run(50).upside).toBeNull();
+    // FF sits at 130 miles and is genuinely there. Offering it would name a
+    // distance the dropdown cannot show, which is exactly the defect.
+    expect(run(100).covered).toEqual(["AA", "BB", "CC", "DD", "EE"]);
+    expect(run(100).upside).toBeNull();
+  });
+
+  it("⚠️ gives up rather than reaching past three steps", () => {
+    // From 50 the first three options are 60, 70 and 80; EE at 70 is inside
+    // that reach, so it IS offered. FF at 130 never is from anywhere.
+    expect(run(50).upside?.extraMiles).toBe(20);
+    expect(
+      [...RADIUS_MILE_OPTIONS].every(
+        (m) => !run(m).upside?.newAreas.includes("FF")
+      )
+    ).toBe(true);
   });
 });
 

@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import { cityForArea, postcodeArea } from "@/lib/postcode";
-import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
 import type { AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import { PredictionBox } from "@/components/filtering/PredictionBox";
@@ -16,7 +15,11 @@ import { VolumeBar } from "@/components/filtering/VolumeBar";
 import { AreaPicker, labelFor, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
-import { resolveRadius, radiusCoverage } from "@/components/filtering/radiusSearch";
+import {
+  RADIUS_DEFAULT_MILES,
+  radiusCoverage,
+} from "@/components/filtering/radiusSearch";
+import { useRadiusSearch } from "@/components/filtering/useRadiusSearch";
 import {
   bedroomInputValue,
   formatPence as poundsFromPence,
@@ -151,24 +154,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // is a SELECTOR, not a different filter: routing matches on postcode areas,
   // so what is saved is always the resolved area set, through the same apply.
   const [locationMode, setLocationMode] = useState<"areas" | "radius">("areas");
-  const [radiusPostcode, setRadiusPostcode] = useState("");
-  const [radiusMiles, setRadiusMiles] = useState(15);
-  const [geoFeatures, setGeoFeatures] = useState<AreaFeature[] | null>(null);
-  const [geoFailed, setGeoFailed] = useState(false);
-
-  // Boundary polygons for the radius test — fetched once, on first use of
-  // radius mode (the map fetches the same file, so it is usually cached).
-  useEffect(() => {
-    if (locationMode !== "radius" || geoFeatures || geoFailed) return;
-    let alive = true;
-    fetch("/data/uk-postcode-areas.geojson")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => alive && setGeoFeatures(d.features as AreaFeature[]))
-      .catch(() => alive && setGeoFailed(true));
-    return () => {
-      alive = false;
-    };
-  }, [locationMode, geoFeatures, geoFailed]);
+  const [radiusQuery, setRadiusQuery] = useState("");
+  // ⚠️ From the constant, not a literal: this was 15, which was not on the
+  // list even before it was re-scaled, so the <select> opened with nothing
+  // selected.
+  const [radiusMiles, setRadiusMiles] = useState<number>(RADIUS_DEFAULT_MILES);
 
   // Live prediction for the draft selection, recomputed on every toggle.
   const draftSelection: FilterSelection = useMemo(
@@ -289,62 +279,55 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [shownLeads, props.monthlyAllocation, product]
   );
 
-  // Radius mode: resolve the typed postcode + radius to the postcode areas
-  // the circle touches, and work out the smallest widening that would add
-  // more leads — "another 5 miles brings in Gloucester, about +2/month".
-  const radius = useMemo((): {
-    outcode: string | null;
-    covered: string[];
-    upside: { extraMiles: number; newAreas: string[]; extraRate: number } | null;
-  } | null => {
-    if (locationMode !== "radius" || !geoFeatures) return null;
-    const unresolved = { outcode: null, covered: [], upside: null };
-    const outcode = parseOutcode(radiusPostcode);
-    if (!outcode) return unresolved;
-    const centre = outcodeCentroid(outcode);
-    if (!centre) return unresolved;
-
-    const { covered, upside } = resolveRadius(
-      geoFeatures,
-      centre,
-      radiusMiles,
-      props.volume,
-      {
-        minBedrooms: bedroomInputValue(minBeds),
-        maxBedrooms: bedroomInputValue(maxBeds),
-      },
-      props.contention
-    );
-    return { outcode, covered, upside };
-  }, [
-    locationMode,
-    geoFeatures,
-    radiusPostcode,
-    radiusMiles,
-    minBeds,
-    maxBeds,
-    props.volume,
-    props.contention,
-  ]);
+  // The two fetches, the debounce and the memos live in useRadiusSearch; the
+  // rules live in parseRadiusCentre/resolveRadius, which are plain functions.
+  // ⚠️ `enabled` is passed from here on purpose — §28.6 records a geojson
+  // fetch that ran for every visitor because its gate lived inside and named
+  // the wrong thing.
+  const radiusBedrooms = useMemo(
+    () => ({
+      minBedrooms: bedroomInputValue(minBeds),
+      maxBedrooms: bedroomInputValue(maxBeds),
+    }),
+    [minBeds, maxBeds]
+  );
+  const {
+    resolution: radius,
+    features: geoFeatures,
+    loading: radiusLoading,
+    failed: geoFailed,
+  } = useRadiusSearch({
+    enabled: locationMode === "radius",
+    query: radiusQuery,
+    miles: radiusMiles,
+    volume: props.volume,
+    bedrooms: radiusBedrooms,
+    contention: props.contention,
+  });
 
   // The rule lives in radiusSearch.ts so it can be unit-tested directly; the
   // reasoning is in its docstring.
-  const { empty: radiusEmpty, areaUncovered: radiusAreaUncovered } = radiusCoverage({
+  const {
+    empty: radiusEmpty,
+    areaUncovered: radiusAreaUncovered,
+    unresolved: radiusUnresolved,
+  } = radiusCoverage({
     isRadiusMode: locationMode === "radius",
-    resolvedOutcode: radius?.outcode ?? null,
+    resolvedOutcode: radius?.centre?.outcode ?? null,
     covered: radius?.covered ?? [],
     knownAreas: geoFeatures?.map((f) => f.properties.area) ?? null,
   });
   const blocked =
     (needsAcknowledgement && !acknowledgedForecast) ||
     (forecast.requiresExtraConfirm && !acknowledgedPoorValue) ||
-    radiusEmpty;
+    radiusEmpty ||
+    radiusUnresolved;
 
   // In radius mode the covered areas ARE the selection, so the map, the
   // prediction, the consent gate and apply all run off the same state as
   // hand-picking. Keyed on the joined list to avoid a re-render loop.
   const coveredKey =
-    radius && radius.outcode !== null ? radius.covered.join(",") : null;
+    radius && radius.centre !== null ? radius.covered.join(",") : null;
   useEffect(() => {
     if (locationMode !== "radius" || coveredKey === null) return;
     setSelectedAreas((prev) =>
@@ -417,15 +400,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     // The radius details are recorded only when the selection genuinely came
     // from a resolved radius search — admin reads them to see what the
     // customer asked for. Routing reads the areas either way.
-    const fromRadius =
-      locationMode === "radius" && radius != null && radius.outcode !== null;
+    const fromRadius = locationMode === "radius" && radius?.centre != null;
+    const centre = fromRadius ? radius!.centre! : null;
     const ok = await post({
       action: "apply",
       areas: selectedAreas,
       min_bedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       max_bedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
       selection_mode: fromRadius ? "radius" : "areas",
-      radius_outcode: fromRadius ? radius.outcode : null,
+      radius_outcode: centre ? centre.outcode : null,
+      radius_place: centre && centre.kind === "place" ? centre.name : null,
       radius_miles: fromRadius ? radiusMiles : null,
       acknowledge_forecast: acknowledgedForecast,
       // Sent in the SAME request as the acknowledgement and the quoted figure,
@@ -670,7 +654,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               <p className="text-xs text-muted-foreground">
                 {locationMode === "areas"
                   ? "Choose the postcode areas you want leads from. Leave all unchecked to accept any location."
-                  : "Enter your business postcode and how far you're willing to travel — we'll work out which postcode areas that covers."}
+                  : "Enter your postcode or a nearby town, and how far you're willing to travel — we'll work out which postcode areas that covers."}
               </p>
               {props.volumeUnavailable ? (
                 <p className="mt-2 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -707,12 +691,12 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                   {locationMode === "radius" && (
                     <RadiusControls
                       idPrefix={product}
-                      postcode={radiusPostcode}
+                      query={radiusQuery}
                       miles={radiusMiles}
-                      onPostcodeChange={setRadiusPostcode}
+                      onQueryChange={setRadiusQuery}
                       onMilesChange={setRadiusMiles}
                       geoFailed={geoFailed}
-                      geoLoading={!geoFeatures}
+                      loading={radiusLoading}
                       resolution={radius}
                       coverageUnavailable={radiusAreaUncovered}
                     />

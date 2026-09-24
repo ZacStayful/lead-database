@@ -16941,3 +16941,348 @@ a BT postcode in radius mode and confirm Apply is blocked with the "we don't
 cover there" wording rather than "widen"; set 50 miles and confirm no widening
 prompt appears; and open `/dashboard/topup` as a filtered customer under plan
 and confirm the amber block sits above the buy button.
+
+---
+
+## 67. A radius around a town, and out to 100 miles *(0157)*
+
+`/dashboard/filtering` and the public `LeadEstimator` both offer a radius mode:
+type a postcode, pick a distance, and we resolve that circle to the postcode
+**areas** it touches. That resolved area list is what gets saved — radius is a
+*selector*, not a different filter, because routing only ever matches
+`filter_areas`.
+
+Two gaps. **The centre had to be a postcode** — `parseOutcode` is a membership
+test against `OUTCODE_CENTROIDS`, so "Salisbury" resolved to nothing and the
+customer was told we don't recognise that postcode, while operators think in
+towns. And **the distance stopped at 50 miles**, from a hard-coded literal.
+
+⚠️ **Baseline, measured before anything was built: of 58 customers, exactly
+ONE has ever used radius mode** (25 miles, management); 7 hand-pick areas and
+50 have no mode recorded. This is a feature almost nobody reaches for — which
+is the reason to change it, and the number to judge it against afterwards.
+
+### 67.1 — A vendored gazetteer, not a geocoding API
+
+`public/data/uk-places.json` · `scripts/generate-uk-places.mjs` ·
+`npm run gen:places`.
+
+The estimator is a public marketing page: a third-party call per keystroke is
+a privacy and reliability problem, and this repo has no geo API, no geo env var
+and no `.env.local`. The precedent is already here twice — `src/lib/outcodes.ts`
+is 2,856 vendored centroids with its provenance in the header, and
+`scripts/fetch-ad-fonts.mjs` is the "committed bytes need a committed recipe"
+rule (§65).
+
+Source: **GeoNames `GB.zip`, CC BY 4.0 — attribution is required**, and it
+lives in the output's own `source` field so a commit that shrinks the payload
+cannot quietly drop it.
+
+| | |
+|---|---|
+| feature class `P` with a population, inside a postcode area | **6,222** |
+| distinct names | 6,003 (**181** of them shared, 219 extra entries) |
+| places with no outcode candidate in their own area | **0** |
+| outcodes failing the server's `/^[A-Z]{1,2}\d[A-Z0-9]?$/` | **0** |
+| names containing a digit | **0** |
+| names with non-ASCII | **2** — `Bo’ness`, `Redmarley D’Abitot` |
+| outcode distance | mean 3.68 km, median 3.11, p95 9.02, **max 30.68** |
+| size | **246 KB raw, 98 KB gzip** |
+
+⚠️ **THE ZIP CANNOT BE READ FROM ITS LOCAL FILE HEADER, and getting it wrong
+writes an EMPTY GAZETTEER SUCCESSFULLY.** `GB.zip` sets general-purpose bit 3
+— verified on the live download, flags `0x808` — so every local header reports
+compressed size 0 and uncompressed size 0, with the real figures in a trailing
+data descriptor. A local-header reader inflates nothing and reports success.
+The first entry is also `readme.txt`, not `GB.txt`, so "take the first entry"
+is wrong twice over. The script scans back for the EOCD and reads the central
+directory, whose sizes ARE correct. The CLI `unzip` handles this; hand-rolled
+Node does not.
+
+⚠️ **The outcode is the nearest centroid WITHIN the place's own postcode
+area**, not the nearest overall. Unconstrained it lands in a different area for
+roughly 3% of places, which would put "Salisbury (BA12)" in front of a
+customer. Constrained: 0 mismatches, 0 places with no candidate, for five
+hundredths of a kilometre on the mean.
+
+⚠️ **Sorted by codepoint, never `localeCompare`** — ICU ordering is
+version-dependent, which makes "deterministic output" machine-dependent and the
+drift test unreproducible.
+
+⚠️ **Places outside any postcode area are DROPPED** — Northern Ireland and
+offshore. `OUTCODE_CENTROIDS` holds 80 `BT` outcodes and the boundary file has
+**no BT feature**, so a Belfast centre resolves to zero areas. Dropping them
+makes §66.2's "anywhere" trap unreachable through the town path rather than
+merely guarded.
+
+⚠️ **A `--check` re-derivation does NOT gate the build.** GeoNames republishes
+weekly, so it would fail on an unrelated Tuesday. `ukPlaces.test.ts` asserts
+invariants over the **committed file** instead — and re-checks every place's
+position with the **real** `distanceToAreaKm`, which is the only reason the
+`.mjs` script is allowed to restate the ray-cast at all.
+
+### 67.2 — The lookup, and the disambiguator that must not be a city
+
+`src/lib/places.ts` is pure and **takes the loaded array as an argument**,
+exactly as `areasWithinRadius(features, …)` does. That is what keeps 250 KB out
+of the landing pages' first-load JS *and* the ranking inside vitest.
+
+Four tiers: an exact name ≻ a whole-name prefix ≻ any TOKEN's prefix ≻ anywhere
+in the name; population descending within each.
+
+⚠️ **THE DISAMBIGUATOR IS THE BARE OUTCODE, NEVER `cityForArea`.** Newport on
+the Isle of Wight is `PO30`, and `cityForArea("PO")` is **"Portsmouth"** — so
+an area label would read *"Newport (PO30 — Portsmouth)"*, which is simply
+wrong. The six Newports land on six distinct outcodes (NP20, PO30, TF10, CB11,
+HU15, SA42), so the outcode separates them on its own. ⚠️ And do not reach for
+`extractCity()` either — §40.14 measured it wrong on the commonest UK address
+shape and banned it from three surfaces.
+
+⚠️ **Apostrophes are the load-bearing normalisation, not accents.** Exactly two
+of the 6,222 names are non-ASCII and both are typographic apostrophes, so
+`Bo’ness`, `Bo'ness` and `Boness` must collide. ⚠️ **Spaces are collapsed and
+never removed** — removing them collides "Newport" with "New Port" and wrecks
+prefix ranking. `saint` → `st`, because GeoNames spells them out ("Saint
+Andrews") and nobody types that.
+
+`exactPlaces()` is separate from `searchPlaces()` **because the resolver needs
+a different answer from the dropdown** — see 67.3.
+
+### 67.3 — One box, and the two things it must never do
+
+`parseRadiusCentre(raw, index)` returns `{ centre, suggestions,
+looksLikePostcode }`; `resolveRadius(features, …)` answers the geojson half.
+
+⚠️ **POSTCODE IS TRIED FIRST, AND THE RULE IS UNAMBIGUOUS BY CONSTRUCTION:**
+`parseOutcode` only succeeds against the 2,856 known outcodes, every one
+contains a digit, and **no place name in the gazetteer contains one** (0 of
+6,222, asserted). So a town can never be swallowed by the postcode branch and
+there is no ordering hazard to reason about.
+
+⚠️ **IT NEVER AUTO-PICKS THE TOP HIT WHILE SOMEBODY IS TYPING.** "New"
+resolving to Newcastle would redraw a coverage paragraph mid-word and, on the
+dashboard, rewrite the saved area selection. A name resolves only when it
+matches **exactly** and matches exactly **one** place — so "Salisbury" typed in
+full just works, and "Newport" offers a choice. ⚠️ The case that separates
+`exactPlaces` from `searchPlaces` is not "New", which has six hits either way:
+it is **"Salisb", which has exactly ONE**, so resolving on the search would
+silently centre the circle six letters into a word.
+
+⚠️ **`RadiusResolution.outcode` was replaced by `centre`.** That field carried
+two meanings — *did this resolve* and *the value to POST* — and the town branch
+would have inherited the conflation, with a place resolving but having no
+separate name to persist.
+
+⚠️ **`looksLikePostcode` is a digit test, and it is honest for the same
+reason.** "We don't recognise that postcode — try just its first half" is
+nonsense for a town, and "try a nearby town" is nonsense for a postcode. It is
+decided once, in the resolver, so the component picks copy from a boolean
+rather than re-deriving the rule.
+
+### 67.4 — Two fetches, and the gate that stays at the call site
+
+`useRadiusSearch` owns both fetches, the debounce and the memos. ⚠️ **It
+contains no decisions**: `vitest.config.mts` is PURE UNITS ONLY — no React — so
+anything branching in there is a branch no test can reach.
+
+⚠️ **TWO FETCHES, NOT ONE**, because the gazetteer is ~250 KB and the boundary
+file ~562 KB. Splitting lets the town dropdown work while the boundaries are
+still in flight; one combined load makes the box do nothing for the best part
+of a megabyte.
+
+⚠️ **`enabled` is the CALLER'S gate, passed in.** §28.6 records a geojson fetch
+that fired for every visitor to both landing pages because its gate read
+`mode !== "radius"` and radius is the **default** mode — a mount-time cost with
+no network request to see in devtools. The dashboard passes
+`locationMode === "radius"`, the estimator passes its own `wantsGeo`, and both
+stay visible where they are written. There are two files now, so an ungated
+fetch is that bug twice; `radiusGuards.test.ts` pins both early returns
+literally, because no behavioural test here can reach an effect.
+
+**Debounced on the resolve, not on the suggestions.** Suggestions are one pass
+over a prebuilt index (~1 ms) and must feel instant; the resolve costs a
+boundary scan per widening step and redraws the coverage paragraph, the map and
+the area selection. Typing "Salisbury" goes from nine resolves to one.
+
+### 67.5 — 10 to 100, and what that costs
+
+`RADIUS_MILE_OPTIONS` is `[10, 20 … 100]`, `RADIUS_DEFAULT_MILES` is 20, and
+`wideningStepsFrom` caps at **three** steps.
+
+⚠️ **DROPPING 5 MILES IS A REAL REGRESSION FOR DENSE-URBAN OPERATORS**, taken
+knowingly. From EC1 a 10-mile circle already returns **19** postcode areas, so
+there is no longer a precise setting for inside London. One entry to add back
+if it ever costs a sale.
+
+⚠️ **The three-step cap only started earning its keep at this scale.** From 10
+miles there are nine larger options, and naming the ninety-mile jump when ten
+would do buys volume the operator cannot service — which is the argument
+`resolveRadius`'s own docstring already made while a six-long literal above it
+contradicted it. §66.4 deliberately shipped the clamp WITHOUT the cap, because
+that was a bug fix and this is a product decision.
+
+**Cost is flat in radius** — one scan is ~1.9 ms at 10 miles and at 100. The
+expense is passes × keystrokes, which is what the debounce addresses.
+
+⚠️ **Above ~40 areas the caveat becomes the main fact.** 100 miles from
+Northampton touches **78 of ~120** areas; a Salisbury customer at that radius
+receives PL, TQ, SA, LE and SS. So the coverage list truncates at 8 with the
+rest behind a disclosure (a plain `.join(", ")` at 78 is a ~1,900-character
+paragraph), and past `NEAR_NATIONAL_AREAS` a second sentence says so outright.
+
+⚠️ **A 100-mile filter is barely a filter, and the route applies NO cap on
+`areas.length`.** Whether a near-national filter should interact differently
+with contention and allocation pricing is a business question this change makes
+reachable in two clicks.
+
+### 67.6 — The box itself
+
+- Label **"Your postcode or town"**, placeholder `e.g. SP1 or Salisbury`.
+- ⚠️ **`autoComplete="postal-code"` had to go.** On a box that now takes town
+  names Chrome offers the saved postcode over our list and can overwrite a
+  half-typed name. Replaced with `off` plus combobox roles.
+- Keyboard handling **mirrors `CommandPalette` rather than inventing**: cursor
+  reset per keystroke, clamped arrows with `preventDefault`, Enter picks,
+  `onMouseEnter` moves. Escape closes without clearing.
+- ⚠️ Picking writes the **canonical name**, not the label: the box is a search
+  box, and putting "Newport (NP20)" in it makes the next keystroke unparseable.
+- **Four failure states now, and the fourth is not an error** — the "which one
+  did you mean" prompt above an ambiguous dropdown is neutral, never amber.
+
+### 67.7 — What 0157 persists, and what it deliberately does not
+
+`filter_radius_place` and its `gr_` mirror (invariant 6), nullable, additive,
+length 1–120. **Metadata only**, exactly as 0094's header says: routing matches
+on `filter_areas`, which the radius resolves to before anything is saved.
+
+Without it `filterKindLabel` reads *"Radius: 20 mi from SP1"* for a search the
+customer made by typing Salisbury, which answers a different question from the
+one admin is asking. It now reads **"Radius: 20 mi from Salisbury (SP1)"**,
+falling back to the bare outcode for every radius filter set before 0157.
+
+⚠️ **The route keeps the name only when the OUTCODE was also accepted.** A
+place surviving a rejected outcode renders "from Salisbury (null)".
+
+⚠️ **Deliberately NOT cleared by `execute_filter_lift`**, for 0094's reason:
+that would mean a `create or replace` of a privileged function for a metadata
+nicety (the §11 ACL trap). Readers must only consult these columns while the
+filter is `active` or `pending_lift`.
+
+⚠️ **The longest real name is 27 characters** ("Knightsbridge and
+Belgravia"), so 120 is generous and still bounded — and the CHECK is not
+decoration: `filterKindLabel` renders this straight into an admin table cell
+and the apply route takes it from the browser.
+
+### 67.8 — §66.2's fix was incomplete, and this closes the rest
+
+⚠️ `radiusCoverage`'s `empty` only fires once a centre **has** resolved. With
+nothing typed yet, or while the 562 KB boundary file is still in flight,
+`covered` is `[]`, nothing was blocked, and Apply wrote the same "anywhere"
+filter. `unresolved` is that wider door, found by rewiring this code rather
+than by a test.
+
+⚠️ **An empty area list is NOT wrong in itself** — a bedroom-only filter is a
+real thing a customer has today (0 areas, 2+ beds). It is wrong when they asked
+for a RADIUS and got nothing, which is why it is scoped to radius mode and
+hand-picking is never gated by it.
+
+### 67.9 — Known, stated, and reversible in a line each
+
+- **The panel never rehydrates a saved radius.** `radiusMiles` is only ever
+  `useState(RADIUS_DEFAULT_MILES)` and `locationMode` only ever
+  `useState("areas")`, so a customer who saved 25 miles returns to a
+  hand-picked view at 20. Out of scope by decision. ⚠️ **If it is ever added it
+  must snap to the nearest `RADIUS_MILE_OPTIONS` value**, or a stored 25
+  renders an `<option>`-less select — the defect §66.4 exists to prevent,
+  arriving from the other direction.
+- ⚠️ **`geoRadius.ts` computes its `cos(lat)` longitude scale ONCE, from the
+  centre's latitude.** Over 50 miles that is ~1.5% east–west error; over 100 it
+  is ~3%, so an area whose nearest boundary sits around 97–103 miles may fall
+  either side. Invisible in a whole-area filter and not worth geodesic maths —
+  but the file header claimed the approximation was "exact enough at
+  radius-search distances", written when the maximum was 50.
+- **181 ambiguous names** are handled by the outcode label and the
+  refuse-to-choose rule; somebody who types "Newport" and never picks gets no
+  resolution rather than a wrong one.
+- **GeoNames coordinate precision is uneven** — "St Albans" ships on a
+  1/3-degree grid, ~1–2 km off. Fine for radius placement; the 35 km assertion
+  catches anything genuinely wrong.
+- **No cron regenerates the gazetteer.** UK towns do not move; the generator's
+  printed counts are the tripwire.
+- **The revenue layer is NOT here.** Phase 2 of the plan (filtering on the
+  lead's projected gross) is a separate change with its own migration.
+
+### Verification
+
+**2,842 vitest cases green**, `npx tsc --noEmit` clean, `npm run lint` clean
+bar the four pre-existing `no-assign-module-variable` warnings.
+
+⚠️ **Twenty-six mutations run across the gazetteer, the lookup and the
+resolver. Twenty-four caught.** The two that were not are recorded at the line
+rather than pretended to be load-bearing: removing the generator's
+`name|outcode` dedupe (GeoNames yields no duplicate pairs today, so it is
+behaviour-preserving on this source) and removing the hook's `if (!enabled)
+return null` (both fetches early-return anyway, so the memo would answer
+`UNRESOLVED_RADIUS` instead of `null` and every consumer is gated on its own
+mode).
+
+⚠️ **Four assertions had to be rewritten, and each failure is the point:**
+
+- *"an exact name outranks a longer one starting the same way"* used
+  **"Newcastle", which has no exact entry** — Emlyn, under Lyme, upon Tyne and
+  Newcastleton. It now uses Burton (4,106) against Burton upon Trent (122,199).
+- *"finds a place by a token in the middle of its name"* used "trent", which
+  the **substring** tier catches too, so deleting the token tier entirely left
+  it green. Only a query where the tiers disagree pins it: "ham" puts West Ham
+  (15,551, a whole word) above Birmingham (1,157,603, a letter run).
+- *"never auto-picks mid-word"* used "New" (six hits either way) and could not
+  see a resolver that used `searchPlaces`. **"Salisb" has exactly one hit** and
+  does.
+- *"the large majority are within 5 km"* guessed 80% and it is **72.5%**. It
+  now asserts the median, p95 and max the generator itself prints, so the test
+  and the generator agree on what good looks like.
+
+`filterKindLabel` had **no test at all**, which a mutation found.
+
+**Not exercised in a browser.** A Vercel preview cannot do it — Deployment
+Protection answers 302 to `vercel.com/sso-api` (§45, §46) — and a preview runs
+against **production** Supabase (§1.1). After merge, on `leads.stayful.co.uk`:
+
+- on `/` and `/guaranteed-rent` with Network open: **zero requests for
+  `uk-places.json` or the geojson on load; both after the first keystroke** —
+  the §28.6 invariant, and the only reason that section exists
+- "Salisbury" resolves alone · "Newport" gives six with NP20 first · "SP1"
+  gives no dropdown · "Bo'ness" and "Boness" both match · "Zzz" gives the place
+  copy and "ZZ99" the postcode copy
+- 100 miles from Northampton: 78 areas, truncated, with the near-national
+  caveat and no widening prompt
+- a BT postcode: Apply blocked with "we don't cover that part of the UK yet",
+  not "widen"
+- apply a town filter, then check `/admin/customers` reads **"Radius: 20 mi
+  from Salisbury (SP1)"**
+
+### Deployment order — migration BEFORE code
+
+✅ **0157 applied to `znlfwbnvhlacwzgfalcf` on 2026-09-24, before the pull
+request merged** (§1.1), and verified there rather than trusted.
+
+- **No collision** on either column or either constraint beforehand.
+- **Post-apply**: both columns and both CHECKs present; 61 customers, 13
+  filtered, **0 rows carrying a place** — inert exactly as designed.
+- **Nothing moved.** A fingerprint of every customer's filter state — status,
+  areas, selection mode, radius outcode, radius miles, expected leads, and the
+  four `gr_` mirrors — is byte-identical before and after
+  (`dbb7616dadc6db2d95c6f212df880926`).
+- Both CHECKs were then exercised **on production**, inside a block that raises
+  at the end so every write rolled back: null, 1 character, 120 characters and
+  a real town name accepted on both columns; an empty string and 121 characters
+  refused on both. The row counts and the fingerprint afterwards confirm it
+  wrote nothing.
+- `get_advisors` reports **no new finding** — the 58 deny-all tables, the five
+  mutable-`search_path` functions, the five `authenticated`-executable
+  `SECURITY DEFINER` functions and the two auth warnings are all pre-existing.
+
+It is additive and inert: both columns are nullable, nothing reads them until
+the code ships, and nothing here touches a balance, counter, pacing or capacity
+column. Code arriving first would write `filter_radius_place` into a column
+that does not exist and fail every filter apply.

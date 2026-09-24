@@ -21,7 +21,7 @@ describe("radiusCoverage", () => {
         covered: [],
         knownAreas: GB_AREAS,
       })
-    ).toEqual({ empty: false, areaUncovered: false });
+    ).toEqual({ empty: false, areaUncovered: false, unresolved: false });
   });
 
   it("is quiet until a postcode actually resolves", () => {
@@ -45,7 +45,7 @@ describe("radiusCoverage", () => {
         covered: ["BS", "BA"],
         knownAreas: GB_AREAS,
       })
-    ).toEqual({ empty: false, areaUncovered: false });
+    ).toEqual({ empty: false, areaUncovered: false, unresolved: false });
   });
 
   it("flags a resolved circle that covers nothing", () => {
@@ -57,7 +57,7 @@ describe("radiusCoverage", () => {
         covered: [],
         knownAreas: GB_AREAS,
       })
-    ).toEqual({ empty: true, areaUncovered: false });
+    ).toEqual({ empty: true, areaUncovered: false, unresolved: false });
   });
 
   it("⚠️ separates a Northern Ireland postcode from a too-tight circle", () => {
@@ -71,7 +71,7 @@ describe("radiusCoverage", () => {
         covered: [],
         knownAreas: GB_AREAS,
       })
-    ).toEqual({ empty: true, areaUncovered: true });
+    ).toEqual({ empty: true, areaUncovered: true, unresolved: false });
   });
 
   it("does not claim we lack coverage while the boundaries are still loading", () => {
@@ -84,7 +84,7 @@ describe("radiusCoverage", () => {
         covered: [],
         knownAreas: null,
       })
-    ).toEqual({ empty: true, areaUncovered: false });
+    ).toEqual({ empty: true, areaUncovered: false, unresolved: false });
   });
 
   it("takes the area off one- and two-letter outcodes alike", () => {
@@ -141,5 +141,55 @@ describe("the panel actually gates on it", () => {
 
   it("tells the customer which of the two situations they are in", () => {
     expect(panel).toContain("coverageUnavailable={radiusAreaUncovered}");
+  });
+
+  it("⚠️ flags radius mode with nothing resolved — the wider door", () => {
+    // `empty` only fires once a centre HAS resolved, so with nothing typed —
+    // or while the 562 KB boundary file is still in flight — covered is [],
+    // nothing was blocked, and Apply wrote the same "anywhere" filter. The
+    // first cut of this fix closed one of the two.
+    expect(
+      radiusCoverage({
+        isRadiusMode: true,
+        resolvedOutcode: null,
+        covered: [],
+        knownAreas: GB_AREAS,
+      })
+    ).toEqual({ empty: false, areaUncovered: false, unresolved: true });
+  });
+
+  it("flags it while the boundaries are still loading too", () => {
+    expect(
+      radiusCoverage({
+        isRadiusMode: true,
+        resolvedOutcode: null,
+        covered: [],
+        knownAreas: null,
+      }).unresolved
+    ).toBe(true);
+  });
+
+  it("⚠️ never flags unresolved while hand-picking", () => {
+    // An empty area list is a legitimate bedroom-only filter — a real
+    // customer has one today — so this must only ever gate radius mode.
+    expect(
+      radiusCoverage({
+        isRadiusMode: false,
+        resolvedOutcode: null,
+        covered: [],
+        knownAreas: GB_AREAS,
+      }).unresolved
+    ).toBe(false);
+  });
+
+  it("stops flagging it once the circle resolves to areas", () => {
+    expect(
+      radiusCoverage({
+        isRadiusMode: true,
+        resolvedOutcode: "BS1",
+        covered: ["BS"],
+        knownAreas: GB_AREAS,
+      }).unresolved
+    ).toBe(false);
   });
 });

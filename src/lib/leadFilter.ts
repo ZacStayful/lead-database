@@ -33,6 +33,8 @@ export interface LeadFilterView {
   /** Radius details, only meaningful when selectionMode is "radius". */
   radiusOutcode: string | null;
   radiusMiles: number | null;
+  /** The town it was centred on (0157), when a name was typed rather than a postcode. */
+  radiusPlace: string | null;
   /**
    * The volume forecast the customer was SHOWN (0098, renamed 0100) — not what
    * today's volumes would quote. The two drift as ingest moves, and admin needs
@@ -79,6 +81,7 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.filter_selection_mode ?? null,
       radiusOutcode: customer.filter_radius_outcode ?? null,
       radiusMiles: customer.filter_radius_miles ?? null,
+      radiusPlace: customer.filter_radius_place ?? null,
       expectedLeads: customer.filter_expected_leads ?? null,
       forecastCostPerLeadPence:
         customer.filter_forecast_cost_per_lead_pence ?? null,
@@ -99,6 +102,7 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       selectionMode: customer.gr_filter_selection_mode ?? null,
       radiusOutcode: customer.gr_filter_radius_outcode ?? null,
       radiusMiles: customer.gr_filter_radius_miles ?? null,
+      radiusPlace: customer.gr_filter_radius_place ?? null,
       expectedLeads: customer.gr_filter_expected_leads ?? null,
       forecastCostPerLeadPence:
         customer.gr_filter_forecast_cost_per_lead_pence ?? null,
@@ -176,7 +180,14 @@ export function filterSummary(f: LeadFilterView, maxAreas = 3): string {
  */
 export function filterKindLabel(f: LeadFilterView): string {
   if (f.selectionMode === "radius" && f.radiusOutcode && f.radiusMiles) {
-    return `Radius: ${f.radiusMiles} mi from ${f.radiusOutcode}`;
+    // ⚠️ The town when we have it, because that is what the customer typed —
+    // "Radius: 20 mi from SP1" for a search made by typing Salisbury answers a
+    // different question from the one admin is asking. Falls back to the bare
+    // outcode, which is every radius filter set before 0157.
+    const from = f.radiusPlace
+      ? `${f.radiusPlace} (${f.radiusOutcode})`
+      : f.radiusOutcode;
+    return `Radius: ${f.radiusMiles} mi from ${from}`;
   }
   return "Hand-picked areas";
 }

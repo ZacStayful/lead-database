@@ -134,6 +134,9 @@ export interface Customer {
   filter_selection_mode: "areas" | "radius" | string | null;
   filter_radius_outcode: string | null;
   filter_radius_miles: number | null;
+  // The town it was centred on, when they typed a name rather than a postcode
+  // (0157). Null means the centre WAS a postcode.
+  filter_radius_place: string | null;
   // The volume forecast the customer was shown and acknowledged (0098, renamed
   // 0100). Derived only by filterForecast.ts and, like the columns above,
   // meaningful only while filter_status is 'active' or 'pending_lift'.
@@ -161,6 +164,7 @@ export interface Customer {
   gr_filter_selection_mode: "areas" | "radius" | string | null;
   gr_filter_radius_outcode: string | null;
   gr_filter_radius_miles: number | null;
+  gr_filter_radius_place: string | null;
   gr_filter_expected_leads: number | null;
   gr_filter_forecast_estimate: number | null;
   gr_filter_forecast_likelihood_pct: number | null;
