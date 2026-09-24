@@ -1,3 +1,4 @@
+import { requestCache } from "@/lib/requestCache";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -12,8 +13,22 @@ export function isAdminUser(user: User | null): boolean {
   return (user.app_metadata?.role as string | undefined) === "admin";
 }
 
-/** Current authenticated user, or null. */
-export async function getUser(): Promise<User | null> {
+/**
+ * Current authenticated user, or null.
+ *
+ * ⚠️ REQUEST-MEMOISED, AND THE `cache()` IS LOAD-BEARING — do not unwrap it.
+ * dashboard/layout.tsx and dashboard/page.tsx both call getCurrentCustomer(),
+ * and Next renders a layout and its page CONCURRENTLY. Without this, both
+ * reach supabase.auth.getUser() with the same expired access token, both
+ * redeem the same refresh token, GoTrue rotates it for the winner and rejects
+ * the loser with `refresh_token_already_used` — and the catch below turns that
+ * into "signed out", bouncing a signed-in customer to /login at random.
+ * Production carried exactly that on /dashboard as late as 2026-09-22, four
+ * days after the catch shipped: catching harder cannot fix a race, only
+ * calling once can. It also halves the auth calls and `customers` reads on
+ * every one of the 31 dashboard routes that resolve identity this way.
+ */
+export const getUser = requestCache(async function getUser(): Promise<User | null> {
   const supabase = createClient();
   try {
     const {
@@ -31,7 +46,7 @@ export async function getUser(): Promise<User | null> {
     if (isAuth || code === "refresh_token_not_found") return null;
     throw err;
   }
-}
+});
 
 /**
  * The view-as cookie, honoured for an ADMIN only (§62). A non-admin carrying
@@ -71,7 +86,7 @@ export function withoutAdminClaim(user: User): User {
  * route resolves identity here, which is what makes one swap cover them all;
  * writes are refused upstream by `src/middleware.ts` before any route runs.
  */
-export async function getCurrentCustomer(): Promise<{
+export const getCurrentCustomer = requestCache(async function getCurrentCustomer(): Promise<{
   user: User | null;
   customer: Customer | null;
   viewAs: ViewAs | null;
@@ -102,4 +117,4 @@ export async function getCurrentCustomer(): Promise<{
     .maybeSingle();
 
   return { user, customer: (data as Customer | null) ?? null, viewAs: null };
-}
+});
