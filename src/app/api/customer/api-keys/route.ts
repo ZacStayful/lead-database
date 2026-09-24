@@ -19,6 +19,7 @@ import { DEFAULT_SCOPES, isApiScope, type ApiScope } from "@/lib/api/scopes";
 import { MAX_KEYS_PER_CUSTOMER } from "@/lib/api/limits";
 import { holdsProduct } from "@/lib/products";
 import { sendApiKeyCreatedEmail } from "@/lib/emails/apiKeyCreated";
+import { describeError } from "@/lib/logError";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,14 +106,14 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
-  const { count, error: countError } = await admin
+  const { count, error: countError, status } = await admin
     .from("customer_api_keys")
     .select("id", { count: "exact", head: true })
     .eq("customer_id", customer.id)
     .is("revoked_at", null);
 
   if (countError) {
-    console.error("[api-keys] count failed", countError);
+    console.error("[api-keys] count failed", describeError(countError, status));
     return NextResponse.json({ error: "Could not create the key" }, { status: 500 });
   }
   if ((count ?? 0) >= MAX_KEYS_PER_CUSTOMER) {
