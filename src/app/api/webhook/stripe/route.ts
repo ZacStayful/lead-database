@@ -12,6 +12,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   applyPastDueEpisode,
+  clearWriteOffCancellation,
   mapStripeSubscriptionStatus as mapStatus,
 } from "@/lib/pastDueEpisode";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
@@ -900,7 +901,7 @@ export async function POST(request: NextRequest) {
             let { data: customer } = await admin
               .from("customers")
               .select(
-                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id, gr_lapsed_at, gr_cancelled_at"
               )
               .or(customerMatchFilter(customerId, true))
               .maybeSingle();
@@ -943,7 +944,7 @@ export async function POST(request: NextRequest) {
                   const { data: linked } = await admin
                     .from("customers")
                     .select(
-                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id"
+                "id, gr_monthly_allocation, gr_pending_monthly_allocation, gr_stripe_subscription_id, gr_lapsed_at, gr_cancelled_at"
               )
                     .eq("id", result.customerId)
                     .maybeSingle();
@@ -1083,6 +1084,16 @@ export async function POST(request: NextRequest) {
               gr_lapsed_at: null,
               updated_at: new Date().toISOString(),
             };
+            // And the cancellation date the write-off stamped — but ONLY that
+            // one: a real cancellation that preceded the lapse keeps its own
+            // date. Without this a recovered customer stays in the churn history
+            // for ever, because §70 reads gr_cancelled_at as the churn event.
+            clearWriteOffCancellation(
+              grUpdate,
+              (customer as { gr_lapsed_at?: string | null }).gr_lapsed_at,
+              (customer as { gr_cancelled_at?: string | null }).gr_cancelled_at,
+              true
+            );
             // Re-anchor the GR billing cycle to this period's start on every
             // renewal, mirroring the management handler so both products pace
             // consistently. Read the SUBSCRIPTION LINE's period, never
@@ -1134,7 +1145,7 @@ export async function POST(request: NextRequest) {
           let { data: customer } = await admin
             .from("customers")
             .select(
-              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id"
+              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id, lapsed_at, cancelled_at"
             )
             .eq("stripe_customer_id", customerId)
             .maybeSingle();
@@ -1192,7 +1203,7 @@ export async function POST(request: NextRequest) {
                 const { data: linked } = await admin
                   .from("customers")
                   .select(
-              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id"
+              "id, monthly_allocation, pending_monthly_allocation, stripe_subscription_id, lapsed_at, cancelled_at"
             )
                   .eq("id", result.customerId)
                   .maybeSingle();
@@ -1388,6 +1399,16 @@ export async function POST(request: NextRequest) {
             lapsed_at: null,
             updated_at: new Date().toISOString(),
           };
+          // And the cancellation date the write-off stamped — but ONLY that one:
+          // a real cancellation that preceded the lapse keeps its own date.
+          // Without this a recovered customer stays in the churn history for
+          // ever, because §70 reads cancelled_at as the churn event.
+          clearWriteOffCancellation(
+            renewalUpdate,
+            (customer as { lapsed_at?: string | null }).lapsed_at,
+            (customer as { cancelled_at?: string | null }).cancelled_at,
+            false
+          );
           // Record which subscription this invoice was for, as the GR half
           // already does. That column is what tells the NEXT invoice it is not
           // an activation — without it, a customer whose subscription.* events

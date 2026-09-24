@@ -14781,6 +14781,109 @@ is stamped once and not moved by the retry, wait past the threshold or lower
 `past_due_lapse_days`, run `?dryRun=true`, then the real run, and confirm the
 board reads Cancelled and `/admin/customers` shows them under Cancelled.
 
+### 59.9 — ⚠️ Recovery left the cancellation date behind *(no migration)*
+
+Found while checking whether §70.9's first "wiring gap" was real. **It was not**
+— see the correction there — but the check turned up a genuine bug one step
+further on, in the half of the round trip nothing had exercised.
+
+The write-off writes THREE things (59.5): `lapsed_at`, `account_status =
+'cancelled'`, and — only when it was null — `cancelled_at`. Recovery through
+`invoice.paid` cleared the first, restored the second, and **left the third set
+for ever.** So a customer whose card failed for four days and who then paid was
+permanently recorded as having cancelled on the day we gave up on them, while
+paying every month afterwards.
+
+⚠️ **WHAT THAT CORRUPTS IS THE CHURN HISTORY, SILENTLY.** `cancelled_at` is what
+§70 reads as the churn event, so a fully recovered customer appears under "Every
+departure" with a tenure and a reason and counts against the retention
+denominator. Nothing errors; the number is simply wrong, and wrong in the
+direction that makes the business look worse than it is. `previouslyHeldProduct()`
+(§32.1) reads it too, harmlessly here — they DO hold the product — which is
+exactly why nothing surfaced it.
+
+**Never fired, and it was 16 hours from firing.** The closest real episode
+(`b613ae8d`) was past due from 2026-08-29 18:13 and paid 2026-09-01 13:56 —
+2.82 days against a 3-day threshold. The 06:00 cron's cutoff would have caught
+them on the morning of 2 September; their payment landed the previous
+afternoon.
+
+`clearWriteOffCancellation()` in `pastDueEpisode.ts` is the fix, called from
+both halves of `invoice.paid` so the column rides along in the single UPDATE the
+branch already performs and can never be half-applied.
+
+⚠️ **EQUALITY WITH `lapsed_at` IS THE TEST, AND IT IS EXACT RATHER THAN CLEVER.**
+The cron writes both columns from ONE `nowIso` and writes `cancelled_at` only
+when it was already null, so:
+
+| | |
+|---|---|
+| equal | the write-off set it — undoing the write-off undoes it |
+| cancelled EARLIER | a real cancellation preceded the lapse and keeps its own date (first cancellation wins, §18) |
+| no `lapsed_at` | a real cancellation with no write-off involved |
+
+Compared as instants rather than strings, so PostgREST rendering `+00:00` where
+we wrote `Z` cannot make a genuine match look like a mismatch and quietly
+reinstate the bug.
+
+⚠️ **DO NOT "SIMPLIFY" IT TO AN UNCONDITIONAL `cancelled_at: null`.** That is the
+mirror-image corruption and the worse one: it would erase the date of every real
+cancellation on that customer's next payment, and §18E is explicit that a
+cancelled customer can be invited back and pay again while §32.1 depends on the
+date surviving exactly that.
+
+⚠️ **All four selects needed the columns, not two.** Each product has TWO
+lookups feeding the same `customer` — the primary one and the re-lookup after
+provisioning — and which runs depends on the path. Absent from either, both
+arguments arrive `undefined`, the helper no-ops, and the bug is back with every
+test green.
+
+#### Verification
+
+**3,125 vitest cases green**, 13 new. `tsc` clean, lint clean bar the four
+pre-existing `module` warnings, `npm run build` passes.
+
+⚠️ **TWELVE MUTATIONS RUN, ALL TWELVE CAUGHT** — the helper clearing
+unconditionally, dropping the equality check, comparing raw strings, writing the
+management column on the GR side; the cron stamping `cancelled_at` from a fresh
+clock or dropping its still-null guard; the webhook deleting a call, neutering
+one, passing the wrong branch's update object, nulling the column
+unconditionally, and EITHER select of EITHER product losing the columns.
+
+⚠️ **Three of those mutations were MISSED on the first run, and fixing the
+GUARDS is what this bought** — the eighth, ninth and tenth times this file has
+recorded a test written weak enough to survive the mutation it existed to catch
+(§50.9 twice, §53, §55, §57, §65, §70):
+
+- the select guard required the columns to appear ONCE where there are TWO
+  selects per product, so removing them from one slipped through — now counted;
+- the call guard counted the identifier, which a commented-out or neutered call
+  still satisfies — now pinned on the call SHAPE (each branch's own update
+  object) and on the call being a STATEMENT rather than a sub-expression.
+
+⚠️ **Not rehearsed against live Stripe**, the standing §12 item, and it cannot
+be rehearsed against history: no customer has ever been written off, so there is
+nothing to recover. Before relying on it, fail a test-mode card, let the lapse
+cron write the customer off (or lower `past_due_lapse_days` to 0), then pay and
+confirm `cancelled_at` comes back null while `account_status` returns to
+`active`. Then repeat on a customer who genuinely cancelled BEFORE going past
+due, and confirm their original date survives.
+
+#### ⚠️ Worth a decision: three days is shorter than Stripe's retry schedule
+
+Not changed here, because it is a business call rather than a bug.
+`past_due_lapse_days` is **3**, and §44.4 records Stripe Smart Retries making
+~4 attempts over **2-3 weeks** — so the write-off can fire before Stripe has
+finished trying, and before a customer who needs to phone their bank over a
+weekend has had a chance. All four real episodes recovered inside three days,
+one by 16 hours; that is four data points.
+
+What makes it survivable rather than urgent: the cron sends the customer **no
+email**, so a premature write-off is silent to them, and recovery is now
+genuinely complete with this fix. What it still costs is a Monday board flip to
+Cancelled and a released capacity slot in the interim. Raising it to 7 or 14
+days is a one-row `system_settings` edit and needs no deploy.
+
 ### Deployment order
 
 **0152 is already in production** — applied 2026-08-22 as `past_due_lapse`
@@ -18236,9 +18339,14 @@ product), not a bigger number.
 Each is a separate change with its own blast radius, and one touches the Stripe
 webhook:
 
-1. **Seven failed subscription payments exist and `past_due_since` is null on
+1. ~~**Seven failed subscription payments exist and `past_due_since` is null on
    all 62 customers.** So §59's write-off cron has never had anything to act on
-   and involuntary churn is untracked. `lapsed_at` is null everywhere.
+   and involuntary churn is untracked.~~ ⚠️ **WRONG, AND CORRECTED IN §59.9.**
+   There was no gap: every one of the seven failures PREDATES the code's deploy
+   on 2026-09-17, and all four episodes RECOVERED (1.07, 1.67, 2.17 and 2.82
+   days to the next successful payment). A null column was the correct reading
+   of a book where nothing had failed since the code went live. Investigating it
+   did turn up a real bug, but a different one — see §59.9.
 2. **`payments.lead_type` is null on 37 of 39 paid subscription rows** (above).
 3. **`subscription_cancellations` holds 4 of the 6 cancellation events** —
    portal cancellations write no row.

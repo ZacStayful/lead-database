@@ -49,6 +49,62 @@ export function applyPastDueEpisode(
 }
 
 /**
+ * Undo the CANCELLATION DATE a write-off stamped, when the write-off itself is
+ * being undone (0152, §59).
+ *
+ * THE BUG THIS EXISTS FOR. /api/cron/lapse-past-due writes three things when it
+ * writes a customer off: `lapsed_at`, `account_status = 'cancelled'`, and — only
+ * when it was null — `cancelled_at`. Recovery through invoice.paid used to clear
+ * the first and restore the second and leave the third set FOR EVER. So a
+ * customer whose card failed for four days and who then paid was permanently
+ * recorded as having cancelled on the day we gave up on them, while paying us
+ * every month afterwards.
+ *
+ * ⚠️ WHAT THAT CORRUPTS IS THE CHURN HISTORY, SILENTLY. `cancelled_at` is what
+ * /admin/retention (§70) reads as the churn event, so a fully recovered customer
+ * appeared under "Every departure" with a tenure and a reason, and counted
+ * against the retention denominator. Nothing errors; the number is just wrong,
+ * and wrong in the direction that makes the business look worse than it is.
+ * `previouslyHeldProduct()` (§32.1) also reads it, harmlessly here — they do hold
+ * the product — which is why nothing else surfaced it.
+ *
+ * ⚠️ EQUALITY WITH `lapsed_at` IS THE TEST, AND IT IS EXACT RATHER THAN CLEVER.
+ * The cron writes both columns from ONE `nowIso`, and writes `cancelled_at` only
+ * when it was already null — so:
+ *
+ *   - equal            → the write-off set it, and undoing the write-off undoes it
+ *   - cancelled earlier → a REAL cancellation preceded the lapse and keeps its
+ *                         own date (first cancellation wins, §18)
+ *   - no `lapsed_at`    → a real cancellation with no write-off involved
+ *
+ * Compared as instants, not strings, so a `+00:00` vs `Z` rendering difference
+ * cannot make a genuine match look like a mismatch and quietly reinstate the bug.
+ *
+ * ⚠️ DO NOT "SIMPLIFY" THIS TO AN UNCONDITIONAL `cancelled_at: null`. That would
+ * erase the date of every real cancellation on the customer's next payment, which
+ * is the mirror-image corruption and a far worse one: §18E is explicit that a
+ * cancelled customer can be invited back and pay again, and §32.1 depends on
+ * `cancelled_at` surviving exactly that.
+ *
+ * Mutates the caller's update object for the same reason applyPastDueEpisode
+ * does: the column rides along in the single UPDATE the branch already performs,
+ * so it can never be half-applied against the rest of the recovery.
+ */
+export function clearWriteOffCancellation(
+  update: Record<string, unknown>,
+  lapsedAt: string | null | undefined,
+  cancelledAt: string | null | undefined,
+  isGuaranteedRent: boolean
+): void {
+  if (!lapsedAt || !cancelledAt) return;
+  const lapsed = new Date(lapsedAt).getTime();
+  const cancelled = new Date(cancelledAt).getTime();
+  if (!Number.isFinite(lapsed) || !Number.isFinite(cancelled)) return;
+  if (lapsed !== cancelled) return;
+  update[isGuaranteedRent ? "gr_cancelled_at" : "cancelled_at"] = null;
+}
+
+/**
  * Map a Stripe subscription status onto our customers.subscription_status.
  *
  * `unpaid` IS A CANCELLATION, NOT A DECLINE (0152). It used to return 'past_due'
