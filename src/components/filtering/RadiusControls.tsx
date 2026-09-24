@@ -2,7 +2,10 @@
 
 import { Input } from "@/components/ui/input";
 import { cityForArea } from "@/lib/postcode";
-import type { RadiusResolution } from "@/components/filtering/radiusSearch";
+import {
+  RADIUS_MILE_OPTIONS,
+  type RadiusResolution,
+} from "@/components/filtering/radiusSearch";
 
 /**
  * Radius search: the postcode box, the distance select, and everything that
@@ -74,7 +77,7 @@ export function RadiusControls({
             onChange={(e) => onMilesChange(parseInt(e.target.value, 10))}
             className="h-10 rounded-md border-[0.5px] border-border bg-background px-3 text-sm"
           >
-            {[5, 10, 15, 20, 25, 30, 40, 50].map((m) => (
+            {RADIUS_MILE_OPTIONS.map((m) => (
               <option key={m} value={m}>
                 {m} miles
               </option>

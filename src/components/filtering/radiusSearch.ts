@@ -16,6 +16,39 @@ import { MILES_TO_KM } from "@/components/filtering/format";
  * component.
  */
 
+/**
+ * ⚠️ THE ONE LIST OF RADIUS DISTANCES. The `<select>`, the widening scan and
+ * the tests all read it, because they must agree: a widening the scan proposes
+ * has to be a setting the dropdown can actually show.
+ *
+ * It did not. The scan tried a literal `[5,10,15,20,25,30]` of EXTRA miles
+ * against this list of ABSOLUTE ones, so "Widen search" from 50 miles offered
+ * 55, 60, 65, 70, 75 or 80 — none of them an <option>, so accepting one left
+ * the select rendering with nothing selected. Not an edge case: from 30, 40 or
+ * 50 miles most of the offered steps missed, and only 40 and 50 could ever be
+ * reached by widening at all.
+ */
+export const RADIUS_MILE_OPTIONS = [5, 10, 15, 20, 25, 30, 40, 50] as const;
+
+/**
+ * The widening steps reachable from `miles` — the gap to each larger option,
+ * so every `miles + step` is itself an option. Empty at the top of the list,
+ * which is what stops an offer being made that cannot be taken.
+ *
+ * An off-list current value still widens ONTO the list (from 35: +5, +15).
+ *
+ * No cap on how many steps are scanned: today's list gives at most seven and
+ * the scan is ~1.9 ms a pass. `resolveRadius`'s docstring argues for offering
+ * the SMALLEST gaining step, and it already does that by stopping at the first
+ * one — capping the tail as well is a product decision about how far to look,
+ * not part of this fix.
+ */
+export function wideningStepsFrom(miles: number): number[] {
+  const next = RADIUS_MILE_OPTIONS.findIndex((m) => m > miles);
+  if (next < 0) return [];
+  return RADIUS_MILE_OPTIONS.slice(next).map((m) => m - miles);
+}
+
 export interface RadiusUpside {
   extraMiles: number;
   newAreas: string[];
@@ -27,7 +60,7 @@ export interface RadiusResolution {
   outcode: string | null;
   /** Postcode areas the circle touches, closest first. */
   covered: string[];
-  /** The first widening that adds volume, or null if none within 30 miles. */
+  /** The first widening that adds volume, or null if no larger option gains any. */
   upside: RadiusUpside | null;
 }
 
@@ -63,7 +96,7 @@ export function resolveRadius(
     contention
   );
 
-  for (const extra of [5, 10, 15, 20, 25, 30]) {
+  for (const extra of wideningStepsFrom(miles)) {
     const wider = areasWithinRadius(
       features,
       centre,
