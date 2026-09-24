@@ -128,6 +128,27 @@ describe("one list, one box", () => {
     expect(src).toContain("areas.head.join");
   });
 
+  it("⚠️ nothing block-level is nested inside a <p>", () => {
+    // <p> takes phrasing content only. The disclosure was first written as a
+    // <details>, which a browser auto-closes the <p> to escape — so the rest
+    // of the sentence lands OUTSIDE the paragraph and a server-rendered page
+    // then hydrates against a DOM React did not build. tsc is happy, the pure
+    // unit suite cannot render, and only a browser shows it. This is the one
+    // reachable assertion.
+    const src = source(CONTROLS);
+    const BLOCK = /<(details|div|ul|ol|li|section|table|h[1-6])\b/;
+    let from = 0;
+    for (;;) {
+      const open = src.indexOf("<p ", from);
+      if (open < 0) break;
+      const close = src.indexOf("</p>", open);
+      expect(close).toBeGreaterThan(open);
+      const inner = src.slice(open, close);
+      expect(BLOCK.test(inner), `block element inside <p>: ${inner.slice(0, 160)}`).toBe(false);
+      from = close + 4;
+    }
+  });
+
   it("the panel blocks Apply on an unresolved radius as well as an empty one", () => {
     const src = source(PANEL);
     expect(src).toContain("radiusEmpty || radiusUnresolved");

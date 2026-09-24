@@ -63,6 +63,7 @@ export function RadiusControls({
   // picks, hover moves. Escape closes without clearing what they typed.
   const [cursor, setCursor] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [showAllAreas, setShowAllAreas] = useState(false);
   useEffect(() => setCursor(0), [query]);
   useEffect(() => setDismissed(false), [query]);
   const open = suggestions.length > 0 && !dismissed;
@@ -79,6 +80,10 @@ export function RadiusControls({
   const areas = summariseAreas(resolution?.covered ?? [], (a) =>
     cityForArea(a) && cityForArea(a) !== a ? `${a} — ${cityForArea(a)}` : a
   );
+  // Collapse again whenever the circle changes: an expanded 78-area list left
+  // open across a new search is a wall of text nobody asked for twice.
+  const coveredKey = (resolution?.covered ?? []).join(",");
+  useEffect(() => setShowAllAreas(false), [coveredKey]);
 
   return (
     <div className="mt-2 space-y-3">
@@ -211,17 +216,28 @@ export function RadiusControls({
             {resolution.covered.length > 0 ? (
               <span className="font-medium">
                 {areas.head.join(", ")}
-                {areas.rest.length > 0 && (
-                  <>
-                    {" "}
-                    <details className="mt-1 inline">
-                      <summary className="cursor-pointer font-normal text-muted-foreground">
+                {areas.rest.length > 0 &&
+                  (showAllAreas ? (
+                    <>, {areas.rest.join(", ")}</>
+                  ) : (
+                    <>
+                      {" "}
+                      {/* ⚠️ A <button>, NOT a <details>. <details> is not
+                          phrasing content, so a browser auto-closes the
+                          enclosing <p> when it meets one — the rest of the
+                          sentence lands outside the paragraph, and on a
+                          server-rendered page React then hydrates against a
+                          DOM it did not build. Invisible to tsc and to a pure
+                          unit suite; only a browser shows it. */}
+                      <button
+                        type="button"
+                        onClick={() => setShowAllAreas(true)}
+                        className="font-normal text-muted-foreground underline underline-offset-2"
+                      >
                         and {areas.rest.length} more
-                      </summary>
-                      <span className="font-medium">{areas.rest.join(", ")}</span>
-                    </details>
-                  </>
-                )}
+                      </button>
+                    </>
+                  ))}
               </span>
             ) : coverageUnavailable ? (
               <span className="text-amber-600">
