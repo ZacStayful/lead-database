@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
-import { cityForArea } from "@/lib/postcode";
+import { cityForArea, postcodeArea } from "@/lib/postcode";
 import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
 import type { AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
@@ -16,7 +16,7 @@ import { VolumeBar } from "@/components/filtering/VolumeBar";
 import { AreaPicker, labelFor, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
-import { resolveRadius } from "@/components/filtering/radiusSearch";
+import { resolveRadius, radiusCoverage } from "@/components/filtering/radiusSearch";
 import {
   bedroomInputValue,
   formatPence as poundsFromPence,
@@ -204,9 +204,6 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // allocation raises no "too small" warning yet is still forecast to deliver
   // less than the plan sells, which the customer should read before applying.
   const needsAcknowledgement = forecast.offerable && forecast.reducesVolume;
-  const blocked =
-    (needsAcknowledgement && !acknowledgedForecast) ||
-    (forecast.requiresExtraConfirm && !acknowledgedPoorValue);
   // Nearest-area chips belong to hand-picking; in radius mode the "widen
   // search" line is the expansion mechanic, and a chip toggle would be undone
   // by the radius-to-selection sync anyway.
@@ -329,6 +326,19 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     props.volume,
     props.contention,
   ]);
+
+  // The rule lives in radiusSearch.ts so it can be unit-tested directly; the
+  // reasoning is in its docstring.
+  const { empty: radiusEmpty, areaUncovered: radiusAreaUncovered } = radiusCoverage({
+    isRadiusMode: locationMode === "radius",
+    resolvedOutcode: radius?.outcode ?? null,
+    covered: radius?.covered ?? [],
+    knownAreas: geoFeatures?.map((f) => f.properties.area) ?? null,
+  });
+  const blocked =
+    (needsAcknowledgement && !acknowledgedForecast) ||
+    (forecast.requiresExtraConfirm && !acknowledgedPoorValue) ||
+    radiusEmpty;
 
   // In radius mode the covered areas ARE the selection, so the map, the
   // prediction, the consent gate and apply all run off the same state as
@@ -704,6 +714,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                       geoFailed={geoFailed}
                       geoLoading={!geoFeatures}
                       resolution={radius}
+                      coverageUnavailable={radiusAreaUncovered}
                     />
                   )}
                 </>

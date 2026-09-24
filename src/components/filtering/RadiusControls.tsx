@@ -24,6 +24,7 @@ export function RadiusControls({
   geoFailed,
   geoLoading,
   resolution,
+  coverageUnavailable = false,
 }: {
   idPrefix: string;
   postcode: string;
@@ -36,6 +37,11 @@ export function RadiusControls({
   geoLoading: boolean;
   /** Null until there is something to resolve. */
   resolution: RadiusResolution | null;
+  /**
+   * The circle resolved to no areas AND we hold no boundary for that postcode
+   * area at all — so widening can never help and must not be suggested.
+   */
+  coverageUnavailable?: boolean;
 }) {
   return (
     <div className="mt-2 space-y-3">
@@ -112,9 +118,15 @@ export function RadiusControls({
                   .map((a) => cityForArea(a) ? `${a} — ${cityForArea(a)}` : a)
                   .join(", ")}
               </span>
+            ) : coverageUnavailable ? (
+              <span className="text-amber-600">
+                no postcode areas. We don&apos;t cover that part of the UK
+                yet, so a wider radius won&apos;t help — pick areas by hand,
+                or try a postcode on the mainland.
+              </span>
             ) : (
-              <span className="text-muted-foreground">
-                no postcode areas — widen the radius.
+              <span className="text-amber-600">
+                no postcode areas — widen the radius before applying.
               </span>
             )}
           </p>

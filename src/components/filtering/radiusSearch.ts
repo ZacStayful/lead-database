@@ -88,3 +88,43 @@ export function resolveRadius(
   }
   return { covered, upside: null };
 }
+
+/**
+ * Whether a resolved radius covers nothing, and whether widening could help.
+ *
+ * ⚠️ A RADIUS THAT COVERS NOTHING MUST NOT APPLY AS AN "ANYWHERE" FILTER.
+ * The chain that made it one: covered = [] -> the panel sets selectedAreas to
+ * [] -> the apply route writes filter_areas = null -> and
+ * lead_matches_customer_filter (0074) reads a null area list as MATCH EVERY
+ * AREA. With no areas the forecast also reads high, so `reducesVolume` is
+ * false and the acknowledgement gate never fired — a customer asking for a
+ * 10-mile radius could end up unfiltered.
+ *
+ * `areaUncovered` separates "this circle is empty" from "we hold no boundary
+ * for that postcode area at all". The second is reachable today with any
+ * Northern Ireland postcode — OUTCODE_CENTROIDS carries 80 BT outcodes and
+ * the boundary file has no BT feature — and for it "widen the radius" is
+ * advice that can never work.
+ *
+ * Pure so the rule is unit-tested directly rather than through a component,
+ * which `vitest.config.mts` cannot render.
+ */
+export function radiusCoverage(args: {
+  /** Radius mode only; hand-picking is never gated by this. */
+  isRadiusMode: boolean;
+  /** The outcode the typed postcode resolved to, or null if it resolved to none. */
+  resolvedOutcode: string | null;
+  covered: string[];
+  /** Postcode areas we hold a boundary for. Null while they are still loading. */
+  knownAreas: string[] | null;
+}): { empty: boolean; areaUncovered: boolean } {
+  const { isRadiusMode, resolvedOutcode, covered, knownAreas } = args;
+  // Scoped to a centre that actually RESOLVED, so an empty box or an
+  // unrecognised postcode still reads as "nothing typed yet", not an error.
+  const empty = isRadiusMode && resolvedOutcode !== null && covered.length === 0;
+  if (!empty || knownAreas === null) return { empty, areaUncovered: false };
+  const area = resolvedOutcode!.toUpperCase().match(/^[A-Z]{1,2}/)?.[0] ?? null;
+  const areaUncovered =
+    area !== null && !knownAreas.some((a) => a.toUpperCase() === area);
+  return { empty, areaUncovered };
+}
