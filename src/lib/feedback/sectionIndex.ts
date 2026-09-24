@@ -74,6 +74,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 65, title: "A chat that makes the advert", migrations: "0156" },
   { n: 66, title: "Five things that were already broken", migrations: "no migration" },
   { n: 67, title: "A radius around a town, and out to 100 miles", migrations: "0157" },
+  { n: 68, title: "Filtering on what the property is worth", migrations: "0158, 0159" },
 ];
 
 /**

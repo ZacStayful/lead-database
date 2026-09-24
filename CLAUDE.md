@@ -17309,3 +17309,407 @@ It is additive and inert: both columns are nullable, nothing reads them until
 the code ships, and nothing here touches a balance, counter, pacing or capacity
 column. Code arriving first would write `filter_radius_place` into a column
 that does not exist and fail every filter apply.
+
+---
+
+## 68. Filtering on what the property is worth *(0158, 0159)*
+
+Every management lead carries a projected **gross annual revenue** — §25 parses
+it off the Stayful property analysis into `leads.gross_annual_income` — and it
+was shown on the lead and filtered on by nothing. A customer who only wants
+properties worth £50k+ had to open every lead to find out.
+
+A third filter dimension now sits beside areas/radius and the bedroom range:
+**a minimum projected gross**, priced and forecast by §28's existing machinery
+under its existing rules, so the customer is still quoted "at least N — P%
+likely — £X a lead".
+
+`customers.filter_min_gross` · `src/lib/filterPrediction.ts` ·
+`src/components/filtering/RevenueFloor.tsx` · `POST /api/customer/filter`.
+
+### Decisions, and the one that changed on the measurements
+
+| | |
+|---|---|
+| Product | **Management only, and NO `gr_` mirror** |
+| Threshold | A fixed list of **five**: £25k · £30k · £40k · £50k · £75k. Never a free number |
+| No figure | Leads with no gross figure are **excluded** whenever a floor is set |
+| Surfaces | The dashboard **and** the public estimator |
+
+⚠️ **£100k was picked, then measured, then DROPPED — and the first argument for
+keeping it was wrong.** The reasoning offered was that £75k and £100k are "thin
+enough that the forecast will usually answer *we can't forecast this* — honest,
+and self-limiting". The second half is false:
+`src/app/api/customer/filter/route.ts` writes **null into all five forecast
+columns and the acknowledgement** whenever `!forecast.offerable`, and §39.8's
+give-back question is skipped because no forecast could be offered. So such an
+option does not decline to quote — it drops the customer into the §58.3
+null-forecast population that is already live for 5 of 12 filtered customers.
+
+The arithmetic, over a 12.1-week window against `MIN_RELIABLE_MATCHES = 5`:
+
+| floor | in window | share of the national book needed to be quotable |
+|---|---|---|
+| ≥£40k | 113 | 4.4% |
+| ≥£50k | 64 | 7.8% |
+| ≥£75k | 23 | **22%** |
+| ≥£100k | **7** | **71%** |
+
+At £100k **no area-restricted filter can ever be quotable**. ⚠️ £75k ships but
+is **national-only in practice** — any realistic three-area selection lands at
+2–3 matching leads and is unquotable. Adding £100k back is one entry in
+`GROSS_THRESHOLDS` plus the CHECK; shipping a control whose top option silently
+nulls a customer's forecast is the thing that could not be undone.
+
+### 68.1 — ⚠️ BAND-FIRST, and `areaBedCounts` is DERIVED
+
+`buildLeadVolumeAggregate` increments `areaBedCounts` and `matchableLeads`
+together, immediately after `if (!area || bed == null) continue;`.
+
+⚠️ **THAT `continue` IS THE MOST DANGEROUS LINE IN THIS CHANGE.** Adding
+`|| gross == null` to it drops the **10.6%** of management leads carrying no
+figure (**29 of 273** in the aggregate's own population) out of *every*
+forecast, including those with no floor set — silently, with nothing erroring.
+It is untouched. Only the increment below it moved:
+
+```ts
+beds[String(bed)] = (beds[String(bed)] ?? 0) + 1;
+// became
+byBand[bandFor(row.gross_annual_income)] += 1;   // bandFor(null) === "none"
+```
+
+⚠️ **A PARALLEL AGGREGATE BESIDE IT WAS THE OBVIOUS DESIGN AND IS WRONG.**
+Making the band a first-class key means `areaBedCounts` **stops being stored
+and becomes a pure accessor** (sum over every band key including `"none"`), so
+the two can never disagree — there is no second number to disagree with. Three
+reasons, the last of which kills the alternative outright:
+
+- The consistency invariant becomes **structural** rather than something to
+  assert.
+- ⚠️ **It is not assertable where it matters anyway.** `applyContention` floors
+  **per bucket** (`Math.floor(count * share)`), and independently-floored
+  quantities do not sum — so a separately stored total would be *legitimately*
+  larger than the sum of its own bands, and a customer could catch it: the same
+  selection quoting one figure by the bedroom path and a smaller one by the
+  band path at the lowest floor.
+- ⚠️ **Per-band contention (§68.3) makes it arithmetically unreconcilable**,
+  because each band then scales by a **different factor**.
+
+⚠️ **ONE PREDICATE, NO `minGross == null` BRANCH.** `allowedBands(null)` returns
+every key including `"none"`; a floor returns the numeric bands at or above it
+and excludes `"none"` and `"0"`. A branch is where the floored and unfloored
+paths drift (§28.5, §28.8) — and the unfloored path must stay byte-identical to
+before this existed.
+
+⚠️ **`"none"` and `"0"` are NOT interchangeable.** `"none"` is a lead with no
+figure; `"0"` is a real figure below the lowest threshold. An absent floor
+admits both and **any** floor excludes both — which is why
+`minGross = null` and `minGross = 25000` must produce different answers
+whenever the `"none"` bucket is non-empty. That single assertion guards the
+whole no-figure-exclusion semantic.
+
+⚠️ **Band edges ARE the threshold list, identically.** Because the floor is a
+fixed list, `>= £40k` is *exactly* the union of the bands from 40k up — zero
+approximation, agreeing with the SQL cell for cell. Enforced three ways: one
+exported constant, the SQL CHECK, and a guard asserting the migration's list
+matches it. Diverge and every floored quote is computed at the wrong edge, and
+half the directions **overstate**.
+
+`rawMatching` is added to `VolumePrediction`, purely additive: `Math.floor` on
+the total and `Math.round` on the rate erase small real gains, and anything
+ranking on `displayRate` would produce three-way 0-0-0 ties rendering as
+"nothing is costing you volume".
+
+### 68.2 — ⚠️ The public payload is VERSIONED, because the estimator is in scope
+
+`toProductVolume` reads `p.areaBedCounts ?? {}`, and its docblock says why: the
+cache row genuinely ships as `{}` (0099) and a landing page can render against
+an un-primed payload. **That deliberate default makes an OLD-SHAPE payload
+indistinguishable from an un-primed one.** Shipped without a version, every
+revenue-floored estimate on both landing pages would quote **zero** for up to
+`PUBLIC_VOLUME_STALE_AFTER_MS` (6 hours) after deploy — §58.2's exact failure,
+self-inflicted, on a marketing page, and recurring on every future shape change.
+
+`public_filter_volume.schema_version integer`, folded into the **existing
+atomic claim** so it keeps its serialising property:
+
+```ts
+.update({ generated_at: now, schema_version: PUBLIC_VOLUME_SCHEMA_VERSION })
+.eq("id", 1)
+.or(`generated_at.is.null,generated_at.lt.${staleBefore},` +
+    `schema_version.is.null,schema_version.neq.${PUBLIC_VOLUME_SCHEMA_VERSION}`)
+```
+
+⚠️ **A plain integer column, NOT a `payload->>schemaVersion` JSON path in the
+filter string** — §65.6 records that shape as "easy to reason about wrongly, and
+impossible to test without PostgREST running", and chose an RPC over it.
+
+⚠️ **The reader gets §18.3's three outcomes, never two.** `toProductVolume`
+returns `areaBedBandCounts: null` — **never `{}`** — for a payload predating the
+feature, so *"I cannot answer revenue questions"* stays distinct from *"zero
+leads clear that floor"*. `canFilterByGross` is that test, and the control
+**hides itself** rather than quoting zero. `{}` and `undefined` must never
+collapse to one number again.
+
+### 68.3 — ⚠️ Contention was revenue-blind, and this feature makes that wrong
+
+`contentionShare` was keyed by **area** only, and `fetchAreaContention` counts a
+filtered customer into every area they name. After this ships:
+
+- a £75k-floor competitor would count as a **full** competitor in an area where
+  they are eligible for ~8% of the leads, deflating everyone else's quote;
+- four customers with **disjoint** floors do not contend at all, yet would trip
+  `CONTENDED_FILTERED_CUSTOMERS = 4` and each be quoted 4/5 of the area.
+
+§28.5 states the rule: *"the estimate must agree with the router, or the number
+quoted is one the engine was never going to deliver."* The router shares a
+**specific lead** among the customers who match **that lead** — which now
+includes its revenue. So contention is per `(area, band)`.
+
+**It costs nothing in the payload**: contention is pre-applied before
+publishing, so no per-area customer count is ever exposed. And it is **inert on
+today's book** — nobody holds a floor, so every band carries the same headcount
+and every share is what it was.
+
+### 68.4 — The SQL: four bodies, and the one signature that had to change
+
+Enumerated against production from `pg_get_functiondef` rather than the
+migration files (§11's rule). **14** `public` functions reference the filter
+predicate: **10 DELEGATE** to `lead_matches_customer_filter` and inherit the
+change for free; **4 inline their own copy** and each needed editing. ⚠️
+`get_unfiltered_candidates_for_lead` is correctly **absent** — it selects
+`filter_status = 'off'` customers, who have no predicate to test. Do not
+"complete the set".
+
+| function | change |
+|---|---|
+| `lead_matches_customer_filter` | the canonical clause |
+| `get_filtered_candidates_for_lead` | its **inlined** copy (§35 explains the inlining) |
+| `releasable_filter_assignments` | its inlined copy — so a floor decides what §39 refunds |
+| `execute_filter_lift` | ⚠️ **nulls the floor with the other criteria** |
+| `release_unmatched_assignments` | reads the stored floor and passes it down |
+
+⚠️ **NULL IS NOT FALSE IN SQL.** The clause is spelt
+`(c.filter_min_gross is null or (l.gross is not null and l.gross >= c.filter_min_gross))`.
+Without the not-null guard `NULL >= 50000` is NULL, the AND chain returns NULL,
+and the function returns NULL rather than false. The two money-path callers
+`coalesce(…, false)` and the `where`-clause callers fail closed — but
+`get_swap_candidates_for_assignment` returns `matches_filter` as a **column**,
+and a NULL there renders in §34's picker as neither "Matches" nor "Outside".
+Driven on production: `none_is_null = false`.
+
+⚠️ **`execute_filter_lift` is the riskiest of the four, and 0094 declined to
+touch it** — a `create or replace` of a privileged function "for a metadata
+nicety". **A revenue floor is not metadata, it is a live predicate input**, so
+the opposite applies: forgetting it strands a floor behind a lifted filter, the
+customer's filter reads "off" everywhere, routing still excludes every lead
+under it, and **nothing errors**.
+
+⚠️ **AND ITS OVERLOAD TRAP BITES THROUGH A SECOND MECHANISM.** Its signature is
+`(p_customer_id uuid, p_lead_type lead_type DEFAULT 'management')` and
+`src/app/api/webhook/stripe/route.ts` calls it with **named args** via
+PostgREST. A defaulted third parameter makes both candidates name-compatible →
+`PGRST203 could not choose the best candidate function` → the handler logs and
+**returns**. The lift then **silently never executes**: the customer sits in
+`pending_lift` for ever, still treated as filtered, and nobody is told. No
+parameter was added.
+
+**The one signature that did change** is `releasable_filter_assignments`, which
+takes the floor being APPLIED rather than the one stored — the update has not
+run yet when the route asks. New 6-arg form with `p_min_gross integer` and **no
+default**, plus the 5-arg form kept as a shim delegating `null`. ⚠️
+`pronargdefaults` is **0 on both**, verified on production: a defaulted extra
+parameter is the §34/§35/§45.10/§63.3 trap.
+
+### 68.5 — The route, and two rules that are not symmetric
+
+- ⚠️ **Validated against the LIST, never a range.** A value between two
+  thresholds bands at the wrong edge and the CHECK then 500s the write.
+  `isGrossThreshold` is the one validator.
+- ⚠️ **A floor on a GUARANTEED RENT apply is REFUSED with a 400, never silently
+  dropped.** Dropping it means the customer believes they set one and then
+  reads every lead that arrives as the filter failing. And `cols()`'s GR branch
+  returns `minGross: null` — **there is no `gr_` column to name** — so that
+  branch is structurally unable to write it even with the refusal removed.
+  Invariant 6 by shape, not by a clause somebody must remember.
+- ⚠️ **The column is written UNCONDITIONALLY**, as `radiusOutcode` and
+  `radiusPlace` already are. Written only-when-present, a customer who set £75k
+  and later edits their areas keeps a floor the UI no longer shows and cannot
+  clear — §28.7's class exactly.
+- A floor **alone** is a valid selection; refusing it would make it the one
+  dimension unusable by itself.
+
+`/v1/me` reports `min_gross` as a **fixed field** (§27.1), null on GR — omitting
+it would have a caller read "absent" as "this API version does not know about
+floors" rather than "this product has none".
+
+### 68.6 — No new forecast machinery, deliberately
+
+§28's model was run over the measured counts before anything was built:
+`MIN_RELIABLE_MATCHES = 5` → `offerable: false, reason: "unreliable"`;
+`expected <= 0` → `"zero_volume"`; `HIGH_COST_PER_LEAD_PENCE` →
+`requiresExtraConfirm`; `recommendedDowngrade` → the over-plan protection.
+**So there is no revenue-specific floor, refusal or warning.** The dimension is
+threaded into `predictMonthlyVolume`'s input and everything downstream works
+unchanged.
+
+⚠️ Worth knowing before the first support ticket blames the new control: a
+narrow area+bedroom filter **already** quotes £150/lead today with no revenue
+floor at all. This does not create thinness; it makes it easier to reach.
+
+### 68.7 — ⚠️ `minGross` is REQUIRED on `FilterSelection`, so the compiler finds the call sites
+
+`predictMonthlyVolume` has **11 call sites**, four of which build
+`FilterSelection` as an object *literal* and would have compiled unchanged —
+and been wrong — had the field been optional: both admin prediction surfaces
+(§28.7's drift indicator would read systematically high for every customer who
+sets a floor), `forecastBackfill.ts`, and `radiusSearch.ts` twice.
+
+⚠️ **The last is the worst.** `radiusCoverage` took
+`Pick<FilterSelection, "minBedrooms" | "maxBedrooms">` and was **structurally
+unable to see a revenue floor** — so a customer with a £50k floor in radius mode
+would be told "widen to 20 miles for 8 more leads a month" on a figure computed
+over stock the floor excludes. An **overstated** gain, plausible, nothing
+erroring. The `Pick` widened.
+
+⚠️ **AND NO BEHAVIOURAL TEST CAN CATCH ITS REMOVAL**, which the mutation run
+found rather than review: a `Pick<>` is a **type**, and `{ areas, ...constraints }`
+still spreads the property at runtime because the caller's object still has it.
+`tsc` rejects it; vitest does not run `tsc`. It has a file-text guard of its own.
+
+### The control
+
+`src/components/filtering/RevenueFloor.tsx`, a sibling of `BedroomRange` and
+mounted on both surfaces. It renders **nothing — not a disabled control** —
+unless the product is management AND `canFilterByGross(volume)`.
+
+⚠️ **The floor is in every dependency list it belongs in**, and
+`LeadFilteringPanel`'s acknowledgement-voiding effect is the one that matters:
+without it the customer acknowledges one forecast, changes the floor, and
+applies against a stale acknowledgement — defeating §39.8's fixed refusal order,
+which exists precisely so the number they were shown is the whole of what they
+were told. **There is no ESLint config (§11), so `react-hooks/exhaustive-deps`
+is not running and nothing warns.**
+
+Every string names it as the **PROPERTY's** projected revenue. "Revenue" alone
+reads as the customer's own income, which is a different number and not one we
+hold.
+
+### Verification
+
+**All 159 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0158 and 0159 each re-applied twice for idempotency, and **all 20
+SQL suites pass** on that build.
+
+**2,955 vitest cases green**, `npx tsc --noEmit` clean, `npm run lint` clean bar
+the four pre-existing `no-assign-module-variable` warnings, `npm run build`
+clean with `/`, `/enquiry`, `/guaranteed-rent` and `/privacy-policy` all still
+**Static** and `ƒ Middleware` present.
+
+⚠️ **Forty-eight mutations run across the five steps, forty-eight caught** —
+nine on the band-first aggregate, eleven on contention and the payload version,
+nine in SQL, twelve on the route and the summaries, and sixteen on the control.
+**Seven survived a first pass and every one was a real weakness in the
+assertion, not in the code:**
+
+| survivor | why it passed |
+|---|---|
+| `fetchAreaContention` ignoring a competitor's floor (×3) | that function **had no test at all**, and the fixtures gave every band the same count — the uniform-fixture trap |
+| the draft memo reading the SAVED floor | `props.minGross,` **contains the substring** `minGross,` |
+| a synthesised volume passed to the gate | `volume={props.volume}` appears twice; the pattern matched `PredictionBox`'s prop |
+| `RadiusConstraints` dropping the floor | a `Pick<>` is a type; vitest does not typecheck |
+| `release_unmatched_assignments` not passing the floor down | **nothing drove that function** |
+
+⚠️ That is the **ninth, tenth and eleventh** time this repository has recorded
+an assertion written weak enough to survive its own mutation (§42.8, §50.9 ×2,
+§53, §55, §57, §65, §66). Two further false passes were caught in the tooling
+rather than the tests: a schema-comparison harness whose two fingerprints were
+both **empty files** (mixed-case database names fold to lowercase, so `psql`
+never connected — a non-empty guard is now in the loop), and a SQL mutation
+whose bash heredoc mangled `\n` so the mutation never compiled.
+
+### Deployment order — migrations BEFORE code
+
+✅ **0158 and 0159 both applied to `znlfwbnvhlacwzgfalcf` on 2026-09-24, before
+the pull request merged** (§1.1).
+
+0159 went on in the **comment-stripped-outside-bodies** form (§48.9, §51.10),
+and **that form was proved schema-identical first**: two scratch databases built
+from the same pre-0159 base, one from the full file and one from the stripped
+form, fingerprinted over every function body with its `prosecdef`, `proconfig`
+and all three ACLs, every column, every constraint and every index — **1,918
+objects, identical**.
+
+**All six bodies hash-match a scratch build from the repo file** —
+`lead_matches_customer_filter` `a7fb320d…` (1605),
+`get_filtered_candidates_for_lead` `947c0634…` (3623),
+`releasable_filter_assignments` `a2042281…` (4518) and its shim `9f9f2a94…`
+(138), `release_unmatched_assignments` `d1fe8d35…` (5096),
+`execute_filter_lift` `a1cc726d…` (1703). All `security definer` with
+`search_path` pinned; `anon` and `authenticated` **false**, `service_role` true
+on every signature by `has_function_privilege` (§63's lesson:
+`role_routine_grants` names PUBLIC in upper case and cannot see a grant left on
+it). **Invariant 7 holds** — four distinct names — and `get_advisors` reports
+**no new finding**.
+
+⚠️ **INERT, PROVEN NOT ARGUED.** Fingerprinted immediately before and
+immediately after the apply: `get_filtered_candidates_for_lead` over all **390**
+unsold marketplace leads (`1c0e3837…`) and `lead_matches_customer_filter` over
+all **5,070** (lead, filtered customer) pairs (`5de0a40c…`) — **both
+byte-identical**. 62 customers, 578 leads and 563 assignments untouched, money
+and filter fingerprints identical either side, 0 floors set.
+
+The floor was then driven **on production itself**, inside a block that raises
+at the end so every write rolled back. Area **GU**, a £52,130 lead, a £23,673
+lead and one with no figure: with no floor all three match; at £50k only the
+first does; the predicate returns a real boolean rather than NULL; the candidate
+function agrees with it; and the lift nulls the floor. Both fingerprints
+afterwards confirm it wrote nothing.
+
+⚠️ **`execute_filter_lift` grew 1074 → 1703 characters and 63 of that is a
+RESTORATION, not an addition.** Production's body was 0026's with the in-body
+comment `-- Fresh deficit baseline from this renewal moment.` and the blank line
+before `return v_executed;` stripped — the §48.9/§51.10 apply signature, proven
+rather than assumed: with comment-only AND blank lines dropped from both sides,
+production and the 0026 file hash **identically** (`0098d0dd…`, 1072). Applying
+0159 puts both back, so the body now matches the repo file exactly and that
+drift is closed. ⚠️ **Only a line-by-line comparison showed this** — a first
+attempt accounted for the comment and left **one character** unexplained, which
+was the blank line.
+
+⚠️ 0159 was applied as **five parts** named `0159_…_part1..part5`, a cosmetic
+ledger mismatch with the single file of the kind §43 records for 0130 and §53
+for 0141. Not worth a second apply.
+
+⚠️ **2 customers sit in `pending_lift`**, so `execute_filter_lift` is live and
+fires for them at their next `invoice.paid`. Both carry a null floor, so the
+added line is a no-op for them.
+
+**Not yet exercised in a browser.** ⚠️ A Vercel preview cannot do it —
+Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51)
+— and a preview runs against **production** Supabase (§1.1), so a test apply
+would move a real customer's filter. After merge, on `leads.stayful.co.uk`: the
+control appears on a management filter and **not** on a GR one; a £50k floor
+quotes a smaller figure than Any; applying one stores it and the admin summary
+reads "£50k+ revenue"; and §28.6's lazy-fetch invariant still holds on both
+landing pages (**zero** geojson requests on load).
+
+### Deferred
+
+- **Nothing recomputes a stored forecast between applies** (§28.7), so a
+  customer whose supply drops is told nothing until they look. Unchanged by
+  this, and easier to reach now.
+- **`filter_lead_releases` and `filter_forecast_acknowledgements` record only
+  areas + bedrooms.** Adding the floor to both would keep "you told me four a
+  month" (§28.9) and "why did you take my lead back" (§39) answerable for
+  exactly the filters most likely to raise them.
+- ⚠️ **Releasable volume can jump by an order of magnitude.** A £75k floor makes
+  most of a customer's untouched stock non-matching and therefore releasable —
+  invariant 4's exception working correctly, but at a scale §39 never saw, and
+  `release_unmatched_assignments` loops 1 DELETE + 2 UPDATEs + 1 INSERT per lead
+  inside the function cap §39.1 already worried about. Bound it before a floor
+  is applied to a large book.
+- **£100k**, if the book ever grows into it — one entry plus the CHECK.
+- **Diagnosing WHICH constraint is costing the volume.** With three dimensions
+  in play, "add more areas" is often the wrong advice: the culprit may be a
+  3-bedroom minimum or a £75k floor, and adding areas fixes neither.
