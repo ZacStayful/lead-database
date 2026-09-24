@@ -87,3 +87,72 @@ describe("the webhook maintains the episode on every path that can end one", () 
     expect(c).not.toMatch(/function mapStatus\(/);
   });
 });
+
+/**
+ * The write-off's cancellation date is undone on recovery.
+ *
+ * clearWriteOffCancellation() decides on `lapsed_at === cancelled_at`, and that
+ * test is only exact because of two properties of OTHER files. Neither is
+ * reachable from a unit test of the helper, and if either drifts the fix stops
+ * working SILENTLY — a recovered customer goes back to being recorded as churned
+ * for ever, with no error anywhere.
+ */
+describe("recovery undoes the write-off's cancellation date", () => {
+  it("the cron stamps lapsed_at and cancelled_at from ONE timestamp", () => {
+    // Two separate new Date() calls would differ by milliseconds and the
+    // equality test would never match again. Both branches must reuse `nowIso`.
+    const c = code(route);
+    expect(c).toMatch(/lapsed_at:\s*nowIso/);
+    expect(c).toMatch(/gr_lapsed_at:\s*nowIso/);
+    expect(c).toMatch(/cancelled_at:\s*nowIso/);
+    expect(c).toMatch(/gr_cancelled_at:\s*nowIso/);
+    // And it never derives either from a fresh clock.
+    expect(c).not.toMatch(/(?:gr_)?(?:lapsed|cancelled)_at:\s*new Date\(\)/);
+  });
+
+  it("the cron stamps the cancellation date only when it is still null", () => {
+    // That guard is what makes an EARLIER date mean "a real cancellation", which
+    // is the whole basis for the helper leaving it alone.
+    const c = code(route);
+    expect(c).toContain("if (!written.cancelled_at)");
+    expect(c).toContain("if (!written.gr_cancelled_at)");
+    expect(c).toContain('.is("cancelled_at", null)');
+    expect(c).toContain('.is("gr_cancelled_at", null)');
+  });
+
+  it("both recovery branches call the helper, each on its OWN update object", () => {
+    // Asserted on the call SHAPE rather than a count of the identifier: a count
+    // is satisfied by a call that has been commented out or neutered, and
+    // passing the wrong branch's update object would put a management column in
+    // the GR update (invariant 6) while a count still read 2.
+    const c = code(webhook);
+    expect(c).toMatch(/clearWriteOffCancellation\(\s*grUpdate,/);
+    expect(c).toMatch(/clearWriteOffCancellation\(\s*renewalUpdate,/);
+    expect(c.match(/clearWriteOffCancellation\(/g)?.length).toBe(2);
+    // Both must be STATEMENTS, not sub-expressions: `void 0 &&
+    // clearWriteOffCancellation(...)` satisfies a count and a shape check while
+    // doing nothing. Requiring the call to open its own line rules that out.
+    expect(c.match(/^\s*clearWriteOffCancellation\(/gm)?.length).toBe(2);
+  });
+
+  it("EVERY recovery lookup selects the columns the helper needs", () => {
+    // ⚠️ COUNTED, NOT MERELY PRESENT. Each product has TWO selects feeding the
+    // same `customer` — the primary lookup and the re-lookup after provisioning —
+    // and which one runs depends on the path. Absent from either, both arguments
+    // arrive undefined, the helper no-ops, and the bug is back with every other
+    // test still green. A "appears at least once" guard misses exactly that.
+    const c = code(webhook);
+    expect(c.match(/stripe_subscription_id, lapsed_at, cancelled_at"/g)?.length).toBe(2);
+    expect(
+      c.match(/gr_stripe_subscription_id, gr_lapsed_at, gr_cancelled_at"/g)?.length
+    ).toBe(2);
+  });
+
+  it("neither branch nulls a cancellation date unconditionally", () => {
+    // The mirror-image corruption, and the worse one: it would erase the date of
+    // every real cancellation on that customer's next payment (§18E, §32.1).
+    const c = code(webhook);
+    expect(c).not.toMatch(/^\s*cancelled_at:\s*null,?\s*$/m);
+    expect(c).not.toMatch(/^\s*gr_cancelled_at:\s*null,?\s*$/m);
+  });
+});
