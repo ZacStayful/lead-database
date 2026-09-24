@@ -232,6 +232,21 @@ export const UNRESOLVED_RADIUS: RadiusResolution = {
 };
 
 /**
+ * Every filter dimension the widening scan has to honour, other than location.
+ *
+ * ⚠️ NOT NAMED `bedrooms`, and not a two-key Pick, deliberately. It was both
+ * until a revenue floor existed, and a parameter called `bedrooms` is one the
+ * next person drops a new dimension from without noticing — at which point a
+ * customer with a £50k floor is told "widen to 40 miles for 8 more leads a
+ * month" on a figure computed over stock the floor excludes. An OVERSTATED
+ * gain, plausible, with nothing erroring. Widen this type, never work round it.
+ */
+export type RadiusConstraints = Pick<
+  FilterSelection,
+  "minBedrooms" | "maxBedrooms" | "minGross"
+>;
+
+/**
  * Areas within `miles` of `centre`, plus the smallest step outwards that would
  * actually add leads.
  *
@@ -246,13 +261,13 @@ export function resolveRadius(
   centre: [number, number],
   miles: number,
   volume: ProductVolume,
-  bedrooms: Pick<FilterSelection, "minBedrooms" | "maxBedrooms">,
+  constraints: RadiusConstraints,
   contention?: AreaContention | null
 ): RadiusCoverage {
   const covered = areasWithinRadius(features, centre, miles * MILES_TO_KM);
   const current = predictMonthlyVolume(
     volume,
-    { areas: covered, ...bedrooms },
+    { areas: covered, ...constraints },
     contention
   );
 
@@ -265,7 +280,7 @@ export function resolveRadius(
     if (wider.length === covered.length) continue;
     const p = predictMonthlyVolume(
       volume,
-      { areas: wider, ...bedrooms },
+      { areas: wider, ...constraints },
       contention
     );
     if (p.displayRate > current.displayRate) {

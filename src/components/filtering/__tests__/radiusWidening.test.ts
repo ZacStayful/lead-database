@@ -61,10 +61,11 @@ function volumeFor(areas: string[]): ProductVolume {
     totalLeads: areas.length * 40,
     matchableLeads: areas.length * 40,
     areaBedCounts,
+    areaBedBandCounts: null,
   };
 }
 
-const ANY_BEDS = { minBedrooms: null, maxBedrooms: null };
+const ANY_BEDS = { minBedrooms: null, maxBedrooms: null, minGross: null };
 
 describe("wideningStepsFrom", () => {
   it("⚠️ every step it offers lands on the option list", () => {

@@ -116,8 +116,8 @@ describe("contention is pre-applied, not published", () => {
       maxPerLead: CONTENDED_FILTERED_CUSTOMERS,
     };
     const raw = { LS: { "3": 20 } };
-    const vol = { windowStart: INGEST_EPOCH_ISO, weeksElapsed: 7.5, totalLeads: 20, matchableLeads: 20, areaBedCounts: raw };
-    const sel = { areas: ["LS"], minBedrooms: null, maxBedrooms: null };
+    const vol = { windowStart: INGEST_EPOCH_ISO, weeksElapsed: 7.5, totalLeads: 20, matchableLeads: 20, areaBedCounts: raw, areaBedBandCounts: null };
+    const sel = { areas: ["LS"], minBedrooms: null, maxBedrooms: null, minGross: null };
 
     // Dashboard: raw counts + contention passed in at predict time.
     const loggedIn = predictMonthlyVolume(vol, sel, c);

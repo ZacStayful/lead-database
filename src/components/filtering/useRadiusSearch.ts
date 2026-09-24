@@ -5,6 +5,7 @@ import {
   UNRESOLVED_RADIUS,
   parseRadiusCentre,
   resolveRadius,
+  type RadiusConstraints,
   type RadiusResolution,
 } from "@/components/filtering/radiusSearch";
 import {
@@ -12,11 +13,7 @@ import {
   type PlaceIndex,
   type PlaceTuple,
 } from "@/lib/places";
-import type {
-  AreaContention,
-  FilterSelection,
-  ProductVolume,
-} from "@/lib/filterPrediction";
+import type { AreaContention, ProductVolume } from "@/lib/filterPrediction";
 import type { AreaFeature } from "@/lib/geoRadius";
 
 /**
@@ -66,10 +63,10 @@ export function useRadiusSearch(args: {
   query: string;
   miles: number;
   volume: ProductVolume | null;
-  bedrooms: Pick<FilterSelection, "minBedrooms" | "maxBedrooms">;
+  constraints: RadiusConstraints;
   contention?: AreaContention | null;
 }): RadiusSearchState {
-  const { enabled, query, miles, volume, bedrooms, contention } = args;
+  const { enabled, query, miles, volume, constraints, contention } = args;
 
   const [features, setFeatures] = useState<AreaFeature[] | null>(null);
   const [places, setPlaces] = useState<PlaceTuple[] | null>(null);
@@ -144,11 +141,11 @@ export function useRadiusSearch(args: {
       forCoverage.centre.centre,
       miles,
       volume,
-      bedrooms,
+      constraints,
       contention
     );
     return { ...head, centre: forCoverage.centre, covered, upside };
-  }, [enabled, live, forCoverage, features, volume, miles, bedrooms, contention]);
+  }, [enabled, live, forCoverage, features, volume, miles, constraints, contention]);
 
   return {
     resolution,

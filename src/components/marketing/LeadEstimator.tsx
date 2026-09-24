@@ -139,10 +139,15 @@ export function LeadEstimator({
     [availableAreas]
   );
 
-  const bedrooms = useMemo(
+  const constraints = useMemo(
     () => ({
       minBedrooms: bedroomInputValue(minBeds),
       maxBedrooms: bedroomInputValue(maxBeds),
+      // No revenue control here yet, and the cached public payload cannot
+      // answer one until it carries bands — `canFilterByGross` is the gate
+      // that decides whether to offer it at all. Null means "no floor", which
+      // is byte-identical to the behaviour before revenue banding existed.
+      minGross: null,
     }),
     [minBeds, maxBeds]
   );
@@ -157,7 +162,7 @@ export function LeadEstimator({
     query,
     miles,
     volume,
-    bedrooms,
+    constraints,
   });
 
   // ⚠️ THE ESTIMATOR MUST ASK THIS TOO, and shipping without it is why a
@@ -193,12 +198,12 @@ export function LeadEstimator({
   );
   const hasSelection =
     selectedAreas.length > 0 ||
-    bedrooms.minBedrooms != null ||
-    bedrooms.maxBedrooms != null;
+    constraints.minBedrooms != null ||
+    constraints.maxBedrooms != null;
 
   const selection = useMemo(
-    () => ({ areas: selectedAreas, ...bedrooms }),
-    [selectedAreas, bedrooms]
+    () => ({ areas: selectedAreas, ...constraints }),
+    [selectedAreas, constraints]
   );
 
   const prediction = useMemo(

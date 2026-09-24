@@ -229,7 +229,10 @@ export async function POST(req: NextRequest) {
     }
     const prediction = predictMonthlyVolume(
       aggregate[product],
-      { areas, minBedrooms: min, maxBedrooms: max },
+      // The revenue floor is read and validated in a later step of this
+      // change; until the column exists there is nothing to read, and null is
+      // byte-identical to today.
+      { areas, minBedrooms: min, maxBedrooms: max, minGross: null },
       contention
     );
     const forecast = forecastVolume(prediction, allocation, product);

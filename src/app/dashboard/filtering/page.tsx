@@ -120,6 +120,7 @@ function panelPropsFor(
       areas: customer.filter_areas ?? [],
       minBedrooms: customer.filter_min_bedrooms,
       maxBedrooms: customer.filter_max_bedrooms,
+      minGross: customer.filter_min_gross ?? null,
       liftEffectiveDate: customer.filter_lift_effective_date,
       availableAreas,
       areaCounts,
@@ -151,6 +152,8 @@ function panelPropsFor(
       areas: customer.gr_filter_areas ?? [],
       minBedrooms: customer.gr_filter_min_bedrooms,
       maxBedrooms: customer.gr_filter_max_bedrooms,
+      // Never a floor on GR — there is no column, by design (§25).
+      minGross: null,
       liftEffectiveDate: customer.gr_filter_lift_effective_date,
       availableAreas,
       areaCounts,

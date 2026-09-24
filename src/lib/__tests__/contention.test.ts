@@ -129,7 +129,7 @@ describe("predictMonthlyVolume with contention", () => {
     })),
   ];
   const vol = buildLeadVolumeAggregate(rows, NOW).management;
-  const sel = { areas: [], minBedrooms: null, maxBedrooms: null };
+  const sel = { areas: [], minBedrooms: null, maxBedrooms: null, minGross: null };
 
   it("leaves an uncontended filter untouched", () => {
     const c: AreaContention = {

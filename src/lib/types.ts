@@ -127,6 +127,21 @@ export interface Customer {
   filter_areas: string[] | null;
   filter_min_bedrooms: number | null;
   filter_max_bedrooms: number | null;
+  /**
+   * Minimum projected gross annual revenue, in POUNDS, from GROSS_THRESHOLDS
+   * (0158). Null = no revenue floor.
+   *
+   * ⚠️ MANAGEMENT ONLY — THERE IS DELIBERATELY NO `gr_` MIRROR. Invariant 6
+   * governs balance, counter, pacing and eligibility branches; this is none of
+   * those. Guaranteed rent carries ZERO leads with a gross figure (§25's
+   * analysis is management-only by design), so a `gr_` column could never hold
+   * a non-null value that meant anything — and a column that can never be set
+   * is a column that lies about what the product does.
+   *
+   * ⚠️ POUNDS, NOT PENCE, unlike every price column in this codebase. It is
+   * compared against `leads.gross_annual_income`, which is `numeric` in pounds.
+   */
+  filter_min_gross?: number | null;
   filter_enabled_at: string | null;
   filter_lift_effective_date: string | null;
   // How the filter was set (0094, metadata only — routing reads filter_areas).

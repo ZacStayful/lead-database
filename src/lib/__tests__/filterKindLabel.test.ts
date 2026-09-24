@@ -13,6 +13,7 @@ const view = (over: Partial<LeadFilterView> = {}): LeadFilterView => ({
   areas: ["SP", "BA"],
   minBedrooms: null,
   maxBedrooms: null,
+  minGross: null,
   liftDate: null,
   selectionMode: "radius",
   radiusOutcode: "SP1",

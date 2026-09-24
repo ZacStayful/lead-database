@@ -136,6 +136,13 @@ export function toProductVolume(
     totalLeads: p.totalLeads ?? 0,
     matchableLeads: p.matchableLeads ?? 0,
     areaBedCounts: p.areaBedCounts ?? {},
+    // ⚠️ NULL, NEVER {} — §18.3's three outcomes. This payload predates
+    // revenue banding, so it cannot answer a revenue question; `{}` would
+    // read as "no lead clears any floor" and quote ZERO on a marketing page,
+    // which is §58.2's failure self-inflicted. `canFilterByGross` turns this
+    // null into a hidden control instead. Step 2 publishes real bands behind
+    // a schema version, and this becomes `p.areaBedBandCounts ?? null`.
+    areaBedBandCounts: null,
   };
 }
 

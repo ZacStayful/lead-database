@@ -68,6 +68,11 @@ export interface FilterPanelProps {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+  /**
+   * The saved revenue floor in POUNDS, or null. Management only — the GR page
+   * passes null because guaranteed rent has no lead carrying a gross figure.
+   */
+  minGross: number | null;
   liftEffectiveDate: string | null;
   availableAreas: AreaOption[];
   // Lead volume per postcode area (national), for the map + list hints.
@@ -166,8 +171,19 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       areas: selectedAreas,
       minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      // Inherits the saved floor: there is no control to change it yet, so the
+      // draft and the saved filter agree by construction.
+      //
+      // ⚠️ WHEN THAT CONTROL LANDS, ITS STATE GOES IN THIS MEMO AND IN THESE
+      // DEPS. `react-hooks/exhaustive-deps` is NOT running — §11 records there
+      // is no ESLint config — so an omitted dep does not warn, it just makes
+      // the effect below stop voiding the forecast acknowledgement when the
+      // floor changes. The customer then acknowledges one forecast and applies
+      // against a different one, which is precisely what §39.8's fixed refusal
+      // order exists to prevent.
+      minGross: props.minGross,
     }),
-    [selectedAreas, minBeds, maxBeds]
+    [selectedAreas, minBeds, maxBeds, props.minGross]
   );
   const prediction = useMemo(
     () => predictMonthlyVolume(props.volume, draftSelection, props.contention),
@@ -228,10 +244,18 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
           areas: props.areas,
           minBedrooms: props.minBedrooms,
           maxBedrooms: props.maxBedrooms,
+          minGross: props.minGross,
         },
         props.contention
       ),
-    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms, props.contention]
+    [
+      props.volume,
+      props.areas,
+      props.minBedrooms,
+      props.maxBedrooms,
+      props.minGross,
+      props.contention,
+    ]
   );
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
   // What the customer was SHOWN, not what today's data would quote. The two
@@ -284,12 +308,15 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // ⚠️ `enabled` is passed from here on purpose — §28.6 records a geojson
   // fetch that ran for every visitor because its gate lived inside and named
   // the wrong thing.
-  const radiusBedrooms = useMemo(
+  const radiusConstraints = useMemo(
     () => ({
       minBedrooms: bedroomInputValue(minBeds),
       maxBedrooms: bedroomInputValue(maxBeds),
+      // ⚠️ The widening scan must see the floor, or it offers "widen to 40
+      // miles for 8 more a month" computed over stock the floor excludes.
+      minGross: draftSelection.minGross,
     }),
-    [minBeds, maxBeds]
+    [minBeds, maxBeds, draftSelection.minGross]
   );
   const {
     resolution: radius,
@@ -301,7 +328,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     query: radiusQuery,
     miles: radiusMiles,
     volume: props.volume,
-    bedrooms: radiusBedrooms,
+    constraints: radiusConstraints,
     contention: props.contention,
   });
 

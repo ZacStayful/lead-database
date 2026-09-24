@@ -27,6 +27,16 @@ export interface LeadFilterView {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+  /**
+   * Minimum projected gross annual revenue, in POUNDS (§25's
+   * `leads.gross_annual_income`), or null for no revenue floor.
+   *
+   * ⚠️ MANAGEMENT ONLY, and the GR branch below is structurally unable to set
+   * it: guaranteed rent has ZERO leads carrying a gross figure — §25's
+   * analysis is management-only by design, so the figure would be WRONG for a
+   * GR operator rather than merely missing. There is no `gr_` column to read.
+   */
+  minGross: number | null;
   liftDate: string | null;
   /** How it was set (0094): "areas", "radius", or null for pre-0094 filters. */
   selectionMode: string | null;
@@ -77,6 +87,7 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       areas: normaliseAreas(customer.filter_areas),
       minBedrooms: customer.filter_min_bedrooms,
       maxBedrooms: customer.filter_max_bedrooms,
+      minGross: customer.filter_min_gross ?? null,
       liftDate: customer.filter_lift_effective_date,
       selectionMode: customer.filter_selection_mode ?? null,
       radiusOutcode: customer.filter_radius_outcode ?? null,
@@ -98,6 +109,9 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       areas: normaliseAreas(customer.gr_filter_areas),
       minBedrooms: customer.gr_filter_min_bedrooms,
       maxBedrooms: customer.gr_filter_max_bedrooms,
+      // Never a floor on GR — see the field's note. Hard-coded rather than
+      // read from a column, because no such column exists to read.
+      minGross: null,
       liftDate: customer.gr_filter_lift_effective_date,
       selectionMode: customer.gr_filter_selection_mode ?? null,
       radiusOutcode: customer.gr_filter_radius_outcode ?? null,

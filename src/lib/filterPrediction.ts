@@ -35,6 +35,118 @@ export const WEEKS_PER_MONTH = 4.33;
 /** Below this many total matches the extrapolation is too thin to show as a number. */
 export const MIN_RELIABLE_MATCHES = 5;
 
+/**
+ * The revenue floors a customer may choose, in POUNDS.
+ *
+ * ⚠️ POUNDS, NOT PENCE. `leads.gross_annual_income` is `numeric` in pounds,
+ * and every price column in this codebase is in pence (`costPerLeadPence`,
+ * `filter_forecast_plan_price_pence`). A floor stored in pence compared
+ * against a pounds column matches nothing, quotes zero, and reads to the
+ * customer as "your filter is too narrow".
+ *
+ * ⚠️ A FIXED LIST, NEVER A FREE NUMBER, and that is what makes the banding
+ * exact: because the only floors are these, `>= £40k` is EXACTLY the union of
+ * the bands from 40k up, with no approximation and agreeing with the SQL cell
+ * for cell. The migration's CHECK is asserted against this constant
+ * mechanically (the `cancelOptions.ts` arrangement, §29) — if the two ever
+ * diverge, every floored quote is computed at the wrong edge and half the
+ * directions OVERSTATE.
+ *
+ * ⚠️ £100k was measured and DROPPED. Only 7 management leads in the whole book
+ * clear it, so no area-restricted filter could ever reach MIN_RELIABLE_MATCHES
+ * — and an unofferable forecast does not merely decline to quote, it writes
+ * null into all five forecast columns (§28, §58.3). Adding it back is one
+ * entry here plus the CHECK, if the book ever grows into it.
+ */
+export const GROSS_THRESHOLDS = [25000, 30000, 40000, 50000, 75000] as const;
+
+export type GrossThreshold = (typeof GROSS_THRESHOLDS)[number];
+
+/**
+ * The band a lead's gross figure falls in.
+ *
+ * `"none"` is a lead with NO figure — 29 of 273 management leads (10.6%), and
+ * every one of the 291 guaranteed-rent leads, because §25's analysis is
+ * management-only by design. `"0"` is a real figure below the lowest floor.
+ * ⚠️ The two are not interchangeable: an absent floor admits both, and ANY
+ * floor excludes both.
+ */
+export type GrossBand = "none" | "0" | `${GrossThreshold}`;
+
+/** Every band key, lowest first. Derived from the thresholds so it cannot drift. */
+export const GROSS_BAND_KEYS: readonly GrossBand[] = [
+  "none",
+  "0",
+  ...GROSS_THRESHOLDS.map((t) => String(t) as `${GrossThreshold}`),
+];
+
+/**
+ * Which band a gross figure belongs to. `null` (no figure) is `"none"`.
+ *
+ * The band is the HIGHEST threshold the figure clears, so a lead at £52,000
+ * lands in `"50000"` and is admitted by floors of 25k, 30k, 40k and 50k but
+ * not 75k — which is exactly what `gross >= floor` means.
+ */
+export function bandFor(gross: number | null | undefined): GrossBand {
+  if (gross == null || !Number.isFinite(gross)) return "none";
+  let band: GrossBand = "0";
+  for (const t of GROSS_THRESHOLDS) {
+    if (gross >= t) band = String(t) as `${GrossThreshold}`;
+  }
+  return band;
+}
+
+/**
+ * The bands a floor admits.
+ *
+ * ⚠️ ONE PREDICATE, NO `minGross == null` BRANCH. A null floor admits every
+ * key INCLUDING `"none"`, so a customer who sets no floor sees byte-identical
+ * numbers to before this feature existed; a floor admits the numeric bands at
+ * or above it and excludes `"none"` and `"0"`. A branch here is where the
+ * floored and unfloored paths would drift (§28.5, §28.8).
+ */
+export function allowedBands(minGross: number | null | undefined): Set<GrossBand> {
+  if (minGross == null) return new Set(GROSS_BAND_KEYS);
+  const out = new Set<GrossBand>();
+  for (const t of GROSS_THRESHOLDS) {
+    if (t >= minGross) out.add(String(t) as `${GrossThreshold}`);
+  }
+  return out;
+}
+
+/** postcode area -> bedroom count -> band -> lead count. */
+export type AreaBedBandCounts = Record<
+  string,
+  Record<string, Partial<Record<GrossBand, number>>>
+>;
+
+/**
+ * Sum a band index back into the plain area/bed shape.
+ *
+ * ⚠️ `areaBedCounts` is DERIVED FROM THIS and never accumulated separately.
+ * That makes the two consistent STRUCTURALLY — there is no second number to
+ * disagree with — which matters because contention floors per bucket
+ * (`Math.floor(count * share)`) and independently-floored quantities do not
+ * sum. With per-band contention each band scales by a different factor, so a
+ * separately-stored total could not be reconciled with the sum of its own
+ * bands at all.
+ */
+export function deriveAreaBedCounts(
+  bands: AreaBedBandCounts
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const [area, beds] of Object.entries(bands)) {
+    const row: Record<string, number> = {};
+    for (const [bed, byBand] of Object.entries(beds)) {
+      let total = 0;
+      for (const n of Object.values(byBand)) total += n ?? 0;
+      if (total > 0) row[bed] = total;
+    }
+    if (Object.keys(row).length > 0) out[area] = row;
+  }
+  return out;
+}
+
 /** Per-product ingest history, restricted to what filtered routing can see. */
 export interface ProductVolume {
   /** INGEST_EPOCH_ISO — kept on the object so the UI can name its basis. */
@@ -45,8 +157,26 @@ export interface ProductVolume {
   totalLeads: number;
   /** The subset with a non-null postcode area AND a parseable bedroom count. */
   matchableLeads: number;
-  /** postcode area (uppercase) -> parsed bedroom count (string key) -> lead count. */
+  /**
+   * postcode area (uppercase) -> parsed bedroom count (string key) -> lead count.
+   *
+   * ⚠️ DERIVED from `areaBedBandCounts`, never accumulated — see
+   * `deriveAreaBedCounts`. Kept on the object because every existing reader
+   * (the estimator, the public payload, the radius widening scan) wants the
+   * bedroom-level total and should not have to sum bands itself.
+   */
   areaBedCounts: Record<string, Record<string, number>>;
+  /**
+   * The same index split by revenue band.
+   *
+   * ⚠️ NULL MEANS "THIS SOURCE CANNOT ANSWER REVENUE QUESTIONS" — not "no lead
+   * clears any floor" (§18.3's three outcomes, never two). Only the public
+   * cached payload can be null, and only while it predates revenue banding; a
+   * surface that finds it null must HIDE the revenue control rather than quote
+   * zero, which is §58.2's failure self-inflicted on a marketing page. Gate on
+   * `canFilterByGross`.
+   */
+  areaBedBandCounts: AreaBedBandCounts | null;
 }
 
 export type LeadVolumeAggregate = Record<LeadType, ProductVolume>;
@@ -56,6 +186,32 @@ export interface FilterSelection {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+  /**
+   * Minimum projected gross annual revenue, in POUNDS, from GROSS_THRESHOLDS.
+   * Null = no revenue floor.
+   *
+   * ⚠️ REQUIRED, NEVER OPTIONAL, and deliberately so. Four call sites build
+   * this type as an object LITERAL and would compile unchanged — and be
+   * silently wrong — if the field were optional: both admin predictions would
+   * ignore the floor and read systematically high against the stored figure
+   * (§28.7's drift indicator), `forecastBackfill` would store a forecast that
+   * ignores it, and the radius widening scan would quote a gain computed over
+   * stock the floor excludes. Required, `tsc` enumerates every one of them.
+   */
+  minGross: number | null;
+}
+
+/**
+ * Whether this volume source can answer a revenue-floor question at all.
+ *
+ * ⚠️ THE GATE, and it is not optional. `predictMonthlyVolume` cannot answer a
+ * floor without band data, and neither available answer is safe: ignoring the
+ * floor OVERSTATES, and excluding everything quotes ZERO, which §58.2 records
+ * as indistinguishable from a real answer and the more dangerous of the two.
+ * So the control is hidden upstream instead.
+ */
+export function canFilterByGross(volume: ProductVolume): boolean {
+  return volume.areaBedBandCounts !== null;
 }
 
 /**
@@ -111,6 +267,26 @@ export function contentionShare(
 export interface VolumePrediction {
   /** Raw matches since windowStart. */
   matchingLeads: number;
+  /**
+   * `matchingLeads` BEFORE the whole-lead floor — contention-scaled, still
+   * fractional.
+   *
+   * Purely additive, and it exists for the diagnosis in Phase 3: `Math.floor`
+   * on the total and `Math.round` on the rate erase small real gains, so
+   * ranking relaxations on `displayRate` produces three-way 0-0-0 ties that
+   * render as "nothing is costing you volume" — the plausible-looking wrong
+   * answer. Nothing user-facing reads it.
+   */
+  rawMatching: number;
+  /**
+   * False when a revenue floor was asked for and this source has no band data,
+   * so the floor was IGNORED and the number is unfloored.
+   *
+   * ⚠️ A caller that set a floor and gets this back must not present the
+   * figure as floored. Gate on `canFilterByGross` instead of relying on it —
+   * this is the second layer, not the first.
+   */
+  grossFilterApplied: boolean;
   /** matchingLeads / weeksElapsed * WEEKS_PER_MONTH, unrounded. */
   monthlyRate: number;
   /** Math.round(monthlyRate) — what the UI prints as "~N". */
@@ -179,34 +355,65 @@ export function predictMonthlyVolume(
       ? new Set(sel.areas.map((a) => a.toUpperCase()))
       : null;
 
-  let matchingLeads = 0;
-  for (const [area, beds] of Object.entries(volume.areaBedCounts)) {
+  // ONE loop over ONE shape. A source with no band data is normalised into
+  // all-"none" rather than given a second code path, because a branch is
+  // where the floored and unfloored readings would drift apart.
+  const bandView = bandViewFor(volume);
+  const grossFilterApplied = sel.minGross == null || canFilterByGross(volume);
+  const allowed = allowedBands(grossFilterApplied ? sel.minGross : null);
+
+  let rawMatching = 0;
+  for (const [area, beds] of Object.entries(bandView)) {
     if (wantedAreas && !wantedAreas.has(area)) continue;
     // Applied per AREA, not to the total: a filter spanning a crowded city and
     // an empty county is only contended in the city, and averaging the two
     // would understate one and overstate the other.
     const share = contentionShare(area, contention);
-    for (const [bed, count] of Object.entries(beds)) {
+    for (const [bed, byBand] of Object.entries(beds)) {
       const b = Number(bed);
       if (sel.minBedrooms != null && b < sel.minBedrooms) continue;
       if (sel.maxBedrooms != null && b > sel.maxBedrooms) continue;
-      matchingLeads += count * share;
+      for (const [band, count] of Object.entries(byBand)) {
+        if (!allowed.has(band as GrossBand)) continue;
+        rawMatching += (count ?? 0) * share;
+      }
     }
   }
   // Whole leads: a share can make this fractional, and every downstream
   // consumer — the reliability floor, the forecast's negative binomial — is
   // counting events, not expectations.
-  matchingLeads = Math.floor(matchingLeads);
+  const matchingLeads = Math.floor(rawMatching);
 
   const monthlyRate =
     (matchingLeads / volume.weeksElapsed) * WEEKS_PER_MONTH;
   return {
     matchingLeads,
+    rawMatching,
+    grossFilterApplied,
     monthlyRate,
     displayRate: Math.round(monthlyRate),
     reliable: matchingLeads >= MIN_RELIABLE_MATCHES,
     weeksElapsed: volume.weeksElapsed,
   };
+}
+
+/**
+ * A band-shaped view of a volume, whatever it actually carries.
+ *
+ * With band data, itself. Without (an old public payload), every lead reads as
+ * `"none"` — which is TRUE: that source tells us nothing about any lead's
+ * gross. Totals are therefore unchanged, because an absent floor admits
+ * `"none"`; a floor is refused upstream by `canFilterByGross`.
+ */
+function bandViewFor(volume: ProductVolume): AreaBedBandCounts {
+  if (volume.areaBedBandCounts) return volume.areaBedBandCounts;
+  const out: AreaBedBandCounts = {};
+  for (const [area, beds] of Object.entries(volume.areaBedCounts)) {
+    const row: Record<string, Partial<Record<GrossBand, number>>> = {};
+    for (const [bed, n] of Object.entries(beds)) row[bed] = { none: n };
+    out[area] = row;
+  }
+  return out;
 }
 
 /**
@@ -290,6 +497,12 @@ export interface LeadVolumeRow {
   lead_type: LeadType | string | null;
   created_at: string;
   /**
+   * Projected gross annual revenue in POUNDS (§25), or null where the lead
+   * carries no Stayful analysis. Absent (rather than null) on callers that
+   * predate revenue banding, which reads as `"none"` exactly as a null does.
+   */
+  gross_annual_income?: number | null;
+  /**
    * True when `lead_retired_from_allocation()` (0073) would return true — the
    * lead was claimed from the expired pool, or pooled on the `ignored` basis.
    * Ordinary routing will never hand it to anyone again (invariant 11), so it
@@ -306,6 +519,7 @@ function emptyVolume(now: Date): ProductVolume {
     totalLeads: 0,
     matchableLeads: 0,
     areaBedCounts: {},
+    areaBedBandCounts: {},
   };
 }
 
@@ -349,8 +563,22 @@ export function buildLeadVolumeAggregate(
     if (!area || bed == null) continue;
 
     product.matchableLeads += 1;
-    const beds = (product.areaBedCounts[area] ??= {});
-    beds[String(bed)] = (beds[String(bed)] ?? 0) + 1;
+    // ⚠️ THE BAND IS THE ONLY THING THAT MOVED. `matchableLeads` and the
+    // `continue` above it are untouched on purpose: adding `|| gross == null`
+    // to that guard would drop the 29 management leads (10.6%) carrying no
+    // figure out of EVERY forecast, including those with no floor set,
+    // silently and with nothing erroring. They land in `"none"` instead,
+    // stay inside `matchableLeads`, and stay matched whenever `minGross` is
+    // null — bit-identical totals, one structure.
+    const bands = (product.areaBedBandCounts![area] ??= {});
+    const byBand = (bands[String(bed)] ??= {});
+    const band = bandFor(row.gross_annual_income);
+    byBand[band] = (byBand[band] ?? 0) + 1;
+  }
+
+  // Derived last, from the bands, so the two can never disagree.
+  for (const product of [agg.management, agg.guaranteed_rent]) {
+    product.areaBedCounts = deriveAreaBedCounts(product.areaBedBandCounts!);
   }
 
   return agg;
@@ -419,7 +647,7 @@ export async function fetchLeadVolumeData(
     const { data, error } = await admin
       .from("leads")
       .select(
-        "id, postcode_area, bedrooms, lead_type, created_at, pool_expired_at, pool_entered_at, pool_entry_basis, stayful_conflict_at"
+        "id, postcode_area, bedrooms, lead_type, created_at, gross_annual_income, pool_expired_at, pool_entered_at, pool_entry_basis, stayful_conflict_at"
       )
       // Customer-owned leads are not marketplace supply. Counting them here
       // would inflate the volume figure we QUOTE to a customer applying a
@@ -448,6 +676,7 @@ export async function fetchLeadVolumeData(
         bedrooms: r.bedrooms,
         lead_type: r.lead_type,
         created_at: r.created_at,
+        gross_annual_income: r.gross_annual_income,
         retired: isRetired(r, retired),
       });
       const a = r.postcode_area?.trim().toUpperCase();
