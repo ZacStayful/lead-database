@@ -16729,3 +16729,215 @@ budget spend on three missing functions.
   the mapping. **Start App Review as soon as this merges.**
 - The spec's two open questions: whether customer adverts carry a "powered by"
   mark, and who owns a customer's ad files if they leave.
+
+---
+
+## 66. Five things that were already broken *(no migration)*
+
+Found while planning a lead-filtering change, all verified against production
+or the live code, none depending on that change. Two were costing customers
+money or access on the day they were found. Shipped on their own so the
+filtering work lands as a reviewable diff rather than a bug fix wearing a
+feature's clothes.
+
+### 66.1 — ⚠️ §56.5 records the sign-out bug as FIXED. It was not.
+
+`getUser()` and `getCurrentCustomer()` in `src/lib/auth.ts` were not memoised
+— the file imported nothing from React. `dashboard/layout.tsx` and
+`dashboard/page.tsx` both call `getCurrentCustomer()`, and Next renders a
+layout and its page **concurrently**, so every dashboard load made two
+independent `supabase.auth.getUser()` calls and two `customers` reads, across
+the 31 files under `/dashboard` that call it.
+
+With an expired access token both calls race to redeem the **same** refresh
+token. GoTrue rotates it for the winner and rejects the loser:
+
+```
+tk [AuthApiError]: Invalid Refresh Token: Already Used
+routes=/dashboard  count=4  users=1  last=2026-09-22T08:10:42Z
+{ __isAuthError: true, status: 400, code: 'refresh_token_already_used' }
+```
+
+⚠️ **§56.5's fix added a `try/catch` and shipped 2026-09-14. The error last
+fired 2026-09-22.** The catch works exactly as written — `__isAuthError` is
+true, so it returns null — but **null means "signed out"**, so the symptom
+stopped being a 500 and became a signed-in customer bounced to `/login` at
+random. Catching harder cannot fix a race; only calling once can.
+
+⚠️ **`cache` is behind React's `react-server` export condition**, so it is
+present in Next's vendored server build and ABSENT from the stock client build
+vitest resolves — reaching for it there throws *"not yet supported outside of
+experimental channels"*. `src/lib/requestCache.ts` resolves it at module load
+and **falls through to a pass-through** when it is not there, with
+`REQUEST_CACHE_IS_REAL` saying which happened. The fallback is correct rather
+than merely safe: without a request scope there is nothing to memoise, and the
+uncached behaviour is exactly today's.
+
+It also halves the auth calls and the `customers` queries on every dashboard
+page in the product.
+
+### 66.2 — ⚠️ A radius covering nothing applied as an "ANYWHERE" filter
+
+The exact opposite of what was asked for, and reachable today.
+
+`coveredKey === "" → setSelectedAreas([])` → `areas: []` → the route writes
+`filter_areas = null` → and `lead_matches_customer_filter` (0074) reads a null
+area list as **match every area** (§19.4's rule, correct in its own right:
+no filter is not an empty filter). Apply was gated only on the forecast
+acknowledgement, and with no areas the forecast reads *high*, so nothing
+stopped it.
+
+⚠️ **Any Northern Ireland postcode does it**: `OUTCODE_CENTROIDS` has 80 `BT`
+outcodes and `public/data/uk-postcode-areas.geojson` has **no BT feature** at
+all. A customer asking for a 10-mile radius around Belfast ends up unfiltered.
+
+`radiusCoverage()` in `radiusSearch.ts` is the one predicate, and it separates
+the two cases rather than collapsing them — because the advice differs and one
+of the two is not a customer error:
+
+| | means | copy |
+|---|---|---|
+| `empty` | the circle touched nothing | widen the radius before applying |
+| `areaUncovered` | the postcode's own area is not in the boundary file | **we don't cover that part of the UK yet** — widening never helps |
+
+"Widen the radius" for a BT postcode is advice that cannot work.
+
+### 66.3 — A £75 top-up sold for leads the filter cannot deliver
+
+⚠️ **NOTHING IN THE TOP-UP PATH READ THE FILTER FOR ANY DECISION** — confirmed
+across `topupCharge.ts`, `chargeIntent.ts`, both routes, both pages and both
+components. Filter state affected copy only, and only the generic "fewer
+matches and a longer wait" sentence in `topupDeliveryNote`.
+
+So Allan Carmichael — filter forecast at **1 lead a month**, **32 unspent
+credits against a plan of 20** — could buy five more. That is §59.8's hole
+("charged £75 for credit routing would never spend") reached by a different
+route.
+
+`topupFilterWarning()` states the forecast, the plan and the unspent credit
+**before the charge**, with a link to the filtering page. ⚠️ **It warns and
+does not refuse**: §16's rule is never to turn away a sale, the credits do
+carry forward, and a customer may fully intend to widen. What they must not be
+is uninformed.
+
+Null whenever we cannot say something true and specific — no filter in force,
+no stored forecast (§58.3's gap; see 66.6), or a forecast that already covers
+the plan, where the balance genuinely **is** the constraint and a top-up is the
+right purchase.
+
+### 66.4 — "Widen search" offered distances the dropdown could not show
+
+The scan tried a literal `[5,10,15,20,25,30]` of **EXTRA** miles against a
+`<select>` holding a literal `[5,10,15,20,25,30,40,50]` of **ABSOLUTE** ones.
+Nothing made them agree, and they did not:
+
+| from | offered | reachable |
+|---|---|---|
+| 50 | 55, 60, 65, 70, 75, 80 | **none** |
+| 40 | 45…70 | only 50 |
+| 30 | 35…60 | only 40 and 50 |
+
+Accepting an unreachable offer set `miles` to a value with no matching
+`<option>`, so the select rendered with **nothing selected**. Wider than it
+looks: for the three largest settings most offers were unusable, and the two
+largest could never be reached by widening at all.
+
+⚠️ **`RADIUS_MILE_OPTIONS` is now the one list**, and `wideningStepsFrom()`
+derives the steps from it as the gap to each larger option — so every
+`miles + extraMiles` is an option by construction, an off-list saved value
+still widens **onto** the list, and the top of the list offers nothing rather
+than something that cannot be taken.
+
+The list itself is unchanged, deliberately: this is the clamp, not a re-scaling.
+There is **no cap on how many steps are scanned** — `resolveRadius`'s
+"smallest gaining step" argument is already served by stopping at the first
+one, and capping the tail is a product decision about how far to look.
+
+### 66.5 — ⚠️ `{ message: '' }` is not a serialisation bug
+
+`[prospect-nudges] cap read failed { message: '' }`, seven times. The instinct
+is "the error is not being serialised". **It was.** The object genuinely held
+nothing but an empty string, and a better serialiser prints the same nothing.
+
+postgrest-js builds a failed response's error from the response **body**:
+
+```js
+const body = await res.text()
+try   { error = JSON.parse(body) }
+catch { error = { message: body } }
+```
+
+and **`head: true` issues an HTTP HEAD, whose response carries no body by
+specification.** So `body` is `""`, the parse throws, and the error is
+`{ message: "" }` — every time, for every failed head count, whatever actually
+went wrong.
+
+⚠️ **The one fact that survives is the HTTP status, and it is right there** on
+`PostgrestResponseBase` next to `error`, unread, because the call site
+destructures `{ count, error }` and stops. `describeError(error, status)`
+renders what is there and, when there is nothing, **says why it is empty**
+rather than printing a blank — an unexplained blank is what sent someone
+reading postgrest-js's source, and the next person should be told in the log
+line instead.
+
+Applied at all five sites where a head count's failure is logged; two of them
+logged `error.message` directly, so their lines carried literally nothing after
+the prefix. ⚠️ **The guard is repo-wide rather than five named files**, because
+the defect is a property of the pattern and a head count added tomorrow has the
+same hole — proven by adding a new offending site and watching it named in the
+failure.
+
+### 66.6 — Two operational steps, not code
+
+- ⚠️ **Five of twelve filtered customers carry NULL forecast columns** — Karey
+  Summers, Leslie Rogers, Michael Vassilounis, Mieszko Tomanski and **Myles
+  Denton (28 credits banked on a plan of 20)**. Their dashboard home reads
+  *"Volume varies…"* rather than a figure, and **66.3's warning is silent for
+  them**, because saying nothing beats inventing a number. `POST
+  /api/admin/filters/backfill-forecast` (§58.3) fills them; dry run first.
+  ⚠️ **Not fixed in code on purpose**: the live fallback the filtering page
+  uses needs the whole-leads-table aggregate, and putting that loader on the
+  dashboard home for every customer is the cost §58.2 records.
+- **Two customers' Monday items cannot be resolved** (`could not resolve board
+  item`, `push did not land`, still firing 2026-09-23), so their subscription
+  status is not reaching the sales board. Run `GET
+  /api/admin/monday-status-check?link=1` (§23.8).
+
+### Not a bug, worth knowing
+
+**102 cron aborts on 2026-09-22 between 00:45 and 03:12**, across
+`monday-enquiry-sync` (49), `prospect-nudges` (44), `monday-lead-sync` (5) and
+`stayful-conflict-sweep` (4), all `system_settings unreadable`. That is §18.3's
+fail-closed design working correctly through a ~2.5-hour Supabase blip — and
+the same window produced 66.5's empty log lines.
+
+### Verification
+
+2,769 vitest cases green (35 new), `npx tsc --noEmit` clean, `npm run lint`
+clean bar the four pre-existing `no-assign-module-variable` warnings.
+
+⚠️ **Twenty-three mutations run, all twenty-three caught**, each broken
+deliberately and watched to fail before the assertion was kept.
+
+⚠️ **One assertion was written weak and only the mutation run found it** —
+"offers the way out" was a bare `toContain("/dashboard/filtering")` over the
+whole file, which **PASSED with the link deleted**, because the success branch
+carries its own filter link and that is what it matched. Scoped to the warning
+block, the mutation fails. That is the **seventh** instance of this shape
+recorded here (§42.8, §50.9 ×2, §53, §55, §57, §65), and the second where the
+test rather than the code had to change.
+
+⚠️ **`radiusCoverage.test.ts` and `radiusWidening.test.ts` are the first test
+files under `src/components/`** — inside `vitest.config.mts`'s existing glob so
+no config changed, and `radiusSearch.ts` has no React in it, so the suite stays
+within the "PURE UNITS ONLY" constraint that gates `next build`. Say so before
+anybody "tidies" them into `src/lib/`.
+
+⚠️ **Not exercised in a browser.** A Vercel preview cannot do it — Deployment
+Protection answers 302 to `vercel.com/sso-api` (§45, §46) — and a preview runs
+against **production** Supabase (§1.1). After merge, on `leads.stayful.co.uk`:
+load `/dashboard` with an expired token and confirm no bounce to `/login`; type
+a BT postcode in radius mode and confirm Apply is blocked with the "we don't
+cover there" wording rather than "widen"; set 50 miles and confirm no widening
+prompt appears; and open `/dashboard/topup` as a filtered customer under plan
+and confirm the amber block sits above the buy button.
