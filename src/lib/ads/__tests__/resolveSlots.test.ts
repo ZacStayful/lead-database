@@ -192,7 +192,7 @@ describe("⚠️ the sub's service list is built from the multi-select", () => {
 
   it("⚠️ so a two-of-six customer's sub never claims the other four", () => {
     const c = customer({ ad_profile: { included: ["cleaning", "linen"] } });
-    const filled = fillPattern(T3.subLocated, resolveSlots(c, T3).slots);
+    const filled = fillPattern(T3.exampleSubLocated, resolveSlots(c, T3).slots);
     expect(filled).toBe("Full short let management. Cleaning and linen, all handled by Adco Ltd.");
     expect(filled).not.toContain("pricing");
     expect(filled).not.toContain("check-in");
@@ -218,15 +218,15 @@ describe("filling a pattern", () => {
     });
     const { slots, unlocated } = resolveSlots(c, T8);
     expect(unlocated).toBe(false);
-    expect(fillPattern(T8.headlineLocated, slots))
+    expect(fillPattern(T8.exampleHeadlineLocated, slots))
       .toBe("Short let management in Leeds: 8 years, 140 properties, *4.9* on Google.");
   });
 
   it("⚠️ falls to the unlocated sub when they declined to narrow", () => {
     const c = customer({ ad_profile: { years_trading: 8 } });
     const { slots } = resolveSlots(c, T8);
-    expect(fillPattern(T8.subLocated, slots)).toBeNull();
-    expect(fillPattern(T8.subUnlocated, slots))
+    expect(fillPattern(T8.exampleSubLocated, slots)).toBeNull();
+    expect(fillPattern(T8.exampleSubUnlocated, slots))
       .toBe("Managing short lets for landlords who would rather not.");
   });
 });

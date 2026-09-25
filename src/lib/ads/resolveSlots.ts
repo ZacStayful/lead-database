@@ -1,6 +1,7 @@
 import type { Customer } from "@/lib/types";
 import { POSTCODE_AREA_CITY } from "@/lib/postcode";
 import type { AdSlotKey, AdTemplate } from "./templates";
+import { destinationNeedsLink, resolveDestination, type AdDestination } from "./destination";
 import { slotsForTemplate } from "./templates";
 
 /**
@@ -17,6 +18,8 @@ export type FeeVat = "inclusive" | "exclusive" | "not_stated";
 
 export type AdProfile = {
   company_name?: string | null;
+  /** Where the button sends them. Absent means nobody has been asked. */
+  destination?: AdDestination | null;
   city?: string | null;
   areas?: string | null;
   landing_url?: string | null;
@@ -148,10 +151,26 @@ export function feeVerdict(pct: number | null | undefined, opts: { fresh: boolea
   return { ok: true, warn: "fee_outside_usual_range" };
 }
 
-/** "15% of gross, plus VAT" — never a bare number. */
+/**
+ * "15% of gross, plus VAT" — never a bare number.
+ *
+ * ⚠️ NULL WHEN NOBODY HAS RECORDED THE VAT TREATMENT, AND THAT CLOSES A
+ * CONTRADICTION BETWEEN THE PROMPT AND THE VALIDATOR. `brief.ts` handed the
+ * model the phrase and told it to state the fee "exactly that way"; the
+ * validator then rejected exactly that as `fee_without_vat_treatment`, because
+ * a bare "15%" is a different price with and without VAT and the landlord
+ * reading it cannot tell which. So the model was invited to write the one
+ * sentence guaranteed to lose the generation.
+ *
+ * ⚠️ `"not_stated"` IS NOT THE SAME AS MISSING. It is a deliberate answer —
+ * "I would rather not say" — and it is what the validator's own truthiness
+ * check already admits. Only an unasked, unrecorded treatment suppresses the
+ * phrase, and the brief then says the fee must not appear at all.
+ */
 export function feePhrase(p: AdProfile): string | null {
   if (p.fee_public !== true) return null;
   if (p.fee_pct === null || p.fee_pct === undefined || !Number.isFinite(p.fee_pct)) return null;
+  if (!p.fee_vat) return null;
   const basis = p.fee_basis === "net" ? "of net" : "of gross";
   const vat =
     p.fee_vat === "inclusive" ? ", including VAT"
@@ -196,6 +215,12 @@ export type Resolution = {
   targeting: TargetingState;
   /** True when no city is known, so the unlocated headline is the honest one. */
   unlocated: boolean;
+  /**
+   * ⚠️ RESOLVED HERE AND NOWHERE ELSE. `context.ts` and the routes read this
+   * rather than deriving it, so there is one answer to "does this ad need a
+   * page" — the §26.7 rule. `undefined` means the question has not been asked.
+   */
+  destination: AdDestination | undefined;
   warnings: string[];
 };
 
@@ -230,6 +255,26 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
 
   const areas = text(p.areas) ?? (targeting.kind === "areas" ? areasPhrase(targeting.areas) : null);
 
+  /**
+   * ⚠️ A WARNING, AND IT USED TO BE A HARD REJECTION IN THE VALIDATOR — where
+   * it was the single worst rule in the file.
+   *
+   * `located_without_targeting` reads NOTHING the model wrote: it is true or
+   * false before the first call is made. So for a customer with a city and no
+   * lead filter it failed BOTH attempts identically, burned two paid calls, and
+   * guaranteed the canned text — silently, because a rejection retries once and
+   * then collapses. `filter_status` is `off` on most of the book, so this was
+   * reachable by anybody who answered a question about where they work.
+   *
+   * It was never a reason to refuse an ad either. Nothing here publishes: the
+   * operator takes the copy and the cards to Meta and sets the audience
+   * themselves. Naming Leeds on an ad shown nationwide is advice we owe them,
+   * not something to stop them doing.
+   */
+  if (text(p.city) !== null && targeting.kind === "unset") {
+    warnings.push("located_without_targeting");
+  }
+
   const slots: SlotValues = {};
   const put = (k: AdSlotKey, v: string | null) => {
     if (v !== null) slots[k] = v;
@@ -239,6 +284,10 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
   put("city", text(p.city));
   put("areas", areas);
   put("landing_url", landingUrl);
+
+  // After landing_url, because an already-resolved link implies `website`.
+  const destination = resolveDestination(p.destination, slots.landing_url !== undefined);
+  put("destination", destination ?? null);
   put("fee_pct", fee.ok && feePct !== null ? String(feePct) : null);
   put("fee_basis", text(p.fee_basis ?? (deckFee?.basis as string | undefined)));
   put("fee_vat", text(p.fee_vat));
@@ -267,6 +316,11 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
       return p.fee_public === true && slots[k] === undefined;
     }
     if (k === "review_quote" || k === "review_quote_source") return false; // optional by design
+    // ⚠️ ONLY A WEBSITE DESTINATION NEEDS A PAGE. This is the half of the
+    // blocker that lives in `missing`: without it the chat keeps asking for a
+    // URL an Instant Form ad will never use, which is how the question came to
+    // be reworded into one whose answer could not be stored.
+    if (k === "landing_url") return destinationNeedsLink(destination) && slots[k] === undefined;
     return slots[k] === undefined;
   });
 
@@ -275,6 +329,7 @@ export function resolveSlots(customer: Customer, template: AdTemplate): Resoluti
     missing,
     targeting,
     unlocated: slots.city === undefined,
+    destination,
     warnings,
   };
 }

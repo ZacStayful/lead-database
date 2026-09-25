@@ -31,8 +31,8 @@ function specFor(id: string, ratio: (typeof AD_RATIOS)[number], over: Record<str
   return layoutSpec(
     layoutInputFrom({
       template: t, ratio, accent: "#2f6fed", logo: null, slots, selected,
-      headline: fillPattern(t.headlineLocated, slots as never)!,
-      sub: fillPattern(t.subLocated, slots as never)!,
+      headline: fillPattern(t.exampleHeadlineLocated, slots as never)!,
+      sub: fillPattern(t.exampleSubLocated, slots as never)!,
       cta: fillPattern(t.ctaPattern, slots as never)!,
     })
   );
@@ -188,7 +188,7 @@ describe("⚠️ the figure check reads the IMAGE", () => {
       slots: { years_trading: "8", properties_managed: "140", review_score: "4.9", review_count: "63" } as never,
       profile: {},
       targeting: { kind: "areas", areas: ["LS"] },
-      fixed: { headline: "", sub: "" },
+      example: { headline: "", sub: "" },
     });
     const flat = flattenSpecText(specFor("years-properties-review", "4x5").root);
     expect(figuresAreSupplied(flat, allowed).ok).toBe(true);

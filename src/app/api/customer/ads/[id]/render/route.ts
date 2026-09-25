@@ -1,5 +1,5 @@
 import { AD_COPY } from "@/lib/ads/copy";
-import { adContext } from "@/lib/ads/context";
+import { adContext, preflight } from "@/lib/ads/context";
 import { validatePresentationBrand } from "@/lib/presentationBrand";
 import { brandLogoDataUrl } from "@/lib/presentationBrandStorage";
 import { figuresAreSupplied, allowedFigures } from "@/lib/ads/validateAdCopy";
@@ -31,13 +31,20 @@ export async function POST(_request: Request, { params }: { params: { id: string
   const draft = await loadDraft(admin, customer.id, params.id);
   if (!draft) return adJson({ error: "Not found" }, 404);
   if (draft.status !== "ready" || !draft.copy) {
-    return adJson({ error: "There is no advert to draw yet." }, 409);
+    return adJson({ error: "There is no ad to draw yet." }, 409);
   }
 
   const template = templateById(draft.template_id ?? DEFAULT_TEMPLATE_ID)!;
   const context = adContext(customer, template);
-  if (context.unresolved.length) {
-    return adJson({ error: AD_COPY.errors.generic, code: "unresolved" }, 409);
+  // ⚠️ THE SAME SENTENCE THE ANSWERS ROUTE GIVES. This showed only `generic`
+  // for the identical condition, so which explanation a customer met depended
+  // on where they were standing — and neither said what to do about it.
+  const check = preflight(context);
+  if (!check.ok) {
+    return adJson(
+      { error: AD_COPY.errors.unresolved(check.labels), code: "unresolved", missing: check.missing },
+      409
+    );
   }
 
   const spent = await spendBudget(admin, customer.id, draft.id, "render");
@@ -61,8 +68,13 @@ export async function POST(_request: Request, { params }: { params: { id: string
         logo,
         slots: context.resolution.slots,
         selected: context.selected,
-        headline: context.ctx.fixed.headline,
-        sub: context.ctx.fixed.sub,
+        // ⚠️ THE STORED LINES, NOT THE TEMPLATE'S EXAMPLE. The model writes the
+        // two on-image lines now, and `validateAdCopy` has already decided
+        // whether what it wrote is drawable — falling back to the example here
+        // would draw a different card from the one the chat showed, on the same
+        // draft, with nothing saying which.
+        headline: draft.copy.image.headline,
+        sub: draft.copy.image.sub,
         cta: context.cta,
       })
     );
@@ -92,7 +104,7 @@ export async function POST(_request: Request, { params }: { params: { id: string
     });
     if (!stored.ok) {
       // ⚠️ A FAILED UPLOAD NEVER COSTS THE COPY (§25). The words are already
-      // stored; the operator gets a Retry rather than a failed advert.
+      // stored; the operator gets a Retry rather than a failed ad.
       results.push({ ratio, ok: false, url: null, reason: stored.reason });
       continue;
     }

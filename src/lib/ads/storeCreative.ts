@@ -11,7 +11,7 @@ import {
  *
  * ⚠️ A FAILED UPLOAD NEVER COSTS THE COPY. §25's rule, and it is the reason
  * this returns a result rather than throwing: the words are the valuable half
- * and they are already stored, so a storage outage shows the advert with a
+ * and they are already stored, so a storage outage shows the ad with a
  * Retry rather than a failed generation.
  */
 
@@ -23,7 +23,7 @@ export type StoreResult =
  * ⚠️ THE BYTES ARE CHECKED BEFORE THEY GO ANYWHERE. `ImageResponse` does its
  * satori work inside the stream's `start()`, so a failed render is a clean 200
  * with an EMPTY body rather than a throw — and without this the zero-byte
- * result upserts straight over a good render, leaving an advert whose images
+ * result upserts straight over a good render, leaving an ad whose images
  * silently became blank.
  */
 export async function storeCreative(

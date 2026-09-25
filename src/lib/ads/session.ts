@@ -182,7 +182,7 @@ export const GENERATION_STALE_MS = 6 * 60 * 1000;
  * ⚠️ ONE CONDITIONAL UPDATE, NEVER A READ THEN A WRITE. A double-tapped Send
  * puts two requests in flight; both pass a TypeScript `if`, and neither passes
  * a WHERE clause. §50's route states the same rule, and the cost of getting it
- * wrong here is two paid generations and two different adverts racing to be
+ * wrong here is two paid generations and two different ads racing to be
  * the one stored.
  */
 export async function claimForGeneration(
@@ -215,7 +215,7 @@ export async function claimForGeneration(
   return { ok: true, draft: rows[0] as AdDraftRow };
 }
 
-/** The finished advert. `status = 'ready'` requires copy AND slots (0156). */
+/** The finished ad. `status = 'ready'` requires copy AND slots (0156). */
 export async function finishDraft(
   admin: SupabaseClient,
   draftId: string,
@@ -293,23 +293,34 @@ export async function spendBudget(
 /**
  * ⚠️ MERGED IN SQL, NEVER READ-MODIFY-WRITE. Two writers exist — the answers
  * route and the profile form — and the edit most likely to be lost in a tab
- * race is the FEE, which decides whether a price appears on a live advert.
+ * race is the FEE, which decides whether a price appears on a live ad.
+ */
+/**
+ * ⚠️ RETURNS THE MERGED PROFILE, WHICH THE RPC WAS ALREADY PRODUCING AND WE
+ * WERE THROWING AWAY. The caller needs the post-merge state to decide whether
+ * anything is still missing, and re-reading the customer to learn what we just
+ * wrote is both a wasted round trip and a second source of truth.
+ *
+ * `{ ok: true, profile: null }` means there was nothing to merge, so the
+ * caller's own copy is already current.
  */
 export async function mergeAdProfile(
   admin: SupabaseClient,
   customerId: string,
   patch: Partial<AdProfile>
-): Promise<boolean> {
-  if (!patch || Object.keys(patch).length === 0) return true;
-  const { error } = await admin.rpc("merge_ad_profile", {
+): Promise<{ ok: boolean; profile: AdProfile | null }> {
+  if (!patch || Object.keys(patch).length === 0) return { ok: true, profile: null };
+  const { data, error } = await admin.rpc("merge_ad_profile", {
     p_customer_id: customerId,
     p_patch: patch,
   });
   if (error) {
     console.error("ads/session: merge_ad_profile failed", error.message);
-    return false;
+    return { ok: false, profile: null };
   }
-  return true;
+  // null comes back when no such customer, which the RPC signals by returning
+  // nothing rather than raising.
+  return { ok: data !== null, profile: (data ?? null) as AdProfile | null };
 }
 
 // ---------------------------------------------------------------------------

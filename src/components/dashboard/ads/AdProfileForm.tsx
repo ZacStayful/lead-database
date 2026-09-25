@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AD_COPY } from "@/lib/ads/copy";
 
 /**
- * The business details every advert is built from (§65).
+ * The business details every ad is built from (§65).
  *
  * ⚠️ EVERY FIELD IS AN OVERRIDE, AND THE FORM HAS TO SAY SO. A blank box in a
  * form full of blank boxes is invisible, so each one is placeheld with what the
@@ -25,6 +25,13 @@ export type AdProfileFormProps = {
   inherited: Record<string, string | null>;
   services: AdProfileService[];
   citySuggestions: string[];
+  /**
+   * ⚠️ SENTENCES, NEVER FLAG KEYS. `resolveSlots` has always produced
+   * `fee_outside_usual_range` and the only reader was the model's prompt, so a
+   * fee being dropped off every ad was explained to Claude and to nobody else.
+   * The route words them (`warningSentences`) so this file needs no copy.
+   */
+  warnings: string[];
   readOnly: boolean;
 };
 
@@ -34,6 +41,14 @@ export function AdProfileForm(props: AdProfileFormProps) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * ⚠️ WHAT WE COULD NOT STORE, AND WHAT WE STORED BUT QUESTION. Saving used to
+   * say only "Saved." — so a fee of 45%, or a link we could not read, was
+   * dropped in silence and the operator found out when an ad refused to
+   * generate. Seeded from the server render and replaced by each save.
+   */
+  const [said, setSaid] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<string[]>(props.warnings);
 
   const set = (key: string, value: unknown) => setForm((f) => ({ ...f, [key]: value }));
   const str = (key: string) => (form[key] == null ? "" : String(form[key]));
@@ -47,6 +62,7 @@ export function AdProfileForm(props: AdProfileFormProps) {
     setBusy(true);
     setError(null);
     setNote(null);
+    setSaid([]);
     const res = await fetch("/api/customer/ads/profile", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -54,6 +70,10 @@ export function AdProfileForm(props: AdProfileFormProps) {
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     setBusy(false);
+    const strings = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    setSaid(strings(json.said));
+    setWarnings(strings(json.warnings));
     if (!res.ok) {
       setError(
         json.code === "read_only_view"
@@ -76,7 +96,15 @@ export function AdProfileForm(props: AdProfileFormProps) {
         </p>
       ) : null}
 
-      <Card title="Who the advert is from">
+      {said.length || warnings.length ? (
+        <ul className="space-y-1 rounded-lg border border-[#f0d9b8] bg-[#fdf8ef] px-3 py-2 text-xs text-[#7a5312]">
+          {[...said, ...warnings].map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      <Card title="Who the ad is from">
         <Text
           label="Trading name"
           value={str("company_name")}
@@ -102,14 +130,14 @@ export function AdProfileForm(props: AdProfileFormProps) {
           hint={
             props.citySuggestions.length
               ? `From your lead areas: ${props.citySuggestions.join(", ")}.`
-              : "An advert may only name a place you actually want work in."
+              : "An ad may only name a place you actually want work in."
           }
         />
       </Card>
 
       <Card title="Your fee">
         {/* ⚠️ Off unless they say otherwise. An unset fee_public reads as false
-            everywhere, so the fee stays off the advert. */}
+            everywhere, so the fee stays off the ad. */}
         <label className="flex items-center gap-2 text-sm text-[#1a1a19]">
           <input
             type="checkbox"
@@ -117,7 +145,7 @@ export function AdProfileForm(props: AdProfileFormProps) {
             onChange={(e) => set("fee_public", e.target.checked)}
             disabled={props.readOnly}
           />
-          Put my fee on the advert
+          Put my fee on the ad
         </label>
         {form.fee_public === true ? (
           <>
@@ -139,7 +167,7 @@ export function AdProfileForm(props: AdProfileFormProps) {
               disabled={props.readOnly}
             />
             {/* ⚠️ A bare "15%" is a different price either way, and the landlord
-                reading the advert cannot tell which. */}
+                reading the ad cannot tell which. */}
             <Choice
               label="VAT"
               value={str("fee_vat")}
@@ -157,9 +185,9 @@ export function AdProfileForm(props: AdProfileFormProps) {
 
       {props.services.map((s) => (
         <Card key={s.slot} title={s.slot === "handled" ? "What you handle" : "What is included"}>
-          {/* ⚠️ Only what they tick may appear on the advert. */}
+          {/* ⚠️ Only what they tick may appear on the ad. */}
           <p className="text-xs text-[#6b706a]">
-            Only what you tick can appear in the advert or on the image.
+            Only what you tick can appear in the ad or on the image.
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             {s.options.map((o) => {
@@ -193,7 +221,7 @@ export function AdProfileForm(props: AdProfileFormProps) {
           value={str("review_count")}
           onChange={(v) => set("review_count", v)}
           disabled={props.readOnly}
-          hint="A score never goes on an advert without its count."
+          hint="A score never goes on an ad without its count."
         />
         {/*
           ⚠️ THE ATTESTATION, AND IT IS SETTABLE NOWHERE ELSE. The advertising

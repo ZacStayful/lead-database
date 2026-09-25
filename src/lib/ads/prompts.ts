@@ -2,8 +2,11 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { AD_TEMPLATES, type AdTemplate } from "./templates";
 import { MAX_OPTIONS, MAX_QUESTIONS, MIN_OPTIONS, MIN_QUESTIONS } from "./schemas";
 import type { Answer, Question } from "./schemas";
-import { META_TRUNCATION_MARKS } from "./metaFields";
-import type { AdRejection } from "./validateAdCopy";
+import { AD_IMAGE_MAX, META_TRUNCATION_MARKS } from "./metaFields";
+import { AD_SPEC_PROSE } from "./specProse";
+import { fillPattern, type SlotValues } from "./resolveSlots";
+import type { AdProfile } from "./resolveSlots";
+import type { AdRejection, AdVariantRejection } from "./validateAdCopy";
 
 /**
  * What the model is told, and in what order (§65).
@@ -18,7 +21,11 @@ import type { AdRejection } from "./validateAdCopy";
 export const PROMPT_VERSIONS = {
   questions: "ad_questions_v1",
   simplify: "ad_simplify_v1",
-  copy: "ad_copy_v1",
+  // ⚠️ v2 IS A DIFFERENT SHAPE, NOT A REWORDING. It asks for one text per
+  // angle instead of one text, and for the on-image headline and sub the model
+  // did not previously write. A single constant across both would collapse the
+  // only join that could answer "did five angles convert better than one".
+  copy: "ad_copy_v2",
 } as const;
 export type PromptVersion = (typeof PROMPT_VERSIONS)[keyof typeof PROMPT_VERSIONS];
 
@@ -104,22 +111,37 @@ const PROHIBITIONS = [
   "something they may not do.",
 ].join("\n");
 
+/**
+ * An angle with its slot written out rather than braced.
+ *
+ * ⚠️ THE PACK CANNOT FILL A SLOT — it is built once at module scope with no
+ * customer in hand — and printing the raw pattern means the model literally
+ * reads "what {properties_managed} properties means day to day". Exactly one
+ * angle in the four templates has a slot; `copyUser` fills it for real, and
+ * this is the catalogue form.
+ */
+function readableAngle(angle: string): string {
+  return angle.replace(/\{(\w+)\}/g, (_, key: string) => `[their ${key.replace(/_/g, " ")}]`);
+}
+
 /** One template, as the model reads it. Derived, never restated. */
 function describeTemplate(t: AdTemplate): string {
   const lines = [
     `## ${t.id} — ${t.name}`,
     `Who it is for: ${t.audience}`,
     `Addressed to: ${t.addressedTo}`,
-    `The argument it makes: ${t.angles[0]}`,
+    `The argument it makes: ${readableAngle(t.angles[0])}`,
     "",
-    "Headline, which is FIXED and which you do not write:",
-    `  with a place: ${t.headlineLocated}`,
-    `  without one:  ${t.headlineUnlocated}`,
-    "Sub-line, also fixed:",
-    `  ${t.subLocated}`,
+    "The headline and sub-line the spec would write, as the register to aim at:",
+    // ⚠️ THROUGH `readableAngle` TOO. These carry slots — {city}, {areas},
+    // {review_score} — and the pack has no customer to fill them with, so a
+    // raw pattern here is a brace the model could copy onto a live ad.
+    `  with a place: ${readableAngle(t.exampleHeadlineLocated)}`,
+    `  without one:  ${readableAngle(t.exampleHeadlineUnlocated)}`,
+    `  sub:          ${readableAngle(t.exampleSubLocated)}`,
     "",
-    "Angles the primary text may take, one per ad:",
-    ...t.angles.map((a, i) => `  ${i + 1}. ${a}`),
+    "Angles it can take — one primary text each:",
+    ...t.angles.map((a, i) => `  ${i + 1}. ${readableAngle(a)}`),
   ];
   if (t.services) {
     lines.push(
@@ -160,11 +182,11 @@ export const AD_PACK: string = [
   "",
   "# The four templates",
   "",
-  "Each is a fixed headline and sub-line with slots, plus an argument the primary",
-  "text may make. ⚠️ YOU DO NOT WRITE THE HEADLINE OR THE SUB. They are filled in",
-  "from the customer's own recorded values, which is what makes it impossible for",
-  "them to contain a figure nobody supplied. You write the primary text, and the",
-  "two short fields Facebook shows beneath the image.",
+  "Each is an argument, with the angles a primary text can take and an example",
+  "headline and sub-line showing the register. You write everything: the words on",
+  "the image, the primary texts, and the two short fields Facebook shows beneath",
+  "it. The examples are there to be matched in tone and beaten in specificity,",
+  "not copied.",
   "",
   AD_TEMPLATES.map(describeTemplate).join("\n\n"),
   "",
@@ -353,66 +375,110 @@ export function simplifyUser(params: { question: Question; account: string }): s
 export const COPY_INSTRUCTIONS = [
   "# Your job",
   "",
-  "Write the advert. Three fields:",
+  "Write the ad. Two parts.",
+  "",
+  "## The image",
+  "",
+  "Two lines that go ON the card, in the customer's own colours:",
+  "",
+  `- \`image_headline\` — the big line. Under ${AD_IMAGE_MAX.headline} characters or it runs off the card.`,
+  "  Wrap ONE short span in *asterisks* and the card draws it in their accent",
+  "  colour — pick the two or three words the whole ad turns on.",
+  `- \`image_sub\` — the line beneath it. Under ${AD_IMAGE_MAX.sub} characters. One sentence,`,
+  "  concrete, saying what the business actually does.",
+  "",
+  "You are shown the headline and sub the spec would have written. Match that",
+  "register and beat it on specificity, using what this customer told us. Do not",
+  "reproduce it word for word.",
+  "",
+  "## The primary texts, one per angle",
+  "",
+  "You are given a list of angles, each with a key. Write ONE `variants` entry",
+  "for EVERY angle in that list, returning its `angle_key` exactly as given.",
+  "Each entry has three fields:",
   "",
   "- `message` — the primary text, above the image. This is the one that does the",
   `  work. Facebook shortens it at about ${META_TRUNCATION_MARKS.message} characters with a "See more", so`,
-  "  the first sentence has to stand alone and has to name the audience and the",
-  "  category. Past that mark, write as long as it needs and no longer.",
+  "  everything before that mark has to stand alone, and has to name the audience",
+  "  and the category somewhere inside it. Past the mark, write as long as it",
+  "  needs and no longer.",
   `- \`headline\` — under the image. Aim for ${META_TRUNCATION_MARKS.headline} characters so Facebook does not`,
-  "  clip it. Say the thing, do not tease it.",
+  "  clip it. Say the thing, do not tease it. Never the same words as the",
+  "  description, and never the same words as the line on the image.",
   `- \`description\` — beneath the headline. Aim for ${META_TRUNCATION_MARKS.description} characters. Usually the`,
   "  action: what happens when they tap.",
   "",
-  "⚠️ The image's own headline and sub-line are already written and are shown to",
-  "you below. Do not repeat them word for word in the primary text — the reader",
-  "sees both at once.",
+  "⚠️ ONE ANGLE PER VARIANT, COMMITTED TO. A text that makes four arguments makes",
+  "none. The point of writing several is that Facebook tests them against each",
+  "other — so two that say the same thing in different words are worth less than",
+  "one. If two of your angles are coming out alike, one of them is wrong.",
   "",
   "# How to write it",
   "",
-  "- Pick ONE angle from the template's list and commit to it. An advert that",
-  "  makes four arguments makes none.",
   "- Write like one person telling another something true. Short sentences. No",
   "  marketing register, no \"unlock\", no \"seamless\", no exclamation marks.",
   "- Take a worry away rather than adding a hope. See the two objections above.",
   "- Be specific about what the business actually does, using only what the brief",
-  "  says it does.",
+  "  says it does. A detail from what they told us beats an adjective.",
   "- End by saying what to do next, plainly, in the words the button uses.",
   "",
   "# The figures you may state",
   "",
   "The brief lists every number this customer has given us. You may state those",
-  "and no others. If a sentence needs a number you have not been given, write the",
-  "sentence without it — it will still be a better advert than one that gets",
-  "rejected.",
+  "and no others, ON THE IMAGE AS WELL AS IN THE TEXT. If a sentence needs a",
+  "number you have not been given, write the sentence without it — it will still",
+  "be a better ad than one that gets rejected.",
 ].join("\n");
+
+/** An angle the model is being asked to write, with the key it must return. */
+export type OfferedAngle = { key: string; angle: string };
 
 export function copyUser(params: {
   template: AdTemplate;
   account: string;
   answers: Answer[];
-  fixed: { headline: string; sub: string };
+  example: { headline: string; sub: string };
   cta: string;
   figures: string[];
+  angles: OfferedAngle[];
   /** The previous attempt, when this is a rewrite the customer asked for. */
   previousMessage?: string | null;
-  /** Why the last attempt was refused, when this is the automatic retry. */
-  rejection?: { reason: AdRejection; detail: string } | null;
+  /**
+   * Which angles the last attempt lost, and why. ⚠️ NOT "the last attempt was
+   * refused" — a retry that re-asks for the four angles it already got right
+   * pays twice for them and risks losing them the second time.
+   */
+  rejected?: AdVariantRejection[] | null;
 }): string {
-  const angles = angleListFor(params.template);
+  const t = params.template;
+  // ⚠️ THE SPEC'S OWN RATIONALE, NOT A PARAPHRASE OF IT. `AD_PACK` keeps the
+  // angle NAMES verbatim and drops every paragraph around them, so the model
+  // was told T7's angles and never told that the template "offers a calculation
+  // rather than a claim, which is why it can talk about income without
+  // triggering the gate". Generated from the document (§50.5's rule) rather
+  // than transcribed, because §65 records four errors that came from
+  // paraphrasing it.
+  const prose = AD_SPEC_PROSE[t.id];
   return [
-    `# Write the "${params.template.name}" advert`,
+    `# Write the "${t.name}" ad`,
     "",
-    `Template: ${params.template.id}`,
-    `Addressed to: ${params.template.addressedTo}`,
+    `Template: ${t.id}`,
+    `Addressed to: ${t.addressedTo}`,
     "",
-    "Angles available — pick one:",
-    ...angles.map((a, i) => `  ${i + 1}. ${a}`),
+    ...(prose ? ["## What this template is, in the spec's own words", "", prose, ""] : []),
+    "## The angles to write",
     "",
-    "# Already on the image, written for you",
+    `Write one variant for each. Return the key exactly as it appears here.`,
     "",
-    `Headline: ${params.fixed.headline}`,
-    `Sub-line: ${params.fixed.sub}`,
+    ...params.angles.map((a) => `- \`${a.key}\` — ${a.angle}`),
+    "",
+    "## The image, for reference",
+    "",
+    "This is what the spec would have put on the card. You are writing your own,",
+    "for this customer. Aim at this register.",
+    "",
+    `Headline: ${params.example.headline}`,
+    `Sub-line: ${params.example.sub}`,
     `Button:   ${params.cta}`,
     "",
     "# Their business",
@@ -429,42 +495,68 @@ export function copyUser(params: {
     "",
     ...(params.figures.length
       ? params.figures.map((f) => `- ${f}`)
-      : ["None. This advert states no numbers at all."]),
+      : ["None. This ad states no numbers at all."]),
     ...(params.previousMessage
       ? [
           "",
           "# They have asked for a rewrite",
           "",
-          "This is what you wrote last time. Take a DIFFERENT angle from the list —",
-          "not a rephrasing of this one.",
+          "This is what you wrote last time. Say it differently — a different way in,",
+          "a different detail, not a rephrasing.",
           "",
           params.previousMessage,
         ]
       : []),
-    ...(params.rejection
+    ...(params.rejected?.length
       ? [
           "",
-          "# Your last attempt was refused",
+          "# These angles were refused last time",
           "",
-          `Reason: ${rejectionAdvice(params.rejection.reason)}`,
-          `(${params.rejection.detail})`,
+          ...params.rejected.map(
+            (r) => `- \`${r.angleKey}\`: ${rejectionAdvice(r.reason)}\n  (the part that did it: ${r.detail})`
+          ),
           "",
-          "Write it again without that. Everything else about the brief is unchanged.",
+          "Write those again without that. Everything else about the brief is unchanged.",
         ]
       : []),
   ].join("\n");
 }
 
 /**
+ * The angles this template may take, with the key the model must return.
+ *
  * ⚠️ T8's THIRD ANGLE IS DROPPED WHEN THERE IS NO CONFIRMED QUOTE. The spec
  * offers "what landlords say, in their words if a quote is supplied" — and
  * offered without one, the model writes a plausible testimonial that passes
  * every other rule in the file. Omission first, the prohibition second, the
  * validator third; this is the omission.
+ *
+ * ⚠️ AN ANGLE WHOSE SLOT IS MISSING IS DROPPED, NOT HALF-FILLED. Exactly one
+ * angle carries a slot — T8's "what {properties_managed} properties means day
+ * to day" — and `requiredSlots` means `preflight` has already refused a T8 with
+ * no count, so this is the second stop rather than the first.
+ *
+ * ⚠️ THERE IS DELIBERATELY NO SERVICE-VOCABULARY FILTER HERE. The plan called
+ * for one, on the model of the answer-option check: never offer an angle whose
+ * words the validator will then refuse. Checked against the real registries —
+ * NOT ONE of the twenty angle names contains a service token as a whole word,
+ * so the filter would be dead code, and `serviceTokensFor` is where the rule
+ * lives anyway. If an angle is ever written that does name one, add it then.
  */
-export function angleListFor(t: AdTemplate): string[] {
-  if (t.id !== "years-properties-review") return [...t.angles];
-  return t.angles.filter((a) => !a.includes("in their words"));
+export function angleListFor(
+  t: AdTemplate,
+  opts?: { profile?: AdProfile; slots?: SlotValues }
+): OfferedAngle[] {
+  const slots = opts?.slots ?? {};
+  const confirmed = opts?.profile?.review_quote_confirmed === true;
+  const out: OfferedAngle[] = [];
+  t.angles.forEach((angle, i) => {
+    if (!confirmed && angle.includes("in their words")) return;
+    const filled = fillPattern(angle, slots);
+    if (filled === null) return;
+    out.push({ key: t.angleKeys[i], angle: filled });
+  });
+  return out;
 }
 
 /** What to do about it, in the model's terms, never our error code. */
@@ -485,23 +577,27 @@ function rejectionAdvice(reason: AdRejection): string {
     case "legal_assurance":
       return "it gave legal advice or promised compliance. Say what the business handles, not what the law requires.";
     case "first_sentence_missing_audience":
-      return "the first sentence did not say who the advert is for. Name landlords in it.";
+      return "the opening did not say who the ad is for. Name landlords in it.";
     case "first_sentence_missing_category":
       return "the first sentence did not say what the service is. Say \"short let management\" in it.";
     case "link_in_text":
       return "it put a web address in the text. The button already carries the link.";
     case "mentions_stayful":
-      return "it named Stayful. This advert is the customer's, and we are not in it.";
+      return "it named Stayful. This ad is the customer's, and we are not in it.";
     case "fee_not_published":
       return "it stated a fee the customer has not agreed to publish. Leave the fee out.";
     case "fee_without_vat_treatment":
       return "it stated a fee without saying whether VAT is included. Leave the fee out.";
     case "example_estimate":
-      return "it gave an example figure. This advert asks the question; it never answers it.";
-    case "located_without_targeting":
-      return "it named a place the advert is not targeting.";
+      return "it gave an example figure. This ad asks the question; it never answers it.";
     case "too_long":
       return "it was too long. Say the same thing in fewer words.";
+    case "copy_repeats_itself":
+      return "it said the same thing twice — either across two angles, or in the headline and the description. Each one has to earn its place.";
+    case "unknown_angle":
+      return "it used an angle key that was not offered. Use the keys exactly as listed.";
+    case "duplicate_angle":
+      return "two variants claimed the same angle. One text per key.";
     default:
       return "it broke one of the rules above. Re-read them and write it again.";
   }

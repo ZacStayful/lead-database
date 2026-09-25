@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Customer } from "@/lib/types";
-import { adAccentFor, adContext } from "../context";
+import { adAccentFor, adContext, preflight } from "../context";
 import { STAYFUL_ACCENT } from "@/lib/presentationBrand";
 import { templateById } from "../templates";
 
@@ -55,9 +55,41 @@ describe("what is still unresolved", () => {
     expect(adContext(c, T8).unresolved).toEqual([]);
   });
 
-  /** The button has to point somewhere, whatever the headline needs. */
-  it("always names a missing landing page", () => {
-    expect(adContext(customer({ website_url: null }), T7).unresolved).toContain("landing_url");
+  /**
+   * ⚠️ THIS TEST USED TO ASSERT THE BUG. It read "always names a missing landing
+   * page", and "always" was exactly the defect: the button's page was demanded
+   * unconditionally, so an operator who wanted a Facebook form — and had said so
+   * — was refused for a page their ad would never use. Production ran one draft
+   * and never produced an ad because of it.
+   *
+   * The rule now: with nothing on file the gap is the QUESTION, not the page.
+   */
+  it("asks where the button goes before it asks for a page", () => {
+    const u = adContext(customer({ website_url: null }), T7).unresolved;
+    expect(u).toContain("destination");
+    expect(u).not.toContain("landing_url");
+  });
+
+  it("names the page only once they have chosen their own website", () => {
+    const c = customer({ website_url: null, ad_profile: { destination: "website" } });
+    expect(adContext(c, T7).unresolved).toContain("landing_url");
+  });
+
+  /** The case that unblocks an operator with no website at all. */
+  it("needs no page at all for a form inside Facebook", () => {
+    const c = customer({ website_url: null, ad_profile: { destination: "instant_form" } });
+    expect(adContext(c, T7).unresolved).toEqual([]);
+  });
+
+  /**
+   * ⚠️ NOT A REGRESSION FOR ANYBODY WHO ALREADY HAS A SITE. A resolved link
+   * implies `website`, so the ~30 customers carrying a website_url are never
+   * asked a question they would not have been asked before.
+   */
+  it("infers website from a link already on file, and asks nothing", () => {
+    const ctx = adContext(customer(), T7);
+    expect(ctx.resolution.destination).toBe("website");
+    expect(ctx.unresolved).toEqual([]);
   });
 
   it("is empty for a template whose patterns need nothing extra", () => {
@@ -65,16 +97,16 @@ describe("what is still unresolved", () => {
   });
 });
 
-describe("the fixed headline and sub", () => {
+describe("the example headline and sub", () => {
   it("uses the unlocated form when no town is set", () => {
     const { ctx } = adContext(customer(), T7);
-    expect(ctx.fixed.headline).toBe(T7.headlineUnlocated);
-    expect(ctx.fixed.headline).not.toContain("{");
+    expect(ctx.example.headline).toBe(T7.exampleHeadlineUnlocated);
+    expect(ctx.example.headline).not.toContain("{");
   });
 
   it("uses the located form once one is", () => {
     const c = customer({ filter_status: "active", filter_areas: ["LS"], ad_profile: { city: "Leeds" } });
-    expect(adContext(c, T7).ctx.fixed.headline).toContain("Leeds");
+    expect(adContext(c, T7).ctx.example.headline).toContain("Leeds");
   });
 
   /**
@@ -85,13 +117,42 @@ describe("the fixed headline and sub", () => {
   it("names only the services they ticked", () => {
     const c = customer({ ad_profile: { included: ["cleaning", "linen"] } });
     const { ctx } = adContext(c, T3);
-    expect(ctx.fixed.sub).toContain("Cleaning and linen");
-    expect(ctx.fixed.sub).not.toContain("pricing");
-    expect(ctx.fixed.sub).not.toContain("check-in");
+    expect(ctx.example.sub).toContain("Cleaning and linen");
+    expect(ctx.example.sub).not.toContain("pricing");
+    expect(ctx.example.sub).not.toContain("check-in");
   });
 
+  /**
+   * ⚠️ IT NAMES THE SLOT THEY WOULD BE ASKED ABOUT, NOT THE DERIVED ONE.
+   * `unresolved` used to be the `{}` the sub pattern could not fill, which is
+   * `included_list` — a derived key nobody is ever asked for, and one
+   * `slotCopyLabel` has no sentence for. `requiredSlots` names `included`,
+   * which is the question.
+   */
   it("leaves T3 unrenderable while nothing is ticked, rather than inventing a list", () => {
-    expect(adContext(customer(), T3).unresolved).toContain("included_list");
+    expect(adContext(customer(), T3).unresolved).toContain("included");
+    expect(adContext(customer(), T3).unresolved).not.toContain("included_list");
+  });
+
+  /**
+   * ⚠️ THE REPLACEMENT FOR A HARD REJECTION THAT COULD NOT BE RECOVERED FROM.
+   * `located_without_targeting` was a validator rule reading nothing the model
+   * wrote, so it failed both paid attempts identically and guaranteed the
+   * canned text — for anybody whose lead filter is off, which is most of the
+   * book. Nothing here publishes; the audience is set in Meta afterwards.
+   */
+  it("⚠️ a town with no targeting behind it warns rather than refusing", () => {
+    const c = customer({ ad_profile: { city: "Leeds" } });
+    const out = adContext(c, T7);
+    expect(out.resolution.targeting.kind).toBe("unset");
+    expect(out.unresolved).not.toContain("city");
+    expect(preflight(out).ok).toBe(true);
+    expect(preflight(out).warnings).toContain("located_without_targeting");
+  });
+
+  it("says nothing when the town came from their own areas", () => {
+    const c = customer({ filter_status: "active", filter_areas: ["LS"], ad_profile: { city: "Leeds" } });
+    expect(preflight(adContext(c, T7)).warnings).not.toContain("located_without_targeting");
   });
 });
 
@@ -127,12 +188,12 @@ describe("the accent", () => {
 describe("what the routes share", () => {
   /**
    * The copy is validated against the fixed headline that the image then
-   * draws. Two readings would eventually produce an advert whose words were
+   * draws. Two readings would eventually produce an ad whose words were
    * checked against a headline it is not carrying.
    */
-  it("gives the same fixed copy to every caller", () => {
+  it("gives the same example copy to every caller", () => {
     const c = customer({ ad_profile: { city: "Leeds" }, filter_status: "active", filter_areas: ["LS"] });
-    expect(adContext(c, T7).ctx.fixed).toEqual(adContext(c, T7).ctx.fixed);
+    expect(adContext(c, T7).ctx.example).toEqual(adContext(c, T7).ctx.example);
   });
 
   it("carries the brief and the figures the model is allowed", () => {

@@ -48,19 +48,37 @@ export async function POST(_request: Request, { params }: { params: { id: string
     customerId: customer.id,
     draft: claim.draft,
     answers,
-    previousMessage: existing.copy?.message ?? null,
+    // The recommended variant is the one they are looking at, so it is the one
+    // a rewrite has to differ from.
+    previousMessage: existing.copy?.variants?.[0]?.message ?? null,
   });
 
   if (!result.ok) {
     if (result.reason === "unresolved") {
       return adJson(
-        { error: `I still need ${result.labels.join(", ")}.`, code: "unresolved", missing: result.missing },
+        {
+          error: AD_COPY.errors.unresolved(result.labels),
+          code: "unresolved",
+          missing: result.missing,
+        },
         400
       );
+    }
+    if (result.reason === "not_written") {
+      // ⚠️ `writeAd` HAS ALREADY RELEASED IT TO `collecting`, and it must not
+      // be failed on top of that. The previous ad is still in the row: a
+      // rewrite that could not reach the model leaves the operator exactly
+      // where they were, with a sentence saying so.
+      return adJson({
+        status: "collecting",
+        error: AD_COPY.errors.notWritten[result.failure] ?? AD_COPY.errors.generic,
+        code: "not_written",
+        regenerations_used: spent,
+      });
     }
     await releaseClaim(admin, existing.id, "failed");
     return adJson({ error: AD_COPY.errors.generic }, 500);
   }
 
-  return adJson({ status: "ready", copy: result.copy, degraded: result.degraded, regenerations_used: spent });
+  return adJson({ status: "ready", copy: result.copy, regenerations_used: spent });
 }

@@ -5,11 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AD_COPY, AD_STARTER_PROMPT } from "@/lib/ads/copy";
 import { META_TRUNCATION_MARKS } from "@/lib/ads/metaFields";
-import type { AdCopy } from "@/lib/ads/metaFields";
+import type { AdCopy, AdVariant } from "@/lib/ads/metaFields";
 
 /**
  * The chat (§65): a prompt already in the box, then the questions it produced,
- * then the advert.
+ * then the ad.
  *
  * ⚠️ IMPORTS `copy.ts` AND `metaFields.ts`, NEVER `templates.ts`'s server
  * siblings. Both are import-free for exactly this — the split `deadLeadCopy.ts`
@@ -41,7 +41,11 @@ export type AdChatProps = {
   questionsVersion: number;
   status: string;
   copy: AdCopy | null;
-  fixed: { headline: string; sub: string } | null;
+  /**
+   * What the card WOULD say before anything is written. Once `copy` exists,
+   * `copy.image` is what will actually be drawn and this is not consulted.
+   */
+  example: { headline: string; sub: string } | null;
   canSimplify: boolean;
   templates: ChatTemplate[];
   readOnly: boolean;
@@ -136,6 +140,13 @@ export function AdChat(props: AdChatProps) {
     });
     setBusy(null);
     if (!ok) return setError(messageFor(json, status));
+    // ⚠️ A 200 THAT WROTE NO AD STILL HAS TO SAY SO. The model being
+    // unreachable is not a bad request — the questions and the answers are
+    // intact and Send works again — so the route answers 200 with the draft
+    // back in `collecting`. Without this the page would simply re-render the
+    // same form with nothing explaining why, which is the silent failure this
+    // whole change is about.
+    if (json.code === "not_written") setError(messageFor(json, status));
     router.refresh();
   }
 
@@ -147,7 +158,7 @@ export function AdChat(props: AdChatProps) {
       <div className="space-y-3">
         {props.readOnly ? <ReadOnly /> : null}
         <label className="block text-sm font-medium text-[#1a1a19]" htmlFor="ad-prompt">
-          What do you want the advert to do?
+          What do you want the ad to do?
         </label>
         <textarea
           id="ad-prompt"
@@ -189,9 +200,10 @@ export function AdChat(props: AdChatProps) {
             {AD_COPY.chat.pickedPrefix} <strong>{template.name}</strong>.
             {props.templateReason ? ` ${props.templateReason}` : ""}
           </p>
-          {props.fixed?.headline ? (
+          {props.example?.headline ? (
             <p className="mt-2 text-xs text-[#6b706a]">
-              The image will say: “{props.fixed.headline.replace(/\*/g, "")}”
+              Something along the lines of: “{props.example.headline.replace(/\*/g, "")}” — the
+              exact words on the image get written with the rest of the ad.
             </p>
           ) : null}
           <button
@@ -308,7 +320,7 @@ function Problem({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The finished advert.
+ * The finished ad.
  *
  * ⚠️ THE TRUNCATION MARKS ARE DRAWN, NEVER ENFORCED. 125/40/30 are where
  * Facebook shortens the rendered ad with a "See more"; the API accepts far
@@ -323,6 +335,13 @@ function AdResult({
   copy: AdCopy;
   readOnly: boolean;
 }) {
+  // ⚠️ THE FIRST VARIANT IS THE RECOMMENDED ONE, AND THAT IS `generate.ts`'s
+  // ordering rather than a choice made here: the list arrives in the order the
+  // angles were offered, which is the spec's own order, and the spec leads with
+  // the angle it considers the template's strongest.
+  const variants = copy.variants ?? [];
+  const [recommended, ...rest] = variants;
+  const provenance = copy.provenance ?? null;
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -334,6 +353,9 @@ function AdResult({
     const { ok, status, json } = await post(`/api/customer/ads/${draftId}/${action}`);
     setBusy(null);
     if (!ok) return setError(messageFor(json, status));
+    // The rewrite reached nobody: the ad on screen is still the previous one,
+    // so say what happened rather than letting a refresh look like a no-op.
+    if (json.code === "not_written") setError(messageFor(json, status));
     router.refresh();
   }
 
@@ -349,16 +371,40 @@ function AdResult({
     router.refresh();
   }
 
+  // ⚠️ AFTER THE HOOKS, NEVER BEFORE THEM. A row stored before the shape
+  // changed carries no variants — nothing in production does, but a
+  // half-written draft is not worth a blank screen, and an early return above
+  // `useRouter` is a conditional hook call that lint rightly refuses.
+  if (!recommended) return <Problem>{AD_COPY.errors.generic}</Problem>;
+
   return (
     <div className="space-y-4">
       {readOnly ? <ReadOnly /> : null}
 
       <div className="rounded-xl border border-[#e4e6e0] bg-white p-4">
         <h2 className="text-sm font-semibold text-[#1a1a19]">{AD_COPY.result.copyHeading}</h2>
-        <Field label="Primary text" value={copy.message} mark={META_TRUNCATION_MARKS.message} />
-        <Field label="Headline" value={copy.headline} mark={META_TRUNCATION_MARKS.headline} />
-        <Field label="Description" value={copy.description} mark={META_TRUNCATION_MARKS.description} />
-        <dl className="mt-3 text-xs text-[#6b706a]">
+
+        {/* ⚠️ ONE IN FULL, THE REST FOLDED AWAY, AND THIS IS THE SHAPE FIFTEEN
+            WILL INHERIT. Five primary texts is already more than anybody reads
+            in one sitting; they exist to give Facebook something to test, not
+            to give the operator five things to compare. */}
+        <VariantBlock variant={recommended} recommended={variants.length > 1} />
+
+        {rest.length ? (
+          <details className="mt-4 border-t border-[#eceee8] pt-3">
+            <summary className="cursor-pointer text-xs font-medium text-[#55564f]">
+              {AD_COPY.result.anglesHeading} ({rest.length})
+            </summary>
+            {rest.map((v) => (
+              <VariantBlock key={v.angle_key} variant={v} recommended={false} />
+            ))}
+          </details>
+        ) : null}
+
+        <dl className="mt-4 border-t border-[#eceee8] pt-3 text-xs text-[#6b706a]">
+          <dt className="inline font-medium">On the image: </dt>
+          <dd className="inline">“{copy.image.headline.replace(/\*/g, "")}”</dd>
+          <br />
           <dt className="inline font-medium">Button: </dt>
           <dd className="inline">{copy.call_to_action_type.replace(/_/g, " ").toLowerCase()}</dd>
           <br />
@@ -370,9 +416,19 @@ function AdResult({
 
       {/* ⚠️ SAID PLAINLY, AND IT CARRIES NO META SEMANTICS. Meta's
           self_ai_disclosure declares AI-generated MEDIA; ours is a card we
-          drew, and only the words are model-written. */}
+          drew, and only the words are model-written.
+
+          ⚠️ AND IT IS ONLY EVER SHOWN OVER MODEL-WRITTEN WORDS NOW. It used to
+          render over the template's own default text on every failed
+          generation, which is what told the owner a model had written an ad it
+          never saw. `provenance` is stored rather than returned precisely so
+          this survives a router.refresh(). */}
       <p className="rounded-lg border border-[#e4e6e0] bg-[#f7f8f5] px-3 py-2 text-xs text-[#55564f]">
         {AD_COPY.result.aiNotice}
+        {provenance && provenance.written < provenance.offered ? (
+          <> {AD_COPY.result.someAngles(provenance.written, provenance.offered)}</>
+        ) : null}
+        {provenance?.image === "example" ? <> {AD_COPY.result.imageFromTemplate}</> : null}
       </p>
 
       <div className="flex flex-wrap gap-2">
@@ -415,9 +471,28 @@ function AdResult({
       {error ? <Problem>{error}</Problem> : null}
       <p className="text-xs text-[#6b706a]">
         <Link href="/dashboard/ads" className="underline">
-          All your adverts
+          All your ads
         </Link>
       </p>
+    </div>
+  );
+}
+
+/** One angle: its name, then the three fields Facebook shows. */
+function VariantBlock({ variant, recommended }: { variant: AdVariant; recommended: boolean }) {
+  return (
+    <div className="mt-3 border-t border-[#eceee8] pt-3 first:mt-0 first:border-t-0 first:pt-0">
+      <p className="text-xs font-medium text-[#55564f]">
+        {variant.angle}
+        {recommended ? (
+          <span className="ml-2 rounded bg-[#eef2ea] px-1.5 py-0.5 text-[10px] font-normal text-[#55564f]">
+            {AD_COPY.result.recommended}
+          </span>
+        ) : null}
+      </p>
+      <Field label="Primary text" value={variant.message} mark={META_TRUNCATION_MARKS.message} />
+      <Field label="Headline" value={variant.headline} mark={META_TRUNCATION_MARKS.headline} />
+      <Field label="Description" value={variant.description} mark={META_TRUNCATION_MARKS.description} />
     </div>
   );
 }

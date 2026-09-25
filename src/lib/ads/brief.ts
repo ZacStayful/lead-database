@@ -74,8 +74,13 @@ function feeLines(customer: Customer): string[] {
   return phrase
     ? [`Fee, which they HAVE agreed to publish: ${phrase}. State it exactly that way or not at all.`]
     : [
-        "Fee: they are happy to publish one but we do not have the number, " +
-          "so it must not appear.",
+        // ⚠️ TWO REASONS, ONE SENTENCE, DELIBERATELY. `feePhrase` now also
+        // withholds a fee whose VAT treatment nobody recorded — because a bare
+        // "15%" is a different price with and without it, and the validator
+        // refuses one. Either way the instruction to the model is identical,
+        // and the operator is told which it was by the questionnaire asking.
+        "Fee: they are happy to publish one, but we do not have it in a form " +
+          "that can go on an ad, so it must not appear.",
       ];
 }
 
@@ -157,14 +162,38 @@ function trustLines(customer: Customer): string[] {
  * already records that this codebase sends real contact details to a provider
  * in one place and treats that as a decision rather than a habit.
  */
+/**
+ * What the model is told about where the button goes.
+ *
+ * ⚠️ `instant_form` NEEDS NO PAGE, and saying so is what stops the ladder
+ * asking for one. An unset destination is the honest gap: ask which of the two
+ * they want, never for a URL nobody has established they have.
+ */
+function destinationLine(r: Resolution): string {
+  if (r.destination === "instant_form") {
+    return "The button opens a lead form inside Facebook. They need no landing page.";
+  }
+  if (r.slots.landing_url) return "They have a page for the button to point at.";
+  if (r.destination === "website") {
+    return "⚠️ They want the button to open their own website and there is no page on file. Ask for it.";
+  }
+  return (
+    "⚠️ Nobody has chosen where the button goes. Ask whether it should open a page on " +
+    "their own website or a lead form inside Facebook — those two and no others."
+  );
+}
+
 export function adBrief(customer: Customer, template: AdTemplate, r: Resolution): string {
   const p = adProfileOf(customer);
   const lines: string[] = [
     "## The business",
     `Trading name for the advert: ${r.slots.company_name ?? "⚠️ not on file — ask what name the advert goes out under."}`,
-    r.slots.landing_url
-      ? "They have a page for the button to point at."
-      : "⚠️ No landing page on file. Ask where the button should send people.",
+    // ⚠️ THREE CASES, NOT TWO. This read "no landing page on file, ask where
+    // the button should send people" for everybody without a link — including
+    // an operator who has chosen a Facebook lead form, whose ad needs no page
+    // at all. Telling the model to chase one is how the question that broke
+    // this feature got reworded in the first place.
+    destinationLine(r),
     "",
     "## Where they want work",
     ...targetingLine(r),

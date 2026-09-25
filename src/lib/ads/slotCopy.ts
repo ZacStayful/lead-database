@@ -27,6 +27,12 @@ export const SLOT_QUESTIONS: Partial<Record<AdSlotKey, SlotQuestion>> = {
     options: [],
     allowOther: true,
   },
+  destination: {
+    question:
+      "When a landlord taps the button on your ad, where should they land — a page on your own website, or a form inside Facebook?",
+    options: ["A page on my own website", "A form inside Facebook"],
+    allowOther: true,
+  },
   landing_url: {
     question: "Where should the button send them?",
     options: [],
@@ -116,14 +122,15 @@ export function questionForSlot(slot: AdSlotKey, t: AdTemplate): SlotQuestion | 
  * sentence rather than a snake_case string.
  */
 export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
-  company_name: "the name the advert goes out under",
+  company_name: "the name the ad goes out under",
   city: "a town or city to name",
   areas: "the areas you cover",
+  destination: "where the button should send people",
   landing_url: "a page for the button to point at",
   fee_pct: "your fee",
   fee_basis: "whether the fee is on gross or net",
   fee_vat: "how VAT is treated",
-  fee_public: "whether the fee goes on the advert",
+  fee_public: "whether the fee goes on the ad",
   included: "what is included",
   handled: "what you handle",
   councils: "the councils you deal with",
@@ -139,4 +146,37 @@ export const SLOT_LABELS: Partial<Record<AdSlotKey, string>> = {
 
 export function slotCopyLabel(slot: string): string {
   return SLOT_LABELS[slot as AdSlotKey] ?? slot.replace(/_/g, " ");
+}
+
+// ---------------------------------------------------------------------------
+// Flags
+// ---------------------------------------------------------------------------
+
+/**
+ * `Resolution.warnings` in English.
+ *
+ * ⚠️ THE ARRAY WAS COMPUTED AND RENDERED NOWHERE. `resolveSlots` has always
+ * flagged a fee outside the usual range, and the only reader was `brief.ts`,
+ * which writes the raw key into the model's prompt. So an operator whose deck
+ * fee is 45% had it dropped off every ad, and the one place that said why was
+ * a string the model read and they never saw.
+ *
+ * ⚠️ NEVER THE RAW KEY, for the reason above `SLOT_LABELS`. An unknown flag
+ * yields NOTHING rather than `fee_not_a_number` — a warning we cannot word is
+ * one nobody can act on, and it is not worth showing a column name to say so.
+ */
+export const AD_WARNING_COPY: Record<string, string> = {
+  fee_outside_usual_range:
+    "Your saved fee is outside the 8% to 30% most managers charge. It'll still be used — worth a look if that wasn't intended.",
+  fee_looks_like_a_typo:
+    "The fee on file is outside the 8% to 30% most managers charge, so it's being left off the ad in case it was a typo.",
+  fee_out_of_range: "The fee on file isn't a percentage anyone can charge, so it's being left off the ad.",
+  fee_not_a_number: "The fee on file isn't a number, so it's being left off the ad.",
+  located_without_targeting:
+    "The ad names a town, and nothing on your account says which areas you cover — so set the audience to that town when you put it live, or you'll be paying to show it everywhere.",
+};
+
+/** The sentences for a resolution's flags, in order, skipping any we cannot word. */
+export function warningSentences(warnings: string[]): string[] {
+  return warnings.map((w) => AD_WARNING_COPY[w]).filter(Boolean);
 }

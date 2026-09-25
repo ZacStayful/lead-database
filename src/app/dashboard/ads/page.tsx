@@ -42,7 +42,7 @@ export default async function AdsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
       <header>
-        <h1 className="text-xl font-semibold text-[#1a1a19]">Make a Facebook advert</h1>
+        <h1 className="text-xl font-semibold text-[#1a1a19]">Make a Facebook ad</h1>
         <p className="mt-1 text-sm text-[#55564f]">
           Answer a few questions and you get the words and three images, ready to put
           in Ads Manager. Nothing is published from here.
@@ -55,7 +55,7 @@ export default async function AdsPage() {
           <Link href="/dashboard/ads/profile" className="font-medium underline">
             your business details
           </Link>
-          . Everything you put there stops being a question, so the second advert asks
+          . Everything you put there stops being a question, so the second ad asks
           far less than the first.
         </p>
       ) : null}
@@ -68,7 +68,7 @@ export default async function AdsPage() {
         questionsVersion={0}
         status="new"
         copy={null}
-        fixed={null}
+        example={null}
         canSimplify={false}
         templates={AD_TEMPLATES.map((t) => ({ id: t.id, name: t.name, audience: t.audience }))}
         readOnly={viewAs !== null}
@@ -76,7 +76,7 @@ export default async function AdsPage() {
 
       {drafts.length ? (
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-[#1a1a19]">Your adverts</h2>
+          <h2 className="text-sm font-semibold text-[#1a1a19]">Your ads</h2>
           {drafts.map((d) => (
             <Link
               key={d.id}

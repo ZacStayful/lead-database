@@ -105,14 +105,14 @@ describe("every shipped headline survives the round trip", () => {
     // The spec marks one span per headline. More than one is a design change,
     // and none means the flagship typographic feature is silently off.
     for (const t of AD_TEMPLATES) {
-      expect(emphasisedSpans(t.headlineLocated)).toHaveLength(1);
-      expect(emphasisedSpans(t.headlineUnlocated)).toHaveLength(1);
+      expect(emphasisedSpans(t.exampleHeadlineLocated)).toHaveLength(1);
+      expect(emphasisedSpans(t.exampleHeadlineUnlocated)).toHaveLength(1);
     }
   });
 
   it("strips to text with no stray markers and no doubled spaces", () => {
     for (const t of AD_TEMPLATES) {
-      for (const p of [t.headlineLocated, t.headlineUnlocated, t.subLocated, t.subUnlocated]) {
+      for (const p of [t.exampleHeadlineLocated, t.exampleHeadlineUnlocated, t.exampleSubLocated, t.exampleSubUnlocated]) {
         const plain = stripEmphasis(p);
         expect(plain).not.toContain("*");
         expect(plain).not.toMatch(/\s{2,}/);
@@ -123,8 +123,8 @@ describe("every shipped headline survives the round trip", () => {
 
   it("emphasises nothing in a sub — the spec marks only headlines", () => {
     for (const t of AD_TEMPLATES) {
-      expect(hasEmphasis(t.subLocated)).toBe(false);
-      expect(hasEmphasis(t.subUnlocated)).toBe(false);
+      expect(hasEmphasis(t.exampleSubLocated)).toBe(false);
+      expect(hasEmphasis(t.exampleSubUnlocated)).toBe(false);
     }
   });
 });

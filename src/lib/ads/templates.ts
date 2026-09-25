@@ -2,15 +2,37 @@ import type { MetaCtaType } from "./metaFields";
 
 /**
  * The four templates part 1 ships — T3, T6, T7 and T8 from the landlord ad
- * template pack (spec v1, 2026-09-20), the ones whose claims gate is `none`.
+ * template pack (spec v1, 2026-09-20).
+ *
+ * ⚠️ THEY WERE SELECTED BY THE PHOTO LAYER, NOT BY THE CLAIMS GATE, AND THIS
+ * COMMENT SAID OTHERWISE. Two independent properties, and conflating them
+ * understates what is available: SIX of the spec's eight core templates have a
+ * claims gate of `none` (T3–T8). Only T1 is `customer_data_required` and only
+ * T2 is conditional. What holds T4 and T5 back is that they need a photograph
+ * of a property, which nothing here can take or crop yet — a layout problem,
+ * with no legal surface at all.
+ *
+ * The consequence for anybody adding templates: T4 and T5 ride in on the photo
+ * layer (B4a), where T1 and T2 must wait for the claims gate (B4b). The half
+ * with legal exposure does not arrive on a layout change.
  *
  * ⚠️ IMPORT-FREE apart from a type. The picker renders these in the browser.
  *
- * ⚠️ THE MODEL DOES NOT WRITE THE HEADLINE. The spec is explicit: "Claude
- * writes the five primary texts and the sub… never the headline pattern
- * itself." Every headline below is pure slot substitution, which is what makes
- * "no invented figure" and the located/unlocated split safe by construction
- * rather than by a rule somebody has to enforce.
+ * ⚠️ THIS SAID "THE MODEL DOES NOT WRITE THE HEADLINE", QUOTING THE SPEC, AND
+ * THAT IS NO LONGER TRUE — it is corrected here rather than deleted, because
+ * the spec's rule was a good one and giving it up was a decision.
+ *
+ * Substitution made "no invented figure" safe by CONSTRUCTION rather than by a
+ * rule somebody enforces, which is strictly stronger. What it cost was every
+ * "what would it earn" ad in the country carrying the identical sub-line — and
+ * a model handed four fixed fields and asked for three more has nowhere to go
+ * but restating them, so the first real ad said the same thing four times.
+ *
+ * So the four patterns below are EXAMPLES now: shown to the model as the
+ * register to write in, and kept as the fallback when what it writes will not
+ * render. The figure rules run over the model's headline and sub as well, so
+ * an invented number is still refused — the safety is a check rather than an
+ * impossibility.
  *
  * ⚠️ THE IDS ARE DUPLICATED IN 0156's template_id CHECK, on purpose, and a
  * file-text guard asserts set-equality. A CHECK and a union that drift apart
@@ -31,6 +53,9 @@ export const AD_SLOT_KEYS = [
   "city",
   "areas",
   "landing_url",
+  // Where the button sends them. Decides whether `landing_url` is needed at
+  // all — see destination.ts, and §65 on the run this unblocks.
+  "destination",
   "fee_pct",
   "fee_basis",
   "fee_vat",
@@ -114,38 +139,81 @@ export interface AdTemplate {
   /** Asked per ad. This split is what makes "a second ad asks fewer questions" real. */
   adSlots: AdSlotKey[];
 
-  headlineLocated: string;
-  headlineUnlocated: string;
   /**
-   * ⚠️ subUnlocated IS NOT OPTIONAL. T8's sub names {areas}, which is
-   * unresolvable when the customer declines to narrow — and under "a template
-   * whose slots are not all resolved cannot render" that would make T8
-   * unrenderable for exactly the case the unlocated form exists for.
+   * ⚠️ EXAMPLES NOW, NOT THE OUTPUT. These four were the rendered headline and
+   * sub, filled by slot substitution, and the model never wrote them. So every
+   * "what would it earn" ad in the country carried the identical sub-line, and
+   * the model — handed four fixed fields and asked for three more — had nowhere
+   * to go but restating them. The ad said the same thing four times over.
+   *
+   * They are shown to the model as the register to write in, and kept as the
+   * fallback when what it writes fails validation. The spec never writes a
+   * primary text, but it DOES write every headline and sub — so these are the
+   * worked examples the pack otherwise lacks.
+   *
+   * ⚠️ subUnlocated IS NOT OPTIONAL. T8's names {areas}, which is unresolvable
+   * when the customer declines to narrow, and the unlocated form exists for
+   * exactly that case.
    */
-  subLocated: string;
-  subUnlocated: string;
+  exampleHeadlineLocated: string;
+  exampleHeadlineUnlocated: string;
+  exampleSubLocated: string;
+  exampleSubUnlocated: string;
 
-  /** Goes through resolveSlots — T8's names the company. */
+  /**
+   * ⚠️ STILL A PATTERN, DELIBERATELY. It is a two- or three-word button label,
+   * there is no quality to win by writing it, and T8's genuinely needs the
+   * slot. It is also why `company_name` is required below.
+   */
   ctaPattern: string;
   metaCta: MetaCtaType;
 
   angles: [string, string, string, string, string];
   /**
-   * ⚠️ MUST BE SERVICE-NOUN-FREE. This is what a rejected generation collapses
-   * to, so it has to pass the same multi-select rule with NOTHING ticked — a
-   * default that names cleaning would publish cleaning for a customer who does
-   * not do it. Asserted in the suite against an empty selection.
+   * ⚠️ THE PROSE CANNOT BE THE KEY. T8's third angle is "what
+   * {properties_managed} properties means day to day" — a pattern, not an
+   * identifier — and the model returns the key it wrote against, so the key has
+   * to be a stable token checked against a closed list before storage. §27.1's
+   * rule one layer down, and the discipline `isChatWritable` already applies to
+   * a model-chosen `Question.slot`.
+   *
+   * Positional with `angles`: index i of one names index i of the other.
    */
-  defaultPrimaryText: string;
+  angleKeys: [string, string, string, string, string];
   /**
-   * ⚠️ Meta needs a headline and a description too, so the fallback cannot be
-   * the primary text alone. These are ours, written to fit inside the
-   * truncation marks (40 and 30) so the one ad we publish when the model has
-   * failed twice is at least not clipped — and, like defaultPrimaryText, they
-   * name no service and state no figure.
+   * ⚠️ WHAT THE ARGUMENT CANNOT SURVIVE WITHOUT — not what a string
+   * interpolated, and NOT the same thing as `resolution.missing`.
+   *
+   *   `missing`       = what to ASK about. `setupSlots ∪ adSlots`, and it drives
+   *                     the questionnaire and the brief's "Still missing".
+   *   `requiredSlots` = what makes the ad IMPOSSIBLE. A subset of `setupSlots`,
+   *                     and what `preflight()` refuses on.
+   *
+   * It exists because `unresolved` used to be derived from the `{}` a headline
+   * pattern could not fill, and with the model writing the headline there is no
+   * pattern left to half-fill. This is the more honest test anyway: T8 is
+   * unofferable without its four figures because it cannot be ARGUED without
+   * them, not because a brace would render empty.
+   *
+   * ⚠️ `review_quote` / `review_quote_source` are deliberately NOT here. A
+   * quote is a bonus angle, not a precondition, and `resolveSlots` already
+   * treats them as optional by design.
    */
-  defaultHeadline: string;
-  defaultDescription: string;
+  requiredSlots: AdSlotKey[];
+  /**
+   * ⚠️ THERE ARE NO DEFAULT AD TEXTS ANY MORE, AND THEIR ABSENCE IS THE RULE.
+   *
+   * `defaultPrimaryText`, `defaultHeadline` and `defaultDescription` used to be
+   * what a rejected generation collapsed to. They were removed because that
+   * collapse is the fault this whole change exists to end: the ad the owner
+   * judged as terrible contained no model output at all — the key was unset,
+   * both calls recorded `not_configured`, and the stored copy was byte-identical
+   * to T7's three defaults, with "the words were drafted by AI" rendered over
+   * it. The app told him a model wrote words it never saw.
+   *
+   * If the model did not write it, it is not an ad. Zero surviving variants
+   * releases the draft and says so, with a Retry.
+   */
   footerLine?: string;
   layout: AdLayout;
   /** Only the templates with a multi-select carry one. */
@@ -170,14 +238,14 @@ export const AD_TEMPLATES: AdTemplate[] = [
     audienceTokens: ["landlord", "host"],
     categoryLine: CATEGORY,
     categoryTokens: CATEGORY_TOKENS,
-    setupSlots: ["company_name", "fee_pct", "fee_basis", "fee_vat", "fee_public", "included", "landing_url"],
+    setupSlots: ["company_name", "fee_pct", "fee_basis", "fee_vat", "fee_public", "included", "landing_url", "destination"],
     adSlots: ["city"],
-    headlineLocated: "Landlords in {city}: you’ll never see the *3am* message.",
-    headlineUnlocated: "Landlords: you’ll never see the *3am* message.",
+    exampleHeadlineLocated: "Landlords in {city}: you’ll never see the *3am* message.",
+    exampleHeadlineUnlocated: "Landlords: you’ll never see the *3am* message.",
     // The spec's sub hardcodes five services. `included` is a multi-select, so
     // a fixed string publishes what the customer does not provide (§5).
-    subLocated: "Full short let management. {included_list}, all handled by {company_name}.",
-    subUnlocated: "Full short let management. {included_list}, all handled by {company_name}.",
+    exampleSubLocated: "Full short let management. {included_list}, all handled by {company_name}.",
+    exampleSubUnlocated: "Full short let management. {included_list}, all handled by {company_name}.",
     ctaPattern: "Talk to us about your property",
     metaCta: "CONTACT_US",
     angles: [
@@ -187,12 +255,16 @@ export const AD_TEMPLATES: AdTemplate[] = [
       "the landlord who self-managed for six months",
       "plain facts, fee and what is included",
     ],
-    defaultPrimaryText:
-      "Landlords, and hosts managing their own place: this is short let management, done for you. " +
-      "You hand the property over and stop being the person who has to answer at 3am. " +
-      "We look after it and send you the statement. Ask us what your place would need.",
-    defaultHeadline: "Short let management, done for you",
-    defaultDescription: "Ask about your property",
+    angleKeys: [
+      "message_at_3am",
+      "cleaner_cancels",
+      "managed_week",
+      "self_managed_six_months",
+      "plain_facts",
+    ],
+    // The argument IS the list of what is handled, so an untouched multi-select
+    // leaves nothing to say.
+    requiredSlots: ["company_name", "included"],
     layout: "checklist_two_col",
     services: {
       slot: "included",
@@ -222,12 +294,16 @@ export const AD_TEMPLATES: AdTemplate[] = [
     audienceTokens: ["landlord"],
     categoryLine: CATEGORY,
     categoryTokens: CATEGORY_TOKENS,
-    setupSlots: ["company_name", "councils", "handled", "landing_url"],
+    setupSlots: ["company_name", "councils", "handled", "landing_url", "destination"],
     adSlots: ["city"],
-    headlineLocated: "Landlords in {city}: short let rules, *handled*.",
-    headlineUnlocated: "Landlords: short let rules, *handled*.",
-    subLocated: "{handled_list}. We keep the file, you keep the property.",
-    subUnlocated: "{handled_list}. We keep the file, you keep the property.",
+    exampleHeadlineLocated: "Landlords in {city}: short let rules, *handled*.",
+    exampleHeadlineUnlocated: "Landlords: short let rules, *handled*.",
+    exampleSubLocated: "{handled_list}. We keep the file, you keep the property.",
+    exampleSubUnlocated: "{handled_list}. We keep the file, you keep the property.",
+    // ⚠️ Fixed, and required by the spec's claims note. Three of this
+    // template's five angles invite legal advice, and a footer does not cure a
+    // body that gives it — but its absence would make that worse.
+    footerLine: "Responsibility stays with the property owner; we manage the process.",
     ctaPattern: "Ask what applies to your property",
     // ASK_A_QUESTION is a real CTA in Meta's enum, verified against the live
     // tool schema. The button should say what the ad asks them to do.
@@ -239,16 +315,14 @@ export const AD_TEMPLATES: AdTemplate[] = [
       "the file we keep on every property",
       "plain facts, fee and what is included",
     ],
-    defaultPrimaryText:
-      "Landlords wondering whether short letting is even allowed: this is short let management " +
-      "with the paperwork handled. We keep the file on every property we look after, so it is " +
-      "somebody’s job rather than an afterthought. Ask what applies to yours.",
-    // ⚠️ Fixed, and required by the spec's claims note. Three of this
-    // template's five angles invite legal advice, and a footer does not cure a
-    // body that gives it — but its absence would make that worse.
-    footerLine: "Responsibility stays with the property owner; we manage the process.",
-    defaultHeadline: "Short let rules, handled",
-    defaultDescription: "Ask what applies to yours",
+    angleKeys: [
+      "responsibility",
+      "certificate_renewal",
+      "local_change",
+      "the_file",
+      "plain_facts",
+    ],
+    requiredSlots: ["company_name", "handled"],
     layout: "document_checklist",
     services: {
       slot: "handled",
@@ -273,12 +347,12 @@ export const AD_TEMPLATES: AdTemplate[] = [
     audienceTokens: ["landlord"],
     categoryLine: CATEGORY,
     categoryTokens: CATEGORY_TOKENS,
-    setupSlots: ["company_name", "property_types", "turnaround", "landing_url"],
+    setupSlots: ["company_name", "property_types", "turnaround", "landing_url", "destination"],
     adSlots: ["city"],
-    headlineLocated: "Landlords in {city}: what would your property earn on *short lets*?",
-    headlineUnlocated: "Landlords: what would your property earn on *short lets*?",
-    subLocated: "Send the postcode and bedroom count. We’ll run the numbers against your current rent.",
-    subUnlocated: "Send the postcode and bedroom count. We’ll run the numbers against your current rent.",
+    exampleHeadlineLocated: "Landlords in {city}: what would your property earn on *short lets*?",
+    exampleHeadlineUnlocated: "Landlords: what would your property earn on *short lets*?",
+    exampleSubLocated: "Send the postcode and bedroom count. We’ll run the numbers against your current rent.",
+    exampleSubUnlocated: "Send the postcode and bedroom count. We’ll run the numbers against your current rent.",
     ctaPattern: "Get my estimate",
     metaCta: "GET_QUOTE",
     angles: [
@@ -288,12 +362,18 @@ export const AD_TEMPLATES: AdTemplate[] = [
       "how long an answer takes",
       "what happens after, so nobody fears a sales call",
     ],
-    defaultPrimaryText:
-      "Any landlord with a property let out, or empty: this is short let management, and the first " +
-      "question is what your place would actually do. Send the postcode and the bedroom count and " +
-      "we will work it out against what you get now. No obligation, and no sales call unless you ask for one.",
-    defaultHeadline: "What would your property earn?",
-    defaultDescription: "Get your estimate",
+    angleKeys: [
+      "question_plainly",
+      "estimate_basis",
+      "assumed_not_worth_it",
+      "answer_speed",
+      "what_happens_after",
+    ],
+    // ⚠️ THE VOLUME TEMPLATE, AND THE THINNEST REQUIREMENT ON PURPOSE. It asks
+    // a question rather than making a claim, so it needs no figure to argue
+    // from — which is why it is the default and why it must stay offerable to a
+    // customer who has told us almost nothing.
+    requiredSlots: ["company_name"],
     layout: "form_card",
   },
   {
@@ -311,15 +391,15 @@ export const AD_TEMPLATES: AdTemplate[] = [
     categoryTokens: CATEGORY_TOKENS,
     setupSlots: [
       "company_name", "areas", "years_trading", "properties_managed",
-      "review_score", "review_count", "review_quote", "review_quote_source", "landing_url",
+      "review_score", "review_count", "review_quote", "review_quote_source", "landing_url", "destination",
     ],
     adSlots: ["city"],
-    headlineLocated:
+    exampleHeadlineLocated:
       "Short let management in {city}: {years_trading} years, {properties_managed} properties, *{review_score}* on Google.",
-    headlineUnlocated:
+    exampleHeadlineUnlocated:
       "Short let management: {years_trading} years, {properties_managed} properties, *{review_score}* on Google.",
-    subLocated: "Managing short lets across {areas} for landlords who would rather not.",
-    subUnlocated: "Managing short lets for landlords who would rather not.",
+    exampleSubLocated: "Managing short lets across {areas} for landlords who would rather not.",
+    exampleSubUnlocated: "Managing short lets for landlords who would rather not.",
     ctaPattern: "Talk to {company_name}",
     metaCta: "CONTACT_US",
     angles: [
@@ -333,12 +413,23 @@ export const AD_TEMPLATES: AdTemplate[] = [
       "why they started",
       "plain facts, fee and what is included",
     ],
-    defaultPrimaryText:
-      "Landlords comparing managers: this is short let management, and here is what we are rather " +
-      "than what we promise. How long we have been doing it, how many properties we look after now, " +
-      "and what the people who use us have said publicly. Have a look, then talk to us.",
-    defaultHeadline: "Years, properties, reviews",
-    defaultDescription: "Talk to us",
+    angleKeys: [
+      "how_long",
+      "what_scale_means",
+      "what_landlords_say",
+      "why_started",
+      "plain_facts",
+    ],
+    // ⚠️ THE ARGUMENT **IS** THESE FOUR NUMBERS. Without them there is no
+    // template here, which is why this is the one with a real precondition —
+    // and why `review_quote` is absent: a quote is a bonus angle.
+    requiredSlots: [
+      "company_name",
+      "years_trading",
+      "properties_managed",
+      "review_score",
+      "review_count",
+    ],
     layout: "stat_blocks",
   },
 ];

@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CHAT_WRITABLE_SLOTS, ATTESTATION_KEYS, answersToProfile, isChatWritable } from "../profile";
+import {
+  CHAT_WRITABLE_SLOTS,
+  ATTESTATION_KEYS,
+  answerableOptions,
+  answerableQuestions,
+  answersToProfile,
+  isChatWritable,
+  refusalMessage,
+} from "../profile";
 import { templateById } from "../templates";
+import { MAX_AD_URL_LENGTH } from "../url";
 import type { Answer, Question } from "../schemas";
 
 const T3 = templateById("never-see-the-messages")!;
@@ -23,9 +32,14 @@ function ask(slot: string, answer: string): { questions: Question[]; answers: An
   return { questions: [q], answers: [{ id: "q1", question: q.question, answer, depth: 0 }] };
 }
 
+const mapping = (slot: string, answer: string, t = T7) => {
+  const { questions, answers } = ask(slot, answer);
+  return answersToProfile(questions, answers, t);
+};
+
 const map = (slot: string, answer: string, t = T7) => {
   const { questions, answers } = ask(slot, answer);
-  return answersToProfile(questions, answers, t) as Record<string, unknown>;
+  return answersToProfile(questions, answers, t).patch as Record<string, unknown>;
 };
 
 /**
@@ -116,6 +130,61 @@ describe("the fee", () => {
     expect(map("fee_pct", "150%")).not.toHaveProperty("fee_pct");
   });
 
+  /**
+   * ⚠️ THE SPEC'S OWN RULE, AT THE POINT OF TYPING. "Under 8% or over 30% is
+   * almost certainly a typo, and a wrong fee in a live ad is worse than no
+   * ad." `feeVerdict` has implemented it since 0156 and the write path never
+   * asked it — so the number was stored, `resolveSlots` then refused the same
+   * number, and the fee vanished off the ad with the reason recorded in a
+   * `warnings` array nothing rendered.
+   */
+  it.each(["3%", "we charge 4 per cent", "45%", "31%"])(
+    "refuses %s as a likely typo rather than storing it",
+    (answer) => {
+      const m = mapping("fee_pct", answer);
+      expect(m.patch).not.toHaveProperty("fee_pct");
+      expect(m.refusals[0]?.reason).toBe("fee_looks_like_a_typo");
+    }
+  );
+
+  it.each(["8%", "30%", "15%", "12.5%"])("takes %s, which is an ordinary fee", (answer) => {
+    expect(mapping("fee_pct", answer).patch).toHaveProperty("fee_pct");
+    expect(mapping("fee_pct", answer).refusals).toHaveLength(0);
+  });
+
+  /**
+   * ⚠️ AND IT SAYS WHY, QUOTING THE NUMBER BACK. "That doesn't look right"
+   * about a fee they cannot see is the shape of refusal this whole change
+   * exists to remove — an operator answering exactly what was asked and being
+   * told they had not.
+   */
+  it("says what it refused and how to insist", () => {
+    const [refusal] = mapping("fee_pct", "45%").refusals;
+    const said = refusalMessage(refusal);
+    expect(said).toContain("45%");
+    expect(said).toContain("8% to 30%");
+    expect(said.toLowerCase()).toContain("send it again");
+    expect(said).not.toContain("fee_pct");
+    expect(said).not.toContain("fee_looks_like_a_typo");
+  });
+
+  /**
+   * Unreadable is still unreadable, and must not be dressed as a typo — the
+   * two want opposite sentences, one asking them to insist and one asking them
+   * to try again.
+   *
+   * ⚠️ "45ish" IS A TYPO AND "15ish" IS A FEE. `asCount` reads a number out of
+   * prose deliberately, and that forgiveness is right: an operator who writes
+   * "about 15" means 15. Only the value decides.
+   */
+  it("keeps an unreadable fee separate from an out-of-range one", () => {
+    expect(mapping("fee_pct", "45ish or so, depends").refusals[0]?.reason).toBe(
+      "fee_looks_like_a_typo"
+    );
+    expect(mapping("fee_pct", "15ish or so, depends").patch.fee_pct).toBe(15);
+    expect(mapping("fee_pct", "whatever the market does").refusals[0]?.reason).toBe("unreadable");
+  });
+
   it.each([
     ["Of gross", "gross"],
     ["we take it off the net", "net"],
@@ -167,14 +236,84 @@ describe("the landing page", () => {
     expect(map("landing_url", "adco.example/quote").landing_url).toBe("https://adco.example/quote");
   });
 
-  /** ⚠️ https only — the button on a live advert must not send anybody over http. */
-  it("refuses http", () => {
-    expect(map("landing_url", "http://adco.example")).not.toHaveProperty("landing_url");
+  /**
+   * ⚠️ WHAT IS STORED IS STILL ALWAYS https — the button on a live ad must not
+   * send anybody over http. What changed is that a typed `http://` is UPGRADED
+   * and said out loud, where it used to be binned in silence. That silence is
+   * what made the first real run look like it had lost an answer the operator
+   * had given.
+   */
+  it("upgrades http to https rather than binning it, and says so", () => {
+    const m = mapping("landing_url", "http://adco.example");
+    expect(m.patch.landing_url).toBe("https://adco.example/");
+    expect(m.notes).toEqual([{ slot: "landing_url", kind: "url_upgraded" }]);
+    expect(m.refusals).toEqual([]);
   });
 
-  it("refuses something that is not a URL at all", () => {
-    expect(map("landing_url", "our website")).not.toHaveProperty("landing_url");
-    expect(map("landing_url", "call me")).not.toHaveProperty("landing_url");
+  it("refuses something that is not a URL at all, WITH A REASON", () => {
+    const m = mapping("landing_url", "call me");
+    expect(m.patch).not.toHaveProperty("landing_url");
+    // ⚠️ The reason is the point. A bare `undefined` is what this replaced.
+    expect(m.refusals).toEqual([
+      { slot: "landing_url", reason: "not_a_url", answer: "call me" },
+    ]);
+  });
+
+  it("tells a dotless host apart from unparseable text", () => {
+    // Two different things to say: one is not an address at all, the other
+    // looks like one and could not be a public site.
+    expect(mapping("landing_url", "our website").refusals[0]?.reason).toBe("not_a_url");
+    expect(mapping("landing_url", "intranet").refusals[0]?.reason).toBe("no_dot");
+  });
+
+  it("refuses a scheme the button cannot open, checked before prefixing", () => {
+    // ⚠️ `new URL("https://javascript:alert(1)")` PARSES — it reads `javascript`
+    // as the host — so a check after the https prefix waves this through.
+    for (const bad of ["javascript:alert(1)", "mailto:me@adco.example", "data:text/html,x"]) {
+      expect(mapping("landing_url", bad).refusals[0]?.reason, bad).toBe("unsupported_scheme");
+    }
+  });
+
+  /**
+   * ⚠️ EACH NON-PUBLIC SHAPE HAS ITS OWN CASE, because they are separate
+   * branches and a mutation run found that out: with only the IPv4 case here,
+   * deleting the localhost branch left the suite green.
+   */
+  it.each([
+    ["https://u:p@adco.example", "has_credentials"],
+    ["http://127.0.0.1:3000", "not_public"],
+    ["http://localhost:3000", "not_public"],
+    ["http://app.localhost/quote", "not_public"],
+    ["http://adco.local", "not_public"],
+    ["http://[::1]:3000", "not_public"],
+  ])("refuses %s", (answer, reason) => {
+    expect(mapping("landing_url", answer).refusals[0]?.reason, answer).toBe(reason);
+  });
+
+  /**
+   * ⚠️ REFUSED, NEVER TRUNCATED. Slicing a long URL to the cap yields a
+   * DIFFERENT, possibly still-valid address — silent corruption pointing a paid
+   * ad somewhere the operator never chose.
+   */
+  it("refuses a url past the cap rather than cutting it down to one", () => {
+    const long = `https://adco.example/${"a".repeat(MAX_AD_URL_LENGTH)}`;
+    const m = mapping("landing_url", long);
+    expect(m.patch).not.toHaveProperty("landing_url");
+    expect(m.refusals[0]?.reason).toBe("too_long");
+    // The shape a truncation would have produced, asserted absent.
+    expect(m.patch.landing_url).not.toBe(long.slice(0, MAX_AD_URL_LENGTH));
+  });
+
+  it("takes one right on the cap", () => {
+    const head = "https://adco.example/";
+    const exact = head + "a".repeat(MAX_AD_URL_LENGTH - head.length);
+    expect(exact).toHaveLength(MAX_AD_URL_LENGTH);
+    expect(mapping("landing_url", exact).patch.landing_url).toBe(exact);
+  });
+
+  it("strips the punctuation a paste picks up from prose", () => {
+    expect(mapping("landing_url", "adco.example/quote.").patch.landing_url)
+      .toBe("https://adco.example/quote");
   });
 });
 
@@ -255,7 +394,7 @@ describe("the patch", () => {
 
   it("ignores an answer to a question with no slot", () => {
     const { questions, answers } = ask("", "Leeds");
-    expect(answersToProfile(questions, answers, T7)).toEqual({});
+    expect(answersToProfile(questions, answers, T7).patch).toEqual({});
   });
 
   it("ignores an empty answer", () => {
@@ -271,6 +410,104 @@ describe("the patch", () => {
       { id: "q1", question: "a", answer: "Leeds", depth: 0 },
       { id: "q2", question: "b", answer: "Bradford", depth: 0 },
     ];
-    expect((answersToProfile(questions, answers, T7) as Record<string, unknown>).city).toBe("Leeds");
+    expect(answersToProfile(questions, answers, T7).patch.city).toBe("Leeds");
+  });
+});
+
+/**
+ * ⚠️ THE ROOT CAUSE, PINNED. The model writes the options as well as the
+ * question, and nothing checked them against the slot they answer — so it
+ * offered a destination the schema could not keep, the operator tapped it, and
+ * the run was refused for the answer it had invited.
+ */
+describe("an option the slot cannot store is never offered", () => {
+  /** Verbatim from the one draft production ever made (draft dd4a1a7e, 21 Sep). */
+  const REAL = "Message straight to my phone (WhatsApp or Messenger)";
+
+  it("drops the exact option that broke the first real run", () => {
+    const kept = answerableOptions("landing_url", [REAL, "https://adco.example/quote"]);
+    expect(kept).toEqual(["https://adco.example/quote"]);
+  });
+
+  it("keeps options the destination slot genuinely accepts", () => {
+    expect(
+      answerableOptions("destination", ["A page on my own website", "A form inside Facebook"])
+    ).toEqual(["A page on my own website", "A form inside Facebook"]);
+  });
+
+  it("drops a town that is a refusal and keeps a real one", () => {
+    expect(answerableOptions("city", ["Leeds", "Leave it off for now"])).toEqual(["Leeds"]);
+  });
+
+  it("drops a fee that is not a number", () => {
+    expect(answerableOptions("fee_pct", ["15%", "It depends on the property"])).toEqual(["15%"]);
+  });
+
+  it("leaves a free-prose slot alone", () => {
+    const opts = ["Same day", "Within a week", "Whenever I get round to it"];
+    expect(answerableOptions("turnaround", opts)).toEqual(opts);
+  });
+
+  it("leaves a slot nobody can write alone", () => {
+    expect(answerableOptions("review_quote", ["anything"])).toEqual(["anything"]);
+    expect(answerableOptions(undefined, ["anything"])).toEqual(["anything"]);
+  });
+
+  /**
+   * ⚠️ A SINGLE BUTTON IS NOT A QUESTION. The ladder already terminates in a
+   * plain text box, so the honest degradation when the options are gutted is to
+   * ask in words — not to offer the one survivor as though it were a choice.
+   */
+  const question = (options: string[], slot = "landing_url"): Question => ({
+    id: "q1",
+    question: "Where should the button send them?",
+    options,
+    allowOther: false,
+    slot,
+    depth: 1,
+    calls: 1,
+  });
+
+  it("falls back to free text when nothing survives", () => {
+    const q = question([REAL, "Ring me instead"]);
+    const [out] = answerableQuestions([q]);
+    expect(out.options).toEqual([]);
+    expect(out.allowOther).toBe(true);
+    // The question itself is untouched — only what it offered.
+    expect(out.question).toBe(q.question);
+    expect(out.depth).toBe(1);
+  });
+
+  /**
+   * ⚠️ THE BOUNDARY, AND IT SURVIVED A MUTATION UNTIL THIS WAS WRITTEN. The case
+   * above gutters to ZERO survivors, so it passes whether the floor is one or
+   * two — `0 >= 1` is false either way. Exactly one survivor is the case the
+   * rule is actually about.
+   */
+  it("falls back to free text rather than offering the one survivor", () => {
+    const [out] = answerableQuestions([question(["https://adco.example", REAL])]);
+    expect(out.options).toEqual([]);
+    expect(out.allowOther).toBe(true);
+  });
+
+  it("offers the survivors when two or more are left", () => {
+    const [out] = answerableQuestions([
+      question(["https://adco.example", "adco.example/quote", REAL]),
+    ]);
+    expect(out.options).toEqual(["https://adco.example", "adco.example/quote"]);
+    expect(out.allowOther).toBe(false);
+  });
+
+  it("leaves a question whose options all survive exactly as it was", () => {
+    const q = {
+      id: "q1",
+      question: "Which town?",
+      options: ["Leeds", "Bradford"],
+      allowOther: true,
+      slot: "city",
+      depth: 0,
+      calls: 0,
+    };
+    expect(answerableQuestions([q])[0]).toBe(q);
   });
 });

@@ -1,8 +1,14 @@
 import type { NextRequest } from "next/server";
 import { AD_COPY } from "@/lib/ads/copy";
 import { adProfileOf, resolveSlots, targetingFor, citySuggestions } from "@/lib/ads/resolveSlots";
-import { ATTESTATION_KEYS, answersToProfile, isChatWritable } from "@/lib/ads/profile";
+import {
+  ATTESTATION_KEYS,
+  answersToProfile,
+  isChatWritable,
+  mappingSentences,
+} from "@/lib/ads/profile";
 import { adJson, adSession, adWriteSession, mergeAdProfile } from "@/lib/ads/session";
+import { warningSentences } from "@/lib/ads/slotCopy";
 import { AD_TEMPLATES, DEFAULT_TEMPLATE_ID, templateById } from "@/lib/ads/templates";
 
 export const runtime = "nodejs";
@@ -10,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * The business details every advert is built from (§65).
+ * The business details every ad is built from (§65).
  *
  * ⚠️ EVERY FIELD IS AN OVERRIDE, NEVER A COPY (§41.6). A NULL key means "use
  * what the account already has" — company_name falls back to
@@ -46,6 +52,10 @@ export async function GET() {
       slot: t.services!.slot,
       options: t.services!.options.map((o) => ({ key: o.key, label: o.label })),
     })),
+    // ⚠️ THE FLAGS, IN ENGLISH. `resolveSlots` has always computed these and
+    // only `brief.ts` read them, so a fee being dropped off every ad was
+    // explained to the model and to nobody else.
+    warnings: warningSentences(resolution.warnings),
     updated_at: (customer as { ad_profile_updated_at?: string | null }).ad_profile_updated_at ?? null,
   });
 }
@@ -105,7 +115,11 @@ export async function PUT(request: NextRequest) {
   // The multi-selects arrive as real arrays from the form, so they skip the
   // prose coercion entirely and are matched against the template that owns
   // them — a service key nobody offered is not a tick.
-  const patch: Record<string, unknown> = { ...answersToProfile(asQuestions, asAnswers, template) };
+  // ⚠️ `.patch`, NOT THE WHOLE MAPPING. Spreading the mapping type-checks
+  // against Record<string, unknown> and would write `refusals` and `notes` into
+  // ad_profile as keys — a bug the compiler cannot see. Named deliberately.
+  const mapping = answersToProfile(asQuestions, asAnswers, template);
+  const patch: Record<string, unknown> = { ...mapping.patch };
   for (const t of AD_TEMPLATES) {
     if (!t.services) continue;
     const raw = body[t.services.slot];
@@ -131,6 +145,25 @@ export async function PUT(request: NextRequest) {
   if (!Object.keys(patch).length) return adJson({ error: "Nothing to change." }, 400);
 
   const merged = await mergeAdProfile(admin, customer.id, patch);
-  if (!merged) return adJson({ error: AD_COPY.errors.generic }, 500);
-  return adJson({ saved: true, profile: patch });
+  // ⚠️ `merged.ok`, NOT `merged`. An object is always truthy, so a bare
+  // `if (!merged)` is a failure branch that can never run.
+  if (!merged.ok) return adJson({ error: AD_COPY.errors.generic }, 500);
+
+  // Recomputed against what was actually stored, so a fee saved from the form
+  // carries the same flag the chat would have given it.
+  const after = merged.profile ? { ...customer, ad_profile: merged.profile } : customer;
+  const warnings = warningSentences(resolveSlots(after, template).warnings);
+
+  // ⚠️ 200, NOT 400. The rest of the form did save; a refused field is a
+  // sentence beside that field, not a failed request.
+  return adJson({
+    saved: true,
+    profile: patch,
+    // Structured, for the chat, which needs the slot to put the sentence beside
+    // the right field — and as sentences, so the form needs no copy of its own.
+    refused: mapping.refusals,
+    notes: mapping.notes,
+    said: mappingSentences(mapping),
+    warnings,
+  });
 }

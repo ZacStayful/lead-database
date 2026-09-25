@@ -111,7 +111,7 @@ export function buildSidebar(f: NavFlags): SidebarModel {
     },
     // Demo-only today (§65), which is why it is a flag rather than a constant.
     ...(f.adsOn
-      ? [{ key: "ads", label: "Facebook adverts", href: ADS_HREF, icon: "ads" as const }]
+      ? [{ key: "ads", label: "Facebook ads", href: ADS_HREF, icon: "ads" as const }]
       : []),
     ...(f.messagingOn
       ? [
@@ -244,9 +244,9 @@ export function tabsetFor(pathname: string, f: NavFlags): Tabset | null {
   }
   if (f.adsOn && under(ADS_HREF)) {
     return {
-      title: "Facebook adverts",
+      title: "Facebook ads",
       tabs: [
-        { label: "Make an advert", href: ADS_HREF },
+        { label: "Make an ad", href: ADS_HREF },
         { label: "Business details", href: `${ADS_HREF}/profile` },
       ],
     };
@@ -285,7 +285,7 @@ export function sectionTitle(pathname: string): string {
   // ⚠️ Without this the top bar reads "Lead Database" on a page that is
   // plainly about something else, which an existing test encodes as a rule
   // without tripping on it.
-  if (p.startsWith(ADS_HREF)) return "Facebook adverts";
+  if (p.startsWith(ADS_HREF)) return "Facebook ads";
   return "Lead Database";
 }
 

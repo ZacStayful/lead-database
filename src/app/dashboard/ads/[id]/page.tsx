@@ -12,7 +12,7 @@ import { AD_TEMPLATES, templateById } from "@/lib/ads/templates";
 
 export const dynamic = "force-dynamic";
 
-/** One advert: the questions, then the words, then the images (§65). */
+/** One ad: the questions, then the words, then the images (§65). */
 export default async function AdDraftPage({ params }: { params: { id: string } }) {
   const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
@@ -45,7 +45,7 @@ export default async function AdDraftPage({ params }: { params: { id: string } }
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
       <p className="text-xs text-[#6b706a]">
         <Link href="/dashboard/ads" className="underline">
-          ← All your adverts
+          ← All your ads
         </Link>
       </p>
 
@@ -58,7 +58,7 @@ export default async function AdDraftPage({ params }: { params: { id: string } }
         questionsVersion={draft.questions_version}
         status={draft.status}
         copy={draft.copy}
-        fixed={template ? adContext(customer, template).ctx.fixed : null}
+        example={template ? adContext(customer, template).ctx.example : null}
         canSimplify={canSimplify(draft.questions ?? [])}
         templates={AD_TEMPLATES.map((t) => ({ id: t.id, name: t.name, audience: t.audience }))}
         readOnly={viewAs !== null}

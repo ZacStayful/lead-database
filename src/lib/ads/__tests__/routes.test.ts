@@ -284,6 +284,225 @@ describe("the profile", () => {
 });
 
 /**
+ * ⚠️ THE ORDER OF THE ANSWERS ROUTE, WHICH IS WHAT THE OPERATOR FEELS.
+ *
+ * It shipped claiming the draft first, so a run missing a slot burned a
+ * generation slot to be told what was missing — and `writeAd` then had to
+ * release the claim it had just taken. These assert the reordering, each on a
+ * literal index rather than a behavioural stand-in, because the route reaches
+ * Supabase and the model and cannot run in this suite.
+ */
+describe("the answers route", () => {
+  const text = source(`${ADS_API}/[id]/answers/route.ts`);
+  const at = (needle: string) => {
+    const i = text.indexOf(needle);
+    expect(i, `expected to find ${needle}`).toBeGreaterThan(-1);
+    return i;
+  };
+
+  it("pre-flights before it claims", () => {
+    expect(at("preflight(adContext(")).toBeLessThan(at("claimForGeneration("));
+  });
+
+  /** ⚠️ The answers being sent are usually exactly what fills the gap. */
+  it("merges the profile before it pre-flights", () => {
+    expect(at("mergeAdProfile(")).toBeLessThan(at("preflight(adContext("));
+  });
+
+  /** ⚠️ A refusal must never cost the operator their typing. */
+  it("files the answers before anything can refuse", () => {
+    expect(at("replaceQuestions(")).toBeLessThan(at("preflight(adContext("));
+  });
+
+  /**
+   * ⚠️ AGAINST THE POST-MERGE PROFILE THE RPC HANDED BACK. Pre-flighting the
+   * row the request was handed checks a profile that is already stale by
+   * exactly the answers being submitted — it would refuse every run.
+   */
+  it("pre-flights the merged profile, not the row it was handed", () => {
+    expect(text).toContain("merged.profile");
+    expect(text).toMatch(/preflight\(adContext\(after,/);
+  });
+
+  /**
+   * ⚠️ `merged.ok`, NOT `merged`. `mergeAdProfile` returns an object, which is
+   * always truthy, so a bare `if (!merged)` is a failure branch that can never
+   * run — and the failure it guards is a profile write that silently did not
+   * happen.
+   */
+  it("tests the merge result rather than the object", () => {
+    for (const file of [`${ADS_API}/[id]/answers/route.ts`, `${ADS_API}/profile/route.ts`]) {
+      const t = source(file);
+      expect(t).toMatch(/if \(!merged\.ok\)/);
+      expect(t).not.toMatch(/if \(!merged\)/);
+    }
+  });
+
+  /**
+   * ⚠️ NOTHING IS RELEASED ON THE REFUSAL PATH BECAUSE NOTHING IS CLAIMED.
+   * The route holds no claim when it refuses, so a `releaseClaim` here would
+   * be releasing somebody else's.
+   */
+  it("takes no claim it has to release", () => {
+    expect(text).not.toContain("releaseClaim");
+  });
+
+  /**
+   * ⚠️ AND IT SAYS WHAT IT COULD NOT READ, WHICH IS THE WHOLE COMPLAINT.
+   *
+   * Three of the five answers on the first real run wrote nothing and said
+   * nothing, and the operator was then refused for a value they believed they
+   * had given. The sentences lead the refusal: "I couldn't read that as a web
+   * address" explains the gap, where naming the field alone reads as us asking
+   * for something already provided.
+   *
+   * Found by a mutation — blanking `said` left the suite green.
+   */
+  it("leads every refusal with what it could not read", () => {
+    expect(text).toContain("mappingSentences(mapping)");
+    // Both refusal paths, the pre-flight's and writeAd's.
+    expect(text.match(/\[\.\.\.said, AD_COPY\.errors\.unresolved\(/g) ?? []).toHaveLength(2);
+    expect(text).toContain("refused: mapping.refusals");
+  });
+
+  /** And on the way out too, so a note is not lost to a successful run. */
+  it("reports them on success as well as on a refusal", () => {
+    const ok = text.slice(text.lastIndexOf('status: "ready"'));
+    expect(ok).toContain("refused: mapping.refusals");
+    expect(ok).toContain("notes: mapping.notes");
+  });
+});
+
+/**
+ * ⚠️ THE FEE RULE EXISTED AND WAS NEVER CONSULTED AT THE POINT OF WRITING.
+ * `resolveSlots` refuses the same number afterwards, so an out-of-range fee was
+ * stored, then silently dropped off the ad, with the reason recorded in a
+ * `warnings` array nothing rendered.
+ */
+describe("the fee", () => {
+  it("is written through feeVerdict rather than straight from asCount", () => {
+    const text = source("src/lib/ads/profile.ts");
+    const start = text.indexOf('case "fee_pct"');
+    expect(start).toBeGreaterThan(-1);
+    const arm = text.slice(start, text.indexOf('case "fee_basis"'));
+    expect(arm).toContain("feeVerdict(");
+    expect(arm).not.toMatch(/put\(slot, asCount\(raw, \{ max: 99 \}\)\)/);
+  });
+
+  /** ⚠️ Never the raw flag key in front of a customer (`slotCopy.ts:114`). */
+  it("is reported to the operator as a sentence, from the profile GET", () => {
+    const text = source(`${ADS_API}/profile/route.ts`);
+    expect(text).toContain("warningSentences(");
+    expect(text).not.toMatch(/warnings:\s*resolution\.warnings/);
+  });
+
+  it("is shown by the form rather than only sent to it", () => {
+    const text = source("src/components/dashboard/ads/AdProfileForm.tsx");
+    expect(text).toContain("props.warnings");
+    expect(text).toMatch(/\[\.\.\.said, \.\.\.warnings\]/);
+  });
+
+  /** The form has no copy of its own, so the route has to send the sentences. */
+  it("is sent as sentences by the profile route, not only as reasons", () => {
+    expect(source(`${ADS_API}/profile/route.ts`)).toContain("said: mappingSentences(mapping)");
+  });
+});
+
+/**
+ * ⚠️ ONE EXPRESSION OF "IS THIS RUNNABLE", AND ONE SENTENCE FOR IT.
+ *
+ * `preflight` is that expression. Three routes and `writeAd` ask it, and none
+ * of them may re-derive the answer from `context.unresolved` — the trap §34
+ * and §35 both record, where a hand-written second copy of a live rule drifts
+ * and the drift is silent.
+ */
+describe("the refusal", () => {
+  it("is asked of preflight rather than read off the context", () => {
+    const files = [
+      ...FILES,
+      "src/lib/ads/writeAd.ts",
+      "src/app/dashboard/ads/[id]/page.tsx",
+    ];
+    for (const file of files) {
+      const text = source(file);
+      expect(text, file).not.toMatch(/\.unresolved\.length/);
+      expect(text, file).not.toMatch(/unresolved\.map\(slotCopyLabel/);
+    }
+  });
+
+  /** ⚠️ And worded once, in `copy.ts`. Regenerate wrote its own inline. */
+  it("is worded once", () => {
+    for (const file of FILES) {
+      const text = source(file);
+      expect(text, file).not.toMatch(/I still need \$\{/);
+    }
+    expect(source("src/lib/ads/copy.ts")).toContain("unresolved: (labels: string[])");
+  });
+
+  /** ⚠️ The render route showed `generic` for the identical condition. */
+  it("names what is missing on the render route too", () => {
+    const text = source(`${ADS_API}/[id]/render/route.ts`);
+    expect(text).toContain("AD_COPY.errors.unresolved(");
+  });
+});
+
+/**
+ * ⚠️ "ad", NEVER "advert", ON EVERY SURFACE AN OPERATOR READS.
+ *
+ * Meta's own vocabulary is "ad" and the code has said `ads` throughout since
+ * 0156, so the UI was the only thing saying something else — a product that
+ * calls one thing two names in two places reads as two features.
+ *
+ * ⚠️ TWO DELIBERATE EXCEPTIONS, AND NEITHER IS AN OVERSIGHT.
+ *
+ *   `prompts.ts` and `brief.ts` are MODEL-FACING. Nothing there is read by a
+ *   customer, the wording is tuned against what the model produced, and
+ *   rewording a prompt to match a UI string is how a retune arrives by
+ *   accident.
+ *
+ *   The privacy policy and §60 are STAYFUL'S OWN advertising. That is legal
+ *   copy about our Meta pixel, where "advert" is correct and where §51.11
+ *   records what changing published claims carelessly costs.
+ */
+describe("the word", () => {
+  const SURFACES = [
+    ...FILES,
+    "src/lib/ads/copy.ts",
+    "src/lib/ads/slotCopy.ts",
+    "src/lib/ads/destination.ts",
+    "src/lib/ads/url.ts",
+    "src/lib/dashboardNav.ts",
+    "src/components/dashboard/ads/AdChat.tsx",
+    "src/components/dashboard/ads/AdCreatives.tsx",
+    "src/components/dashboard/ads/AdProfileForm.tsx",
+    "src/app/dashboard/ads/page.tsx",
+    "src/app/dashboard/ads/[id]/page.tsx",
+    "src/app/dashboard/ads/profile/page.tsx",
+  ];
+
+  it("is ad, not advert, on every ad surface", () => {
+    for (const file of SURFACES) {
+      // ⚠️ NOT comment-stripped, unlike every other guard in this file. The
+      // point is the vocabulary a reader meets, and half of these strings sit
+      // in a docblock explaining the copy beneath them.
+      //
+      // ⚠️ THE NOUN ONLY. "advertising" is an ordinary word — the ASA is the
+      // Advertising Standards Authority, which the attestation copy names —
+      // and banning it pushes perfectly good sentences into circumlocution to
+      // satisfy a test.
+      const text = readFileSync(join(ROOT, file), "utf8");
+      expect(text, file).not.toMatch(/\badverts?\b/i);
+    }
+  });
+
+  it("leaves the model's own prompts alone", () => {
+    const prompts = readFileSync(join(ROOT, "src/lib/ads/prompts.ts"), "utf8");
+    const brief = readFileSync(join(ROOT, "src/lib/ads/brief.ts"), "utf8");
+    expect(prompts + brief).toMatch(/\badverts?\b/i);
+  });
+});
+
+/**
  * ⚠️ ONE LAYOUT OVER THE WHOLE SEGMENT, not a check in the page. A page-level
  * check leaves the next page somebody adds ungated, and `dashboard/layout.tsx`
  * is a server component with no pathname so it cannot gate one route.

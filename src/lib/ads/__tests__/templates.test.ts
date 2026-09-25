@@ -23,7 +23,7 @@ const migration = readFileSync(
 const DERIVED: Record<string, string> = { included_list: "included", handled_list: "handled" };
 
 function patternsOf(t: AdTemplate): string[] {
-  return [t.headlineLocated, t.headlineUnlocated, t.subLocated, t.subUnlocated, t.ctaPattern];
+  return [t.exampleHeadlineLocated, t.exampleHeadlineUnlocated, t.exampleSubLocated, t.exampleSubUnlocated, t.ctaPattern];
 }
 
 function firstSentence(text: string): string {
@@ -44,11 +44,20 @@ describe("the registry covers the four templates the spec calls gate-free", () =
     expect(templateById(DEFAULT_TEMPLATE_ID)).not.toBeNull();
   });
 
-  it("every claims gate is none — a photo template must not sneak in", () => {
+  /**
+   * ⚠️ TWO INDEPENDENT PROPERTIES, AND THIS USED TO ASSERT THEM UNDER ONE
+   * TITLE — "every claims gate is none — a photo template must not sneak in".
+   * They are not the same rule and they gate different work: six of the spec's
+   * eight core templates have a claims gate of `none`, so that is not what
+   * selected these four, and a reader taking the old title at face value
+   * concludes T4 and T5 need the claims gate when all they need is a
+   * photograph.
+   */
+  it("makes no claim needing evidence, so no claims gate is owed", () => {
     for (const t of AD_TEMPLATES) expect(t.claimsGate).toBe("none");
   });
 
-  it("renders no photo in part 1, whatever the spec allows later", () => {
+  it("needs no photo layer, which is what selected these four", () => {
     // ⚠️ "required" is not expressible: the union is "none" | "optional", so
     // tsc refuses a photo template before a test could. T7 stays declared
     // `optional` because the spec says so; what this pins is that the other
@@ -80,7 +89,7 @@ describe("addressing — the rule that stops the ad reading as a riddle", () => 
 
   it("⚠️ T8's headline names no audience — which is why addressedTo is on the card", () => {
     const t8 = templateById("years-properties-review")!;
-    const head = t8.headlineLocated.toLowerCase();
+    const head = t8.exampleHeadlineLocated.toLowerCase();
     expect(t8.audienceTokens.some((tok) => head.includes(tok))).toBe(false);
     expect(t8.addressedTo).toBe("Landlords comparing managers");
   });
@@ -91,16 +100,16 @@ describe("the copy patterns", () => {
     for (const t of AD_TEMPLATES) {
       for (const p of patternsOf(t)) expect(p.trim().length).toBeGreaterThan(0);
       // The located form names a city; the unlocated one must not.
-      expect(slotsInPattern(t.headlineLocated)).toContain("city");
-      expect(slotsInPattern(t.headlineUnlocated)).not.toContain("city");
+      expect(slotsInPattern(t.exampleHeadlineLocated)).toContain("city");
+      expect(slotsInPattern(t.exampleHeadlineUnlocated)).not.toContain("city");
     }
   });
 
   it("⚠️ T8's sub differs between the forms — {areas} is unresolvable when they decline to narrow", () => {
     const t8 = templateById("years-properties-review")!;
-    expect(slotsInPattern(t8.subLocated)).toContain("areas");
-    expect(slotsInPattern(t8.subUnlocated)).not.toContain("areas");
-    expect(t8.subLocated).not.toBe(t8.subUnlocated);
+    expect(slotsInPattern(t8.exampleSubLocated)).toContain("areas");
+    expect(slotsInPattern(t8.exampleSubUnlocated)).not.toContain("areas");
+    expect(t8.exampleSubLocated).not.toBe(t8.exampleSubUnlocated);
   });
 
   it("every {slot} in every pattern is declared, or derived from one that is", () => {
@@ -124,7 +133,7 @@ describe("the copy patterns", () => {
     for (const t of AD_TEMPLATES) {
       if (!t.services) continue;
       const slot = `${t.services.slot}_list`;
-      expect(slotsInPattern(t.subLocated)).toContain(slot);
+      expect(slotsInPattern(t.exampleSubLocated)).toContain(slot);
     }
   });
 
@@ -143,57 +152,76 @@ describe("the copy patterns", () => {
   });
 });
 
-describe("the default primary text — what a rejected generation collapses to", () => {
-  it("opens with the audience AND the category, the spec's generation check", () => {
+/**
+ * ⚠️ THE "default primary text" SUITE IS GONE BECAUSE THE FIELDS ARE.
+ *
+ * It asserted that `defaultPrimaryText`, `defaultHeadline` and
+ * `defaultDescription` would survive the validator with nothing ticked — a good
+ * test of a bad idea. What a rejected generation collapsed to was an ad we
+ * stored, stamped with a model id, and rendered under "the words were drafted
+ * by AI": production shows both calls recording `not_configured` and copy
+ * byte-identical to T7's three defaults. If the model did not write it, it is
+ * not an ad, and the replacement assertion is in `generate.test.ts` — zero
+ * surviving variants never reaches `ready`.
+ */
+
+describe("the angle registry", () => {
+  it("pairs five keys with five angles, positionally", () => {
     for (const t of AD_TEMPLATES) {
-      const first = firstSentence(t.defaultPrimaryText);
-      expect(t.audienceTokens.some((tok) => first.includes(tok))).toBe(true);
-      expect(t.categoryTokens.some((tok) => first.includes(tok))).toBe(true);
+      expect(t.angleKeys).toHaveLength(t.angles.length);
+      expect(new Set(t.angleKeys).size).toBe(t.angleKeys.length);
     }
   });
 
-  it("⚠️ names NO service the customer might not have ticked", () => {
-    // This is the one that matters. The default is what we publish when the
-    // model has been rejected twice — so it has to pass the multi-select rule
-    // with NOTHING selected, or a customer who ticked two of six gets a
-    // fallback ad claiming all six.
+  it("⚠️ keys are stable tokens, never prose — the model returns them", () => {
+    for (const t of AD_TEMPLATES) {
+      for (const key of t.angleKeys) expect(key).toMatch(/^[a-z][a-z0-9_]*$/);
+    }
+  });
+
+  it("⚠️ every key is unique ACROSS templates, so a stored key names one angle", () => {
+    const all = AD_TEMPLATES.flatMap((t) => t.angleKeys.map((k) => `${t.id}:${k}`));
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("⚠️ no angle name contains a service token as a whole word", () => {
+    // This is the measurement `angleListFor` cites for NOT filtering the angle
+    // list on the multi-select vocabulary: the filter would be dead code. If
+    // this ever fails, an angle has been written that invites a word the
+    // validator refuses, and the filter has to exist.
     for (const t of AD_TEMPLATES) {
       const { forbidden } = serviceTokensFor(t, []);
-      const body = t.defaultPrimaryText.toLowerCase();
-      const found = forbidden.filter((tok) => body.includes(tok));
-      expect(found).toEqual([]);
+      for (const angle of t.angles) {
+        for (const tok of forbidden) {
+          const re = new RegExp(`(?:^|[^a-z0-9])${tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9])`, "i");
+          expect(re.test(angle), `${t.id} "${angle}" names "${tok}"`).toBe(false);
+        }
+      }
     }
   });
+});
 
-  it("states no figure at all — the slots are unresolved when it fires", () => {
+describe("required slots — what makes the ad impossible", () => {
+  it("⚠️ is a SUBSET of setupSlots, never a new question", () => {
     for (const t of AD_TEMPLATES) {
-      expect(t.defaultPrimaryText).not.toMatch(/[£$€]\s*\d/);
-      expect(t.defaultPrimaryText).not.toMatch(/\d+\s*%/);
-      expect(t.defaultPrimaryText).not.toMatch(/\{\w+\}/);
-    }
-  });
-
-  it("⚠️ carries a fallback headline and description too — Meta needs all three", () => {
-    for (const t of AD_TEMPLATES) {
-      // Ours, so they should FIT the marks rather than merely clear the bound.
-      expect(t.defaultHeadline.length).toBeLessThanOrEqual(META_TRUNCATION_MARKS.headline);
-      expect(t.defaultDescription.length).toBeLessThanOrEqual(META_TRUNCATION_MARKS.description);
-      for (const s of [t.defaultHeadline, t.defaultDescription]) {
-        expect(s.trim()).toBe(s);
-        expect(s).not.toMatch(/[£$€]\s*\d/);
-        expect(s).not.toMatch(/\d+\s*%/);
-        expect(s).not.toMatch(/\{\w+\}/);
-        const { forbidden } = serviceTokensFor(t, []);
-        expect(forbidden.filter((tok) => s.toLowerCase().includes(tok))).toEqual([]);
+      for (const slot of t.requiredSlots) {
+        expect(t.setupSlots, `${t.id} requires ${slot}`).toContain(slot);
       }
     }
   });
 
-  it("fits our own bound and is long enough to be an ad", () => {
-    for (const t of AD_TEMPLATES) {
-      expect(t.defaultPrimaryText.length).toBeGreaterThan(META_TRUNCATION_MARKS.message);
-      expect(t.defaultPrimaryText.length).toBeLessThanOrEqual(AD_COPY_MAX.message);
+  it("⚠️ never demands the review quote — a quote is a bonus angle", () => {
+    const t8 = templateById("years-properties-review")!;
+    expect(t8.requiredSlots).not.toContain("review_quote");
+    expect(t8.requiredSlots).not.toContain("review_quote_source");
+    // But it does demand the four figures the argument IS.
+    for (const slot of ["years_trading", "properties_managed", "review_score", "review_count"]) {
+      expect(t8.requiredSlots).toContain(slot);
     }
+  });
+
+  it("every template needs the company name, for the button", () => {
+    for (const t of AD_TEMPLATES) expect(t.requiredSlots).toContain("company_name");
   });
 });
 

@@ -65,10 +65,42 @@ describe("gaps say they are gaps", () => {
     expect(text).toContain("Google reviews: not on file");
   });
 
-  it("says when there is no trading name or landing page", () => {
+  it("says when there is no trading name", () => {
     const text = brief(customer({ business_name: null, website_url: null }));
     expect(text).toContain("not on file — ask what name");
-    expect(text).toContain("No landing page on file");
+  });
+
+  /**
+   * ⚠️ THREE CASES, NOT TWO, AND THE TEST USED TO PIN THE WRONG ONE. It asserted
+   * "No landing page on file" for everybody without a link — which is what the
+   * brief said, and it is what told the model to chase a page from an operator
+   * who wanted a Facebook lead form. That is how the question the whole feature
+   * broke on came to be reworded in the first place.
+   */
+  it("asks which destination when nobody has chosen one", () => {
+    const text = brief(customer({ business_name: null, website_url: null }));
+    expect(text).toContain("Nobody has chosen where the button goes");
+    expect(text).toContain("those two and no others");
+    expect(text).not.toContain("no landing page on file");
+  });
+
+  it("asks for the page only once they have chosen their own website", () => {
+    const text = brief(customer({ website_url: null, ad_profile: { destination: "website" } }));
+    expect(text).toContain("there is no page on file");
+  });
+
+  /** ⚠️ AND NEVER ASKS FOR ONE ON AN INSTANT FORM AD. */
+  it("tells the model an Instant Form ad needs no page at all", () => {
+    const text = brief(
+      customer({ website_url: null, ad_profile: { destination: "instant_form" } })
+    );
+    expect(text).toContain("lead form inside Facebook");
+    expect(text).toContain("They need no landing page");
+    expect(text.toLowerCase()).not.toContain("ask for it");
+  });
+
+  it("says they have one when they do", () => {
+    expect(brief(customer())).toContain("They have a page for the button to point at.");
   });
 });
 
@@ -129,7 +161,31 @@ describe("the fee", () => {
 
   it("is withheld when they agreed but we do not have the number", () => {
     const text = brief(customer({ ad_profile: { fee_public: true } }));
-    expect(text).toContain("do not have the number");
+    expect(text).toContain("not appear");
+  });
+
+  /**
+   * ⚠️ THE PROMPT USED TO INVITE THE ONE SENTENCE THE VALIDATOR REFUSES.
+   *
+   * `feePhrase` returned "15% of gross" with the VAT treatment unrecorded, the
+   * brief told the model to state the fee "exactly that way", and
+   * `fee_without_vat_treatment` then rejected exactly that — because a bare
+   * "15%" is a different price with and without VAT and the landlord reading it
+   * cannot tell which. A rejection retries once and then collapses, so the
+   * customer most likely to hit it was the one who had bothered to publish a
+   * fee.
+   */
+  it("⚠️ offers no fee phrase when nobody recorded the VAT treatment", () => {
+    const text = brief(customer({ ad_profile: { fee_public: true, fee_pct: 15, fee_basis: "gross" } }));
+    expect(text).not.toContain("15%");
+    expect(text).toContain("not appear");
+  });
+
+  it("⚠️ but \"not stated\" is an answer, not a gap", () => {
+    const text = brief(
+      customer({ ad_profile: { fee_public: true, fee_pct: 15, fee_basis: "gross", fee_vat: "not_stated" } })
+    );
+    expect(text).toContain("15% of gross");
   });
 });
 
@@ -236,7 +292,7 @@ describe("the figure list agrees with the validator", () => {
       slots: r.slots,
       profile: (c as unknown as { ad_profile: Record<string, unknown> }).ad_profile,
       targeting: r.targeting,
-      fixed: { headline: "", sub: "" },
+      example: { headline: "", sub: "" },
     };
   };
 
