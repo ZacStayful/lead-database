@@ -79,9 +79,10 @@ describe("the privacy policy says the same thing", () => {
   });
 
   it("never claims a customer's figures are always pooled with others", () => {
-    // STR-Website-2 shows every district however thin, so a district can rest
-    // on one analysed lead (CLAUDE.md §71.2). "Never against a single postcode"
-    // is true; "pooled with other reports" would not be.
+    // STR-Website-2 shows an area from its first report, and each bedroom size
+    // however few, so a figure can rest on one analysed lead (CLAUDE.md §71.2).
+    // "Never against a single postcode" is true; "pooled with other reports"
+    // would not be.
     const src = code("app/privacy-policy/page.tsx");
     expect(src).not.toMatch(/pooled|combined with other|alongside other reports/i);
   });

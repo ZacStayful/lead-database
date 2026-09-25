@@ -18952,14 +18952,16 @@ the single-postcode figure.
 STR-Website-2's `docs/market-explorer/sources.md` holds the same table from its
 side.
 
-⚠️ **A district figure can still rest on one report.** STR-Website-2 shows
-every area however thin (`min_samples = 1`, `src/lib/market/confidence.ts`), so
-a district with one analysed lead shows that property's figures as the
-district's, at the lowest confidence tier. That is where the line was drawn: a
-district is an outward code (LS6) covering thousands of addresses, a full
-postcode a handful. The privacy policy says the figures are never shown against
-a single postcode, which stays true. It does not say they are always pooled with
-other reports, and must not start to.
+⚠️ **A figure can still rest on one report.** STR-Website-2 hides a district's
+figures until it has 3 reports (`MIN_DISTRICT_SAMPLES`), but shows an area from
+its first report (`min_samples = 1`, `src/lib/market/confidence.ts`), and shows
+each bedroom size inside an area, or inside a district that is showing figures,
+however few reports it has. So one analysed lead can be all there is behind a
+thin area's figures, or behind one bedroom size. That is where the line was
+drawn: a full postcode is a handful of addresses, while a district (LS6) or an
+area (LS) covers thousands. The privacy policy says the figures are never shown
+against a single postcode, which stays true. It does not say they are always
+pooled with other reports, and must not start to.
 
 ### 71.3 — The four gaps, and what closed each
 
