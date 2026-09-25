@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ProductChooser } from "./AddLeadsPanel";
 import { analysability, describeIneligibility } from "@/lib/leadAnalysis";
+import { ANALYSIS_MARKET_DATA_NOTE } from "@/lib/analysisDisclosure";
 import type { LeadType } from "@/lib/types";
 
 interface FormState {
@@ -232,6 +233,9 @@ export function ManualLeadForm({ available }: { available: LeadType[] }) {
                 Projected occupancy, nightly rate, gross income and your
                 management fee, with the full property analysis attached — the
                 same figures a lead from us arrives with.
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {ANALYSIS_MARKET_DATA_NOTE}
               </span>
               {!analysable.ok && (
                 <span className="mt-1 block text-xs text-amber-700">
