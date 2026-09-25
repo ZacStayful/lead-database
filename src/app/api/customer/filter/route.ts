@@ -6,7 +6,10 @@ import { formatDate } from "@/lib/utils";
 import {
   fetchLeadVolumeAggregate,
   fetchAreaContention,
+  formatGrossThreshold,
+  isGrossThreshold,
   predictMonthlyVolume,
+  GROSS_THRESHOLDS,
   type LeadVolumeAggregate,
 } from "@/lib/filterPrediction";
 import { forecastVolume } from "@/lib/filterForecast";
@@ -40,12 +43,20 @@ function cols(product: LeadType) {
       selectionMode: "gr_filter_selection_mode",
       radiusOutcode: "gr_filter_radius_outcode",
       radiusMiles: "gr_filter_radius_miles",
+      radiusPlace: "gr_filter_radius_place",
       expectedLeads: "gr_filter_expected_leads",
       forecastEstimate: "gr_filter_forecast_estimate",
       forecastLikelihood: "gr_filter_forecast_likelihood_pct",
       forecastCostPence: "gr_filter_forecast_cost_per_lead_pence",
       forecastPricePence: "gr_filter_forecast_plan_price_pence",
       forecastAcknowledgedAt: "gr_filter_forecast_acknowledged_at",
+      // ⚠️ NULL, NOT A COLUMN NAME, AND THERE IS NO `gr_` COLUMN TO NAME.
+      // The revenue floor is management-only (§25's analysis is, by design),
+      // so this branch is STRUCTURALLY unable to write one — invariant 6
+      // satisfied by the shape rather than by a clause somebody must
+      // remember. The apply below refuses a GR `min_gross` outright, and this
+      // is the second stop if that refusal were ever removed.
+      minGross: null,
       anchor: "gr_billing_cycle_anchor" as keyof Customer,
       balance: "gr_lead_balance" as keyof Customer,
       allocation: "gr_monthly_allocation" as keyof Customer,
@@ -62,12 +73,14 @@ function cols(product: LeadType) {
     selectionMode: "filter_selection_mode",
     radiusOutcode: "filter_radius_outcode",
     radiusMiles: "filter_radius_miles",
+    radiusPlace: "filter_radius_place",
     expectedLeads: "filter_expected_leads",
     forecastEstimate: "filter_forecast_estimate",
     forecastLikelihood: "filter_forecast_likelihood_pct",
     forecastCostPence: "filter_forecast_cost_per_lead_pence",
     forecastPricePence: "filter_forecast_plan_price_pence",
     forecastAcknowledgedAt: "filter_forecast_acknowledged_at",
+    minGross: "filter_min_gross" as string | null,
     anchor: "billing_cycle_anchor" as keyof Customer,
     balance: "lead_balance" as keyof Customer,
     allocation: "monthly_allocation" as keyof Customer,
@@ -108,9 +121,11 @@ export async function POST(req: NextRequest) {
     areas?: unknown;
     min_bedrooms?: unknown;
     max_bedrooms?: unknown;
+    min_gross?: unknown;
     selection_mode?: unknown;
     radius_outcode?: unknown;
     radius_miles?: unknown;
+    radius_place?: unknown;
     acknowledge_forecast?: unknown;
     quoted_expected_leads?: unknown;
     existing_leads?: unknown;
@@ -153,9 +168,48 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (areas.length === 0 && min === null && max === null) {
+
+    // -- the revenue floor (§25's `leads.gross_annual_income`, in POUNDS) ---
+    //
+    // ⚠️ REFUSED ON GUARANTEED RENT, NEVER SILENTLY DROPPED. Dropping it means
+    // the customer believes they set a floor they did not, and then reads
+    // every lead that arrives as the filter failing. GR has ZERO leads
+    // carrying a gross figure, so there is no column to write and nothing a
+    // floor could ever admit.
+    if (product === "guaranteed_rent" && body.min_gross != null) {
       return NextResponse.json(
-        { error: "Choose at least one area or a bedroom range." },
+        {
+          error:
+            "A minimum property revenue can only be set on management leads.",
+          code: "gross_not_supported",
+        },
+        { status: 400 }
+      );
+    }
+    // ⚠️ VALIDATED AGAINST THE LIST, not a range. A free number between two
+    // thresholds bands at the wrong edge (see `isGrossThreshold`) and the
+    // CHECK would refuse the write afterwards as a 500.
+    let minGross: number | null = null;
+    if (body.min_gross != null) {
+      const g = toIntOrNull(body.min_gross);
+      if (g === null || !isGrossThreshold(g)) {
+        return NextResponse.json(
+          {
+            error:
+              "Choose a minimum property revenue from the list: " +
+              GROSS_THRESHOLDS.map(formatGrossThreshold).join(", ") +
+              ".",
+            code: "invalid_min_gross",
+          },
+          { status: 400 }
+        );
+      }
+      minGross = g;
+    }
+
+    if (areas.length === 0 && min === null && max === null && minGross === null) {
+      return NextResponse.json(
+        { error: "Choose at least one area, a bedroom range or a minimum property revenue." },
         { status: 400 }
       );
     }
@@ -173,6 +227,16 @@ export async function POST(req: NextRequest) {
         : null;
     const radiusMiles =
       selectionMode === "radius" ? toIntOrNull(body.radius_miles) : null;
+    // The town, when they typed one (0157). Trimmed and capped to the CHECK,
+    // and kept only when the outcode was also accepted — a place name with no
+    // centre behind it would render "Radius: 20 mi from Salisbury (null)".
+    const radiusPlace =
+      selectionMode === "radius" &&
+      radiusOutcode !== null &&
+      typeof body.radius_place === "string" &&
+      body.radius_place.trim() !== ""
+        ? body.radius_place.trim().slice(0, 120)
+        : null;
 
     // ---------------------------------------------------------------------
     // Re-derive the forecast HERE. The client sends intent; the server sends
@@ -216,7 +280,7 @@ export async function POST(req: NextRequest) {
     }
     const prediction = predictMonthlyVolume(
       aggregate[product],
-      { areas, minBedrooms: min, maxBedrooms: max },
+      { areas, minBedrooms: min, maxBedrooms: max, minGross },
       contention
     );
     const forecast = forecastVolume(prediction, allocation, product);
@@ -287,6 +351,10 @@ export async function POST(req: NextRequest) {
         p_areas: areas.length > 0 ? areas : null,
         p_min_bedrooms: min,
         p_max_bedrooms: max,
+        // ⚠️ The floor being APPLIED, not the one stored. This asks "what
+        // would the new filter exclude", and the stored column is still the
+        // old filter's at this point — the update below has not run yet.
+        p_min_gross: minGross,
       }
     );
     if (releasableError) {
@@ -341,10 +409,19 @@ export async function POST(req: NextRequest) {
       [c.liftDate]: null, // applying/editing cancels any scheduled lift
       [c.selectionMode]: selectionMode,
       [c.radiusOutcode]: radiusOutcode,
+      [c.radiusPlace]: radiusPlace,
       [c.radiusMiles]:
         radiusMiles !== null && radiusMiles > 0 && radiusMiles <= 200
           ? radiusMiles
           : null,
+      // ⚠️ WRITTEN UNCONDITIONALLY, never only-when-present. Written only when
+      // a floor arrives, a customer who set £75k and later edits their areas
+      // keeps a floor the UI no longer shows and cannot clear — §28.7's class
+      // exactly, and the reason `radiusOutcode` / `radiusPlace` above are
+      // written the same way. The spread is on the PRODUCT, not on the value:
+      // `c.minGross` is null on guaranteed rent (see `cols`), so that branch
+      // cannot write the column at all.
+      ...(c.minGross ? { [c.minGross]: minGross } : {}),
       // From `forecast`, never from the body. Cleared when nothing is offerable
       // so a stale figure cannot outlive the filter that produced it.
       [c.expectedLeads]: forecast.offerable ? forecast.expected : null,

@@ -1,4 +1,5 @@
 import { cityForArea } from "@/lib/postcode";
+import { formatGrossThreshold } from "@/lib/filterPrediction";
 import type { Customer, LeadType } from "@/lib/types";
 
 /**
@@ -27,12 +28,24 @@ export interface LeadFilterView {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+  /**
+   * Minimum projected gross annual revenue, in POUNDS (§25's
+   * `leads.gross_annual_income`), or null for no revenue floor.
+   *
+   * ⚠️ MANAGEMENT ONLY, and the GR branch below is structurally unable to set
+   * it: guaranteed rent has ZERO leads carrying a gross figure — §25's
+   * analysis is management-only by design, so the figure would be WRONG for a
+   * GR operator rather than merely missing. There is no `gr_` column to read.
+   */
+  minGross: number | null;
   liftDate: string | null;
   /** How it was set (0094): "areas", "radius", or null for pre-0094 filters. */
   selectionMode: string | null;
   /** Radius details, only meaningful when selectionMode is "radius". */
   radiusOutcode: string | null;
   radiusMiles: number | null;
+  /** The town it was centred on (0157), when a name was typed rather than a postcode. */
+  radiusPlace: string | null;
   /**
    * The volume forecast the customer was SHOWN (0098, renamed 0100) — not what
    * today's volumes would quote. The two drift as ingest moves, and admin needs
@@ -75,10 +88,12 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       areas: normaliseAreas(customer.filter_areas),
       minBedrooms: customer.filter_min_bedrooms,
       maxBedrooms: customer.filter_max_bedrooms,
+      minGross: customer.filter_min_gross ?? null,
       liftDate: customer.filter_lift_effective_date,
       selectionMode: customer.filter_selection_mode ?? null,
       radiusOutcode: customer.filter_radius_outcode ?? null,
       radiusMiles: customer.filter_radius_miles ?? null,
+      radiusPlace: customer.filter_radius_place ?? null,
       expectedLeads: customer.filter_expected_leads ?? null,
       forecastCostPerLeadPence:
         customer.filter_forecast_cost_per_lead_pence ?? null,
@@ -95,10 +110,14 @@ export function activeLeadFilters(customer: Customer): LeadFilterView[] {
       areas: normaliseAreas(customer.gr_filter_areas),
       minBedrooms: customer.gr_filter_min_bedrooms,
       maxBedrooms: customer.gr_filter_max_bedrooms,
+      // Never a floor on GR — see the field's note. Hard-coded rather than
+      // read from a column, because no such column exists to read.
+      minGross: null,
       liftDate: customer.gr_filter_lift_effective_date,
       selectionMode: customer.gr_filter_selection_mode ?? null,
       radiusOutcode: customer.gr_filter_radius_outcode ?? null,
       radiusMiles: customer.gr_filter_radius_miles ?? null,
+      radiusPlace: customer.gr_filter_radius_place ?? null,
       expectedLeads: customer.gr_filter_expected_leads ?? null,
       forecastCostPerLeadPence:
         customer.gr_filter_forecast_cost_per_lead_pence ?? null,
@@ -166,7 +185,18 @@ export function filterSummary(f: LeadFilterView, maxAreas = 3): string {
     places = shown.join(", ") + (rest > 0 ? ` +${rest} more` : "");
   }
 
-  return beds ? `${beds} · ${places}` : places;
+  // ⚠️ The floor is its OWN segment, never folded into the bedroom phrase.
+  // "3+ beds" and "£50k+" are different dimensions of the filter, and an
+  // admin reading a thin forecast needs to see which of the two is narrow.
+  const parts = [beds, revenuePhrase(f.minGross), places].filter(
+    (x): x is string => Boolean(x)
+  );
+  return parts.join(" · ");
+}
+
+/** "£50k+ revenue", or null when no floor is set. */
+export function revenuePhrase(minGross: number | null): string | null {
+  return minGross == null ? null : `${formatGrossThreshold(minGross)}+ revenue`;
 }
 
 /**
@@ -176,7 +206,14 @@ export function filterSummary(f: LeadFilterView, maxAreas = 3): string {
  */
 export function filterKindLabel(f: LeadFilterView): string {
   if (f.selectionMode === "radius" && f.radiusOutcode && f.radiusMiles) {
-    return `Radius: ${f.radiusMiles} mi from ${f.radiusOutcode}`;
+    // ⚠️ The town when we have it, because that is what the customer typed —
+    // "Radius: 20 mi from SP1" for a search made by typing Salisbury answers a
+    // different question from the one admin is asking. Falls back to the bare
+    // outcode, which is every radius filter set before 0157.
+    const from = f.radiusPlace
+      ? `${f.radiusPlace} (${f.radiusOutcode})`
+      : f.radiusOutcode;
+    return `Radius: ${f.radiusMiles} mi from ${from}`;
   }
   return "Hand-picked areas";
 }
@@ -192,6 +229,14 @@ export function filterTooltip(f: LeadFilterView): string {
     `${f.label} lead filter`,
     `Bedrooms: ${bedroomPhrase(f.minBedrooms, f.maxBedrooms)}`,
     `Locations: ${locationText(f.areas)}`,
+    // ⚠️ Named as the PROPERTY's projected revenue, never "revenue" alone: the
+    // customer's own income is the other thing an admin could read that as,
+    // and §25's figure is Stayful's projection for the property.
+    `Minimum property revenue: ${
+      f.minGross == null
+        ? "Any"
+        : `${formatGrossThreshold(f.minGross)} a year projected gross`
+    }`,
     `Set by: ${filterKindLabel(f)}`,
   ];
   if (f.expectedLeads != null && f.forecastCostPerLeadPence != null) {

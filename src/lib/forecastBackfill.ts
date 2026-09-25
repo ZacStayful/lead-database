@@ -68,6 +68,7 @@ export function forecastBackfillFor(
       areas: filter.areas,
       minBedrooms: filter.minBedrooms,
       maxBedrooms: filter.maxBedrooms,
+      minGross: filter.minGross,
     },
     contention
   );

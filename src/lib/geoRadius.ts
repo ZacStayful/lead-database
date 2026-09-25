@@ -7,9 +7,17 @@ import type { LatLng } from "@/lib/areaCentroids";
  * edge must include that neighbour even though its centroid is 40 miles off.
  *
  * Client-side geometry on ~120 multipolygons; a full pass is a few
- * milliseconds. Planar approximation with cos(lat) scaling — exact enough at
- * radius-search distances, and the alternative (true geodesic point-to-
- * segment) buys nothing a customer could see.
+ * milliseconds, at 10 miles and at 100 alike — the cost is passes per
+ * keystroke, not the radius.
+ *
+ * Planar approximation with cos(lat) scaling. ⚠️ The longitude scale is
+ * computed ONCE, from the CENTRE's latitude, so the error grows with the
+ * radius: ~1.5% east-west at 50 miles and ~3% at 100, which means an area
+ * whose nearest boundary sits around 97-103 miles away may fall either side.
+ * Invisible in a whole-area filter and not worth geodesic point-to-segment
+ * maths — but this header said "exact enough at radius-search distances" when
+ * the maximum WAS 50, and that sentence stopped being the whole truth when
+ * §67 took it to 100.
  */
 
 /** The geojson feature shape the boundary file uses (as LeadSourceMap reads it). */

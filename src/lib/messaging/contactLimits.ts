@@ -31,6 +31,7 @@
  * passed on this" arrived at by subtraction.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { describeError } from "@/lib/logError";
 
 /** Mirrors 0120. A missing setting means this, not "no cooldown". */
 export const DEFAULT_LEAD_COOLDOWN_HOURS = 24;
@@ -99,7 +100,7 @@ export async function otherOperatorMessagedRecently(
   const ids = (threads ?? []).map((t) => (t as { id: string }).id);
   if (ids.length === 0) return { blocked: false };
 
-  const { count, error } = await admin
+  const { count, error, status } = await admin
     .from("lead_messages")
     .select("id", { count: "exact", head: true })
     .in("thread_id", ids)
@@ -108,7 +109,10 @@ export async function otherOperatorMessagedRecently(
     .gte("created_at", since);
 
   if (error) {
-    console.error("[contactLimits] message count failed", error.message);
+    console.error(
+      "[contactLimits] message count failed",
+      describeError(error, status)
+    );
     return { blocked: false };
   }
 

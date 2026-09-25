@@ -61,3 +61,46 @@ export function bedroomInputValue(raw: string): number | null {
   const n = parseInt(raw, 10);
   return Number.isFinite(n) ? n : null;
 }
+
+/**
+ * Past this many areas, a radius filter is closer to "anywhere" than to a
+ * choice, and saying so matters more than listing them.
+ *
+ * Measured: a 100-mile circle from Northampton touches 78 of the ~120 areas —
+ * a Salisbury customer at that radius receives PL, TQ, SA, LE and SS. The
+ * caveat under the list is not decoration at that size; it is the main fact.
+ */
+export const NEAR_NATIONAL_AREAS = 40;
+
+/** How many areas to name before collapsing the rest behind a disclosure. */
+export const AREAS_SHOWN = 8;
+
+export interface AreaSummary {
+  /** "BS — Bristol" for the first `shown`. */
+  head: string[];
+  /** Everything after them, same labelling, for the disclosure. */
+  rest: string[];
+  /** True once the list is long enough to read as "most of the country". */
+  nearNational: boolean;
+}
+
+/**
+ * A coverage list a person can read.
+ *
+ * ⚠️ At 78 areas a plain `.join(", ")` is a ~1,900-character paragraph, which
+ * is what the radius controls rendered before the distance went past 50 miles.
+ * The shape follows locationText() in leadFilter.ts: name a few, count the
+ * rest, and let them open it if they want it.
+ */
+export function summariseAreas(
+  areas: string[],
+  label: (area: string) => string,
+  shown: number = AREAS_SHOWN
+): AreaSummary {
+  const labelled = areas.map(label);
+  return {
+    head: labelled.slice(0, shown),
+    rest: labelled.slice(shown),
+    nearNational: areas.length >= NEAR_NATIONAL_AREAS,
+  };
+}

@@ -7,8 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
-import { cityForArea } from "@/lib/postcode";
-import { parseOutcode, outcodeCentroid } from "@/lib/outcodes";
+import { cityForArea, postcodeArea } from "@/lib/postcode";
 import type { AreaFeature } from "@/lib/geoRadius";
 import { LeadSourceMap } from "@/components/dashboard/LeadSourceMap";
 import { PredictionBox } from "@/components/filtering/PredictionBox";
@@ -16,7 +15,12 @@ import { VolumeBar } from "@/components/filtering/VolumeBar";
 import { AreaPicker, labelFor, type AreaOption } from "@/components/filtering/AreaPicker";
 import { BedroomRange } from "@/components/filtering/BedroomRange";
 import { RadiusControls } from "@/components/filtering/RadiusControls";
-import { resolveRadius } from "@/components/filtering/radiusSearch";
+import { RevenueFloor } from "@/components/filtering/RevenueFloor";
+import {
+  RADIUS_DEFAULT_MILES,
+  radiusCoverage,
+} from "@/components/filtering/radiusSearch";
+import { useRadiusSearch } from "@/components/filtering/useRadiusSearch";
 import {
   bedroomInputValue,
   formatPence as poundsFromPence,
@@ -35,8 +39,15 @@ import {
 import {
   forecastVolume,
   recommendedDowngrade,
+  HIGH_COST_PER_LEAD_PENCE,
   type VolumeForecast,
 } from "@/lib/filterForecast";
+import {
+  bankedCreditSentence,
+  downgradeRelief,
+  planGapSentence,
+  planVsFilter,
+} from "@/lib/planVsFilter";
 import type { FilterStatus, LeadType } from "@/lib/types";
 
 export type { AreaOption } from "@/components/filtering/AreaPicker";
@@ -65,6 +76,11 @@ export interface FilterPanelProps {
   areas: string[];
   minBedrooms: number | null;
   maxBedrooms: number | null;
+  /**
+   * The saved revenue floor in POUNDS, or null. Management only — the GR page
+   * passes null because guaranteed rent has no lead carrying a gross figure.
+   */
+  minGross: number | null;
   liftEffectiveDate: string | null;
   availableAreas: AreaOption[];
   // Lead volume per postcode area (national), for the map + list hints.
@@ -75,6 +91,17 @@ export interface FilterPanelProps {
   // The plan's monthly lead allocation for this product — what a selection is
   // judged "too small" against.
   monthlyAllocation: number;
+  /**
+   * Unspent credit for this product.
+   *
+   * ⚠️ Read ONLY to compare against the forecast (§69), never to decide
+   * anything: `(gr_)lead_balance` is the allocation gate (invariant 1) and the
+   * gate lives in SQL. On production the filtered customers hold 94 credits
+   * between them while the unfiltered ones hold TWO, because ordinary routing
+   * drains a balance as fast as it is granted — the filter is the mechanism
+   * that banks it, and no screen said so.
+   */
+  leadBalance: number;
   // How many other filtered customers already compete for each area, so the
   // draft forecast matches what routing will actually deliver.
   contention?: AreaContention | null;
@@ -126,6 +153,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   const [minBeds, setMinBeds] = useState<string>(
     props.minBedrooms != null ? String(props.minBedrooms) : ""
   );
+  const [minGross, setMinGross] = useState<number | null>(props.minGross);
   const [maxBeds, setMaxBeds] = useState<string>(
     props.maxBedrooms != null ? String(props.maxBedrooms) : ""
   );
@@ -151,24 +179,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // is a SELECTOR, not a different filter: routing matches on postcode areas,
   // so what is saved is always the resolved area set, through the same apply.
   const [locationMode, setLocationMode] = useState<"areas" | "radius">("areas");
-  const [radiusPostcode, setRadiusPostcode] = useState("");
-  const [radiusMiles, setRadiusMiles] = useState(15);
-  const [geoFeatures, setGeoFeatures] = useState<AreaFeature[] | null>(null);
-  const [geoFailed, setGeoFailed] = useState(false);
-
-  // Boundary polygons for the radius test — fetched once, on first use of
-  // radius mode (the map fetches the same file, so it is usually cached).
-  useEffect(() => {
-    if (locationMode !== "radius" || geoFeatures || geoFailed) return;
-    let alive = true;
-    fetch("/data/uk-postcode-areas.geojson")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => alive && setGeoFeatures(d.features as AreaFeature[]))
-      .catch(() => alive && setGeoFailed(true));
-    return () => {
-      alive = false;
-    };
-  }, [locationMode, geoFeatures, geoFailed]);
+  const [radiusQuery, setRadiusQuery] = useState("");
+  // ⚠️ From the constant, not a literal: this was 15, which was not on the
+  // list even before it was re-scaled, so the <select> opened with nothing
+  // selected.
+  const [radiusMiles, setRadiusMiles] = useState<number>(RADIUS_DEFAULT_MILES);
 
   // Live prediction for the draft selection, recomputed on every toggle.
   const draftSelection: FilterSelection = useMemo(
@@ -176,8 +191,16 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
       areas: selectedAreas,
       minBedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       maxBedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      // ⚠️ THE DRAFT FLOOR, AND IT IS IN THE DEPS BELOW.
+      // `react-hooks/exhaustive-deps` is NOT running — §11 records there is no
+      // ESLint config — so dropping it from either list does not warn. It
+      // simply makes the effect below stop voiding the forecast
+      // acknowledgement when the floor changes, and the customer then
+      // acknowledges one forecast and applies against a different one, which
+      // is precisely what §39.8's fixed refusal order exists to prevent.
+      minGross,
     }),
-    [selectedAreas, minBeds, maxBeds]
+    [selectedAreas, minBeds, maxBeds, minGross]
   );
   const prediction = useMemo(
     () => predictMonthlyVolume(props.volume, draftSelection, props.contention),
@@ -204,9 +227,6 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
   // allocation raises no "too small" warning yet is still forecast to deliver
   // less than the plan sells, which the customer should read before applying.
   const needsAcknowledgement = forecast.offerable && forecast.reducesVolume;
-  const blocked =
-    (needsAcknowledgement && !acknowledgedForecast) ||
-    (forecast.requiresExtraConfirm && !acknowledgedPoorValue);
   // Nearest-area chips belong to hand-picking; in radius mode the "widen
   // search" line is the expansion mechanic, and a chip toggle would be undone
   // by the radius-to-selection sync anyway.
@@ -229,7 +249,11 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     // selection. Change the selection and a different set is excluded, so the
     // answer they gave no longer refers to anything.
     setReleaseDecision(null);
-  }, [selectedAreas, minBeds, maxBeds]);
+    // ⚠️ `minGross` is here for the reason the memo above states. A floor is
+    // a selection change like any other: it excludes a different set of leads,
+    // so the forecast they acknowledged and the release decision they gave no
+    // longer refer to anything.
+  }, [selectedAreas, minBeds, maxBeds, minGross]);
 
   // The SAVED filter's prediction, for the read-only summary view — the same
   // number the admin surfaces show for this customer.
@@ -241,10 +265,18 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
           areas: props.areas,
           minBedrooms: props.minBedrooms,
           maxBedrooms: props.maxBedrooms,
+          minGross: props.minGross,
         },
         props.contention
       ),
-    [props.volume, props.areas, props.minBedrooms, props.maxBedrooms, props.contention]
+    [
+      props.volume,
+      props.areas,
+      props.minBedrooms,
+      props.maxBedrooms,
+      props.minGross,
+      props.contention,
+    ]
   );
   const savedBelow = belowAllocation(savedPrediction, props.monthlyAllocation);
   // What the customer was SHOWN, not what today's data would quote. The two
@@ -292,49 +324,112 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     [shownLeads, props.monthlyAllocation, product]
   );
 
-  // Radius mode: resolve the typed postcode + radius to the postcode areas
-  // the circle touches, and work out the smallest widening that would add
-  // more leads — "another 5 miles brings in Gloucester, about +2/month".
-  const radius = useMemo((): {
-    outcode: string | null;
-    covered: string[];
-    upside: { extraMiles: number; newAreas: string[]; extraRate: number } | null;
-  } | null => {
-    if (locationMode !== "radius" || !geoFeatures) return null;
-    const unresolved = { outcode: null, covered: [], upside: null };
-    const outcode = parseOutcode(radiusPostcode);
-    if (!outcode) return unresolved;
-    const centre = outcodeCentroid(outcode);
-    if (!centre) return unresolved;
+  // What they pay for, beside what this filter can actually deliver (§69).
+  //
+  // ⚠️ BUILT FROM `shownLeads`, NOT `props.expectedLeads`, so it inherits the
+  // stored-vs-live fallback resolved above rather than writing a second copy of
+  // it — a customer whose figure predates 0100 has no stored number and must
+  // still get a truthful comparison, not silence.
+  const savedGap = useMemo(
+    () =>
+      planVsFilter({
+        allocation: props.monthlyAllocation,
+        expected: shownLeads,
+        balance: props.leadBalance,
+        costPerLeadPence: shownCostPence,
+        acknowledged: props.forecastAcknowledgedAt != null,
+      }),
+    [
+      props.monthlyAllocation,
+      shownLeads,
+      props.leadBalance,
+      shownCostPence,
+      props.forecastAcknowledgedAt,
+    ]
+  );
 
-    const { covered, upside } = resolveRadius(
-      geoFeatures,
-      centre,
-      radiusMiles,
-      props.volume,
-      {
-        minBedrooms: bedroomInputValue(minBeds),
-        maxBedrooms: bedroomInputValue(maxBeds),
-      },
-      props.contention
-    );
-    return { outcode, covered, upside };
-  }, [
-    locationMode,
-    geoFeatures,
-    radiusPostcode,
-    radiusMiles,
-    minBeds,
-    maxBeds,
-    props.volume,
-    props.contention,
-  ]);
+  // Both sentences computed ONCE, rather than called in the gate and again in
+  // the body.
+  //
+  // ⚠️ THIS SHAPE IS THE POINT, not a micro-optimisation. Written as
+  // `{bankedCreditSentence(x) && <p>{bankedCreditSentence(x)}</p>}` the gate and
+  // the render are the same string, so a file-text guard cannot tell them apart
+  // — and deleting the gate leaves the guard green while the line stops
+  // rendering entirely. That mutation survived on the first pass here, which is
+  // the twelfth time this repository has recorded an assertion weak enough to
+  // survive its own mutation (§42.8, §50.9, §53, §55, §57, §65, §66, §68).
+  const savedGapLines =
+    savedGap.kind === "under_plan"
+      ? {
+          gap: planGapSentence(savedGap),
+          banked: bankedCreditSentence(savedGap),
+        }
+      : null;
+
+  // ⚠️ A CHEAPER PLAN IS NOT AUTOMATICALLY A FIX. `recommendedDowngrade` returns
+  // the cheapest plan whose leads >= expected, so a customer forecast at 1 lead
+  // a month on a £300/20 plan is offered the £150/10 plan — which is £150 A
+  // LEAD. §28.3 calls that advice "the only thing between them and paying twice
+  // the going rate indefinitely", so it keeps being offered; what it must not
+  // do is read as a solution when the price per lead is still absurd.
+  const savedDowngradeRelief = useMemo(() => {
+    if (!savedDowngrade || shownLeads == null || shownLeads <= 0) return null;
+    const pence = Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads);
+    return { pence, relief: downgradeRelief(pence, HIGH_COST_PER_LEAD_PENCE) };
+  }, [savedDowngrade, shownLeads]);
+
+  // The two fetches, the debounce and the memos live in useRadiusSearch; the
+  // rules live in parseRadiusCentre/resolveRadius, which are plain functions.
+  // ⚠️ `enabled` is passed from here on purpose — §28.6 records a geojson
+  // fetch that ran for every visitor because its gate lived inside and named
+  // the wrong thing.
+  const radiusConstraints = useMemo(
+    () => ({
+      minBedrooms: bedroomInputValue(minBeds),
+      maxBedrooms: bedroomInputValue(maxBeds),
+      // ⚠️ The widening scan must see the floor, or it offers "widen to 40
+      // miles for 8 more a month" computed over stock the floor excludes.
+      minGross: draftSelection.minGross,
+    }),
+    [minBeds, maxBeds, draftSelection.minGross]
+  );
+  const {
+    resolution: radius,
+    features: geoFeatures,
+    loading: radiusLoading,
+    failed: geoFailed,
+  } = useRadiusSearch({
+    enabled: locationMode === "radius",
+    query: radiusQuery,
+    miles: radiusMiles,
+    volume: props.volume,
+    constraints: radiusConstraints,
+    contention: props.contention,
+  });
+
+  // The rule lives in radiusSearch.ts so it can be unit-tested directly; the
+  // reasoning is in its docstring.
+  const {
+    empty: radiusEmpty,
+    areaUncovered: radiusAreaUncovered,
+    unresolved: radiusUnresolved,
+  } = radiusCoverage({
+    isRadiusMode: locationMode === "radius",
+    resolvedOutcode: radius?.centre?.outcode ?? null,
+    covered: radius?.covered ?? [],
+    knownAreas: geoFeatures?.map((f) => f.properties.area) ?? null,
+  });
+  const blocked =
+    (needsAcknowledgement && !acknowledgedForecast) ||
+    (forecast.requiresExtraConfirm && !acknowledgedPoorValue) ||
+    radiusEmpty ||
+    radiusUnresolved;
 
   // In radius mode the covered areas ARE the selection, so the map, the
   // prediction, the consent gate and apply all run off the same state as
   // hand-picking. Keyed on the joined list to avoid a re-render loop.
   const coveredKey =
-    radius && radius.outcode !== null ? radius.covered.join(",") : null;
+    radius && radius.centre !== null ? radius.covered.join(",") : null;
   useEffect(() => {
     if (locationMode !== "radius" || coveredKey === null) return;
     setSelectedAreas((prev) =>
@@ -407,15 +502,17 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
     // The radius details are recorded only when the selection genuinely came
     // from a resolved radius search — admin reads them to see what the
     // customer asked for. Routing reads the areas either way.
-    const fromRadius =
-      locationMode === "radius" && radius != null && radius.outcode !== null;
+    const fromRadius = locationMode === "radius" && radius?.centre != null;
+    const centre = fromRadius ? radius!.centre! : null;
     const ok = await post({
       action: "apply",
       areas: selectedAreas,
       min_bedrooms: minBeds === "" ? null : parseInt(minBeds, 10),
       max_bedrooms: maxBeds === "" ? null : parseInt(maxBeds, 10),
+      min_gross: minGross,
       selection_mode: fromRadius ? "radius" : "areas",
-      radius_outcode: fromRadius ? radius.outcode : null,
+      radius_outcode: centre ? centre.outcode : null,
+      radius_place: centre && centre.kind === "place" ? centre.name : null,
       radius_miles: fromRadius ? radiusMiles : null,
       acknowledge_forecast: acknowledgedForecast,
       // Sent in the SAME request as the acknowledgement and the quoted figure,
@@ -547,15 +644,37 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                       )
                     )}
                   </p>
-                  {savedDowngrade && (
+                  {/*
+                    What they pay for, beside what this filter delivers (§69).
+                    Amber, never red: this is a choice the customer made and can
+                    unmake, not an error. And it never offers the difference
+                    back — nothing settles a shortfall (§28.0, §28.4), and
+                    types.ts says of these columns that no copy reading them
+                    may offer to.
+                  */}
+                  {savedGapLines && (
+                    <p className="text-xs text-amber-700">
+                      {savedGapLines.gap}
+                    </p>
+                  )}
+                  {savedGapLines?.banked && (
+                    <p className="text-xs text-amber-700">
+                      {savedGapLines.banked}
+                    </p>
+                  )}
+                  {savedDowngrade && savedDowngradeRelief && (
                     <p className="text-xs text-amber-700">
                       On the {poundsFromPence(savedDowngrade.priceGbp * 100)}{" "}
                       plan you would expect the same {shownLeads} lead
                       {shownLeads === 1 ? "" : "s"} at{" "}
-                      {poundsFromPence(
-                        Math.ceil((savedDowngrade.priceGbp * 100) / shownLeads)
-                      )}{" "}
-                      each.{" "}
+                      {poundsFromPence(savedDowngradeRelief.pence)} each.{" "}
+                      {savedDowngradeRelief.relief ===
+                        "cheaper_but_still_poor" && (
+                        <>
+                          That is cheaper, but still a high price for each lead
+                          — widening this filter is the better move of the two.{" "}
+                        </>
+                      )}
                       <a href="/dashboard/settings" className="underline">
                         Change your plan
                       </a>
@@ -660,7 +779,7 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               <p className="text-xs text-muted-foreground">
                 {locationMode === "areas"
                   ? "Choose the postcode areas you want leads from. Leave all unchecked to accept any location."
-                  : "Enter your business postcode and how far you're willing to travel — we'll work out which postcode areas that covers."}
+                  : "Enter your postcode or a nearby town, and how far you're willing to travel — we'll work out which postcode areas that covers."}
               </p>
               {props.volumeUnavailable ? (
                 <p className="mt-2 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -697,13 +816,14 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
                   {locationMode === "radius" && (
                     <RadiusControls
                       idPrefix={product}
-                      postcode={radiusPostcode}
+                      query={radiusQuery}
                       miles={radiusMiles}
-                      onPostcodeChange={setRadiusPostcode}
+                      onQueryChange={setRadiusQuery}
                       onMilesChange={setRadiusMiles}
                       geoFailed={geoFailed}
-                      geoLoading={!geoFeatures}
+                      loading={radiusLoading}
                       resolution={radius}
+                      coverageUnavailable={radiusAreaUncovered}
                     />
                   )}
                 </>
@@ -718,6 +838,14 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               onMaxChange={setMaxBeds}
             />
 
+            <RevenueFloor
+              idPrefix={`filter-${product}`}
+              product={product}
+              volume={props.volume}
+              value={minGross}
+              onChange={setMinGross}
+            />
+
             {!props.volumeUnavailable && (
             <PredictionBox
               prediction={prediction}
@@ -726,7 +854,10 @@ export function LeadFilteringPanel(props: FilterPanelProps) {
               productLabel={productLabel}
               isBelow={isBelow}
               nothingSelected={
-                selectedAreas.length === 0 && minBeds === "" && maxBeds === ""
+                selectedAreas.length === 0 &&
+                minBeds === "" &&
+                maxBeds === "" &&
+                minGross === null
               }
               suggestions={suggestions}
               onAddArea={toggleArea}

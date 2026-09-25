@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { describeError } from "@/lib/logError";
 
 /**
  * `ad_generation_requests` — one row per model call (§65).
@@ -107,14 +108,17 @@ export async function draftsStartedToday(
   customerId: string
 ): Promise<{ ok: true; count: number } | { ok: false }> {
   const since = new Date(Date.now() - DAY_MS).toISOString();
-  const { count, error } = await admin
+  const { count, error, status } = await admin
     .from("ad_generation_requests")
     .select("id", { count: "exact", head: true })
     .eq("customer_id", customerId)
     .eq("kind", "questions")
     .gte("created_at", since);
   if (error) {
-    console.error("ads/ledger: draft cap read failed, refusing", error.message);
+    console.error(
+      "ads/ledger: draft cap read failed, refusing",
+      describeError(error, status)
+    );
     return { ok: false };
   }
   return { ok: true, count: count ?? 0 };

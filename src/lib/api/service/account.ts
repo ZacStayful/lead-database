@@ -39,12 +39,28 @@ function filterBlock(customer: Customer, leadType: LeadType) {
     radius_miles: gr
       ? customer.gr_filter_radius_miles
       : customer.filter_radius_miles,
+    // A derived list, never a spread (§27.2) — so this is a deliberate line.
+    radius_place: gr
+      ? customer.gr_filter_radius_place
+      : customer.filter_radius_place,
     min_bedrooms: gr
       ? customer.gr_filter_min_bedrooms
       : customer.filter_min_bedrooms,
     max_bedrooms: gr
       ? customer.gr_filter_max_bedrooms
       : customer.filter_max_bedrooms,
+    /**
+     * Minimum projected gross annual revenue, in POUNDS — the figure §25
+     * parses off the property analysis, not a price in pence like every other
+     * money field on this surface.
+     *
+     * ⚠️ ALWAYS NULL ON GUARANTEED RENT, and there is no `gr_` column to read:
+     * §25's analysis is management-only, so GR has no lead a floor could
+     * admit. Reported as a fixed field rather than omitted, because a caller
+     * branching on its presence would read "absent" as "this API version does
+     * not know about floors" rather than "this product has none".
+     */
+    min_gross: gr ? null : customer.filter_min_gross ?? null,
   };
 }
 

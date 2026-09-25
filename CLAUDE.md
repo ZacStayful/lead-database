@@ -14781,6 +14781,109 @@ is stamped once and not moved by the retry, wait past the threshold or lower
 `past_due_lapse_days`, run `?dryRun=true`, then the real run, and confirm the
 board reads Cancelled and `/admin/customers` shows them under Cancelled.
 
+### 59.9 — ⚠️ Recovery left the cancellation date behind *(no migration)*
+
+Found while checking whether §70.9's first "wiring gap" was real. **It was not**
+— see the correction there — but the check turned up a genuine bug one step
+further on, in the half of the round trip nothing had exercised.
+
+The write-off writes THREE things (59.5): `lapsed_at`, `account_status =
+'cancelled'`, and — only when it was null — `cancelled_at`. Recovery through
+`invoice.paid` cleared the first, restored the second, and **left the third set
+for ever.** So a customer whose card failed for four days and who then paid was
+permanently recorded as having cancelled on the day we gave up on them, while
+paying every month afterwards.
+
+⚠️ **WHAT THAT CORRUPTS IS THE CHURN HISTORY, SILENTLY.** `cancelled_at` is what
+§70 reads as the churn event, so a fully recovered customer appears under "Every
+departure" with a tenure and a reason and counts against the retention
+denominator. Nothing errors; the number is simply wrong, and wrong in the
+direction that makes the business look worse than it is. `previouslyHeldProduct()`
+(§32.1) reads it too, harmlessly here — they DO hold the product — which is
+exactly why nothing surfaced it.
+
+**Never fired, and it was 16 hours from firing.** The closest real episode
+(`b613ae8d`) was past due from 2026-08-29 18:13 and paid 2026-09-01 13:56 —
+2.82 days against a 3-day threshold. The 06:00 cron's cutoff would have caught
+them on the morning of 2 September; their payment landed the previous
+afternoon.
+
+`clearWriteOffCancellation()` in `pastDueEpisode.ts` is the fix, called from
+both halves of `invoice.paid` so the column rides along in the single UPDATE the
+branch already performs and can never be half-applied.
+
+⚠️ **EQUALITY WITH `lapsed_at` IS THE TEST, AND IT IS EXACT RATHER THAN CLEVER.**
+The cron writes both columns from ONE `nowIso` and writes `cancelled_at` only
+when it was already null, so:
+
+| | |
+|---|---|
+| equal | the write-off set it — undoing the write-off undoes it |
+| cancelled EARLIER | a real cancellation preceded the lapse and keeps its own date (first cancellation wins, §18) |
+| no `lapsed_at` | a real cancellation with no write-off involved |
+
+Compared as instants rather than strings, so PostgREST rendering `+00:00` where
+we wrote `Z` cannot make a genuine match look like a mismatch and quietly
+reinstate the bug.
+
+⚠️ **DO NOT "SIMPLIFY" IT TO AN UNCONDITIONAL `cancelled_at: null`.** That is the
+mirror-image corruption and the worse one: it would erase the date of every real
+cancellation on that customer's next payment, and §18E is explicit that a
+cancelled customer can be invited back and pay again while §32.1 depends on the
+date surviving exactly that.
+
+⚠️ **All four selects needed the columns, not two.** Each product has TWO
+lookups feeding the same `customer` — the primary one and the re-lookup after
+provisioning — and which runs depends on the path. Absent from either, both
+arguments arrive `undefined`, the helper no-ops, and the bug is back with every
+test green.
+
+#### Verification
+
+**3,125 vitest cases green**, 13 new. `tsc` clean, lint clean bar the four
+pre-existing `module` warnings, `npm run build` passes.
+
+⚠️ **TWELVE MUTATIONS RUN, ALL TWELVE CAUGHT** — the helper clearing
+unconditionally, dropping the equality check, comparing raw strings, writing the
+management column on the GR side; the cron stamping `cancelled_at` from a fresh
+clock or dropping its still-null guard; the webhook deleting a call, neutering
+one, passing the wrong branch's update object, nulling the column
+unconditionally, and EITHER select of EITHER product losing the columns.
+
+⚠️ **Three of those mutations were MISSED on the first run, and fixing the
+GUARDS is what this bought** — the eighth, ninth and tenth times this file has
+recorded a test written weak enough to survive the mutation it existed to catch
+(§50.9 twice, §53, §55, §57, §65, §70):
+
+- the select guard required the columns to appear ONCE where there are TWO
+  selects per product, so removing them from one slipped through — now counted;
+- the call guard counted the identifier, which a commented-out or neutered call
+  still satisfies — now pinned on the call SHAPE (each branch's own update
+  object) and on the call being a STATEMENT rather than a sub-expression.
+
+⚠️ **Not rehearsed against live Stripe**, the standing §12 item, and it cannot
+be rehearsed against history: no customer has ever been written off, so there is
+nothing to recover. Before relying on it, fail a test-mode card, let the lapse
+cron write the customer off (or lower `past_due_lapse_days` to 0), then pay and
+confirm `cancelled_at` comes back null while `account_status` returns to
+`active`. Then repeat on a customer who genuinely cancelled BEFORE going past
+due, and confirm their original date survives.
+
+#### ⚠️ Worth a decision: three days is shorter than Stripe's retry schedule
+
+Not changed here, because it is a business call rather than a bug.
+`past_due_lapse_days` is **3**, and §44.4 records Stripe Smart Retries making
+~4 attempts over **2-3 weeks** — so the write-off can fire before Stripe has
+finished trying, and before a customer who needs to phone their bank over a
+weekend has had a chance. All four real episodes recovered inside three days,
+one by 16 hours; that is four data points.
+
+What makes it survivable rather than urgent: the cron sends the customer **no
+email**, so a premature write-off is silent to them, and recovery is now
+genuinely complete with this fix. What it still costs is a Monday board flip to
+Cancelled and a released capacity slot in the interim. Raising it to 7 or 14
+days is a one-row `system_settings` edit and needs no deploy.
+
 ### Deployment order
 
 **0152 is already in production** — applied 2026-08-22 as `past_due_lapse`
@@ -17211,3 +17314,1587 @@ Delete or Rewrite clears it.
   the mapping. **Start App Review as soon as this merges.**
 - The spec's two open questions: whether customer ads carry a "powered by"
   mark, and who owns a customer's ad files if they leave.
+
+---
+
+## 66. Five things that were already broken *(no migration)*
+
+Found while planning a lead-filtering change, all verified against production
+or the live code, none depending on that change. Two were costing customers
+money or access on the day they were found. Shipped on their own so the
+filtering work lands as a reviewable diff rather than a bug fix wearing a
+feature's clothes.
+
+### 66.1 — ⚠️ §56.5 records the sign-out bug as FIXED. It was not.
+
+`getUser()` and `getCurrentCustomer()` in `src/lib/auth.ts` were not memoised
+— the file imported nothing from React. `dashboard/layout.tsx` and
+`dashboard/page.tsx` both call `getCurrentCustomer()`, and Next renders a
+layout and its page **concurrently**, so every dashboard load made two
+independent `supabase.auth.getUser()` calls and two `customers` reads, across
+the 31 files under `/dashboard` that call it.
+
+With an expired access token both calls race to redeem the **same** refresh
+token. GoTrue rotates it for the winner and rejects the loser:
+
+```
+tk [AuthApiError]: Invalid Refresh Token: Already Used
+routes=/dashboard  count=4  users=1  last=2026-09-22T08:10:42Z
+{ __isAuthError: true, status: 400, code: 'refresh_token_already_used' }
+```
+
+⚠️ **§56.5's fix added a `try/catch` and shipped 2026-09-14. The error last
+fired 2026-09-22.** The catch works exactly as written — `__isAuthError` is
+true, so it returns null — but **null means "signed out"**, so the symptom
+stopped being a 500 and became a signed-in customer bounced to `/login` at
+random. Catching harder cannot fix a race; only calling once can.
+
+⚠️ **`cache` is behind React's `react-server` export condition**, so it is
+present in Next's vendored server build and ABSENT from the stock client build
+vitest resolves — reaching for it there throws *"not yet supported outside of
+experimental channels"*. `src/lib/requestCache.ts` resolves it at module load
+and **falls through to a pass-through** when it is not there, with
+`REQUEST_CACHE_IS_REAL` saying which happened. The fallback is correct rather
+than merely safe: without a request scope there is nothing to memoise, and the
+uncached behaviour is exactly today's.
+
+It also halves the auth calls and the `customers` queries on every dashboard
+page in the product.
+
+### 66.2 — ⚠️ A radius covering nothing applied as an "ANYWHERE" filter
+
+The exact opposite of what was asked for, and reachable today.
+
+`coveredKey === "" → setSelectedAreas([])` → `areas: []` → the route writes
+`filter_areas = null` → and `lead_matches_customer_filter` (0074) reads a null
+area list as **match every area** (§19.4's rule, correct in its own right:
+no filter is not an empty filter). Apply was gated only on the forecast
+acknowledgement, and with no areas the forecast reads *high*, so nothing
+stopped it.
+
+⚠️ **Any Northern Ireland postcode does it**: `OUTCODE_CENTROIDS` has 80 `BT`
+outcodes and `public/data/uk-postcode-areas.geojson` has **no BT feature** at
+all. A customer asking for a 10-mile radius around Belfast ends up unfiltered.
+
+`radiusCoverage()` in `radiusSearch.ts` is the one predicate, and it separates
+the two cases rather than collapsing them — because the advice differs and one
+of the two is not a customer error:
+
+| | means | copy |
+|---|---|---|
+| `empty` | the circle touched nothing | widen the radius before applying |
+| `areaUncovered` | the postcode's own area is not in the boundary file | **we don't cover that part of the UK yet** — widening never helps |
+
+"Widen the radius" for a BT postcode is advice that cannot work.
+
+⚠️ **AND FOR TWO WEEKS IT WAS THE ONLY ADVICE THE PUBLIC ESTIMATOR GAVE.** The
+predicate above was right and its unit tests passed; `RadiusControls` carried
+both wordings and branched on `coverageUnavailable`; `LeadFilteringPanel`
+passed it. **`LeadEstimator` never called `radiusCoverage` at all**, so the
+prop fell to its `= false` default and every Northern Ireland postcode on both
+landing pages read "widen the radius before applying". Found by driving BT1
+against production after §67 merged — not by any test.
+
+Two things worth keeping from it. **A correct pure function whose caller never
+reads it is invisible to this entire suite**, because `vitest.config.mts` is
+PURE UNITS ONLY with no React — the seam §42.8 and §65 both record, and the
+reason the repair is a file-text guard in `radiusGuards.test.ts` rather than a
+behavioural test. And the blast radius was bounded by something structural
+rather than lucky: **the estimator applies no filter**, so §66.2's actual
+safety bug — a radius covering nothing applying as an ANYWHERE filter — was
+never reachable from it. Only the dashboard writes a filter, and the dashboard
+was correct throughout.
+
+⚠️ The guard asserts the estimator passes a REAL `knownAreas`, not just that it
+passes the prop. `knownAreas: null` is the documented "still loading" state and
+makes `areaUncovered` false by design, so a call passing a literal null would
+satisfy a naive assertion while restoring the exact defect.
+
+### 66.3 — A £75 top-up sold for leads the filter cannot deliver
+
+⚠️ **NOTHING IN THE TOP-UP PATH READ THE FILTER FOR ANY DECISION** — confirmed
+across `topupCharge.ts`, `chargeIntent.ts`, both routes, both pages and both
+components. Filter state affected copy only, and only the generic "fewer
+matches and a longer wait" sentence in `topupDeliveryNote`.
+
+So Allan Carmichael — filter forecast at **1 lead a month**, **32 unspent
+credits against a plan of 20** — could buy five more. That is §59.8's hole
+("charged £75 for credit routing would never spend") reached by a different
+route.
+
+`topupFilterWarning()` states the forecast, the plan and the unspent credit
+**before the charge**, with a link to the filtering page. ⚠️ **It warns and
+does not refuse**: §16's rule is never to turn away a sale, the credits do
+carry forward, and a customer may fully intend to widen. What they must not be
+is uninformed.
+
+Null whenever we cannot say something true and specific — no filter in force,
+no stored forecast (§58.3's gap; see 66.6), or a forecast that already covers
+the plan, where the balance genuinely **is** the constraint and a top-up is the
+right purchase.
+
+### 66.4 — "Widen search" offered distances the dropdown could not show
+
+The scan tried a literal `[5,10,15,20,25,30]` of **EXTRA** miles against a
+`<select>` holding a literal `[5,10,15,20,25,30,40,50]` of **ABSOLUTE** ones.
+Nothing made them agree, and they did not:
+
+| from | offered | reachable |
+|---|---|---|
+| 50 | 55, 60, 65, 70, 75, 80 | **none** |
+| 40 | 45…70 | only 50 |
+| 30 | 35…60 | only 40 and 50 |
+
+Accepting an unreachable offer set `miles` to a value with no matching
+`<option>`, so the select rendered with **nothing selected**. Wider than it
+looks: for the three largest settings most offers were unusable, and the two
+largest could never be reached by widening at all.
+
+⚠️ **`RADIUS_MILE_OPTIONS` is now the one list**, and `wideningStepsFrom()`
+derives the steps from it as the gap to each larger option — so every
+`miles + extraMiles` is an option by construction, an off-list saved value
+still widens **onto** the list, and the top of the list offers nothing rather
+than something that cannot be taken.
+
+The list itself is unchanged, deliberately: this is the clamp, not a re-scaling.
+There is **no cap on how many steps are scanned** — `resolveRadius`'s
+"smallest gaining step" argument is already served by stopping at the first
+one, and capping the tail is a product decision about how far to look.
+
+### 66.5 — ⚠️ `{ message: '' }` is not a serialisation bug
+
+`[prospect-nudges] cap read failed { message: '' }`, seven times. The instinct
+is "the error is not being serialised". **It was.** The object genuinely held
+nothing but an empty string, and a better serialiser prints the same nothing.
+
+postgrest-js builds a failed response's error from the response **body**:
+
+```js
+const body = await res.text()
+try   { error = JSON.parse(body) }
+catch { error = { message: body } }
+```
+
+and **`head: true` issues an HTTP HEAD, whose response carries no body by
+specification.** So `body` is `""`, the parse throws, and the error is
+`{ message: "" }` — every time, for every failed head count, whatever actually
+went wrong.
+
+⚠️ **The one fact that survives is the HTTP status, and it is right there** on
+`PostgrestResponseBase` next to `error`, unread, because the call site
+destructures `{ count, error }` and stops. `describeError(error, status)`
+renders what is there and, when there is nothing, **says why it is empty**
+rather than printing a blank — an unexplained blank is what sent someone
+reading postgrest-js's source, and the next person should be told in the log
+line instead.
+
+Applied at all five sites where a head count's failure is logged; two of them
+logged `error.message` directly, so their lines carried literally nothing after
+the prefix. ⚠️ **The guard is repo-wide rather than five named files**, because
+the defect is a property of the pattern and a head count added tomorrow has the
+same hole — proven by adding a new offending site and watching it named in the
+failure.
+
+### 66.6 — Two operational steps, not code
+
+- ⚠️ **Five of twelve filtered customers carry NULL forecast columns** — Karey
+  Summers, Leslie Rogers, Michael Vassilounis, Mieszko Tomanski and **Myles
+  Denton (28 credits banked on a plan of 20)**. Their dashboard home reads
+  *"Volume varies…"* rather than a figure, and **66.3's warning is silent for
+  them**, because saying nothing beats inventing a number. `POST
+  /api/admin/filters/backfill-forecast` (§58.3) fills them; dry run first.
+  ⚠️ **Not fixed in code on purpose**: the live fallback the filtering page
+  uses needs the whole-leads-table aggregate, and putting that loader on the
+  dashboard home for every customer is the cost §58.2 records.
+- **Two customers' Monday items cannot be resolved** (`could not resolve board
+  item`, `push did not land`, still firing 2026-09-23), so their subscription
+  status is not reaching the sales board. Run `GET
+  /api/admin/monday-status-check?link=1` (§23.8).
+
+### Not a bug, worth knowing
+
+**102 cron aborts on 2026-09-22 between 00:45 and 03:12**, across
+`monday-enquiry-sync` (49), `prospect-nudges` (44), `monday-lead-sync` (5) and
+`stayful-conflict-sweep` (4), all `system_settings unreadable`. That is §18.3's
+fail-closed design working correctly through a ~2.5-hour Supabase blip — and
+the same window produced 66.5's empty log lines.
+
+### Verification
+
+2,769 vitest cases green (35 new), `npx tsc --noEmit` clean, `npm run lint`
+clean bar the four pre-existing `no-assign-module-variable` warnings.
+
+⚠️ **Twenty-three mutations run, all twenty-three caught**, each broken
+deliberately and watched to fail before the assertion was kept.
+
+⚠️ **One assertion was written weak and only the mutation run found it** —
+"offers the way out" was a bare `toContain("/dashboard/filtering")` over the
+whole file, which **PASSED with the link deleted**, because the success branch
+carries its own filter link and that is what it matched. Scoped to the warning
+block, the mutation fails. That is the **seventh** instance of this shape
+recorded here (§42.8, §50.9 ×2, §53, §55, §57, §65), and the second where the
+test rather than the code had to change.
+
+⚠️ **`radiusCoverage.test.ts` and `radiusWidening.test.ts` are the first test
+files under `src/components/`** — inside `vitest.config.mts`'s existing glob so
+no config changed, and `radiusSearch.ts` has no React in it, so the suite stays
+within the "PURE UNITS ONLY" constraint that gates `next build`. Say so before
+anybody "tidies" them into `src/lib/`.
+
+⚠️ **Not exercised in a browser.** A Vercel preview cannot do it — Deployment
+Protection answers 302 to `vercel.com/sso-api` (§45, §46) — and a preview runs
+against **production** Supabase (§1.1). After merge, on `leads.stayful.co.uk`:
+load `/dashboard` with an expired token and confirm no bounce to `/login`; type
+a BT postcode in radius mode and confirm Apply is blocked with the "we don't
+cover there" wording rather than "widen"; set 50 miles and confirm no widening
+prompt appears; and open `/dashboard/topup` as a filtered customer under plan
+and confirm the amber block sits above the buy button.
+
+---
+
+## 67. A radius around a town, and out to 100 miles *(0157)*
+
+`/dashboard/filtering` and the public `LeadEstimator` both offer a radius mode:
+type a postcode, pick a distance, and we resolve that circle to the postcode
+**areas** it touches. That resolved area list is what gets saved — radius is a
+*selector*, not a different filter, because routing only ever matches
+`filter_areas`.
+
+Two gaps. **The centre had to be a postcode** — `parseOutcode` is a membership
+test against `OUTCODE_CENTROIDS`, so "Salisbury" resolved to nothing and the
+customer was told we don't recognise that postcode, while operators think in
+towns. And **the distance stopped at 50 miles**, from a hard-coded literal.
+
+⚠️ **Baseline, measured before anything was built: of 58 customers, exactly
+ONE has ever used radius mode** (25 miles, management); 7 hand-pick areas and
+50 have no mode recorded. This is a feature almost nobody reaches for — which
+is the reason to change it, and the number to judge it against afterwards.
+
+### 67.1 — A vendored gazetteer, not a geocoding API
+
+`public/data/uk-places.json` · `scripts/generate-uk-places.mjs` ·
+`npm run gen:places`.
+
+The estimator is a public marketing page: a third-party call per keystroke is
+a privacy and reliability problem, and this repo has no geo API, no geo env var
+and no `.env.local`. The precedent is already here twice — `src/lib/outcodes.ts`
+is 2,856 vendored centroids with its provenance in the header, and
+`scripts/fetch-ad-fonts.mjs` is the "committed bytes need a committed recipe"
+rule (§65).
+
+Source: **GeoNames `GB.zip`, CC BY 4.0 — attribution is required**, and it
+lives in the output's own `source` field so a commit that shrinks the payload
+cannot quietly drop it.
+
+| | |
+|---|---|
+| feature class `P` with a population, inside a postcode area | **6,222** |
+| distinct names | 6,003 (**181** of them shared, 219 extra entries) |
+| places with no outcode candidate in their own area | **0** |
+| outcodes failing the server's `/^[A-Z]{1,2}\d[A-Z0-9]?$/` | **0** |
+| names containing a digit | **0** |
+| names with non-ASCII | **2** — `Bo’ness`, `Redmarley D’Abitot` |
+| outcode distance | mean 3.68 km, median 3.11, p95 9.02, **max 30.68** |
+| size | **246 KB raw, 98 KB gzip** |
+
+⚠️ **THE ZIP CANNOT BE READ FROM ITS LOCAL FILE HEADER, and getting it wrong
+writes an EMPTY GAZETTEER SUCCESSFULLY.** `GB.zip` sets general-purpose bit 3
+— verified on the live download, flags `0x808` — so every local header reports
+compressed size 0 and uncompressed size 0, with the real figures in a trailing
+data descriptor. A local-header reader inflates nothing and reports success.
+The first entry is also `readme.txt`, not `GB.txt`, so "take the first entry"
+is wrong twice over. The script scans back for the EOCD and reads the central
+directory, whose sizes ARE correct. The CLI `unzip` handles this; hand-rolled
+Node does not.
+
+⚠️ **The outcode is the nearest centroid WITHIN the place's own postcode
+area**, not the nearest overall. Unconstrained it lands in a different area for
+roughly 3% of places, which would put "Salisbury (BA12)" in front of a
+customer. Constrained: 0 mismatches, 0 places with no candidate, for five
+hundredths of a kilometre on the mean.
+
+⚠️ **Sorted by codepoint, never `localeCompare`** — ICU ordering is
+version-dependent, which makes "deterministic output" machine-dependent and the
+drift test unreproducible.
+
+⚠️ **Places outside any postcode area are DROPPED** — Northern Ireland and
+offshore. `OUTCODE_CENTROIDS` holds 80 `BT` outcodes and the boundary file has
+**no BT feature**, so a Belfast centre resolves to zero areas. Dropping them
+makes §66.2's "anywhere" trap unreachable through the town path rather than
+merely guarded.
+
+⚠️ **A `--check` re-derivation does NOT gate the build.** GeoNames republishes
+weekly, so it would fail on an unrelated Tuesday. `ukPlaces.test.ts` asserts
+invariants over the **committed file** instead — and re-checks every place's
+position with the **real** `distanceToAreaKm`, which is the only reason the
+`.mjs` script is allowed to restate the ray-cast at all.
+
+### 67.2 — The lookup, and the disambiguator that must not be a city
+
+`src/lib/places.ts` is pure and **takes the loaded array as an argument**,
+exactly as `areasWithinRadius(features, …)` does. That is what keeps 250 KB out
+of the landing pages' first-load JS *and* the ranking inside vitest.
+
+Four tiers: an exact name ≻ a whole-name prefix ≻ any TOKEN's prefix ≻ anywhere
+in the name; population descending within each.
+
+⚠️ **THE DISAMBIGUATOR IS THE BARE OUTCODE, NEVER `cityForArea`.** Newport on
+the Isle of Wight is `PO30`, and `cityForArea("PO")` is **"Portsmouth"** — so
+an area label would read *"Newport (PO30 — Portsmouth)"*, which is simply
+wrong. The six Newports land on six distinct outcodes (NP20, PO30, TF10, CB11,
+HU15, SA42), so the outcode separates them on its own. ⚠️ And do not reach for
+`extractCity()` either — §40.14 measured it wrong on the commonest UK address
+shape and banned it from three surfaces.
+
+⚠️ **Apostrophes are the load-bearing normalisation, not accents.** Exactly two
+of the 6,222 names are non-ASCII and both are typographic apostrophes, so
+`Bo’ness`, `Bo'ness` and `Boness` must collide. ⚠️ **Spaces are collapsed and
+never removed** — removing them collides "Newport" with "New Port" and wrecks
+prefix ranking. `saint` → `st`, because GeoNames spells them out ("Saint
+Andrews") and nobody types that.
+
+`exactPlaces()` is separate from `searchPlaces()` **because the resolver needs
+a different answer from the dropdown** — see 67.3.
+
+### 67.3 — One box, and the two things it must never do
+
+`parseRadiusCentre(raw, index)` returns `{ centre, suggestions,
+looksLikePostcode }`; `resolveRadius(features, …)` answers the geojson half.
+
+⚠️ **POSTCODE IS TRIED FIRST, AND THE RULE IS UNAMBIGUOUS BY CONSTRUCTION:**
+`parseOutcode` only succeeds against the 2,856 known outcodes, every one
+contains a digit, and **no place name in the gazetteer contains one** (0 of
+6,222, asserted). So a town can never be swallowed by the postcode branch and
+there is no ordering hazard to reason about.
+
+⚠️ **IT NEVER AUTO-PICKS THE TOP HIT WHILE SOMEBODY IS TYPING.** "New"
+resolving to Newcastle would redraw a coverage paragraph mid-word and, on the
+dashboard, rewrite the saved area selection. A name resolves only when it
+matches **exactly** and matches exactly **one** place — so "Salisbury" typed in
+full just works, and "Newport" offers a choice. ⚠️ The case that separates
+`exactPlaces` from `searchPlaces` is not "New", which has six hits either way:
+it is **"Salisb", which has exactly ONE**, so resolving on the search would
+silently centre the circle six letters into a word.
+
+⚠️ **`RadiusResolution.outcode` was replaced by `centre`.** That field carried
+two meanings — *did this resolve* and *the value to POST* — and the town branch
+would have inherited the conflation, with a place resolving but having no
+separate name to persist.
+
+⚠️ **`looksLikePostcode` is a digit test, and it is honest for the same
+reason.** "We don't recognise that postcode — try just its first half" is
+nonsense for a town, and "try a nearby town" is nonsense for a postcode. It is
+decided once, in the resolver, so the component picks copy from a boolean
+rather than re-deriving the rule.
+
+### 67.4 — Two fetches, and the gate that stays at the call site
+
+`useRadiusSearch` owns both fetches, the debounce and the memos. ⚠️ **It
+contains no decisions**: `vitest.config.mts` is PURE UNITS ONLY — no React — so
+anything branching in there is a branch no test can reach.
+
+⚠️ **TWO FETCHES, NOT ONE**, because the gazetteer is ~250 KB and the boundary
+file ~562 KB. Splitting lets the town dropdown work while the boundaries are
+still in flight; one combined load makes the box do nothing for the best part
+of a megabyte.
+
+⚠️ **`enabled` is the CALLER'S gate, passed in.** §28.6 records a geojson fetch
+that fired for every visitor to both landing pages because its gate read
+`mode !== "radius"` and radius is the **default** mode — a mount-time cost with
+no network request to see in devtools. The dashboard passes
+`locationMode === "radius"`, the estimator passes its own `wantsGeo`, and both
+stay visible where they are written. There are two files now, so an ungated
+fetch is that bug twice; `radiusGuards.test.ts` pins both early returns
+literally, because no behavioural test here can reach an effect.
+
+**Debounced on the resolve, not on the suggestions.** Suggestions are one pass
+over a prebuilt index (~1 ms) and must feel instant; the resolve costs a
+boundary scan per widening step and redraws the coverage paragraph, the map and
+the area selection. Typing "Salisbury" goes from nine resolves to one.
+
+### 67.5 — 10 to 100, and what that costs
+
+`RADIUS_MILE_OPTIONS` is `[10, 20 … 100]`, `RADIUS_DEFAULT_MILES` is 20, and
+`wideningStepsFrom` caps at **three** steps.
+
+⚠️ **DROPPING 5 MILES IS A REAL REGRESSION FOR DENSE-URBAN OPERATORS**, taken
+knowingly. From EC1 a 10-mile circle already returns **19** postcode areas, so
+there is no longer a precise setting for inside London. One entry to add back
+if it ever costs a sale.
+
+⚠️ **The three-step cap only started earning its keep at this scale.** From 10
+miles there are nine larger options, and naming the ninety-mile jump when ten
+would do buys volume the operator cannot service — which is the argument
+`resolveRadius`'s own docstring already made while a six-long literal above it
+contradicted it. §66.4 deliberately shipped the clamp WITHOUT the cap, because
+that was a bug fix and this is a product decision.
+
+**Cost is flat in radius** — one scan is ~1.9 ms at 10 miles and at 100. The
+expense is passes × keystrokes, which is what the debounce addresses.
+
+⚠️ **Above ~40 areas the caveat becomes the main fact.** 100 miles from
+Northampton touches **78 of ~120** areas; a Salisbury customer at that radius
+receives PL, TQ, SA, LE and SS. So the coverage list truncates at 8 with the
+rest behind a disclosure (a plain `.join(", ")` at 78 is a ~1,900-character
+paragraph), and past `NEAR_NATIONAL_AREAS` a second sentence says so outright.
+
+⚠️ **A 100-mile filter is barely a filter, and the route applies NO cap on
+`areas.length`.** Whether a near-national filter should interact differently
+with contention and allocation pricing is a business question this change makes
+reachable in two clicks.
+
+### 67.6 — The box itself
+
+- Label **"Your postcode or town"**, placeholder `e.g. SP1 or Salisbury`.
+- ⚠️ **`autoComplete="postal-code"` had to go.** On a box that now takes town
+  names Chrome offers the saved postcode over our list and can overwrite a
+  half-typed name. Replaced with `off` plus combobox roles.
+- Keyboard handling **mirrors `CommandPalette` rather than inventing**: cursor
+  reset per keystroke, clamped arrows with `preventDefault`, Enter picks,
+  `onMouseEnter` moves. Escape closes without clearing.
+- ⚠️ Picking writes the **canonical name**, not the label: the box is a search
+  box, and putting "Newport (NP20)" in it makes the next keystroke unparseable.
+- **Four failure states now, and the fourth is not an error** — the "which one
+  did you mean" prompt above an ambiguous dropdown is neutral, never amber.
+
+### 67.7 — What 0157 persists, and what it deliberately does not
+
+`filter_radius_place` and its `gr_` mirror (invariant 6), nullable, additive,
+length 1–120. **Metadata only**, exactly as 0094's header says: routing matches
+on `filter_areas`, which the radius resolves to before anything is saved.
+
+Without it `filterKindLabel` reads *"Radius: 20 mi from SP1"* for a search the
+customer made by typing Salisbury, which answers a different question from the
+one admin is asking. It now reads **"Radius: 20 mi from Salisbury (SP1)"**,
+falling back to the bare outcode for every radius filter set before 0157.
+
+⚠️ **The route keeps the name only when the OUTCODE was also accepted.** A
+place surviving a rejected outcode renders "from Salisbury (null)".
+
+⚠️ **Deliberately NOT cleared by `execute_filter_lift`**, for 0094's reason:
+that would mean a `create or replace` of a privileged function for a metadata
+nicety (the §11 ACL trap). Readers must only consult these columns while the
+filter is `active` or `pending_lift`.
+
+⚠️ **The longest real name is 27 characters** ("Knightsbridge and
+Belgravia"), so 120 is generous and still bounded — and the CHECK is not
+decoration: `filterKindLabel` renders this straight into an admin table cell
+and the apply route takes it from the browser.
+
+### 67.8 — §66.2's fix was incomplete, and this closes the rest
+
+⚠️ `radiusCoverage`'s `empty` only fires once a centre **has** resolved. With
+nothing typed yet, or while the 562 KB boundary file is still in flight,
+`covered` is `[]`, nothing was blocked, and Apply wrote the same "anywhere"
+filter. `unresolved` is that wider door, found by rewiring this code rather
+than by a test.
+
+⚠️ **An empty area list is NOT wrong in itself** — a bedroom-only filter is a
+real thing a customer has today (0 areas, 2+ beds). It is wrong when they asked
+for a RADIUS and got nothing, which is why it is scoped to radius mode and
+hand-picking is never gated by it.
+
+### 67.9 — Known, stated, and reversible in a line each
+
+- **The panel never rehydrates a saved radius.** `radiusMiles` is only ever
+  `useState(RADIUS_DEFAULT_MILES)` and `locationMode` only ever
+  `useState("areas")`, so a customer who saved 25 miles returns to a
+  hand-picked view at 20. Out of scope by decision. ⚠️ **If it is ever added it
+  must snap to the nearest `RADIUS_MILE_OPTIONS` value**, or a stored 25
+  renders an `<option>`-less select — the defect §66.4 exists to prevent,
+  arriving from the other direction.
+- ⚠️ **`geoRadius.ts` computes its `cos(lat)` longitude scale ONCE, from the
+  centre's latitude.** Over 50 miles that is ~1.5% east–west error; over 100 it
+  is ~3%, so an area whose nearest boundary sits around 97–103 miles may fall
+  either side. Invisible in a whole-area filter and not worth geodesic maths —
+  but the file header claimed the approximation was "exact enough at
+  radius-search distances", written when the maximum was 50.
+- **181 ambiguous names** are handled by the outcode label and the
+  refuse-to-choose rule; somebody who types "Newport" and never picks gets no
+  resolution rather than a wrong one.
+- **GeoNames coordinate precision is uneven** — "St Albans" ships on a
+  1/3-degree grid, ~1–2 km off. Fine for radius placement; the 35 km assertion
+  catches anything genuinely wrong.
+- **No cron regenerates the gazetteer.** UK towns do not move; the generator's
+  printed counts are the tripwire.
+- **The revenue layer is NOT here.** Phase 2 of the plan (filtering on the
+  lead's projected gross) is a separate change with its own migration.
+
+### Verification
+
+**2,842 vitest cases green**, `npx tsc --noEmit` clean, `npm run lint` clean
+bar the four pre-existing `no-assign-module-variable` warnings.
+
+⚠️ **Twenty-six mutations run across the gazetteer, the lookup and the
+resolver. Twenty-four caught.** The two that were not are recorded at the line
+rather than pretended to be load-bearing: removing the generator's
+`name|outcode` dedupe (GeoNames yields no duplicate pairs today, so it is
+behaviour-preserving on this source) and removing the hook's `if (!enabled)
+return null` (both fetches early-return anyway, so the memo would answer
+`UNRESOLVED_RADIUS` instead of `null` and every consumer is gated on its own
+mode).
+
+⚠️ **Four assertions had to be rewritten, and each failure is the point:**
+
+- *"an exact name outranks a longer one starting the same way"* used
+  **"Newcastle", which has no exact entry** — Emlyn, under Lyme, upon Tyne and
+  Newcastleton. It now uses Burton (4,106) against Burton upon Trent (122,199).
+- *"finds a place by a token in the middle of its name"* used "trent", which
+  the **substring** tier catches too, so deleting the token tier entirely left
+  it green. Only a query where the tiers disagree pins it: "ham" puts West Ham
+  (15,551, a whole word) above Birmingham (1,157,603, a letter run).
+- *"never auto-picks mid-word"* used "New" (six hits either way) and could not
+  see a resolver that used `searchPlaces`. **"Salisb" has exactly one hit** and
+  does.
+- *"the large majority are within 5 km"* guessed 80% and it is **72.5%**. It
+  now asserts the median, p95 and max the generator itself prints, so the test
+  and the generator agree on what good looks like.
+
+`filterKindLabel` had **no test at all**, which a mutation found.
+
+**Not exercised in a browser.** A Vercel preview cannot do it — Deployment
+Protection answers 302 to `vercel.com/sso-api` (§45, §46) — and a preview runs
+against **production** Supabase (§1.1). After merge, on `leads.stayful.co.uk`:
+
+- on `/` and `/guaranteed-rent` with Network open: **zero requests for
+  `uk-places.json` or the geojson on load; both after the first keystroke** —
+  the §28.6 invariant, and the only reason that section exists
+- "Salisbury" resolves alone · "Newport" gives six with NP20 first · "SP1"
+  gives no dropdown · "Bo'ness" and "Boness" both match · "Zzz" gives the place
+  copy and "ZZ99" the postcode copy
+- 100 miles from Northampton: 78 areas, truncated, with the near-national
+  caveat and no widening prompt
+- a BT postcode: Apply blocked with "we don't cover that part of the UK yet",
+  not "widen"
+- apply a town filter, then check `/admin/customers` reads **"Radius: 20 mi
+  from Salisbury (SP1)"**
+
+### Deployment order — migration BEFORE code
+
+✅ **0157 applied to `znlfwbnvhlacwzgfalcf` on 2026-09-24, before the pull
+request merged** (§1.1), and verified there rather than trusted.
+
+- **No collision** on either column or either constraint beforehand.
+- **Post-apply**: both columns and both CHECKs present; 61 customers, 13
+  filtered, **0 rows carrying a place** — inert exactly as designed.
+- **Nothing moved.** A fingerprint of every customer's filter state — status,
+  areas, selection mode, radius outcode, radius miles, expected leads, and the
+  four `gr_` mirrors — is byte-identical before and after
+  (`dbb7616dadc6db2d95c6f212df880926`).
+- Both CHECKs were then exercised **on production**, inside a block that raises
+  at the end so every write rolled back: null, 1 character, 120 characters and
+  a real town name accepted on both columns; an empty string and 121 characters
+  refused on both. The row counts and the fingerprint afterwards confirm it
+  wrote nothing.
+- `get_advisors` reports **no new finding** — the 58 deny-all tables, the five
+  mutable-`search_path` functions, the five `authenticated`-executable
+  `SECURITY DEFINER` functions and the two auth warnings are all pre-existing.
+
+It is additive and inert: both columns are nullable, nothing reads them until
+the code ships, and nothing here touches a balance, counter, pacing or capacity
+column. Code arriving first would write `filter_radius_place` into a column
+that does not exist and fail every filter apply.
+
+---
+
+## 68. Filtering on what the property is worth *(0158, 0159)*
+
+Every management lead carries a projected **gross annual revenue** — §25 parses
+it off the Stayful property analysis into `leads.gross_annual_income` — and it
+was shown on the lead and filtered on by nothing. A customer who only wants
+properties worth £50k+ had to open every lead to find out.
+
+A third filter dimension now sits beside areas/radius and the bedroom range:
+**a minimum projected gross**, priced and forecast by §28's existing machinery
+under its existing rules, so the customer is still quoted "at least N — P%
+likely — £X a lead".
+
+`customers.filter_min_gross` · `src/lib/filterPrediction.ts` ·
+`src/components/filtering/RevenueFloor.tsx` · `POST /api/customer/filter`.
+
+### Decisions, and the one that changed on the measurements
+
+| | |
+|---|---|
+| Product | **Management only, and NO `gr_` mirror** |
+| Threshold | A fixed list of **five**: £25k · £30k · £40k · £50k · £75k. Never a free number |
+| No figure | Leads with no gross figure are **excluded** whenever a floor is set |
+| Surfaces | The dashboard **and** the public estimator |
+
+⚠️ **£100k was picked, then measured, then DROPPED — and the first argument for
+keeping it was wrong.** The reasoning offered was that £75k and £100k are "thin
+enough that the forecast will usually answer *we can't forecast this* — honest,
+and self-limiting". The second half is false:
+`src/app/api/customer/filter/route.ts` writes **null into all five forecast
+columns and the acknowledgement** whenever `!forecast.offerable`, and §39.8's
+give-back question is skipped because no forecast could be offered. So such an
+option does not decline to quote — it drops the customer into the §58.3
+null-forecast population that is already live for 5 of 12 filtered customers.
+
+The arithmetic, over a 12.1-week window against `MIN_RELIABLE_MATCHES = 5`:
+
+| floor | in window | share of the national book needed to be quotable |
+|---|---|---|
+| ≥£40k | 113 | 4.4% |
+| ≥£50k | 64 | 7.8% |
+| ≥£75k | 23 | **22%** |
+| ≥£100k | **7** | **71%** |
+
+At £100k **no area-restricted filter can ever be quotable**. ⚠️ £75k ships but
+is **national-only in practice** — any realistic three-area selection lands at
+2–3 matching leads and is unquotable. Adding £100k back is one entry in
+`GROSS_THRESHOLDS` plus the CHECK; shipping a control whose top option silently
+nulls a customer's forecast is the thing that could not be undone.
+
+### 68.1 — ⚠️ BAND-FIRST, and `areaBedCounts` is DERIVED
+
+`buildLeadVolumeAggregate` increments `areaBedCounts` and `matchableLeads`
+together, immediately after `if (!area || bed == null) continue;`.
+
+⚠️ **THAT `continue` IS THE MOST DANGEROUS LINE IN THIS CHANGE.** Adding
+`|| gross == null` to it drops the **10.6%** of management leads carrying no
+figure (**29 of 273** in the aggregate's own population) out of *every*
+forecast, including those with no floor set — silently, with nothing erroring.
+It is untouched. Only the increment below it moved:
+
+```ts
+beds[String(bed)] = (beds[String(bed)] ?? 0) + 1;
+// became
+byBand[bandFor(row.gross_annual_income)] += 1;   // bandFor(null) === "none"
+```
+
+⚠️ **A PARALLEL AGGREGATE BESIDE IT WAS THE OBVIOUS DESIGN AND IS WRONG.**
+Making the band a first-class key means `areaBedCounts` **stops being stored
+and becomes a pure accessor** (sum over every band key including `"none"`), so
+the two can never disagree — there is no second number to disagree with. Three
+reasons, the last of which kills the alternative outright:
+
+- The consistency invariant becomes **structural** rather than something to
+  assert.
+- ⚠️ **It is not assertable where it matters anyway.** `applyContention` floors
+  **per bucket** (`Math.floor(count * share)`), and independently-floored
+  quantities do not sum — so a separately stored total would be *legitimately*
+  larger than the sum of its own bands, and a customer could catch it: the same
+  selection quoting one figure by the bedroom path and a smaller one by the
+  band path at the lowest floor.
+- ⚠️ **Per-band contention (§68.3) makes it arithmetically unreconcilable**,
+  because each band then scales by a **different factor**.
+
+⚠️ **ONE PREDICATE, NO `minGross == null` BRANCH.** `allowedBands(null)` returns
+every key including `"none"`; a floor returns the numeric bands at or above it
+and excludes `"none"` and `"0"`. A branch is where the floored and unfloored
+paths drift (§28.5, §28.8) — and the unfloored path must stay byte-identical to
+before this existed.
+
+⚠️ **`"none"` and `"0"` are NOT interchangeable.** `"none"` is a lead with no
+figure; `"0"` is a real figure below the lowest threshold. An absent floor
+admits both and **any** floor excludes both — which is why
+`minGross = null` and `minGross = 25000` must produce different answers
+whenever the `"none"` bucket is non-empty. That single assertion guards the
+whole no-figure-exclusion semantic.
+
+⚠️ **Band edges ARE the threshold list, identically.** Because the floor is a
+fixed list, `>= £40k` is *exactly* the union of the bands from 40k up — zero
+approximation, agreeing with the SQL cell for cell. Enforced three ways: one
+exported constant, the SQL CHECK, and a guard asserting the migration's list
+matches it. Diverge and every floored quote is computed at the wrong edge, and
+half the directions **overstate**.
+
+`rawMatching` is added to `VolumePrediction`, purely additive: `Math.floor` on
+the total and `Math.round` on the rate erase small real gains, and anything
+ranking on `displayRate` would produce three-way 0-0-0 ties rendering as
+"nothing is costing you volume".
+
+### 68.2 — ⚠️ The public payload is VERSIONED, because the estimator is in scope
+
+`toProductVolume` reads `p.areaBedCounts ?? {}`, and its docblock says why: the
+cache row genuinely ships as `{}` (0099) and a landing page can render against
+an un-primed payload. **That deliberate default makes an OLD-SHAPE payload
+indistinguishable from an un-primed one.** Shipped without a version, every
+revenue-floored estimate on both landing pages would quote **zero** for up to
+`PUBLIC_VOLUME_STALE_AFTER_MS` (6 hours) after deploy — §58.2's exact failure,
+self-inflicted, on a marketing page, and recurring on every future shape change.
+
+`public_filter_volume.schema_version integer`, folded into the **existing
+atomic claim** so it keeps its serialising property:
+
+```ts
+.update({ generated_at: now, schema_version: PUBLIC_VOLUME_SCHEMA_VERSION })
+.eq("id", 1)
+.or(`generated_at.is.null,generated_at.lt.${staleBefore},` +
+    `schema_version.is.null,schema_version.neq.${PUBLIC_VOLUME_SCHEMA_VERSION}`)
+```
+
+⚠️ **A plain integer column, NOT a `payload->>schemaVersion` JSON path in the
+filter string** — §65.6 records that shape as "easy to reason about wrongly, and
+impossible to test without PostgREST running", and chose an RPC over it.
+
+⚠️ **The reader gets §18.3's three outcomes, never two.** `toProductVolume`
+returns `areaBedBandCounts: null` — **never `{}`** — for a payload predating the
+feature, so *"I cannot answer revenue questions"* stays distinct from *"zero
+leads clear that floor"*. `canFilterByGross` is that test, and the control
+**hides itself** rather than quoting zero. `{}` and `undefined` must never
+collapse to one number again.
+
+### 68.3 — ⚠️ Contention was revenue-blind, and this feature makes that wrong
+
+`contentionShare` was keyed by **area** only, and `fetchAreaContention` counts a
+filtered customer into every area they name. After this ships:
+
+- a £75k-floor competitor would count as a **full** competitor in an area where
+  they are eligible for ~8% of the leads, deflating everyone else's quote;
+- four customers with **disjoint** floors do not contend at all, yet would trip
+  `CONTENDED_FILTERED_CUSTOMERS = 4` and each be quoted 4/5 of the area.
+
+§28.5 states the rule: *"the estimate must agree with the router, or the number
+quoted is one the engine was never going to deliver."* The router shares a
+**specific lead** among the customers who match **that lead** — which now
+includes its revenue. So contention is per `(area, band)`.
+
+**It costs nothing in the payload**: contention is pre-applied before
+publishing, so no per-area customer count is ever exposed. And it is **inert on
+today's book** — nobody holds a floor, so every band carries the same headcount
+and every share is what it was.
+
+### 68.4 — The SQL: four bodies, and the one signature that had to change
+
+Enumerated against production from `pg_get_functiondef` rather than the
+migration files (§11's rule). **14** `public` functions reference the filter
+predicate: **10 DELEGATE** to `lead_matches_customer_filter` and inherit the
+change for free; **4 inline their own copy** and each needed editing. ⚠️
+`get_unfiltered_candidates_for_lead` is correctly **absent** — it selects
+`filter_status = 'off'` customers, who have no predicate to test. Do not
+"complete the set".
+
+| function | change |
+|---|---|
+| `lead_matches_customer_filter` | the canonical clause |
+| `get_filtered_candidates_for_lead` | its **inlined** copy (§35 explains the inlining) |
+| `releasable_filter_assignments` | its inlined copy — so a floor decides what §39 refunds |
+| `execute_filter_lift` | ⚠️ **nulls the floor with the other criteria** |
+| `release_unmatched_assignments` | reads the stored floor and passes it down |
+
+⚠️ **NULL IS NOT FALSE IN SQL.** The clause is spelt
+`(c.filter_min_gross is null or (l.gross is not null and l.gross >= c.filter_min_gross))`.
+Without the not-null guard `NULL >= 50000` is NULL, the AND chain returns NULL,
+and the function returns NULL rather than false. The two money-path callers
+`coalesce(…, false)` and the `where`-clause callers fail closed — but
+`get_swap_candidates_for_assignment` returns `matches_filter` as a **column**,
+and a NULL there renders in §34's picker as neither "Matches" nor "Outside".
+Driven on production: `none_is_null = false`.
+
+⚠️ **`execute_filter_lift` is the riskiest of the four, and 0094 declined to
+touch it** — a `create or replace` of a privileged function "for a metadata
+nicety". **A revenue floor is not metadata, it is a live predicate input**, so
+the opposite applies: forgetting it strands a floor behind a lifted filter, the
+customer's filter reads "off" everywhere, routing still excludes every lead
+under it, and **nothing errors**.
+
+⚠️ **AND ITS OVERLOAD TRAP BITES THROUGH A SECOND MECHANISM.** Its signature is
+`(p_customer_id uuid, p_lead_type lead_type DEFAULT 'management')` and
+`src/app/api/webhook/stripe/route.ts` calls it with **named args** via
+PostgREST. A defaulted third parameter makes both candidates name-compatible →
+`PGRST203 could not choose the best candidate function` → the handler logs and
+**returns**. The lift then **silently never executes**: the customer sits in
+`pending_lift` for ever, still treated as filtered, and nobody is told. No
+parameter was added.
+
+**The one signature that did change** is `releasable_filter_assignments`, which
+takes the floor being APPLIED rather than the one stored — the update has not
+run yet when the route asks. New 6-arg form with `p_min_gross integer` and **no
+default**, plus the 5-arg form kept as a shim delegating `null`. ⚠️
+`pronargdefaults` is **0 on both**, verified on production: a defaulted extra
+parameter is the §34/§35/§45.10/§63.3 trap.
+
+### 68.5 — The route, and two rules that are not symmetric
+
+- ⚠️ **Validated against the LIST, never a range.** A value between two
+  thresholds bands at the wrong edge and the CHECK then 500s the write.
+  `isGrossThreshold` is the one validator.
+- ⚠️ **A floor on a GUARANTEED RENT apply is REFUSED with a 400, never silently
+  dropped.** Dropping it means the customer believes they set one and then
+  reads every lead that arrives as the filter failing. And `cols()`'s GR branch
+  returns `minGross: null` — **there is no `gr_` column to name** — so that
+  branch is structurally unable to write it even with the refusal removed.
+  Invariant 6 by shape, not by a clause somebody must remember.
+- ⚠️ **The column is written UNCONDITIONALLY**, as `radiusOutcode` and
+  `radiusPlace` already are. Written only-when-present, a customer who set £75k
+  and later edits their areas keeps a floor the UI no longer shows and cannot
+  clear — §28.7's class exactly.
+- A floor **alone** is a valid selection; refusing it would make it the one
+  dimension unusable by itself.
+
+`/v1/me` reports `min_gross` as a **fixed field** (§27.1), null on GR — omitting
+it would have a caller read "absent" as "this API version does not know about
+floors" rather than "this product has none".
+
+### 68.6 — No new forecast machinery, deliberately
+
+§28's model was run over the measured counts before anything was built:
+`MIN_RELIABLE_MATCHES = 5` → `offerable: false, reason: "unreliable"`;
+`expected <= 0` → `"zero_volume"`; `HIGH_COST_PER_LEAD_PENCE` →
+`requiresExtraConfirm`; `recommendedDowngrade` → the over-plan protection.
+**So there is no revenue-specific floor, refusal or warning.** The dimension is
+threaded into `predictMonthlyVolume`'s input and everything downstream works
+unchanged.
+
+⚠️ Worth knowing before the first support ticket blames the new control: a
+narrow area+bedroom filter **already** quotes £150/lead today with no revenue
+floor at all. This does not create thinness; it makes it easier to reach.
+
+### 68.7 — ⚠️ `minGross` is REQUIRED on `FilterSelection`, so the compiler finds the call sites
+
+`predictMonthlyVolume` has **11 call sites**, four of which build
+`FilterSelection` as an object *literal* and would have compiled unchanged —
+and been wrong — had the field been optional: both admin prediction surfaces
+(§28.7's drift indicator would read systematically high for every customer who
+sets a floor), `forecastBackfill.ts`, and `radiusSearch.ts` twice.
+
+⚠️ **The last is the worst.** `radiusCoverage` took
+`Pick<FilterSelection, "minBedrooms" | "maxBedrooms">` and was **structurally
+unable to see a revenue floor** — so a customer with a £50k floor in radius mode
+would be told "widen to 20 miles for 8 more leads a month" on a figure computed
+over stock the floor excludes. An **overstated** gain, plausible, nothing
+erroring. The `Pick` widened.
+
+⚠️ **AND NO BEHAVIOURAL TEST CAN CATCH ITS REMOVAL**, which the mutation run
+found rather than review: a `Pick<>` is a **type**, and `{ areas, ...constraints }`
+still spreads the property at runtime because the caller's object still has it.
+`tsc` rejects it; vitest does not run `tsc`. It has a file-text guard of its own.
+
+### The control
+
+`src/components/filtering/RevenueFloor.tsx`, a sibling of `BedroomRange` and
+mounted on both surfaces. It renders **nothing — not a disabled control** —
+unless the product is management AND `canFilterByGross(volume)`.
+
+⚠️ **The floor is in every dependency list it belongs in**, and
+`LeadFilteringPanel`'s acknowledgement-voiding effect is the one that matters:
+without it the customer acknowledges one forecast, changes the floor, and
+applies against a stale acknowledgement — defeating §39.8's fixed refusal order,
+which exists precisely so the number they were shown is the whole of what they
+were told. **There is no ESLint config (§11), so `react-hooks/exhaustive-deps`
+is not running and nothing warns.**
+
+Every string names it as the **PROPERTY's** projected revenue. "Revenue" alone
+reads as the customer's own income, which is a different number and not one we
+hold.
+
+### Verification
+
+**All 159 migrations applied to a scratch Postgres 16.13 from empty, zero
+failures**, 0158 and 0159 each re-applied twice for idempotency, and **all 20
+SQL suites pass** on that build.
+
+**2,955 vitest cases green**, `npx tsc --noEmit` clean, `npm run lint` clean bar
+the four pre-existing `no-assign-module-variable` warnings, `npm run build`
+clean with `/`, `/enquiry`, `/guaranteed-rent` and `/privacy-policy` all still
+**Static** and `ƒ Middleware` present.
+
+⚠️ **Forty-eight mutations run across the five steps, forty-eight caught** —
+nine on the band-first aggregate, eleven on contention and the payload version,
+nine in SQL, twelve on the route and the summaries, and sixteen on the control.
+**Seven survived a first pass and every one was a real weakness in the
+assertion, not in the code:**
+
+| survivor | why it passed |
+|---|---|
+| `fetchAreaContention` ignoring a competitor's floor (×3) | that function **had no test at all**, and the fixtures gave every band the same count — the uniform-fixture trap |
+| the draft memo reading the SAVED floor | `props.minGross,` **contains the substring** `minGross,` |
+| a synthesised volume passed to the gate | `volume={props.volume}` appears twice; the pattern matched `PredictionBox`'s prop |
+| `RadiusConstraints` dropping the floor | a `Pick<>` is a type; vitest does not typecheck |
+| `release_unmatched_assignments` not passing the floor down | **nothing drove that function** |
+
+⚠️ That is the **ninth, tenth and eleventh** time this repository has recorded
+an assertion written weak enough to survive its own mutation (§42.8, §50.9 ×2,
+§53, §55, §57, §65, §66). Two further false passes were caught in the tooling
+rather than the tests: a schema-comparison harness whose two fingerprints were
+both **empty files** (mixed-case database names fold to lowercase, so `psql`
+never connected — a non-empty guard is now in the loop), and a SQL mutation
+whose bash heredoc mangled `\n` so the mutation never compiled.
+
+### Deployment order — migrations BEFORE code
+
+✅ **0158 and 0159 both applied to `znlfwbnvhlacwzgfalcf` on 2026-09-24, before
+the pull request merged** (§1.1).
+
+0159 went on in the **comment-stripped-outside-bodies** form (§48.9, §51.10),
+and **that form was proved schema-identical first**: two scratch databases built
+from the same pre-0159 base, one from the full file and one from the stripped
+form, fingerprinted over every function body with its `prosecdef`, `proconfig`
+and all three ACLs, every column, every constraint and every index — **1,918
+objects, identical**.
+
+**All six bodies hash-match a scratch build from the repo file** —
+`lead_matches_customer_filter` `a7fb320d…` (1605),
+`get_filtered_candidates_for_lead` `947c0634…` (3623),
+`releasable_filter_assignments` `a2042281…` (4518) and its shim `9f9f2a94…`
+(138), `release_unmatched_assignments` `d1fe8d35…` (5096),
+`execute_filter_lift` `a1cc726d…` (1703). All `security definer` with
+`search_path` pinned; `anon` and `authenticated` **false**, `service_role` true
+on every signature by `has_function_privilege` (§63's lesson:
+`role_routine_grants` names PUBLIC in upper case and cannot see a grant left on
+it). **Invariant 7 holds** — four distinct names — and `get_advisors` reports
+**no new finding**.
+
+⚠️ **INERT, PROVEN NOT ARGUED.** Fingerprinted immediately before and
+immediately after the apply: `get_filtered_candidates_for_lead` over all **390**
+unsold marketplace leads (`1c0e3837…`) and `lead_matches_customer_filter` over
+all **5,070** (lead, filtered customer) pairs (`5de0a40c…`) — **both
+byte-identical**. 62 customers, 578 leads and 563 assignments untouched, money
+and filter fingerprints identical either side, 0 floors set.
+
+The floor was then driven **on production itself**, inside a block that raises
+at the end so every write rolled back. Area **GU**, a £52,130 lead, a £23,673
+lead and one with no figure: with no floor all three match; at £50k only the
+first does; the predicate returns a real boolean rather than NULL; the candidate
+function agrees with it; and the lift nulls the floor. Both fingerprints
+afterwards confirm it wrote nothing.
+
+⚠️ **`execute_filter_lift` grew 1074 → 1703 characters and 63 of that is a
+RESTORATION, not an addition.** Production's body was 0026's with the in-body
+comment `-- Fresh deficit baseline from this renewal moment.` and the blank line
+before `return v_executed;` stripped — the §48.9/§51.10 apply signature, proven
+rather than assumed: with comment-only AND blank lines dropped from both sides,
+production and the 0026 file hash **identically** (`0098d0dd…`, 1072). Applying
+0159 puts both back, so the body now matches the repo file exactly and that
+drift is closed. ⚠️ **Only a line-by-line comparison showed this** — a first
+attempt accounted for the comment and left **one character** unexplained, which
+was the blank line.
+
+⚠️ 0159 was applied as **five parts** named `0159_…_part1..part5`, a cosmetic
+ledger mismatch with the single file of the kind §43 records for 0130 and §53
+for 0141. Not worth a second apply.
+
+⚠️ **2 customers sit in `pending_lift`**, so `execute_filter_lift` is live and
+fires for them at their next `invoice.paid`. Both carry a null floor, so the
+added line is a no-op for them.
+
+### Verified live after the merge — the payload versioning, end to end
+
+Merged as `dd9a344` on 2026-09-24; production deploy **READY**, **no runtime
+errors** in the hour after.
+
+⚠️ **The merge exercised design decision B for real, by luck of timing.** The
+cache was in exactly the state the version column exists to survive:
+`schema_version` **null**, **7.04 hours old** (past the 6-hour window), carrying
+no band counts. So the first `/api/filter-estimate/public` call after the deploy
+rebuilt it:
+
+| | |
+|---|---|
+| version stamped | **null → 2** |
+| payload shape | `areaBedBandCounts` on **both** products |
+| ⚠️ derived `areaBedCounts` == the sum of its own bands | **0 mismatches across 112 areas** |
+| a second call | served from cache, no rebuild, content identical |
+
+**That third row is the one that mattered.** The band-first decision's whole
+claim is that the consistency invariant is structural rather than asserted —
+there is no second number to disagree with — and this is it holding on the live
+book rather than on a fixture.
+
+⚠️ **The live bands also confirm the management-only decision on real rows, which
+no fixture could**: management sampled `B`/1-bed → `{'0': 1}`, a real figure
+below the lowest threshold; guaranteed rent sampled `AL`/4-bed → `{'none': 1}`,
+no figure at all. That is why there is no `gr_filter_min_gross` column for it to
+write to.
+
+⚠️ **One false alarm worth keeping.** Comparing the two API responses by **md5**
+said they differed, which reads as the cache rebuilding twice. A structural diff
+showed **zero differing leaves** — the gap was only JSON key ordering. The md5
+was the weak check; never conclude a rebuild from a hash.
+
+### Still not exercised in a browser — and now WHY, not just that
+
+⚠️ **Two things block it from a session like this one**, both worth knowing
+before anyone spends the time again:
+
+- there is **no customer or admin credential** here, and every check below needs
+  a signed-in session;
+- **Chromium cannot reach the site at all.** The agent proxy's NSS store is
+  **empty** (0 certs) and `certutil` is not installed to import the CA, so every
+  navigation fails `ERR_CERT_AUTHORITY_INVALID`. Disabling TLS verification is
+  forbidden, so that is a hard stop rather than something to work around.
+
+What remains, on `leads.stayful.co.uk` and ⚠️ never a preview (302 to
+`vercel.com/sso-api` — §45, §46, §50, §51 — and a preview runs against
+**production** Supabase, §1.1, so a test apply moves a real customer's filter):
+the control appears on a management filter and **not** on a GR one; a £50k floor
+quotes a smaller figure than Any; applying one stores it and the admin summary
+reads "£50k+ revenue"; and §28.6's lazy-fetch invariant still holds on both
+landing pages (**zero** geojson requests on load).
+
+### Deferred
+
+- **Nothing recomputes a stored forecast between applies** (§28.7), so a
+  customer whose supply drops is told nothing until they look. Unchanged by
+  this, and easier to reach now.
+- **`filter_lead_releases` and `filter_forecast_acknowledgements` record only
+  areas + bedrooms.** Adding the floor to both would keep "you told me four a
+  month" (§28.9) and "why did you take my lead back" (§39) answerable for
+  exactly the filters most likely to raise them.
+- ⚠️ **Releasable volume can jump by an order of magnitude.** A £75k floor makes
+  most of a customer's untouched stock non-matching and therefore releasable —
+  invariant 4's exception working correctly, but at a scale §39 never saw, and
+  `release_unmatched_assignments` loops 1 DELETE + 2 UPDATEs + 1 INSERT per lead
+  inside the function cap §39.1 already worried about. Bound it before a floor
+  is applied to a large book.
+- **£100k**, if the book ever grows into it — one entry plus the CHECK.
+- **Diagnosing WHICH constraint is costing the volume.** With three dimensions
+  in play, "add more areas" is often the wrong advice: the culprit may be a
+  3-bedroom minimum or a £75k floor, and adding areas fixes neither.
+
+---
+
+## 69. What you pay for, beside what your filter delivers *(no migration)*
+
+A customer pays for a monthly allocation; their filter decides what can reach
+them; their unspent credit accrues in between. Those are three separate truths
+on three separate screens and **nothing in the product had ever compared any two
+of them.**
+
+⚠️ **`filter_forecast_plan_price_pence` — the plan price the forecast was quoted
+against — is written by three code paths and READ BY NONE**
+(`forecastBackfill.ts`, `api/customer/filter/route.ts` twice, `planChanges.ts`
+twice). That one fact is this section in miniature: the comparison was computed,
+stored, and never shown to anybody.
+
+`src/lib/planVsFilter.ts` · the saved-filter box · the dashboard home caption ·
+both top-up surfaces and both charge routes.
+
+### 69.1 — Measured on production 2026-09-24, and the contrast is the finding
+
+| | |
+|---|---|
+| Live filtered customers (active, unpaused, unarchived) | **8** |
+| …forecast **below** their own plan | **6 of 8** |
+| …carrying a forecast they never acknowledged | **2** — §58.3's backfill wrote it |
+| …carrying no forecast at all | **0**, the backfill closed this |
+| Unspent credit held by those 8 | **94 leads · £1,410** |
+| Held by the 6 under-plan | **78 leads · £1,170** |
+| Monthly forecast shortfall across the 6 | **57 leads/month · £855/month** |
+
+⚠️ **Ten live customers with NO filter hold TWO credits between them.** Ordinary
+routing drains a balance as fast as it is granted, so an unfiltered book cannot
+accumulate one. *The filter is the mechanism that banks the credit*, and not one
+screen said so.
+
+The case in one row — **Allan Carmichael**: £300/20 plan, filter forecast **1
+lead a month at £300 a lead**, **32 credits banked**. He acknowledged that
+forecast. Beside it his dashboard tile reads **"0 of 20"**.
+
+### 69.2 — ⚠️ The home caption is why nobody noticed
+
+`dashboard/page.tsx` builds the tile caption as:
+
+```ts
+product === "management" && filterActive
+  ? filterMessage(customer)
+  : balance === 0 && renewalDate ? "No lead credit left. …" : pacingMessage(…)
+```
+
+So a filtered management customer takes the **first** branch and can therefore
+*never* reach a balance sentence — while the tile beside it renders
+`value: received`, `unit: "of 20"`. **They are the one population on the platform
+that reads nothing about their balance**, and they are exactly the population
+whose balance has gone wrong. Both ends are now folded into `filterMessage`: the
+banked-credit line when there is far too much, the no-credit line when there is
+none. They are mutually exclusive, so only one ever renders.
+
+⚠️ **`filterMessage` also did not know about the revenue floor.** §68 shipped
+`filter_min_gross` and this sentence named areas and bedrooms only, so a customer
+filtering on £50k+ was read back a description of a filter they had not set. The
+THRESHOLD FORMATTING is shared (`formatGrossThreshold`) because that is the half
+which would drift; the prose is local, exactly as `bedroomPhrase` already is
+there — that file deliberately keeps a second, prose-register copy
+("any bedroom size", "3+ bedrooms") against `leadFilter.ts`'s compact table form
+("Any", "3+"). Those are registers, not drift; do not "deduplicate" them.
+
+### 69.3 — One pure function, and five copy rules that are tested not reviewed
+
+`planVsFilter.ts` returns `no_figure | covered | under_plan`. ⚠️ **Import-free**
+— the `featureRequest.ts` (§21.8) / `deadLeadCopy.ts` (§51.6) rule — because both
+consumers sit inside `"use client"` components and `vitest.config.mts` is PURE
+UNITS ONLY with no React.
+
+It takes **resolved figures, not a `Customer` row**, so §58.3's stored-vs-live
+fallback stays in the one place that already does it and is never written twice.
+
+⚠️ **Three outcomes, never two** (§18.3): "we cannot put a number on this filter"
+and "this filter covers your plan" are opposite facts, and collapsing them would
+reassure precisely the customer we cannot reassure.
+
+| # | rule | why |
+|---|---|---|
+| 1 | **Never offer or imply a refund** | `types.ts` says of these very columns: *"nothing settles a shortfall against it, and no copy reading these may offer to"* (§28.0, §28.4) |
+| 2 | **Never "you agreed"** unless they ticked | 2 of 8 carry a backfilled figure; `forecastBackfill.ts` is explicit they did not |
+| 3 | **Always "at least"** | a lower bound at 0.83, missed one month in six by construction (§28.0) |
+| 4 | **Two options, never one instruction** | widening and changing plan are both honest (§28.3) |
+| 5 | **A cheaper plan is not automatically a fix** | below |
+
+⚠️ **RULE 5 IS THE NON-OBVIOUS ONE.** `recommendedDowngrade` returns the cheapest
+plan whose `leads >= expected`, so for Allan it offers the £150/10 plan — which
+is **£150 a lead**. §28.3 calls that advice "the only thing between them and
+paying twice the going rate indefinitely", so it keeps being offered; what it
+must not do is read as a solution. `downgradeRelief()` answers `fix` or
+`cheaper_but_still_poor` against `HIGH_COST_PER_LEAD_PENCE`, which is a
+**parameter** rather than a copied constant so the module stays import-free with
+nothing to drift.
+
+⚠️ **`monthsBanked` is a COMPARISON, never a delivery estimate**, and the
+direction matters: `expected` is a lower bound, so the real time to drain a
+balance is at MOST that figure. "At this filter's forecast rate that is about 32
+months' worth" is defensible; "it will take 32 months" is a promise we never
+made, and a floor phrased as a ceiling is arithmetically backwards.
+
+### 69.4 — The top-up: the warning existed and reached one surface
+
+`topupFilterWarning` (§66.3) already encoded this exact case — its own comment
+names *"32 unspent credits against a plan of 20"*. It was never missing. What was
+missing is everywhere it did not reach:
+
+- ⚠️ **The emailed `/topup/[token]` page had no figure-specific warning at all** —
+  and that link is emailed and texted **because the balance ran out**, so the
+  surface most likely to be used at the worst moment was the one saying least.
+  `TopupTokenView` carried only `filterInForce: boolean` and `describeTopupToken`
+  selected only the two `filter_status` columns.
+- ⚠️ **Neither charge route consulted the filter or the balance**, so the server
+  charged regardless of what the screen had said. §40.10's rule: *a stated safety
+  limit that does nothing is worse than none.*
+
+**Should it ever refuse? NO, and the reason is worth writing down.** §16's rule
+is never to turn away a sale, and the credit here is genuinely spendable the
+moment the filter widens. The one existing refusal, §59.8's `past_due` block, is
+**categorically different**: there routing is structurally off and the credit can
+*never* be spent. Here routing is on and the credit drains, just slowly.
+
+**Instead, an acknowledgement**, §39.8's pattern one surface over: when the
+warning applies the charge requires an explicit tick and both routes answer
+**400 `topup_not_acknowledged`** without it. That refuses an *un-acknowledged*
+purchase, never the purchase.
+
+⚠️ **The emailed route RELEASES the claim before refusing**, exactly as its
+eligibility gate does. The token is single-use; refusing without releasing burns
+the customer's only link on a refusal we invited them to clear by ticking a box.
+
+⚠️ **`describeTopupToken` still fails OPEN.** Widening the select widened what can
+fail, so the direction matters more than it did: an unreadable customer row
+yields the unfiltered wording and **no warning**, never a refusal. A blip must
+cost a sentence, never a sale.
+
+⚠️ **AND THE SELECT MUST BE ONE STRING LITERAL.** supabase-js infers the row type
+from that literal; splitting it across `+` for readability collapses the result
+to `GenericStringError` and every field read below stops typechecking. `tsc`
+caught it, which is the only reason it is a note rather than an incident.
+
+### Verification
+
+**3,014 vitest cases green** (59 new), `npx tsc --noEmit` clean, `npm run lint`
+clean bar the four pre-existing `no-assign-module-variable` warnings,
+`npm run build` clean with `/`, `/enquiry`, `/guaranteed-rent` and
+`/privacy-policy` all still **Static** and `ƒ Middleware` present.
+
+⚠️ **The fixtures are the real production rows, and the list is chosen to defeat
+the UNIFORM-FIXTURE TRAP.** Every fixture being under plan lets a mutation that
+returns `under_plan` unconditionally survive untouched. **Simon Brint is in the
+list because he is `covered`, and James because he is under plan WITHOUT being
+banked** (6 credits against 9 a month — 0.7 months, silent). Those two separate
+the three verdicts and the two halves of the threshold. Do not trim the list.
+
+**Twenty-seven mutations run, twenty-seven caught.** Seven on the module
+(collapsing `no_figure` into `covered`, returning `under_plan` unconditionally,
+dropping the threshold, claiming they agreed, dropping "at least", calling every
+downgrade a fix, dividing by zero) and sixteen on the wiring (the panel reading
+the raw stored column, dropping the balance, both render gates, the home
+reverting to a one-argument caption, dropping the revenue clause, the token page
+dropping the warning, the button un-gated, both routes dropping the 400, the
+emailed route refusing without releasing the claim, `describeTopupToken` failing
+closed, and `planVsFilter.ts` gaining an import), and four on the criteria
+phrase — which was **extracted from the home page for exactly that reason**: the
+join is arithmetic on a list, the regression it invites is "areas, and beds" or
+a dropped criterion, and that sentence is read by every filtered customer on
+every dashboard load while being invisible to a React-free suite. Its first
+assertion pins the no-floor output **byte-identical to the pre-§69 sentence**.
+
+⚠️ **ONE SURVIVED THE FIRST PASS, AND IT IS THE TWELFTH TIME THIS REPOSITORY HAS
+RECORDED THAT SHAPE** (§42.8, §50.9 ×2, §53, §55, §57, §65, §66, §68 ×3). The
+render was written `{f(x) && <p>{f(x)}</p>}`, so the GATE and the RENDER are the
+same string — a file-text guard cannot tell them apart, and deleting the gate
+left the guard green while the line stopped rendering entirely. **The fix was to
+the code, not the test**: both sentences are computed once into `savedGapLines`,
+so the gate and the body are now distinguishable strings and all three mutations
+against them fail.
+
+⚠️ **Not yet exercised in a browser, and the reason is now recorded rather than
+left as a to-do.** Merged as `dd9a344` on 2026-09-24 alongside §68; production
+deploy **READY**, **no runtime errors** in the hour after — which says the routes
+and the render did not throw, and says **nothing** about whether the sentences
+read correctly, which is the whole point of the five copy rules above.
+
+⚠️ **Two things block it from a session like this one:**
+
+- there is **no customer or admin credential** here, and every check below needs
+  a signed-in session;
+- **Chromium cannot reach the site.** The agent proxy's NSS store is **empty**
+  (0 certs) with no `certutil` to import the CA, so every navigation fails
+  `ERR_CERT_AUTHORITY_INVALID`, and disabling TLS verification is forbidden.
+
+What remains, on `leads.stayful.co.uk` and ⚠️ never a preview (302 to
+`vercel.com/sso-api` — §45, §46 — and a preview runs against **production**
+Supabase, §1.1, so a test top-up takes real money): Allan's saved filter shows
+the gap and the banked line in amber; his home tile caption names the unspent
+credit beside "0 of 20"; a management filter with a floor names it in that
+sentence; the emailed top-up link shows the warning with the tick; and the charge
+is refused with `topup_not_acknowledged` until it is ticked **and the link still
+works afterwards** — that last one is the released claim, and it is the failure
+that would cost a customer their only link.
+
+### Deployment order — none
+
+No migration: every column already exists and
+`filter_forecast_plan_price_pence` merely stops being write-only. Nothing here
+touches a balance, counter, pacing or capacity column, and §1.1's
+migration-before-merge rule does not apply.
+
+### Deferred
+
+- **The monthly re-forecast.** §28.7's named gap is unchanged: nothing recomputes
+  a stored figure between applies, so the number is what the volumes supported
+  the day they applied. ⚠️ Whatever does it must **not** re-stamp
+  `filter_forecast_acknowledged_at` — a machine refresh is not an
+  acknowledgement.
+- ⚠️ **The rule change — credits ceasing to roll over — REVERSES INVARIANT 2 and
+  is deliberately not built.** It needs its own migration, a `credit_invoice`
+  change, a written spend-order rule, corrections to **nine** published
+  "carries forward / never expires" promises (seven on `app/page.tsx`, plus the
+  guide and `topup.ts`), and one customer told first that they are losing 12
+  credits.
+- **`filter_forecast_estimate` is still write-only and goes stale.**
+  `repriceFilterForecast` caps `expected` downward and never updates `estimate`,
+  so the two disagree after a plan change. This section reads `expected` and
+  never `estimate`. Noted, not fixed.
+- **A near-national filter reads as `covered` while still being thin.** The
+  verdict is plan-vs-forecast only; *which* constraint is costing the volume is
+  the diagnosis still listed in §68's Deferred.
+
+---
+
+## 70. Where customers drop off, and how stable the income is *(no migration)*
+
+`/admin` reports live capacity and a days-since-activity churn *risk* band;
+`/admin/outcomes` reports what happened to the leads. Nothing measured a
+customer's **tenure**, nothing plotted **drop-off over time**, and nothing put a
+cancellation reason next to the month it happened in.
+
+⚠️ `get_customer_risk()`'s header says it is stated rules rather than a model
+because *"zero customers have ever cancelled, so there is nothing to fit"* —
+that stopped being true in September. Worse, its `WHERE` clause requires an
+active subscription, so **it structurally cannot see a single customer who has
+left.** Any retention question needed its own query.
+
+`/admin/retention` · `src/lib/retention.ts` (pure) ·
+`src/lib/retentionData.ts` (the reads) ·
+`src/components/admin/RetentionChart.tsx`
+
+### 70.1 — What the live data says, which reshaped the design
+
+Measured read-only before anything was built, and re-measured through the
+shipped code afterwards:
+
+| | |
+|---|---|
+| Customers / lifecycle rows (customer × product) | 62 / **31** |
+| Paid subscription invoices ever | 41 |
+| First paid invoice ever | **2026-07-24** — the book is 12 weeks old |
+| Monthly cohorts | **3** — 7 / 14 / 7 |
+| Longest tenure any customer has reached | **2.00 months** |
+| Churn events | **4**, of which **1 never paid an invoice** |
+| Paused | **6 live subscriptions**, £990/mo not being billed |
+| MRR in force | **£3,945** (management £3,795 + GR £150) |
+
+⚠️ **THE DROP-OFF IS A CLIFF, NOT A CURVE.** All three churns with a paid
+history cancelled at **exactly 31.0 days**, to the minute — every one at the
+moment their second invoice came due, each having paid exactly one. Three of the
+four stated reasons are lead quality.
+
+⚠️ **6- and 12-month retention are NOT COMPUTABLE and will not be until
+2027-01-24 and 2027-07-24.** The page computes those dates and prints them, so
+the rows read as a countdown rather than a blank or a confident zero.
+
+### 70.2 — No migration, and that is the whole risk profile
+
+Every one of the ten inputs already existed: `payments` (tenure, revenue),
+`customers.cancelled_at`/`lapsed_at` (the churn event),
+`subscription_cancellations` (our reasons), `customers.cancellation_feedback`
+(Stripe's), `subscription_pauses`, `subscription_plan_changes`,
+`support_tickets`, and `customer_engagement_snapshots` — which already carries
+`tenure_days`, `paying_days`, `worked_rate` and `days_since_last_activity`
+captured daily per customer per product.
+
+So this ships with **no schema change, no production apply, no
+migration-before-merge step (§1.1)** and nothing that can touch a balance,
+counter, pacing or capacity column.
+
+**No snapshot table either, and that is not an oversight.** Every other trend
+here (`service_capacity_snapshots`, `customer_engagement_snapshots`,
+`operator_proof_snapshots`) cannot be backfilled because it captures live state,
+and all three carry a real 3-day hole from the §18.3 outage. This one is
+different: `payments` is a ledger of cleared invoices and cancellation dates are
+stamped once and never moved, so the whole history recomputes from scratch on
+every render, with no capture job and no hole.
+
+⚠️ **WHAT IS NOT RECONSTRUCTABLE IS ALLOCATION-DERIVED MRR.**
+`monthly_allocation` is current state *and is a lead count, not currency* — a
+customer who downgraded reads at today's tier for their whole history. MRR here
+is always **the latest paid invoice's `amount_pence`**, which is also strictly
+better than `/admin`'s existing `planForAllocation()` inference, the thing §33
+records as having hidden a £150/mo leak. Do not add a historical
+allocation-derived line.
+
+### 70.3 — Retention is counted in INVOICES, which is what kills the boundary bug
+
+All three measurable churns sit at exactly 31.0 days — **one day past the
+1-month line**. A month-based band flips the headline on the boundary: defined
+as "up to 1 month" it reports 3 churns in month 1; defined as "under 1 month" it
+reports 0 there and 3 in the 1–3 band. Neither is wrong and a reader cannot tell
+which they are looking at.
+
+Counting invoices has one answer. *Did they pay a 2nd invoice? a 4th? a 7th? a
+13th?* — which are months 1, 3, 6 and 12. Months stay as the labels because that
+is how the business thinks; the arithmetic underneath is the invoice count.
+
+Every checkpoint reports **five** numbers, not two:
+
+| | |
+|---|---|
+| `eligible` | first paid invoice is at least *N−1* months ago — they had the chance |
+| `renewed` | actually paid invoice *N* |
+| `churned` | has an end date and never paid it |
+| `unclear` | eligible, still here, invoice has not cleared — a failed or in-flight payment |
+| `paused` | reached the date while paused without having already cleared it — **out of `eligible`** |
+
+⚠️ **`unclear` must never be folded into `renewed`.** Seven failed subscription
+payments exist in the book; hiding them inflates retention.
+
+### 70.4 — ⚠️ A PAUSED CUSTOMER IS NOT A MISSED RENEWAL, and getting this wrong cost 22 points
+
+The first cut counted paused customers as `unclear`, and running the real
+functions over the real book is what caught it: **Management 1-month retention
+read 65% (13 of 20) when the honest figure is 87% (13 of 15).** All five
+"unclear" were paused.
+
+Stripe **voids** a paused subscription's invoices, so *we* are the reason the
+renewal never landed. Calling it unclear blames a payment failure that never
+happened and understates retention by the size of the paused book — six of
+nineteen live management subscriptions on the day it shipped. The wrong version
+would have had an owner believing a third of customers fail to renew when it is
+an eighth.
+
+⚠️ **The pause test sits AFTER the `cleared` test, not before.** Somebody who
+paid invoice 2 and then paused has renewed; the pause only removes a checkpoint
+they had not already reached. Both orderings are mutation-pinned.
+
+### 70.5 — Three more rules the page rests on
+
+**Every percentage prints its eligible denominator, and is withheld below
+five.** `13 of 15`, never a bare `87%`. `MIN_COHORT = 5` mirrors
+`get_engagement_benchmarks`'s existing suppression rule (§10) — fewer than that
+is a report on named individuals with the names removed, and it reads as a rate
+when it is not one. `pct` is **`null`, never `0`**, when suppressed.
+
+⚠️ **`payments` is known-incomplete and the page says so, first.** 0064's header
+records 17 payment rows against 20 subscribers at the time; today **two**
+nominally-active subscriptions have no paid invoice and **one churner has none
+at all**. Every row carries `tenureBasis: "invoice" | "signup_estimated" |
+"never_paid"`, the header states the count of each, and a never-paid churn is
+excluded from every checkpoint (it never entered the renewal funnel) and
+reported apart rather than lost.
+
+**Reason mentions exceed churn events, on purpose.**
+`subscription_cancellations.reasons` is a `text[]`; each reason counts once, so
+columns total higher than the number who left — the §18A discipline.
+
+### 70.6 — The reason taxonomy
+
+Most of it already existed: `cancelOptions.ts:11-15` records that the four
+overlapping pause/cancel keys are **deliberately identical** so the two signals
+can be counted together. The map only adds Stripe's vocabulary and the write-off.
+
+⚠️ **Stripe's `low_quality` gets its OWN theme and must never be collapsed into
+`lead_quality`.** `CANCEL_REASON_TO_STRIPE_FEEDBACK` sends **both** our
+`lead_quality` and our `not_enough_leads` to Stripe as `low_quality`, so a
+Stripe-only row genuinely cannot say which the customer meant. Collapsing it
+invents a sourcing problem out of a supply problem. It renders as *"lead quality
+or volume — from Stripe, cannot tell which"*.
+
+⚠️ **Precedence, because a portal cancellation writes no row of ours.**
+`src/lib/cancellations.ts:105-106`: only the in-app flow inserts
+`subscription_cancellations`. In production that table holds **4 of the 6**
+cancellation events, so the ladder is: our row → `cancellation_feedback` → a
+pause taken within 120 days before the end → `payment_failed` →
+`not_recorded`. Each row keeps `reasonSource`, and the drill-down shows the
+customer's own words and raw keys, never only the mapped theme. Live today: 3
+resolved from our form, 1 from Stripe's feedback.
+
+⚠️ **A write-off is churn with no stated reason, and that IS the finding.**
+`payment_failed` is its own theme rather than folded into `not_recorded`, which
+would file a billing failure as a silent departure. Zero rows today, and it will
+stay zero until the gap in 70.9 is fixed.
+
+### 70.7 — The chart
+
+Daily **MRR in force**, banded by tenure: for each London day, every live
+subscription contributes its most recent paid invoice, bucketed by how old that
+customer was *that day*. 63 points today, one more daily, every one exactly
+reconstructable — which is why no snapshot table is needed. ⚠️ A paused
+subscription contributes **nothing**; counting it would put revenue in the
+series that nobody collected.
+
+Recharts, **already a dependency at `^3.9.1`** — no new package. Follows
+`BucketChart.tsx`: `height="100%"` inside a height-setting parent,
+`isAnimationActive={false}`, `dot={false}`, stripped axes, typed tooltip.
+
+- ⚠️ **Five `Line`s, not a stacked area.** Trend-over-time with several series is
+  a line chart; a stacked area makes any middle band unreadable, because you are
+  measuring it by eye against a moving floor.
+- ⚠️ **ONE y-axis, always.** The obvious next request is the stable-share
+  percentage on a right-hand axis. Never: with two y-scales the crossing point of
+  the lines is an artefact of the scales rather than a fact. The share is a stat
+  tile. Mutation-pinned, along with the stacked-area ban.
+- ⚠️ **Colour is an ORDINAL ramp — one hue, monotone lightness — not five
+  categorical hues.** Swapping the band order would change the meaning, so the
+  reader has to see the order in the colour. Five distinct hues would spend the
+  identity channel re-encoding what the labels already say. Validated rather than
+  eyeballed: monotone L, adjacent ΔL ≥ 0.06, 3° hue spread, and every step
+  clearing 2:1 on the page surface (`#fcfcfb`) — 2.07, 3.14, 4.99, 8.60,
+  13.56:1. Steps: `#9cba93 #74996b #52774b #365132 #1e3119`.
+- ⚠️ **The lightest step is 2.07:1, which obligates a relief channel** — the
+  banded £ tiles and the retention table on the same page are it, and must ship
+  with the chart rather than after it.
+- ⚠️ **A DARK RAMP IS DELIBERATELY NOT WIRED UP.** `tailwind.config.ts` sets
+  `darkMode: ["class"]` but `globals.css` defines **no dark token block** and only
+  four files in `src/` use a `dark:` variant — the app is light-only in practice,
+  so a dark ramp could only fire on a page that stayed white. The validated steps,
+  for the day dark mode lands, are in the component's docblock, with the anchor
+  **flipped** so lighter means more stable; a straight inversion would sink the
+  stable band into the background.
+
+Milestones are a hand-maintained constant drawn as `ReferenceLine`s, filtered to
+the series range so none can sit off the axis.
+
+### 70.8 — Where the arithmetic lives, and two read traps
+
+⚠️ **Every figure is an exported pure function in `src/lib/retention.ts`.**
+`vitest.config.mts` is *"PURE UNITS ONLY — no network, no database, no React"*
+and gates `next build`, so anything inlined in the page or the chart is
+untestable — the split `oversupplyShortfall` (`serviceHealth.ts:253`) and
+`withdrawalBasisOf` already make, for the same stated reason.
+
+⚠️ **The product comes from `payment_type`, never `payments.lead_type`**, which
+is **null on 37 of 39** paid subscription rows: 0041's backfill covered the two
+rows that existed and the Stripe webhook has never set it since. Reading it would
+attribute almost all revenue to neither product.
+
+⚠️ **Support tickets are read and ordered on `submitted_at`, never
+`created_at`** — 9 of the 10 rows are backfilled to one identical `created_at`,
+which makes a customer look like they filed tickets *after* they cancelled. The
+guard for this is **scoped to the tickets read**, because `payments` orders on
+`created_at` legitimately (that column IS a payment's clock, there being no
+`paid_at`), and a file-wide ban would fail on correct code — which is how a guard
+ends up deleted.
+
+⚠️ **Both spellings of cancelled are checked**: `account_status` uses British
+`cancelled`, the Stripe-mirrored `subscription_status` uses American `canceled`.
+Testing one silently drops every customer recorded in the other.
+
+`customer_engagement_snapshots` is the only unbounded table on the page, so the
+read is bounded to churn in the last `ENGAGEMENT_CHURN_LOOKBACK_DAYS` (180) plus
+7 days for everyone else. ⚠️ **Snapshots do not stop at cancellation** — all six
+churned customers have rows through today — so a churner is read from their last
+snapshot **before** they left; taking their latest row would read zero and make
+every churner look disengaged. If that window ever needs widening, the
+replacement is a `SECURITY DEFINER` function returning one row per (customer,
+product), not a bigger number.
+
+### 70.9 — ⚠️ Four wiring gaps this surfaced, reported and NOT fixed here
+
+Each is a separate change with its own blast radius, and one touches the Stripe
+webhook:
+
+1. ~~**Seven failed subscription payments exist and `past_due_since` is null on
+   all 62 customers.** So §59's write-off cron has never had anything to act on
+   and involuntary churn is untracked.~~ ⚠️ **WRONG, AND CORRECTED IN §59.9.**
+   There was no gap: every one of the seven failures PREDATES the code's deploy
+   on 2026-09-17, and all four episodes RECOVERED (1.07, 1.67, 2.17 and 2.82
+   days to the next successful payment). A null column was the correct reading
+   of a book where nothing had failed since the code went live. Investigating it
+   did turn up a real bug, but a different one — see §59.9.
+2. **`payments.lead_type` is null on 37 of 39 paid subscription rows** (above).
+3. **`subscription_cancellations` holds 4 of the 6 cancellation events** —
+   portal cancellations write no row.
+4. **Two nominally-active subscriptions have no paid invoice**, and one
+   `is_active = false` row is billing on both products.
+
+The page states 1, 2 and 4 in its own header rather than hiding them, because
+each one makes a figure on it less certain.
+
+### Verification
+
+`npx tsc --noEmit` clean, `npm run lint` clean bar the four pre-existing
+`module` warnings, `npm run build` passes and registers `ƒ /admin/retention`.
+**3,112 vitest cases green**, 98 of them new — 75 on the arithmetic and 23
+file-text guards on the wiring.
+
+⚠️ **TWENTY MUTATIONS RUN, ALL TWENTY CAUGHT**, each broken deliberately and
+watched to fail before the assertion was kept (this file records seven
+assertions once written weak enough to survive the very mutation they existed to
+catch — §50.9 twice, §53, §55, §57, §65):
+
+| | |
+|---|---|
+| Arithmetic | drop the eligible filter · drop `MIN_COHORT` suppression · fold `unclear` into `renewed` · collapse `low_quality` into `lead_quality` · fold `payment_failed` into `not_recorded` · let top-ups into a band · `monthsBetween` in 30.44-day steps · count a paused day in the series · churner engagement reads the latest snapshot · delete the paused branch · paused counted as paying · paused counted as `unclear` again · pause tested before `cleared` |
+| Wiring | second y-axis · stacked area · non-London `formatDate` · tickets ordered on `created_at` · top-ups in the payments read · nav entry removed · bare `createClient` |
+
+⚠️ One further mutation (removing the paused branch's `continue`) turned out to
+be a **no-op** rather than a missed assertion — the `isPaying` guard below it
+already excludes a paused row — so it was replaced with two that genuinely
+change behaviour. A mutation that cannot change the answer proves nothing about
+the test.
+
+**Against production, read-only.** The shipped functions were run over the real
+62 customers, 41 invoices, 4 cancellations and 7 pauses, and every figure ties:
+cohorts **7 / 14 / 7**; earliest first paid **2026-07-24**; max tenure **2.00
+months**; MRR in force **£3,945** with **£990 paused reported apart** (the two
+sum to £4,935, which is the figure a naive "latest invoice per active
+subscription" query returns — the difference IS the paused exclusion);
+collected per month **£1,410 / £3,420 / £3,345**; 6- and 12-month rows
+suppressed naming **2027-01-24** and **2027-07-24**; three churns at exactly
+1.00 month with one invoice each; the never-paid churner appearing once as
+`never_paid`.
+
+⚠️ The collected-August figure is **£3,420, not the £3,495** an earlier
+whole-table query returned. The £75 difference is exactly the one `topup` row,
+which this page excludes by design — so the discrepancy is the exclusion
+working, not a fault.
+
+**Not yet exercised in a browser.** ⚠️ A Vercel preview cannot be used —
+Deployment Protection answers 302 to `vercel.com/sso-api` (§45, §46, §50, §51,
+§52) — and a preview runs against **production** Supabase (§1.1). After merge,
+on `leads.stayful.co.uk`: Retention appears under Insights and highlights on the
+page (`DesktopNav` matches longest prefix, so it will not light `/admin`); five
+lines render with the milestone markers and a working crosshair; every
+percentage shows its denominator; the 6- and 12-month rows name their dates; and
+the paused section lists all six with their resume dates.
+
+### Deferred
+
+- **The four gaps in 70.9**, each on its own.
+- **Cohort survival curves** — one line per first-paid month. Worth building
+  once three or more cohorts have two or more points each; today every line
+  would stop after two.
+- **An editable milestone table.** A code constant until it hurts.
+- **A per-customer drill-down page.** Today the departure table carries the
+  reason, the words and the tickets inline, which is enough at four events.
+- **`revenueMovement` renders nothing**, because `subscription_plan_changes` has
+  no `applied_at` row yet. The section is conditional, so it appears the day one
+  lands — worth checking it looks right then rather than assuming.

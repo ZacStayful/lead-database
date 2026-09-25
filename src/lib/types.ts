@@ -127,6 +127,21 @@ export interface Customer {
   filter_areas: string[] | null;
   filter_min_bedrooms: number | null;
   filter_max_bedrooms: number | null;
+  /**
+   * Minimum projected gross annual revenue, in POUNDS, from GROSS_THRESHOLDS
+   * (0158). Null = no revenue floor.
+   *
+   * ⚠️ MANAGEMENT ONLY — THERE IS DELIBERATELY NO `gr_` MIRROR. Invariant 6
+   * governs balance, counter, pacing and eligibility branches; this is none of
+   * those. Guaranteed rent carries ZERO leads with a gross figure (§25's
+   * analysis is management-only by design), so a `gr_` column could never hold
+   * a non-null value that meant anything — and a column that can never be set
+   * is a column that lies about what the product does.
+   *
+   * ⚠️ POUNDS, NOT PENCE, unlike every price column in this codebase. It is
+   * compared against `leads.gross_annual_income`, which is `numeric` in pounds.
+   */
+  filter_min_gross?: number | null;
   filter_enabled_at: string | null;
   filter_lift_effective_date: string | null;
   // How the filter was set (0094, metadata only — routing reads filter_areas).
@@ -134,6 +149,9 @@ export interface Customer {
   filter_selection_mode: "areas" | "radius" | string | null;
   filter_radius_outcode: string | null;
   filter_radius_miles: number | null;
+  // The town it was centred on, when they typed a name rather than a postcode
+  // (0157). Null means the centre WAS a postcode.
+  filter_radius_place: string | null;
   // The volume forecast the customer was shown and acknowledged (0098, renamed
   // 0100). Derived only by filterForecast.ts and, like the columns above,
   // meaningful only while filter_status is 'active' or 'pending_lift'.
@@ -161,6 +179,7 @@ export interface Customer {
   gr_filter_selection_mode: "areas" | "radius" | string | null;
   gr_filter_radius_outcode: string | null;
   gr_filter_radius_miles: number | null;
+  gr_filter_radius_place: string | null;
   gr_filter_expected_leads: number | null;
   gr_filter_forecast_estimate: number | null;
   gr_filter_forecast_likelihood_pct: number | null;

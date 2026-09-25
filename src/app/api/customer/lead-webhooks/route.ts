@@ -20,6 +20,7 @@ import { availableLeadTypes } from "@/lib/products";
 import { MAX_LEAD_WEBHOOKS_PER_CUSTOMER } from "@/lib/api/limits";
 import { generateLeadWebhookToken, leadWebhookUrl } from "@/lib/api/leadWebhooks";
 import type { LeadType } from "@/lib/types";
+import { describeError } from "@/lib/logError";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,14 +95,17 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
-  const { count, error: countError } = await admin
+  const { count, error: countError, status } = await admin
     .from("customer_lead_webhooks")
     .select("id", { count: "exact", head: true })
     .eq("customer_id", customer.id)
     .is("revoked_at", null);
 
   if (countError) {
-    console.error("[lead-webhooks] count failed", countError);
+    console.error(
+      "[lead-webhooks] count failed",
+      describeError(countError, status)
+    );
     return NextResponse.json({ error: "Could not create the webhook" }, { status: 500 });
   }
   if ((count ?? 0) >= MAX_LEAD_WEBHOOKS_PER_CUSTOMER) {

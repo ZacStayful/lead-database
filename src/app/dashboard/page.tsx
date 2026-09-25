@@ -35,6 +35,8 @@ import { buildGoalCard } from "@/lib/home/goalCard";
 import { ENGAGEMENT_EVENT_TYPES } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
+import { filterCriteriaPhrase } from "@/lib/home/filterCaption";
+import { bankedCreditSentence, planVsFilter } from "@/lib/planVsFilter";
 import {
   RELEASE_SETTING_KEYS,
   computeGrPacing,
@@ -381,7 +383,7 @@ function thisMonthCard(
   const balance = product === "management" ? customer.lead_balance : customer.gr_lead_balance;
   const caption =
     product === "management" && filterActive
-      ? filterMessage(customer)
+      ? filterMessage(customer, renewalDate)
       : balance === 0 && renewalDate
         ? `No lead credit left. Your balance updates when your next payment is processed on ${renewalDate}.`
         : pacingMessage(pacing.deficit, pacing.effectiveAllocation);
@@ -396,22 +398,66 @@ function thisMonthCard(
   };
 }
 
-/** Dashboard sentence shown to a customer with an active/pending-lift filter. */
-function filterMessage(customer: Customer): string {
+/**
+ * Dashboard sentence shown to a customer with an active/pending-lift filter.
+ *
+ * ⚠️ THIS SENTENCE REPLACES THE BALANCE CAPTION ENTIRELY. The caller picks it
+ * over both the zero-credit sentence and the pacing one, so a filtered
+ * management customer is the ONE person on the platform who never reads
+ * anything about their balance — while the tile beside this renders "0 of 20".
+ * On production that is Allan Carmichael: 32 unspent credits, a filter forecast
+ * at 1 lead a month, and a tile reading 0 of 20 with no sentence reconciling
+ * them. Both balance facts are therefore folded in here rather than left
+ * unreachable: the banked-credit line when there is far too much (§69), and the
+ * no-credit line when there is none.
+ */
+function filterMessage(customer: Customer, renewalDate: string | null): string {
   const areas =
     customer.filter_areas && customer.filter_areas.length > 0
       ? customer.filter_areas.map((a) => cityForArea(a) || a).join(", ")
       : "any location";
   const beds = bedroomPhrase(customer.filter_min_bedrooms, customer.filter_max_bedrooms);
+  // ⚠️ THE REVENUE FLOOR IS A CRITERION LIKE THE OTHERS AND MUST BE NAMED.
+  // §68 shipped it and this sentence knew only about areas and bedrooms, so a
+  // customer filtering on £50k+ was read back a description of a filter they
+  // had not set. The THRESHOLD FORMATTING is shared (`formatGrossThreshold`)
+  // because that is the half which would drift; the prose is local, exactly as
+  // `bedroomPhrase` already is here, because this sentence speaks in a
+  // different register from the compact table form in leadFilter.ts.
+  const matching = filterCriteriaPhrase(
+    areas,
+    beds,
+    customer.filter_min_gross ?? null
+  );
+
   // "At least", and no clause about what happens if we fall short: the figure
   // is a lower bound at FORECAST_CONFIDENCE and nothing is credited back.
   const expected = customer.filter_expected_leads;
   const likelihood = customer.filter_forecast_likelihood_pct;
-  let msg = `Your filter is active — you'll receive leads matching ${areas} and ${beds} as they become available.`;
+  let msg = `Your filter is active — you'll receive leads matching ${matching} as they become available.`;
   msg +=
     expected != null && expected > 0
       ? ` You can expect at least ${expected} lead${expected === 1 ? "" : "s"} a month on this filter${likelihood != null ? ` (${likelihood}% likely)` : ""} — some months will be quieter than others.`
       : ` Volume varies based on how many matching leads come through the marketplace each month.`;
+
+  // The balance half, which nothing on this tile could reach before (§69).
+  // Two ends of one problem: far too much credit banked behind a narrow
+  // filter, or none left at all. Never both — they are mutually exclusive.
+  const balance = customer.lead_balance ?? 0;
+  const gap = planVsFilter({
+    allocation: customer.monthly_allocation ?? 0,
+    expected,
+    balance,
+    costPerLeadPence: customer.filter_forecast_cost_per_lead_pence ?? null,
+    acknowledged: customer.filter_forecast_acknowledged_at != null,
+  });
+  const banked = gap.kind === "under_plan" ? bankedCreditSentence(gap) : null;
+  if (banked) {
+    msg += ` ${banked}`;
+  } else if (balance === 0 && renewalDate) {
+    msg += ` You have no lead credit left — your balance updates when your next payment is processed on ${renewalDate}.`;
+  }
+
   if (customer.filter_status === "pending_lift" && customer.filter_lift_effective_date) {
     msg += ` Your filter is scheduled to lift on ${formatDate(customer.filter_lift_effective_date)}.`;
   }
