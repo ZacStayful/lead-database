@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AlertTriangle, HelpCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ANALYSIS_SHEET_HELP, formatPence } from "@/lib/leadAnalysis";
+import { ANALYSIS_MARKET_DATA_NOTE } from "@/lib/analysisDisclosure";
 import type { LeadType } from "@/lib/types";
 
 export interface AnalysisOffer {
@@ -133,6 +134,9 @@ export function AnalysisOfferPanel({
           we can&rsquo;t get trustworthy numbers for a property, that £3 comes back.
         </span>
       </p>
+
+      {/* What happens to the figures afterwards (§71). Before the buy button, never after. */}
+      <p className="mt-2 text-xs text-muted-foreground">{ANALYSIS_MARKET_DATA_NOTE}</p>
 
       {offer.ineligible.length > 0 && (
         <div className="mt-3 rounded-md bg-amber-500/10 p-3 text-sm">

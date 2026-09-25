@@ -77,6 +77,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 68, title: "Filtering on what the property is worth", migrations: "0158, 0159" },
   { n: 69, title: "What you pay for, beside what your filter delivers", migrations: "no migration" },
   { n: 70, title: "Where customers drop off, and how stable the income is", migrations: "no migration" },
+  { n: 71, title: "A customer's own analysed leads become market data", migrations: "no migration here" },
 ];
 
 /**

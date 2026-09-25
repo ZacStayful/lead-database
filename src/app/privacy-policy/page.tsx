@@ -214,6 +214,29 @@ export default function PrivacyPolicyPage() {
               </>,
             ]}
           />
+          <SubHeading>5.3 Leads you add yourself, and the paid analysis</SubHeading>
+          <P>
+            If you pay for the figures on a lead you added yourself, we send the
+            property&apos;s address, postcode and number of bedrooms to
+            Stayful&apos;s property analyser to work them out. We never send the
+            landlord&apos;s name, email address or phone number.
+          </P>
+          <P>
+            We keep the result of each analysis as part of Stayful&apos;s market
+            data, which we use to show average figures for an area on Stayful
+            Intelligence. What we keep is the postcode, the number of bedrooms and
+            the figures, not the street address, and not the landlord&apos;s name
+            or contact details. These figures are shown as part of an area, never
+            against a single postcode. We rely on our{" "}
+            <strong>legitimate interests</strong> in building and improving that
+            market data.
+          </P>
+          <InternalNote>
+            Added when the paid analysis started feeding the Market Explorer. Worth
+            confirming that legitimate interests is the right basis for keeping
+            postcode-level figures derived from a customer&apos;s own lead list,
+            and whether the subscriber terms should say it too.
+          </InternalNote>
 
           {/* 6 */}
           <Heading n="6">Who we share your data with</Heading>
@@ -318,6 +341,12 @@ export default function PrivacyPolicyPage() {
               <>
                 <strong>Subscriber account data:</strong> retained for 90 days
                 after account closure, then deleted.
+              </>,
+              <>
+                <strong>Market data from the paid analysis:</strong> the postcode,
+                number of bedrooms and figures described in section 5.3 are kept
+                for as long as they are used in Stayful&apos;s market data. They
+                carry no name, contact details or street address.
               </>,
             ]}
           />

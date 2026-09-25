@@ -4542,6 +4542,11 @@ analyser is sent the property and nothing else.
 The `analyser_reports` insert sits *before* that early return, so the run is
 still persisted and attributable as `source: 'lead_db'`.
 
+⚠️ **That row is Stayful market data.** STR-Website-2's Market Explorer is
+built from `analyser_reports`, so every paid analysis of a customer's own lead
+becomes part of it — by design, and disclosed to the customer. §71 records
+where those rows count, what is stored, and what the customer is told.
+
 **No `sideEffectGate` is passed** — a gate vetoes a CRM write and there is none.
 The same verdict is computed and returned as `quality_ok`, because the caller is
 about to charge somebody and refunds a row that comes back false.
@@ -18898,3 +18903,106 @@ the paused section lists all six with their resume dates.
 - **`revenueMovement` renders nothing**, because `subscription_plan_changes` has
   no `applied_at` row yet. The section is conditional, so it appears the day one
   lands — worth checking it looks right then rather than assuming.
+
+---
+
+## 71. A customer's own analysed leads become market data *(no migration here)*
+
+When a customer adds their own leads (§30) and pays £3 a lead for the figures
+(§31), each property's analysis becomes part of Stayful's market data: the
+Market Explorer and the rest of STR-Website-2 (intelligence.stayful.co.uk). That
+was already wired end to end across three apps. It had simply never run: on
+2026-09-25 there were 12 customer-owned leads, **no analysis had ever been
+bought**, and so no customer row existed anywhere outside this database.
+
+This section records the contract between the three apps, and the four gaps
+closed before the first purchase. Each gap was settled with Zac on 2026-09-25.
+
+### 71.1 — Three apps, two databases
+
+| App | Repo | Domain | Supabase |
+|---|---|---|---|
+| Lead database | lead-database | leads.stayful.co.uk | znlfwbnvhlacwzgfalcf |
+| Estimate software (runs the analysis) | Stayful-STR-estimate-software | calculator.stayful.co.uk | lbsxrhzifaqehpqqjhvo |
+| Market Explorer | STR-Website-2 | intelligence.stayful.co.uk | lbsxrhzifaqehpqqjhvo (shared) |
+
+1. **This app** sends `{request_id, address, postcode, bedrooms}` to
+   `${ANALYSER_API_URL}/api/internal/analyse` (`analyserClient.ts`). It sends no
+   name, email or phone, and `analyserClient.test.ts` pins the exact body.
+   `request_id` is the `lead_analysis_rows` id.
+2. **The estimate software** runs `runAnalysis(reportSource: 'lead_db')` and
+   `persistAndSync` inserts an `analyser_reports` row. The insert happens
+   **before** any quality check, so a synthetic estimate is stored too.
+3. **STR-Website-2** reads that table and never writes to it.
+
+⚠️ **`'lead_db'` is a string shared across two repos** and nothing enforces it:
+the estimate software writes it, and STR-Website-2's `LEAD_DB_SOURCE` reads it.
+A rename on one side silently puts customer rows back into the trend series and
+the single-postcode figure.
+
+### 71.2 — Where a customer's row counts
+
+| | Counts? |
+|---|---|
+| Area, region and district figures, per-bedroom figures, yield, verdict, score, confidence tier, competition, demand, seasonality | yes |
+| "Analyser reports" totals, API, MCP `market_snapshot`, market PDF, alerts, daily picks, screen report | yes |
+| The monthly trend series ("Reports per month", "Enquiries", trend arrows) | **no**. A customer analyses an imported list in one go, which would read as a one-day spike, and these are not dated enquiries |
+| The listing quick view's single-postcode figure | **no**. A full postcode is a handful of addresses, and that figure can rest on one report |
+
+STR-Website-2's `docs/market-explorer/sources.md` holds the same table from its
+side.
+
+⚠️ **A district figure can still rest on one report.** STR-Website-2 shows
+every area however thin (`min_samples = 1`, `src/lib/market/confidence.ts`), so
+a district with one analysed lead shows that property's figures as the
+district's, at the lowest confidence tier. That is where the line was drawn: a
+district is an outward code (LS6) covering thousands of addresses, a full
+postcode a handful. The privacy policy says the figures are never shown against
+a single postcode, which stays true. It does not say they are always pooled with
+other reports, and must not start to.
+
+### 71.3 — The four gaps, and what closed each
+
+| Gap | Fix | Repo |
+|---|---|---|
+| **Synthetic estimates became market data.** This app refunds a `quality_ok = false` run, and retries it once, yet the analyser had already stored both rows, and the explorer's only check was `gross_revenue > 0` | `isTrustworthyReport` applies the analyser's own gate (`bulkSideEffectGate`) to **every** source. On live data that dropped 23 of 404 `analyser` rows, touched 20 of 101 areas, and changed no tier | STR-Website-2 [#73](https://github.com/ZacStayful/STR-Website-2/pull/73) |
+| **Retries stored the same property twice.** This app gives up at 45s while the analyser runs to 60s and still inserts | `request_id` column with a partial unique index on `(source, request_id)`; a 23505 reuses the first row | estimate software [#15](https://github.com/ZacStayful/Stayful-STR-estimate-software/pull/15) |
+| **The full street address and exact coordinates were stored** | `lead_db` rows store `address` null, coordinates rounded to 2 dp (~1 km), and a `raw_response` copy with the address replaced by the postcode. The caller's result is never mutated, because the customer's PDF is rendered from it | estimate software #15 |
+| **Customers were not told** | `ANALYSIS_MARKET_DATA_NOTE` (`src/lib/analysisDisclosure.ts`) is shown in `AnalysisOfferPanel` and under the £3 checkbox in `ManualLeadForm`, plus privacy policy §5.3 and a line in §8 | this repo |
+
+⚠️ **The sentence claims the street address is not kept, which is only true
+once estimate software #15 is live.** Merge that PR first. It needs its
+migration applied to `lbsxrhzifaqehpqqjhvo` before it merges, and that database
+is shared with STR-Website-2. STR-Website-2 #73 is independent and can merge in
+any order.
+
+⚠️ **The sentence says nothing about who can see the lead itself**, and must not
+start to. An analysed owned lead can be sold on once (§32.4), and §32.9's
+settled decision is that nothing tells the uploader. "Only visible to you" here
+would be false, and `analysisDisclosure.test.ts` bans it.
+
+### 71.4 — What is still unproven
+
+- **The chain has never run.** `ANALYSER_INTERNAL_SECRET` on this app could not
+  be checked: listing the Vercel env returned 403. The analyser's side is live,
+  and answers 401 without a secret. The first real purchase is the proof. Check
+  it end to end:
+  1. a `lead_analysis_rows` row succeeds;
+  2. exactly one `analyser_reports` row appears with `source = 'lead_db'`,
+     `request_id` equal to that row id, `address` null and `lat`/`lng` at 2 dp;
+  3. after `/api/internal/market-warm` it counts in its area's "Analyser
+     reports" but not in "Reports per month".
+- **This app keeps no link to the stored row.** The analyser returns
+  `report_id` and nothing here stores it. That is harmless while the stored row
+  carries no landlord details. It is the first thing to add if a customer ever
+  asks for their contributions to be removed.
+
+### Verification
+
+- **This repo:** vitest guard `analysisDisclosure.test.ts` covers the sentence
+  itself, both surfaces importing and rendering it (the panel shows it before
+  the buy button), and privacy policy §5.3. `publishedClaims.test.ts` is still
+  green.
+- **The other two repos:** the tests and mutation runs are described in their
+  own PRs. That includes the migration applied to a scratch Postgres 16:
+  redaction, idempotency, and the unique index refusing a duplicate request.
