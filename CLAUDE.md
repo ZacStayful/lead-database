@@ -19008,3 +19008,139 @@ would be false, and `analysisDisclosure.test.ts` bans it.
 - **The other two repos:** the tests and mutation runs are described in their
   own PRs. That includes the migration applied to a scratch Postgres 16:
   redaction, idempotency, and the unique index refusing a duplicate request.
+
+---
+
+## 72. Cancellation reasons reach the sales board *(no migration)*
+
+When a customer cancels, the reason and their own words now land on the Monday
+enquiries board **18420649520**: status **`color_mm7n8j39` "Cancel reason"** and
+long text **`long_text_mm7nz39f` "Cancel comment"**. Before this the reason lived
+only in the database, and sales filled the cells in by hand. The first ten were
+done that way on 2026-09-29; this code does not re-push them.
+
+`src/lib/mondayCancel.ts` (pure, import-free) ·
+`src/lib/cancellationMondaySync.ts` · `setEnquiryCancellation` in `monday.ts`.
+
+### 72.1 — The map
+
+| Stored key (ours or Stripe's) | Board label |
+|---|---|
+| `lead_quality`, `low_quality` | Lead quality |
+| `at_capacity`, `unused` | At capacity |
+| `too_expensive` | Too expensive |
+| `switched_provider`, `switched_service` | Switched provider |
+| anything else | Other |
+
+Several reasons → the **first**, which is the customer's own selection order.
+The comment is the customer's note, with **`(Guaranteed Rent)`** appended on a GR
+cancellation, because the board item is the customer and not the product.
+
+⚠️ **The five labels already exist on the column, and the write passes
+`create_labels_if_missing: false`** (§23.1). A misspelt label fails the write; it
+never adds a sixth label. `MONDAY_CANCEL_LABELS` is the only place the strings
+live, and a test pins them literally.
+
+⚠️ **`not_enough_leads` and `closing_business` map to Other on purpose.** Stripe
+has one feedback slot, so `cancelOptions.ts` files `not_enough_leads` as
+`low_quality` and `closing_business` as `unused`. Read from Stripe, they would
+come out as Lead quality and At capacity. That is why our own row wins (72.2).
+
+### 72.2 — Two triggers, one answer
+
+| Trigger | Where |
+|---|---|
+| In-app cancel | `customer/subscription/cancel/route.ts`, after `recordCancellationRequested` |
+| Portal cancel | Stripe webhook, `customer.subscription.*`, **only when this event newly set `cancellation_feedback`** |
+
+The webhook gate matters. First reason wins (§21), so the column is set once per
+cancellation. Without the gate, every `subscription.updated` would push.
+
+**Both triggers call `pushCancellationToMonday`, which re-reads the database**
+rather than trusting its caller, in this order:
+
+1. the latest `subscription_cancellations` row for **this customer, product and
+   Stripe subscription** with `reverted_at` null. Its reasons, and its note, or,
+   with no note, the reason labels joined by "; ". That is exactly what
+   `composeCancellationComment` sends Stripe;
+2. else, **management only**, `customers.cancellation_feedback` /
+   `cancellation_comment`;
+3. else nothing to push.
+
+⚠️ **This order is what makes an in-app cancellation converge.** That path
+pushes twice: once from the route, and once from the webhook fired by the
+route's own Stripe update. Either push can land first. Both find our row, so
+both compute the same values. `setEnquiryCancellation` reads the two cells
+before writing and skips when they already match, so the second push costs no
+write.
+
+⚠️ **The row is scoped to the Stripe subscription id** so that an un-reverted
+row from an earlier episode is never pushed for a new cancellation. A
+re-subscription always has a new id.
+
+### 72.3 — Finding the item, and never creating one
+
+The customer's email is matched against `text_mm50e3d7`, using
+`fetchEnquiryBoardIndex` and `emailsFromCell`: lowercased, and a cell can hold
+two addresses.
+
+| Email matches | Item used |
+|---|---|
+| exactly one | that one |
+| several (repeat enquiries, §23.10) | the one in `customers.monday_item_id`, else **skip** |
+| none | the linked item, else **skip** |
+
+⚠️ **The no-match fallback was not in the original brief, and the live data is
+why it exists.** Measured on 2026-09-29: of the 10 cancellations on record,
+**3 have a different email on their account than on the board** (Emanuela
+Sharra, Matilda Mwenya, Leslie Rogers). §23.5 links all three by name. Email
+alone would have skipped 30% of real cancellations. The fallback still creates
+nothing. It is trusted only when `monday_board_id` is this board, because a
+GR-form enquirer's link can point at the GR board, which has no status column
+(§23.7).
+
+Every skip is logged as `[monday-cancel]` with its reason (`no_match`,
+`ambiguous`, `no_email`, `board_unreadable`). Nothing creates an item, and a
+guard pins that.
+
+### 72.4 — Never fails the cancellation
+
+`pushCancellationToMonday` and `setEnquiryCancellation` return result objects
+and never throw, and both call sites are also wrapped in try/catch. On the
+webhook side that is load-bearing: an escaped exception deletes the
+`stripe_events` claim and Stripe redelivers an event that has already been
+processed (§23.6). On the route side, Stripe has already accepted the
+cancellation by the time the push runs. A missing `MONDAY_API_TOKEN` is
+`skipped: "not_configured"`.
+
+### 72.5 — Known, and deliberately left
+
+- **A GR cancellation through the billing portal pushes nothing.** The
+  webhook's GR branch captures no feedback (invariant 6; the columns are
+  management-only), so only in-app GR cancellations reach the board.
+- **"Keep my subscription" does not clear the cells.** They record what the
+  customer said. The Status label already moves back (§23.2), and a later
+  cancellation overwrites the cells.
+- **Leslie Rogers's cell reads "At capacity" and the map would give "Other"**
+  (her Stripe feedback is `other`). It was set by hand and nothing re-pushes
+  it. That is noted, not changed.
+
+### Verification
+
+`npx tsc --noEmit` clean. `mondayCancel.test.ts` (44 cases) covers the map over
+both vocabularies, first-reason-wins, the GR suffix, the resolver's precedence
+and the GR exclusion, item picking in all branches, and file-text guards on the
+wiring.
+
+⚠️ **Fourteen mutations run, all fourteen caught**: the webhook gate dropped two
+ways, the subscription scoping, the audit-row precedence, a GR fallback to
+Stripe fields, last-reason-wins, the ambiguity rule, a map entry, the reverted
+filter, the unchanged suppression, the route call, the board check on the linked
+fallback, the no-match fallback, and the note-less label fallback.
+
+**Dry-run against production (read-only)**: all 10 existing cancellations
+resolve to exactly one board item, and 9 of 10 agree with the hand-set label.
+
+**Not yet exercised end to end.** No real cancellation has gone through it.
+After merge, check that the next cancellation lands both cells, and that
+`[monday-cancel]` logs show the second push as `unchanged`.

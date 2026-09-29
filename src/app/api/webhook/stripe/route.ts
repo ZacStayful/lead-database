@@ -16,6 +16,7 @@ import {
   mapStripeSubscriptionStatus as mapStatus,
 } from "@/lib/pastDueEpisode";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
+import { pushCancellationToMonday } from "@/lib/cancellationMondaySync";
 import {
   GR_PLANS,
   allocationForPriceIds,
@@ -748,6 +749,38 @@ export async function POST(request: NextRequest) {
           .from("customers")
           .update(update)
           .or(customerMatchFilter(customerId, isGuaranteedRent));
+
+        // A cancellation reason captured by THIS event goes to the Monday
+        // board's Cancel reason / Cancel comment cells (§72). Gated on the
+        // update above having newly set it — first reason wins, so this fires
+        // once per cancellation rather than on every subscription.updated —
+        // and management only, because only that branch captures feedback.
+        //
+        // ⚠️ The try/catch is load-bearing: an exception reaching the outer
+        // catch deletes the stripe_events claim and Stripe redelivers an event
+        // that has already been processed (§23.6).
+        const newlyCapturedFeedback =
+          !isGuaranteedRent &&
+          typeof update.cancellation_feedback === "string" &&
+          update.cancellation_feedback.length > 0;
+        if (newlyCapturedFeedback && existing?.id) {
+          try {
+            const pushed = await pushCancellationToMonday(admin, {
+              customerId: existing.id,
+              leadType: "management",
+              stripeSubscriptionId: sub.id,
+              source: event.type,
+            });
+            if (pushed.error) {
+              console.error("[monday-cancel] webhook push failed", {
+                customer: existing.id,
+                error: pushed.error,
+              });
+            }
+          } catch (err) {
+            console.error("[monday-cancel] webhook push threw", err);
+          }
+        }
 
         // If that update re-sized the allocation, the stored filter forecast has
         // to move with it (§28.3) — the same call applyPendingPlanChange makes.
