@@ -776,6 +776,82 @@ export async function createEnquiryUpdate(
   }
 }
 
+/** "Cancel reason" (status) and "Cancel comment" (long text) — §72. */
+const ENQUIRY_CANCEL_REASON_COLUMN = "color_mm7n8j39";
+const ENQUIRY_CANCEL_COMMENT_COLUMN = "long_text_mm7nz39f";
+
+/**
+ * Write a customer's cancellation reason and comment onto one item of the
+ * enquiries board (§72).
+ *
+ * NEVER THROWS — the setEnquiryStatus contract, and for its reason: one caller
+ * is the Stripe webhook, whose outer catch deletes the stripe_events claim, and
+ * the other runs after Stripe has already accepted the cancellation.
+ *
+ * READS BEFORE IT WRITES and returns `skipped: "unchanged"` when both cells
+ * already hold these values — the setEnquiryMobile / §23.4 suppression. An
+ * in-app cancellation pushes twice (the route, then the webhook its own Stripe
+ * update fires), and both resolve to the same values, so the second costs no
+ * write. That is what makes the push idempotent rather than merely harmless.
+ *
+ * create_labels_if_missing stays FALSE: the label comes from
+ * MONDAY_CANCEL_LABELS, and a typo must fail rather than add a label.
+ */
+export async function setEnquiryCancellation(params: {
+  itemId: string;
+  label: string;
+  comment: string;
+}): Promise<MondayStatusWriteResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { written: false, skipped: "not_configured" };
+
+  try {
+    const current = await mondayGraphql<{ items?: MondayItem[] }>(
+      token,
+      `query ($ids: [ID!]) { items(ids: $ids) { id name column_values(ids: ${JSON.stringify(
+        [ENQUIRY_CANCEL_REASON_COLUMN, ENQUIRY_CANCEL_COMMENT_COLUMN]
+      )}) { id text } } }`,
+      { ids: [params.itemId] }
+    );
+    const item = current.items?.[0];
+    if (!item) {
+      return { written: false, error: `item ${params.itemId} not found` };
+    }
+    if (
+      textFor(item, ENQUIRY_CANCEL_REASON_COLUMN) === params.label &&
+      textFor(item, ENQUIRY_CANCEL_COMMENT_COLUMN).trim() === params.comment.trim()
+    ) {
+      return { written: false, skipped: "unchanged" };
+    }
+
+    await mondayGraphql<{ change_multiple_column_values?: { id: string } }>(
+      token,
+      `mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+        change_multiple_column_values(
+          board_id: $boardId
+          item_id: $itemId
+          column_values: $values
+          create_labels_if_missing: false
+        ) { id }
+      }`,
+      {
+        boardId: enquiryBoardId(),
+        itemId: params.itemId,
+        values: JSON.stringify({
+          [ENQUIRY_CANCEL_REASON_COLUMN]: { label: params.label },
+          [ENQUIRY_CANCEL_COMMENT_COLUMN]: { text: params.comment },
+        }),
+      }
+    );
+    return { written: true };
+  } catch (err) {
+    return {
+      written: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 /** One row of the enquiries board, reduced to what customer matching needs. */
 export interface EnquiryBoardItem {
   id: string;

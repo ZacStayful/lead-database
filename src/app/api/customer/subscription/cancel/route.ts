@@ -8,6 +8,7 @@ import {
   sendSubscriptionKeptEmail,
 } from "@/lib/emails";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
+import { pushCancellationToMonday } from "@/lib/cancellationMondaySync";
 import { holdsProduct, PRODUCT_COPY, toLeadType } from "@/lib/products";
 import {
   CANCEL_NOTE_MAX_LENGTH,
@@ -308,6 +309,28 @@ export async function POST(req: NextRequest) {
     }
     if (auditId && emailId) {
       await recordConfirmationEmail(admin, auditId, emailId, SOURCE);
+    }
+
+    // The reason and comment onto the Monday board's Cancel reason / Cancel
+    // comment cells (§72). AFTER the audit insert, because the push re-reads
+    // that row and prefers it to Stripe's coarser feedback. The webhook our own
+    // Stripe update fired pushes too; both resolve to the same values, so
+    // whichever lands second writes nothing. Never fails the cancellation.
+    try {
+      const pushed = await pushCancellationToMonday(admin, {
+        customerId: customer.id,
+        leadType,
+        stripeSubscriptionId: subscriptionId,
+        source: SOURCE,
+      });
+      if (pushed.error) {
+        console.error(`[${SOURCE}] Monday cancel reason push failed`, {
+          customer: customer.id,
+          error: pushed.error,
+        });
+      }
+    } catch (err) {
+      console.error(`[${SOURCE}] Monday cancel reason push threw`, err);
     }
   } else {
     await closeOpenCancellation(admin, customer.id, leadType, SOURCE);
