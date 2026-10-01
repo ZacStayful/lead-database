@@ -77,6 +77,12 @@ const PREFERENCE_ROWS: {
     description:
       "Each morning: which landlords are due a call, message or email today, and roughly how long it will take. Nothing is sent on a day with nothing due.",
   },
+  {
+    key: "monthly_review",
+    label: "Monthly lead review",
+    description:
+      "A week after each billing month: one tap per lead to say where it got to, then how the batch is converting. Your answers update your pipeline.",
+  },
 ];
 
 /** Format an ISO timestamp as e.g. "23 October 2026". */
@@ -119,6 +125,7 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
       customer.notification_preferences,
       "contact_followups"
     ),
+    monthly_review: prefOn(customer.notification_preferences, "monthly_review"),
   });
   const [prefSaving, setPrefSaving] = useState<keyof NotificationPreferences | null>(
     null

@@ -1778,3 +1778,134 @@ export async function sendProspectBookingNudgeEmail(params: {
     return { id: null, error };
   }
 }
+
+/**
+ * A cycle that delivered less than the plan (§73).
+ *
+ * Every sentence comes from src/lib/batchReview/shortfall.ts, which is pure and
+ * tested; this function lays them out and decides nothing. ⚠️ It never offers
+ * or implies a refund (§28.0, §69): what the customer is owed is leads, and
+ * they carry forward.
+ *
+ * No opt-out line. This is information about what the customer paid for, the
+ * same footing as a card-declined email (§44), not a marketing stream.
+ */
+export async function sendBatchShortfallEmail(params: {
+  to: string;
+  contactName: string;
+  subject: string;
+  headline: string;
+  figures: { label: string; value: string }[];
+  causeSentence: string;
+  options: string[];
+  filteringUrl: string | null;
+  /**
+   * Days until the review email, or null when none will follow (no leads
+   * delivered, opted out, no link secret). The line is a promise, so it is
+   * only made when the cron will keep it.
+   */
+  reviewInDays: number | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, subject, headline, figures, causeSentence, options, filteringUrl, reviewInDays } = params;
+  const first = contactName.trim().split(/\s+/)[0] || "there";
+
+  const table = `
+    <table style="width:100%;border-collapse:collapse;margin:16px 0 14px">
+      ${figures
+        .map(
+          (f) => `<tr style="border-top:0.5px solid #e3e5e2">
+        <td style="padding:10px 6px;font-size:13px">${esc(f.label)}</td>
+        <td style="padding:10px 6px;font-size:13px;text-align:right;font-weight:700;color:${BRAND}">${esc(f.value)}</td>
+      </tr>`
+        )
+        .join("")}
+    </table>`;
+
+  const inner = `
+    <p style="margin:0 0 12px;font-size:14px">Hi ${esc(first)},</p>
+    <h1 style="margin:0 0 10px;font-size:18px">${esc(headline)}</h1>
+    ${table}
+    <p style="margin:0 0 12px;font-size:14px;line-height:1.5">${esc(causeSentence)}</p>
+    ${options
+      .map((o) => `<p style="margin:0 0 8px;font-size:14px;line-height:1.5">${esc(o)}</p>`)
+      .join("")}
+    ${filteringUrl ? button(filteringUrl, "Review your filter") : ""}
+    ${
+      reviewInDays != null
+        ? `<p style="margin:18px 0 0;color:#6b706a;font-size:13px;line-height:1.5">
+      ${reviewInDays === 7 ? "In a week" : reviewInDays === 0 ? "Shortly" : `In ${reviewInDays} days`} we’ll ask how this month’s leads went, one tap per lead.
+    </p>`
+        : ""
+    }
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * The monthly batch review (§73): one link to every lead in the batch with its
+ * stage already filled in.
+ *
+ * The link opens the review with no login, so it is the customer's to keep
+ * private. That is stated in the email, as it is for the top-up link.
+ */
+export async function sendBatchReviewEmail(params: {
+  to: string;
+  contactName: string;
+  productLabel: string;
+  periodLabel: string;
+  delivered: number;
+  reviewUrl: string;
+  reminder: boolean;
+  shortfallLine: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, productLabel, periodLabel, delivered, reviewUrl, reminder, shortfallLine } = params;
+  const first = contactName.trim().split(/\s+/)[0] || "there";
+  const leadsWord = `${delivered} lead${delivered === 1 ? "" : "s"}`;
+  const subject = reminder
+    ? `Reminder: how did your ${periodLabel} leads go?`
+    : `How did your ${periodLabel} leads go? About 2 minutes`;
+
+  const inner = `
+    <p style="margin:0 0 12px;font-size:14px">Hi ${esc(first)},</p>
+    <h1 style="margin:0 0 10px;font-size:18px">How did your ${esc(productLabel.toLowerCase())} leads go?</h1>
+    ${shortfallLine ? `<p style="margin:0 0 12px;font-size:14px;line-height:1.5">${esc(shortfallLine)}</p>` : ""}
+    <p style="margin:0 0 12px;font-size:14px;line-height:1.5">
+      You received ${esc(leadsWord)} in the period ${esc(periodLabel)}. Tell us where each one got to:
+      not called yet, couldn’t reach them, interested, a meeting booked, or likely to sign later.
+      Anything already in your pipeline is filled in for you.
+    </p>
+    <p style="margin:0 0 12px;font-size:14px;line-height:1.5">
+      Your answers update your pipeline, and afterwards you’ll see how this batch is converting
+      against the ${productLabel === "Guaranteed Rent" ? "10%" : "5%"} benchmark.
+      It also tells us which leads are worth sending you more of.
+    </p>
+    ${button(reviewUrl, "Review my leads")}
+    <p style="margin:18px 0 0;color:#8a8f88;font-size:11px;line-height:1.5">
+      This link opens your review without signing in, so please don’t forward it.
+      You can turn these monthly reviews off under Notifications in your dashboard.
+    </p>
+  `;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}

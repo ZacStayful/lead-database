@@ -36,6 +36,11 @@ export interface NotificationPreferences {
   // exist. Governs the EMAIL and the text; the timeline on the lead page is
   // unaffected, because it is a page they chose to open.
   contact_followups: boolean;
+  // The monthly lead-batch review and its one reminder (§73). Governs the
+  // survey emails only. The shortfall email is information about what the
+  // customer paid for, so it has no opt-out, and the dashboard card is a page
+  // they chose to open.
+  monthly_review: boolean;
 }
 
 export interface Customer {

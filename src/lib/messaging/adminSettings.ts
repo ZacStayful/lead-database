@@ -259,6 +259,41 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     kind: "boolean",
     fallback: "false",
   },
+  // §73 — the monthly batch review and the shortfall email. The switch gates
+  // SENDING only: the snapshot is captured inside reset_monthly_counts
+  // whatever this says, because a missed capture cannot be rebuilt. Ships OFF.
+  // The cron reads the switch as `=== "true"` and the three numbers through
+  // batchReviewSettingsFrom(), whose defaults these fallbacks must equal.
+  {
+    key: "batch_reviews_enabled",
+    label: "Monthly lead review emails",
+    kind: "boolean",
+    fallback: "false",
+  },
+  {
+    key: "batch_review_delay_days",
+    label: "Days after the cycle before the review email",
+    kind: "number",
+    fallback: "7",
+    min: 0,
+    max: 21,
+  },
+  {
+    key: "batch_review_reminder_days",
+    label: "Days before the one reminder",
+    kind: "number",
+    fallback: "3",
+    min: 1,
+    max: 14,
+  },
+  {
+    key: "batch_review_token_days",
+    label: "How long the review link works (days)",
+    kind: "number",
+    fallback: "30",
+    min: 7,
+    max: 90,
+  },
 
   // -------------------------------------------------------------------------
   // Chasing an enquirer who never books a web meeting (§55). In THIS list for

@@ -53,7 +53,10 @@ export default async function AdminAllocationPage() {
     (s) =>
       s.key.startsWith("release_") ||
       s.key === "lead_sync_enabled" ||
-      s.key === "stayful_conflict_enabled"
+      s.key === "stayful_conflict_enabled" ||
+      // §73 — the monthly review emails sit here because a shortfall email is
+      // about what allocation delivered.
+      s.key.startsWith("batch_review")
   ).map((s) => s.key);
 
   const [settingRows, customersRes, todayRes, windowRes, stockRes, owedRes] = await Promise.all([

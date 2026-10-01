@@ -15,6 +15,7 @@ const PREFERENCE_KEYS: (keyof NotificationPreferences)[] = [
   "monthly_insights",
   "announcements",
   "contact_followups",
+  "monthly_review",
 ];
 
 /** Full-true default — used to fill any key missing from a customer's jsonb. */
@@ -26,6 +27,7 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   monthly_insights: true,
   announcements: true,
   contact_followups: true,
+  monthly_review: true,
 };
 
 /**

@@ -41,6 +41,27 @@ const NUMBER_FIELDS: { key: string; label: string; hint: string; min: number; ma
     min: 0,
     max: 168,
   },
+  {
+    key: "batch_review_delay_days",
+    label: "Review email: days after the month",
+    hint: "How long after a customer's billing month ends the review email goes, so the last leads of the month have had time to be rung. The shortfall email still goes on reset day.",
+    min: 0,
+    max: 21,
+  },
+  {
+    key: "batch_review_reminder_days",
+    label: "Review reminder: days later",
+    hint: "One reminder, this many days after the review email, if it has not been answered. Never more than one.",
+    min: 1,
+    max: 14,
+  },
+  {
+    key: "batch_review_token_days",
+    label: "Review link lifetime (days)",
+    hint: "How long the one-tap review link works. The dashboard card disappears when it expires.",
+    min: 7,
+    max: 90,
+  },
 ];
 
 export function AllocationSettingsPanel({
@@ -90,6 +111,7 @@ export function AllocationSettingsPanel({
   const on = initial.release_enabled === "true";
   const pollOn = initial.lead_sync_enabled === "true";
   const stayfulOn = initial.stayful_conflict_enabled === "true";
+  const reviewsOn = initial.batch_reviews_enabled === "true";
 
   return (
     <div className="space-y-4">
@@ -149,6 +171,24 @@ export function AllocationSettingsPanel({
           </>
         }
         offWarning="Switch this off? Nothing new is flagged; leads already flagged stay withdrawn and replacements already owed are still delivered by the next matching lead."
+      />
+
+      <SettingSwitch
+        label="Monthly lead review emails"
+        on={reviewsOn}
+        busy={busy}
+        onChange={(next) => save({ batch_reviews_enabled: next })}
+        description={
+          <>
+            At the end of each customer&apos;s billing month: an email on reset
+            day to anyone who received fewer leads than their plan (delivered,
+            owed and why), and a week later a one-tap review of every lead in the
+            batch, which updates their pipeline. The month is recorded whether
+            this is on or off, so switching it on later loses nothing. Answers
+            are on Lead feedback.
+          </>
+        }
+        offWarning="Switch the monthly review emails off? Nothing more is sent. Months keep being recorded, and links already sent keep working until they expire."
       />
 
       <div className="rounded-md border-[0.5px] border-border p-4">

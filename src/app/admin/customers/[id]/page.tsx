@@ -15,6 +15,7 @@ import { AdminCustomerForm } from "@/components/admin/AdminCustomerForm";
 import { AdminAccessPanel } from "@/components/admin/AdminAccessPanel";
 import { AdminEmailPanel } from "@/components/admin/AdminEmailPanel";
 import { SwapLeadControl } from "@/components/admin/SwapLeadControl";
+import { BatchReviewsCard, type CustomerBatchReview } from "@/components/admin/BatchReviewsCard";
 import { formatDate } from "@/lib/utils";
 import {
   activeLeadFilters,
@@ -85,6 +86,18 @@ export default async function AdminCustomerDetailPage({
     .order("released_at", { ascending: false })
     .limit(20);
   const releases = (releasesRaw ?? []) as FilterLeadRelease[];
+
+  // §73 — this customer's monthly batch reviews. Best effort: a failed read
+  // costs the card, never the page.
+  const { data: batchReviewsRaw } = await admin
+    .from("lead_batch_reviews")
+    .select(
+      "id, customer_id, lead_type, cycle_start, cycle_end, allocation, delivered, balance_at_reset, next_allocation, pool_debit, filter_status, filter_expected_leads, filter_areas, filter_min_bedrooms, filter_max_bedrooms, filter_min_gross, release_hold_until, survey_sent_at, submitted_at, quality_rating, comment, items:lead_batch_review_items(answer)"
+    )
+    .eq("customer_id", customer.id)
+    .order("cycle_end", { ascending: false })
+    .limit(12);
+  const batchReviews = (batchReviewsRaw ?? []) as unknown as CustomerBatchReview[];
 
   // Ingest-history aggregate for the filter card's predicted volume — the same
   // functions the customer's filtering panel runs. Best-effort: a failed fetch
@@ -187,6 +200,7 @@ export default async function AdminCustomerDetailPage({
           <FilterCard customer={customer} volumeAggregate={volumeAggregate} />
 
           <FilterReleasesCard releases={releases} />
+          <BatchReviewsCard reviews={batchReviews} />
 
         </div>
 

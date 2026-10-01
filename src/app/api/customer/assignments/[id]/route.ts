@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { stagesForLeadType } from "@/components/dashboard/pipelineStage";
 import { normaliseTags } from "@/lib/leadTags";
+import { recordStageChanged } from "@/lib/assignmentStage";
 import type { LeadType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -234,21 +235,12 @@ export async function PATCH(
   // get_assignment_engagement_scores and as "worked" in the capacity model,
   // exactly as those functions always intended. That is a definition change in
   // the series, recorded in CLAUDE.md the way §40.15 records whatsapp_click.
+  // Stage history (§56): written server-side after the update succeeded, never
+  // accepted from the browser. The helper is shared with the monthly batch
+  // review (§73), so a stage moved either way leaves the same trace.
   const previousStage = (assignment as { pipeline_stage?: string | null }).pipeline_stage ?? null;
-  if (
-    body.pipeline_stage !== undefined &&
-    body.pipeline_stage !== previousStage
-  ) {
-    const { error: eventError } = await admin.from("lead_events").insert({
-      assignment_id: params.id,
-      event_type: "stage_changed",
-      metadata: { from: previousStage, to: body.pipeline_stage },
-    });
-    if (eventError) {
-      // Best effort: the stage moved, the history row is reporting. Losing it
-      // must never fail the customer's edit.
-      console.error("[assignments] stage_changed event failed", eventError);
-    }
+  if (body.pipeline_stage !== undefined) {
+    await recordStageChanged(admin, params.id, previousStage, body.pipeline_stage);
   }
 
   return NextResponse.json({ ok: true, assignment: data });
