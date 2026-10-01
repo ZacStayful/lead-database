@@ -19426,9 +19426,44 @@ Code arriving first would select tables that do not exist on the dashboard home
 Applied the other way round, the reset still runs, because the capture is only
 called by the replaced function.
 
+✅ **0160 was applied to `znlfwbnvhlacwzgfalcf` on 2026-10-01, before the merge**
+(§1.1), applied verbatim from the file and then verified there.
+
+- **No drift before it went on.** The live `reset_monthly_counts` matched 0153
+  (`72ecc758…`). The ledger ended at 0159, no table, function or setting had any
+  of the names 0160 uses, and `origin/main` had no competing 0160.
+- **All three bodies match the file exactly**:
+  - `batch_cycle_start` `7c5354e2…` (201 characters)
+  - `capture_lead_batch_reviews` `613b44eb…` (5945)
+  - `reset_monthly_counts` `d733e47d…` (2395)
+
+  All three pin `search_path`. `anon` and `authenticated` cannot execute any of
+  them; `service_role` can. Invariant 7 still holds (four names).
+  `get_advisors` reports nothing new apart from the two deny-all tables.
+- **Nothing moved.** 85 customers and 605 assignments are untouched. A
+  fingerprint of every balance and counter is identical before and after
+  (`7ec10693…`). Every preference with `monthly_review` removed hashes to its
+  value from before the apply (`37706c83…`), so the merge added one key and
+  changed nothing else. All 85 customers now carry the key. The switch is off.
+- **Driven on production** inside a block that raises at the end, so every write
+  rolled back. One customer had today as their anchor day. They were captured
+  for 2026-09-01 → 2026-10-01 with 11 leads delivered against an allocation of
+  10, and the delivered count matched `lead_assignments`. Their counter still
+  zeroed, and a second reset the same day inserted nothing. Afterwards: zero
+  reviews and the same balance fingerprint.
+
+⚠️ **That customer's real September batch is not recorded.** The 1 October
+reset ran at 00:05 UTC, before the apply, and §18.2's rule is that a missed
+capture cannot be rebuilt. The first real capture is on the next anchor day.
+
 Switch-on: wait for one capture, check its figures by hand against
 `lead_assignments`, run `GET /api/cron/batch-reviews?dryRun=true`, then flip the
-switch. Confirm `MESSAGING_TOKEN_SECRET` is set in Vercel production.
+switch. `MESSAGING_TOKEN_SECRET` is set in Vercel production (confirmed by Zac
+on 2026-10-01).
+
+Settled with Zac on 2026-10-01:
+- "Owed" is every unspent credit, so top-ups and older carried credit count.
+- Replacement leads count as delivered in the month they arrive.
 
 ### Deferred
 
