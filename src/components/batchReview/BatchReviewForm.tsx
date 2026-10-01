@@ -33,6 +33,8 @@ export interface FormItem {
   readOnly: ReadOnlyReason | null;
   answer: BatchAnswer | null;
   deadReason: DeadReason | null;
+  /** Set when this lead was sent to replace one the customer reported (§73.8). */
+  replacementFor?: string | null;
 }
 
 const REPORTABLE: ReadonlySet<DeadReason> = new Set<DeadReason>(["with_other_company", "not_letting"]);
@@ -134,6 +136,9 @@ export function BatchReviewForm({
                 <p className="text-sm font-medium">{item.name}</p>
                 <p className="text-xs text-muted-foreground">{meta}</p>
               </div>
+              {item.replacementFor && (
+                <p className="mt-1 text-xs text-brand">Sent to replace {item.replacementFor}</p>
+              )}
               {item.readOnly ? (
                 <p className="mt-2 text-xs text-muted-foreground">{READ_ONLY_LABEL[item.readOnly]}</p>
               ) : (

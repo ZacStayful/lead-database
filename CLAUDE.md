@@ -19329,6 +19329,41 @@ responses at 1,000 rows. `/admin/customers/[id]` gains a "Monthly lead reviews"
 card. All arithmetic is in `src/lib/batchReview/adminStats.ts`, which is pure
 and tested.
 
+### 73.8 — What was replaced, and what carries forward
+
+The review page also shows:
+
+- **Leads you reported this month.** Each one shows the reported lead, the
+  reason given, and what came of it: replaced (with the replacement named), a
+  lead credit returned, still under review, or not upheld (with the reviewer's
+  note, §51.8). A lead in the batch that arrived as a replacement is tagged
+  "Sent to replace …".
+- **Carried forward.** The lead credits carried into the next month, the new
+  month's grant, and the total due. "Credits never expire" (invariant 2).
+
+`src/lib/batchReview/replacements.ts` is pure and tested. Three rules:
+
+- ⚠️ **Only the customer's own reports** (`lead_quality_claims`, §51–§53) are
+  shown. A Stayful-pipeline withdrawal (§64) is swapped *without
+  notification* by decision, and showing it here would be that notification.
+  Its replacement also carries `replacement_depth > 0`, so no lead is ever
+  tagged from depth alone. A plain admin swap (§34) writes no claim, so it
+  cannot be linked. A test bans `owed_lead_replacements` and
+  `replacement_depth` from the review loader.
+- **Each report appears in exactly one review.** It goes in the review whose
+  batch holds the reported lead. Otherwise it goes in the review whose window
+  contains the report date, which covers a lead swapped before month end:
+  its assignment was deleted before the capture, so it is in no batch.
+- ⚠️ **The replacement count is linked, never quoted.** §53.1: it is published
+  on Replace a lead and "nothing else restates it". The section shows lead
+  credits as a number and links to Replace a lead for replacements. A credit
+  returned on a report is a lead credit and no copy names the allowance
+  (§51.3).
+
+A failed claims read hides the section rather than showing "none". Nothing to
+show for a customer who reported nothing is also an empty section, not a line
+saying so.
+
 ### Verification
 
 All 160 migrations to a scratch Postgres 16 from empty, all 21 SQL suites green,

@@ -19,6 +19,14 @@ import { answersFor, type BatchAnswer, type DeadReason, type LeadTypeKey } from 
 import { pipelineChangeFor, prefillAnswer, readOnlyReason, type ReadOnlyReason } from "./pipeline";
 import { validateSubmission } from "./submission";
 import { countAnswers, benchmarkReading, type BatchCounts, type BenchmarkReading } from "./metrics";
+import { DEAD_LEAD_REASON_LABELS, type DeadLeadReason } from "@/lib/quality/deadLeadCopy";
+import {
+  claimsForReview,
+  replacementLeadIds,
+  replacementOutcome,
+  type ClaimRow,
+  type ReplacementOutcome,
+} from "./replacements";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -92,6 +100,26 @@ export interface ReviewItemView {
   /** What the form shows selected: a saved answer first, else the pipeline's. */
   answer: BatchAnswer | null;
   deadReason: DeadReason | null;
+  /** The reported lead this one was sent to replace (§73.8), or null. */
+  replacementFor: string | null;
+}
+
+export interface LeadSummary {
+  name: string;
+  postcodeArea: string | null;
+  bedrooms: string | null;
+}
+
+/** A lead the customer reported in this batch, and what came of it (§73.8). */
+export interface ReplacementView {
+  claimId: string;
+  outcome: ReplacementOutcome;
+  reasonLabel: string;
+  reportedAt: string;
+  original: LeadSummary;
+  replacement: LeadSummary | null;
+  /** The reviewer's note, shown only when a report was not upheld (§51.8). */
+  note: string | null;
 }
 
 interface ItemRow {
@@ -156,18 +184,122 @@ export function toItemView(row: ItemRow, leadType: LeadTypeKey, customerId: stri
     readOnly,
     answer: row.answer ?? prefillAnswer(leadType, a),
     deadReason: row.dead_reason,
+    replacementFor: null,
   };
 }
 
 export interface LoadedReview {
   review: ReviewRow;
   items: ReviewItemView[];
+  /** Null when the claims could not be read, so the page says nothing rather than "none". */
+  replacements: ReplacementView[] | null;
+}
+
+type ClaimWithLead = ClaimRow & {
+  lead: { lead_name: string | null; postcode_area: string | null; bedrooms: string | null } | null;
+};
+
+function summary(l: { lead_name?: string | null; postcode_area: string | null; bedrooms: string | null } | null): LeadSummary {
+  return {
+    name: l?.lead_name?.trim() || "A landlord",
+    postcodeArea: l?.postcode_area ?? null,
+    bedrooms: l?.bedrooms ?? null,
+  };
+}
+
+/**
+ * The customer's own reports touching this batch (§73.8). Best effort: a read
+ * failure returns null and the page leaves the section out, rather than
+ * telling a customer who did report a lead that nothing was replaced.
+ */
+async function loadReplacements(
+  admin: Admin,
+  review: ReviewRow,
+  rows: ItemRow[]
+): Promise<{ views: ReplacementView[]; byReplacementLead: Map<string, string> } | null> {
+  const [claimsRes, otherRes] = await Promise.all([
+    admin
+      .from("lead_quality_claims")
+      .select(
+        "id, lead_id, status, resolution, reason, created_at, replacement_lead_id, review_note, lead:leads!inner(lead_name, postcode_area, bedrooms, lead_type)"
+      )
+      .eq("customer_id", review.customer_id)
+      .eq("lead.lead_type", review.lead_type),
+    admin
+      .from("lead_batch_review_items")
+      .select("lead_id, review:lead_batch_reviews!inner(customer_id, lead_type)")
+      .eq("review.customer_id", review.customer_id)
+      .eq("review.lead_type", review.lead_type)
+      .neq("review_id", review.id),
+  ]);
+  if (claimsRes.error || otherRes.error) {
+    console.error("[batch-review] replacements read failed", review.id, claimsRes.error ?? otherRes.error);
+    return null;
+  }
+  const claims = ((claimsRes.data ?? []) as unknown[]).map((c) => {
+    const row = c as ClaimWithLead & { lead: unknown };
+    return { ...row, lead: one(row.lead as ClaimWithLead["lead"]) };
+  });
+  const mine = claimsForReview(claims, {
+    itemLeadIds: new Set(rows.map((r) => r.lead_id).filter((x): x is string => !!x)),
+    otherReviewLeadIds: new Set(
+      ((otherRes.data ?? []) as { lead_id: string | null }[]).map((r) => r.lead_id).filter((x): x is string => !!x)
+    ),
+    cycleStart: review.cycle_start,
+    cycleEnd: review.cycle_end,
+  });
+
+  const replacementIds = Array.from(
+    new Set(mine.map((c) => c.replacement_lead_id).filter((x): x is string => !!x))
+  );
+  const replacementLeads = new Map<string, LeadSummary>();
+  if (replacementIds.length > 0) {
+    const { data, error } = await admin
+      .from("leads")
+      .select("id, lead_name, postcode_area, bedrooms")
+      .in("id", replacementIds);
+    if (error) {
+      console.error("[batch-review] replacement leads read failed", review.id, error);
+      return null;
+    }
+    for (const l of (data ?? []) as { id: string; lead_name: string | null; postcode_area: string | null; bedrooms: string | null }[]) {
+      replacementLeads.set(l.id, summary(l));
+    }
+  }
+
+  const views = mine.map((c) => {
+    const outcome = replacementOutcome(c.status, c.resolution);
+    return {
+      claimId: c.id,
+      outcome,
+      reasonLabel: DEAD_LEAD_REASON_LABELS[c.reason as DeadLeadReason] ?? "Reported",
+      reportedAt: c.created_at,
+      original: summary(c.lead),
+      replacement:
+        outcome === "swapped" && c.replacement_lead_id
+          ? replacementLeads.get(c.replacement_lead_id) ?? null
+          : null,
+      note: outcome === "declined" ? c.review_note : null,
+    };
+  });
+
+  const byReplacementLead = new Map<string, string>();
+  replacementLeadIds(mine).forEach((claim, leadId) => {
+    byReplacementLead.set(leadId, summary(claim.lead).name);
+  });
+  return { views, byReplacementLead };
 }
 
 export async function loadReview(admin: Admin, review: ReviewRow): Promise<LoadedReview | null> {
   const rows = await loadItemRows(admin, review.id);
   if (!rows) return null;
-  return { review, items: rows.map((r) => toItemView(r, review.lead_type, review.customer_id)) };
+  const replaced = await loadReplacements(admin, review, rows);
+  const items = rows.map((r) => {
+    const view = toItemView(r, review.lead_type, review.customer_id);
+    view.replacementFor = (r.lead_id && replaced?.byReplacementLead.get(r.lead_id)) || null;
+    return view;
+  });
+  return { review, items, replacements: replaced?.views ?? null };
 }
 
 export type TokenLookup =

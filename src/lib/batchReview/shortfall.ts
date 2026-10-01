@@ -44,9 +44,12 @@ export function isShortfall(s: Pick<ShortfallSnapshot, "allocation" | "delivered
 }
 
 /** Credit carried, plus the next cycle's grant, less any pool debit that grant will settle (§19.5). */
+export function nextGrant(s: Pick<ShortfallSnapshot, "next_allocation" | "pool_debit">): number {
+  return Math.max(0, s.next_allocation - Math.max(0, s.pool_debit));
+}
+
 export function nextDue(s: Pick<ShortfallSnapshot, "balance_at_reset" | "next_allocation" | "pool_debit">): number {
-  const grant = Math.max(0, s.next_allocation - Math.max(0, s.pool_debit));
-  return Math.max(0, s.balance_at_reset) + grant;
+  return Math.max(0, s.balance_at_reset) + nextGrant(s);
 }
 
 export type ShortfallCause = "hold" | "filter" | "supply";
@@ -141,7 +144,7 @@ export function shortfallCopy(
     figures: [
       { label: "Delivered this month", value: String(s.delivered) },
       { label: "Owed, carried forward", value: String(s.balance_at_reset) },
-      { label: `Due from ${nextCycleLabel}`, value: `${due} (${s.balance_at_reset} owed + ${Math.max(0, s.next_allocation - Math.max(0, s.pool_debit))} new)` },
+      { label: `Due from ${nextCycleLabel}`, value: `${due} (${s.balance_at_reset} owed + ${nextGrant(s)} new)` },
     ],
     cause,
     causeSentence,

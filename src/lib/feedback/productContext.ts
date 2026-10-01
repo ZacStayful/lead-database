@@ -274,6 +274,7 @@ export const ROUTES: RouteEntry[] = [
     tests: [
       "src/lib/batchReview/__tests__/batchReview.test.ts",
       "src/lib/batchReview/__tests__/batchReviewGuards.test.ts",
+      "src/lib/batchReview/__tests__/replacements.test.ts",
     ],
     section: 73,
   },
