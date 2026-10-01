@@ -200,6 +200,9 @@ async function run(request: Request) {
             causeSentence: copy.causeSentence,
             options: copy.options,
             filteringUrl: copy.cause === "filter" ? `${APP_URL}/dashboard/filtering` : null,
+            // The same three conditions the survey phase checks, so the
+            // email never promises a review the cron will not send.
+            reviewInDays: r.delivered > 0 && wantsReview(c) && secret ? settings.delayDays : null,
           });
           if (res.error) console.error("[batch-reviews] shortfall send failed", r.id, res.error);
           report.shortfall.push({ review: r.id, customer: c.id, sent: !res.error });

@@ -19352,7 +19352,29 @@ The last one **survived the first pass**. The reset's exception handler
 swallowed the duplicate key, and the fix was calling the capture directly
 (§50.9's shape again).
 
-63 vitest cases in `src/lib/batchReview/__tests__/`. `tsc` clean.
+67 vitest cases in `src/lib/batchReview/__tests__/`. `tsc` clean.
+
+⚠️ **An independent review before merge found five real bugs, all now fixed and
+each mutation-pinned:**
+1. **Confirming a prefilled answer moved the stage.** Prefill reads a no-show as
+   "meeting booked", and mapping that back rewrote `web_meeting_no_show` as
+   `web_meeting_booked`, writing a `stage_changed` event that counts as
+   engagement, on a customer who touched nothing. An answer equal to the
+   prefill now moves nothing.
+2. **A re-save dragged leads backwards.** The form reopens on the stored
+   answers, so re-saving to change only the rating would have dragged a lead
+   the customer had since moved back to what they said before. Unchanged
+   answers write nothing now.
+3. **Signed leads were missing from every admin figure.** Read-only rows never
+   stored an answer, so a lead won before the survey went out was absent from
+   all of them. Their implied answer is now stored, once, and never over an
+   existing one.
+4. **The reminder could slip a day.** It compared milliseconds against a cron
+   whose start time drifts. It is now date-based.
+5. **The shortfall email promised a review that never came.** It always said
+   "next week we'll ask", but nothing is sent when no leads were delivered,
+   when the customer has opted out, or when there is no link secret. That
+   line now appears only when the cron will send the review.
 
 **Not exercised against a real cycle or in a browser.** Nothing is captured
 until the first anchor day after 0160 is applied, and nothing is sent until the

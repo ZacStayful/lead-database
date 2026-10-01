@@ -264,10 +264,34 @@ export async function submitReview(
     return { ok: false, status: 500, error: "We could not save your answers just now." };
   }
 
+  // ⚠️ Read-only rows (won, closed) get the answer their pipeline implies
+  // stored, once. Without it a lead signed before the review went out would
+  // stay NULL for ever and be missing from every admin figure, which reads
+  // stored answers only. Never overwrites an answer already there.
+  for (const row of rows) {
+    if (row.answer) continue;
+    const owned = ownedAssignment(row, review.customer_id);
+    if (readOnlyReason(owned) === null) continue;
+    const implied = prefillAnswer(review.lead_type, owned);
+    if (!implied) continue;
+    const { error } = await admin
+      .from("lead_batch_review_items")
+      .update({ answer: implied, answered_at: now })
+      .eq("id", row.id)
+      .eq("review_id", review.id)
+      .is("answer", null);
+    if (error) console.error("[batch-review] implied answer write failed", row.id, error);
+  }
+
   for (const a of verdict.value.answers) {
     const row = byId.get(a.itemId);
     const owned = row ? ownedAssignment(row, review.customer_id) : null;
-    if (!owned) continue;
+    if (!owned || !row) continue;
+    // ⚠️ An answer UNCHANGED since the last save moves nothing. The form
+    // reopens on the stored answers, so re-saving to change only the rating
+    // would otherwise drag a lead the customer has since moved on the lead
+    // page (attended, revived) back to what they said last time.
+    if (row.answer === a.answer) continue;
     const change = pipelineChangeFor(review.lead_type, a.answer, owned);
     if (!change) continue;
     await applyPipelineWrite(admin, owned, change);

@@ -123,7 +123,14 @@ export function pipelineChangeFor(
   })();
 
   const markContacted = state?.status === "new";
-  const stageChanges = stage !== undefined && stage !== state?.pipeline_stage;
+  // ⚠️ Confirming what the pipeline already says is not a change. Prefill maps
+  // several stages onto one answer (a no-show reads as "meeting booked", §20),
+  // so mapping the answer back would rewrite web_meeting_no_show as
+  // web_meeting_booked on a customer who touched nothing, and write a
+  // stage_changed event that counts as engagement (§56.4).
+  const confirmsPipeline = answer === prefillAnswer(leadType, state);
+  const stageChanges =
+    !confirmsPipeline && stage !== undefined && stage !== state?.pipeline_stage;
   if (!markContacted && !stageChanges) return null;
   return stageChanges ? { markContacted, pipeline_stage: stage } : { markContacted };
 }

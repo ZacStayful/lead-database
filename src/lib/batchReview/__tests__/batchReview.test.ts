@@ -136,6 +136,15 @@ describe("write-back", () => {
       "interested_in_the_future"
     );
   });
+  it("confirming a no-show's prefilled answer leaves the no-show alone", () => {
+    // prefill reads web_meeting_no_show as meeting_booked (§20). Mapping it
+    // back would rewrite the no-show as booked on a customer who touched nothing.
+    expect(pipelineChangeFor("management", "meeting_booked", live("web_meeting_no_show"))).toBeNull();
+    // A real change from a no-show still moves it.
+    expect(pipelineChangeFor("management", "meeting_held", live("web_meeting_no_show"))?.pipeline_stage).toBe(
+      "web_meeting_attended"
+    );
+  });
   it("an answer matching the current stage writes nothing", () => {
     expect(pipelineChangeFor("management", "meeting_booked", live("web_meeting_booked"))).toBeNull();
   });
@@ -328,6 +337,9 @@ describe("timing", () => {
     expect(reminderDue({ ...sent, reminder_sent_at: "x" }, new Date("2026-10-26T09:40:00Z"), s)).toBe(false);
     expect(reminderDue({ ...sent, submitted_at: "x" }, new Date("2026-10-26T09:40:00Z"), s)).toBe(false);
     expect(reminderDue(sent, new Date("2026-11-22T09:40:00Z"), s)).toBe(false);
+    // The cron starts at a slightly different moment each day. A run a few
+    // seconds EARLIER than the send three days before must still remind.
+    expect(reminderDue(sent, new Date("2026-10-25T09:39:55Z"), s)).toBe(true);
     expect(reviewOpen(sent, new Date("2026-10-30T00:00:00Z"))).toBe(true);
     expect(reviewOpen(sent, new Date("2026-11-22T00:00:00Z"))).toBe(false);
   });

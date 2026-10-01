@@ -123,6 +123,22 @@ describe("the submit path", () => {
     expect(code("src/lib/assignmentStage.ts")).toContain('event_type: "stage_changed"');
   });
 
+  it("an unchanged answer never moves the pipeline on a re-save", () => {
+    const src = code("src/lib/batchReview/review.ts");
+    const skip = src.indexOf("if (row.answer === a.answer) continue;");
+    const write = src.indexOf("pipelineChangeFor(review.lead_type, a.answer, owned)");
+    expect(skip).toBeGreaterThan(-1);
+    expect(skip).toBeLessThan(write);
+  });
+
+  it("read-only rows get their implied answer stored, never over an existing one", () => {
+    const src = code("src/lib/batchReview/review.ts");
+    const block = src.slice(src.indexOf("for (const row of rows) {"), src.indexOf("for (const a of verdict.value.answers) {\n    const row"));
+    expect(block).toContain("prefillAnswer(review.lead_type, owned)");
+    expect(block).toContain('.is("answer", null)');
+    expect(block).toContain("readOnlyReason(owned) === null) continue");
+  });
+
   it("the form will not send until every editable row is answered", () => {
     expect(code("src/components/batchReview/BatchReviewForm.tsx")).toContain("disabled={busy || remaining > 0}");
   });
@@ -157,6 +173,11 @@ describe("the emails", () => {
   const body = src.slice(src.indexOf("export async function sendBatchShortfallEmail"));
   it("never offer or imply a refund", () => {
     expect(body).not.toMatch(/refund|money back|compensat|reimburs/i);
+  });
+  it("the shortfall email only promises a review the cron will send", () => {
+    expect(body).toMatch(/reviewInDays != null\s*\?/);
+    const cron = code(CRON);
+    expect(cron).toContain("reviewInDays: r.delivered > 0 && wantsReview(c) && secret ? settings.delayDays : null");
   });
   it("escape what they render", () => {
     expect(body).toContain("esc(causeSentence)");

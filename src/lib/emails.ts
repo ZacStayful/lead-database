@@ -1799,8 +1799,14 @@ export async function sendBatchShortfallEmail(params: {
   causeSentence: string;
   options: string[];
   filteringUrl: string | null;
+  /**
+   * Days until the review email, or null when none will follow (no leads
+   * delivered, opted out, no link secret). The line is a promise, so it is
+   * only made when the cron will keep it.
+   */
+  reviewInDays: number | null;
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to, contactName, subject, headline, figures, causeSentence, options, filteringUrl } = params;
+  const { to, contactName, subject, headline, figures, causeSentence, options, filteringUrl, reviewInDays } = params;
   const first = contactName.trim().split(/\s+/)[0] || "there";
 
   const table = `
@@ -1824,9 +1830,13 @@ export async function sendBatchShortfallEmail(params: {
       .map((o) => `<p style="margin:0 0 8px;font-size:14px;line-height:1.5">${esc(o)}</p>`)
       .join("")}
     ${filteringUrl ? button(filteringUrl, "Review your filter") : ""}
-    <p style="margin:18px 0 0;color:#6b706a;font-size:13px;line-height:1.5">
-      In a week we’ll ask how this month’s leads went, one tap per lead.
-    </p>
+    ${
+      reviewInDays != null
+        ? `<p style="margin:18px 0 0;color:#6b706a;font-size:13px;line-height:1.5">
+      ${reviewInDays === 7 ? "In a week" : reviewInDays === 0 ? "Shortly" : `In ${reviewInDays} days`} we’ll ask how this month’s leads went, one tap per lead.
+    </p>`
+        : ""
+    }
   `;
 
   try {

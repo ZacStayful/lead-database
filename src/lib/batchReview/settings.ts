@@ -96,7 +96,10 @@ export function surveyDue(r: ReviewTiming, today: string, s: BatchReviewSettings
 export function reminderDue(r: ReviewTiming, now: Date, s: BatchReviewSettings): boolean {
   if (r.survey_sent_at == null || r.reminder_sent_at != null || r.submitted_at != null) return false;
   if (r.token_expires_at && new Date(r.token_expires_at).getTime() <= now.getTime()) return false;
-  return now.getTime() - new Date(r.survey_sent_at).getTime() >= s.reminderDays * 86_400_000;
+  // By DATE, not by milliseconds. The cron runs once a day and its start time
+  // drifts, so "72 hours to the millisecond" would miss by a few seconds and
+  // slip the reminder a whole day.
+  return addDaysIso(r.survey_sent_at.slice(0, 10), s.reminderDays) <= now.toISOString().slice(0, 10);
 }
 
 /** Shown on the dashboard while sent, unsubmitted and unexpired. */
