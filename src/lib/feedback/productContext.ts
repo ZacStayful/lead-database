@@ -258,6 +258,26 @@ export const ROUTES: RouteEntry[] = [
     section: 20,
   },
   {
+    path: "/dashboard/review/[reviewId]",
+    purpose:
+      "The monthly batch review: every lead from one billing month with its " +
+      "stage prefilled, one tap each, which updates the pipeline and then " +
+      "shows how the batch is converting against the 5% / 10% benchmark. " +
+      "Also reachable with no login from the emailed /review/[token] link (§73).",
+    files: [
+      "src/app/dashboard/review/[reviewId]/page.tsx",
+      "src/app/review/[token]/page.tsx",
+      "src/components/batchReview/BatchReviewForm.tsx",
+      "src/lib/batchReview/review.ts",
+      "src/app/api/cron/batch-reviews/route.ts",
+    ],
+    tests: [
+      "src/lib/batchReview/__tests__/batchReview.test.ts",
+      "src/lib/batchReview/__tests__/batchReviewGuards.test.ts",
+    ],
+    section: 73,
+  },
+  {
     path: "/dashboard/goals",
     purpose:
       "A target for signed management clients. Management only, no GR equivalent.",

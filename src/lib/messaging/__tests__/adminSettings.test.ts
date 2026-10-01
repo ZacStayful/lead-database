@@ -21,6 +21,10 @@ import {
 describe("the allow-list is closed", () => {
   it("names exactly these keys and no others", () => {
     expect(MESSAGING_SETTINGS.map((s) => s.key).sort()).toEqual([
+      "batch_review_delay_days",
+      "batch_review_reminder_days",
+      "batch_review_token_days",
+      "batch_reviews_enabled",
       "contact_landlord_max_per_day",
       "contact_landlord_max_per_week",
       "contact_plans_enabled",
@@ -194,6 +198,12 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     // §64. The sweep and the ingest cache both read the switch as `=== "true"`,
     // so an absent row is off, and 0155 seeds it off.
     stayful_conflict_enabled: "false",
+    // §73. The cron reads the switch as `=== "true"` and the three numbers
+    // through batchReviewSettingsFrom(), whose defaults are these.
+    batch_reviews_enabled: "false",
+    batch_review_delay_days: "7",
+    batch_review_reminder_days: "3",
+    batch_review_token_days: "30",
     // §55. The cron reads the switch as `!== "true"` (fails to off) and the cap
     // through `Number(config.get(...) ?? "30")`, so both must match here or the
     // admin page shows a limit the chase is not actually using.

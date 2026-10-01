@@ -12,6 +12,7 @@ import { TodayPanel } from "@/components/dashboard/TodayPanel";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
 import { NewLeadCard } from "@/components/dashboard/NewLeadCard";
+import { BatchReviewCard } from "@/components/dashboard/BatchReviewCard";
 import { NEW_LEAD_CARD_DAYS, buildNewLeadCard, type NewLeadRow } from "@/lib/home/newLeadCard";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { StatCards, type StatCard } from "@/components/home/StatCards";
@@ -163,6 +164,24 @@ export default async function DashboardPage() {
   // Only our own columns are selected above, so there is no uploader id or
   // private profile to strip — but the builder still drops the viewer's own
   // uploads by owner id (§32.8).
+  // §73 — a monthly review sent and not yet answered, while its link still
+  // works. Best effort: an unreadable table hides the card, never the page.
+  const { data: openReviewRows } = await admin
+    .from("lead_batch_reviews")
+    .select("id, lead_type, cycle_start, cycle_end, delivered")
+    .eq("customer_id", customer.id)
+    .not("survey_sent_at", "is", null)
+    .is("submitted_at", null)
+    .gt("token_expires_at", now.toISOString())
+    .order("cycle_end", { ascending: false })
+    .limit(1);
+  const openReview = ((openReviewRows ?? []) as {
+    id: string;
+    lead_type: LeadType;
+    cycle_start: string;
+    cycle_end: string;
+    delivered: number;
+  }[])[0] ?? null;
   const newLeadCard = buildNewLeadCard(
     ((newLeadRows.data ?? []) as unknown as NewLeadRow[]),
     { now, viewerId: customer.id }
@@ -304,6 +323,16 @@ export default async function DashboardPage() {
       </div>
 
       {newLeadCard && <NewLeadCard card={newLeadCard} />}
+
+      {openReview && (
+        <BatchReviewCard
+          reviewId={openReview.id}
+          productLabel={hasGuaranteedRent ? (openReview.lead_type === "guaranteed_rent" ? "Guaranteed Rent" : "Management") : null}
+          cycleStart={openReview.cycle_start}
+          cycleEnd={openReview.cycle_end}
+          delivered={openReview.delivered}
+        />
+      )}
 
       {banner && (
         <AnnouncementBanner

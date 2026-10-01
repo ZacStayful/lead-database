@@ -85,6 +85,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/lapse-past-due` | `0 6 * * *` | Write off a customer whose card has been failing for `past_due_lapse_days` (3): `account_status → cancelled`, board → `Cancelled`. Never calls Stripe (§59) |
 | `/api/cron/monday-lead-sync` | `*/5 * * * *` | Ingest NEW sellable items from both lead boards within minutes of them appearing; only ids not yet in `leads`. The two 09:00 syncs stay as the backstop (§63). Switch `lead_sync_enabled` on `/admin/allocation` |
 | `/api/cron/stayful-conflict-sweep` | `*/15 * * * *` | Withdraw any management lead that matches a landlord in one of the nine pipeline groups on Stayful's own Management Leads board (5891626711), owe each holder a replacement, and fill every open debt from stock (§64). Switch `stayful_conflict_enabled` on `/admin/allocation`; ships off |
+| `/api/cron/batch-reviews` | `40 9 * * *` | The monthly lead-batch review (§73): the shortfall email on reset day, the review email 7 days after a billing month ends, one reminder 3 days later. Reads the snapshot `reset_monthly_counts` captures. Switch `batch_reviews_enabled` on `/admin/allocation`; ships off |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
@@ -19144,3 +19145,242 @@ resolve to exactly one board item, and 9 of 10 agree with the hand-set label.
 **Not yet exercised end to end.** No real cancellation has gone through it.
 After merge, check that the next cancellation lands both cells, and that
 `[monday-cancel]` logs show the second push as `unchanged`.
+
+---
+
+## 73. Asking how each month's leads went *(0160)*
+
+At the end of each customer's billing month we now record what that month
+delivered. A customer who got less than their plan is told on reset day what
+arrived, what is owed and why. A week later every customer with at least one
+lead gets a one-tap review of every lead in the batch. Their answers move each
+lead's pipeline and give us per-lead conversion and quality data by area and
+month.
+
+Measured before it was built (2026-10-01): of about 560 marketplace leads, 406
+had never left `cold`, while 21 were `interested_in_the_future`, 19
+`web_meeting_booked`, 11 `web_meeting_attended` and 6 won. 17 of 23 management
+holders were below their allocation mid-cycle, and 109 management credits sat
+unspent.
+
+Decided with Zac: the review is per lead, prefilled and writes back to the
+pipeline. It goes 7 days after the month, with one reminder and a dashboard card
+until it is answered. A short month gets the figures and the cause. Both
+products are covered, with benchmarks of 5% management and 10% GR. Paused
+customers are excluded. The link works with one tap and no login.
+
+`reset_monthly_counts` → `capture_lead_batch_reviews` · `lead_batch_reviews` /
+`lead_batch_review_items` · `/api/cron/batch-reviews` · `/review/[token]` ·
+`/dashboard/review/[reviewId]` · `src/lib/batchReview/*` ·
+`/admin/lead-feedback`.
+
+### 73.1 — ⚠️ The capture lives inside the reset, and it has to
+
+`leads_received_this_month` is zeroed at 00:05 UTC on the anchor day and nothing
+else stores last month's figure. A cron after 00:05 would read a balance the new
+cycle has already moved: `monday-lead-sync` runs every five minutes overnight
+(§63) and the release cron runs at 07:30. So 0160's `reset_monthly_counts`
+calls `capture_lead_batch_reviews(today)` **first**, before any zeroing.
+
+- ⚠️ **A failed capture never stops the reset.** It runs in its own sub-block
+  with `exception when others then raise warning`. Losing a review costs one
+  email. Losing the reset would leave every customer on that anchor day paced
+  against last month. The suite renames the table away and asserts the counter
+  still zeroes.
+- ⚠️ **Capture is not gated on the switch.** `batch_reviews_enabled` gates
+  SENDING only. Like every snapshot here (§18.2), a missed capture cannot be
+  rebuilt, so months accumulate from the day 0160 is applied.
+- **Idempotent twice over.** The insert is `on conflict (customer_id,
+  lead_type, cycle_end) do nothing`. The suite calls the capture directly as
+  well as through the reset, because the reset's exception handler would
+  swallow a duplicate-key error and hide a missing `on conflict`.
+- **Who.** Management: `is_active`, `holdsProduct`'s columns, not paused
+  (§21), not written off (§59). GR: `gr_subscription_status` and `gr_lapsed_at`
+  only (invariant 6). Day matching uses the same expression as the counter it
+  sits beside.
+- **The window** is `[previous anchor occurrence, reset date)`. It starts no
+  earlier than the last captured `cycle_end`, so a re-anchor (a resume, §21)
+  never double-counts. A lead assigned on the reset date belongs to the next
+  batch.
+- **Items** are the customer's assignments for that product in the window,
+  excluding their own uploads (§30). Pool claims and swap replacements count,
+  because they are leads the customer holds. ⚠️ `assignment_id` is **ON DELETE
+  SET NULL**: a discard, swap or Stayful withdrawal (§64) deletes the
+  assignment, and a cascade would erase the record in the act of acting on it
+  (0139's hazard).
+- **`delivered` is the item count**, the leads the customer can see.
+  `counter_at_reset` is kept for audit only, because reject (0006) and an
+  upheld claim (0137) decrement the counter.
+- **Owed is `balance_at_reset`.** Due next is that plus the next grant
+  (`pending_*` tier if one is set) less pool debit (§19.5). Accepted edge case:
+  a renewal paid before 00:05 UTC on the anchor date would already include the
+  new grant.
+
+### 73.2 — Short months, and naming the cause
+
+A month is short when `delivered < allocation` **and** `balance_at_reset > 0`.
+Under plan with nothing banked means nothing is owed, so no email.
+`shortfallCause()` names one cause, in this order:
+
+| Cause | When |
+|---|---|
+| `hold` | their release hold (§54.3) overlapped the month |
+| `filter` | a filter in force that `planVsFilter` (§69) does not find covering the plan, including one with no stored figure |
+| `supply` | otherwise |
+
+§69 measured that most shortfalls are the customer's own filter, so blaming
+supply would be untrue. ⚠️ **No copy offers or implies a refund** (§28.0, §69).
+What is owed is leads, and they carry forward. A test bans the words. The
+shortfall email has **no opt-out**: it is information about what the customer
+paid for, on the same footing as §44's card-declined email. It is sent only
+within 3 days of the reset and is never sent late.
+
+### 73.3 — The review, and why answers move the pipeline
+
+One row per lead, oldest first. Answers for management: not called yet ·
+couldn't reach · not interested · interested, talking · web meeting booked ·
+meeting held · likely to sign later · signed. GR swaps the two meeting answers
+for viewing booked and contract sent. **Called is derived** from the answer
+(anything but "not called"), so it is never asked twice. "Couldn't reach" and
+"not interested" ask why (optional): never picked up, already with another
+company, no longer letting, wrong details, numbers didn't work, something else.
+Then there is a 1–5 rating and a comment.
+
+- **Prefill** comes from the live pipeline, and only from unambiguous stages. A
+  no-show counts as booked (§20). `cold` is left blank, so the customer has to
+  say whether they rang.
+- **No skipping** (§50.2): every editable row must be answered, enforced by the
+  server as well as the disabled button.
+- ⚠️ **Won, rejected, closed and gone rows are read-only.** A rejected lead is
+  settled (0019, §6A), and the review must not be a second door round the PATCH
+  route's guard. `applyPipelineWrite` repeats the guard in the database
+  (`.neq("status","rejected").is("closed_at", null)`), so a lead rejected after
+  the page loaded is still not moved.
+- **Write-back** (`pipelineChangeFor`): meeting booked → `web_meeting_booked`,
+  held → `web_meeting_attended`, likely later → `interested_in_the_future`,
+  signed → `won` (whose trigger sets status), not interested → `abandoned`.
+  Couldn't reach and talking only mark a `new` lead contacted. GR has no
+  `abandoned` or "later" stage, so those answers are stored and not written
+  back. Every stage move writes `stage_changed` through `recordStageChanged()`
+  in `src/lib/assignmentStage.ts`, now shared with
+  `PATCH /api/customer/assignments/[id]`. ⚠️ So a submitted review counts as
+  engagement exactly as a hand move does (§56.4).
+- **It never refunds or claims.** For "already with another company" or "no
+  longer letting", it links to the existing report flow on the lead page (§51)
+  and never names the allowance.
+
+### 73.4 — The link, and why it is derived rather than random
+
+`/review/[token]` needs no login. The token is
+`base64url(HMAC-SHA256(MESSAGING_TOKEN_SECRET, "batch-review:<id>:<expiry epoch>"))`
+and only its sha256 is stored. It is derived rather than random because the
+**reminder must carry the same link** and only the hash is kept. Rotating the
+token would kill the first email's link, and a sign-in link would lose the
+one-tap property. The expiry goes in as epoch seconds, because Postgres hands
+back `+00:00` where JS wrote `.000Z`. ⚠️ **Without `MESSAGING_TOKEN_SECRET` no
+survey is sent** (fails closed, reported as `no_token_secret`). §41's referral
+link already depends on it.
+
+Both doors, the link and `/dashboard/review/[id]` (session, follows §62 view-as),
+go through `submitReview()`. ⚠️ **Every row is checked against the review's own
+customer**: an item whose assignment is gone or belongs to someone else is shown
+as "no longer in your leads" and can never be written. The token proves which
+batch this is, never anything about another one. §62's middleware already
+refuses both POSTs while an admin is viewing as a customer.
+
+### 73.5 — Results, and the benchmark
+
+After submitting, the page shows the batch's interested / meetings / likely /
+signed figures as counts and rates **over delivered** (an unrung lead is still a
+lead sent). Beside them is the lifetime signed ÷ received against 5% or 10%,
+excluding the customer's own uploads, and the trend across earlier batches.
+⚠️ **The batch rate is never set against the benchmark.** Most deals close after
+the month, so one batch reads low. The lifetime rate is compared instead,
+withheld below 10 leads, and the copy says "benchmark", never a promise.
+
+### 73.6 — Timing
+
+| | When | Claimed by |
+|---|---|---|
+| Shortfall | reset day, within 3 days | `shortfall_email_sent_at` |
+| Review | `cycle_end + batch_review_delay_days` (7), until twice that plus 7 | `survey_sent_at` + `token_hash` + `token_expires_at` |
+| Reminder | `batch_review_reminder_days` (3) after, once, while unexpired | `reminder_sent_at` |
+
+Every send is claimed by a guarded update first and then sent (the
+credit_invoice discipline). A failed send is not retried, because missing is
+better than duplicating (§44.4). The review respects a new opt-out key,
+`monthly_review`, in all four places §21.7 lists. The dashboard card shows while
+a review is sent, unanswered and unexpired, and it **cannot be dismissed**
+(decided). The switch and the three numbers are on `/admin/allocation` (§63.7:
+hand-rendered).
+
+### 73.7 — Admin
+
+`/admin/lead-feedback` (Insights) shows four things:
+- response rate per customer
+- conversion by month and by postcode area against the benchmark
+- why leads went nowhere, by area and month
+- every short month with its cause
+
+Comments are listed too. ⚠️ **Conversion counts answered batches only.** An
+unanswered batch says something about the customer, not the leads, and it shows
+in the response rate instead. Items are read in pages, because PostgREST caps
+responses at 1,000 rows. `/admin/customers/[id]` gains a "Monthly lead reviews"
+card. All arithmetic is in `src/lib/batchReview/adminStats.ts`, which is pure
+and tested.
+
+### Verification
+
+All 160 migrations to a scratch Postgres 16 from empty, all 21 SQL suites green,
+including `0160_lead_batch_reviews_test.sql`. That suite covers who is captured
+and who is not, the figures as they stood before the reset, the window
+exclusions, the GR-only customer captured from `gr_` columns only, three
+same-day runs plus a direct call inserting nothing, a deleted assignment
+keeping its item, a failed capture still resetting, the CHECKs, and the ACLs.
+
+⚠️ **Eleven SQL mutations run, all caught:**
+- paused, archived or lapsed customers included
+- the owned-lead exclusion dropped
+- the window including today
+- items cascading
+- GR reading `account_status`
+- the capture moved after the zeroing
+- the exception handler removed
+- `on conflict` removed
+
+The last one **survived the first pass**. The reset's exception handler
+swallowed the duplicate key, and the fix was calling the capture directly
+(§50.9's shape again).
+
+63 vitest cases in `src/lib/batchReview/__tests__/`. `tsc` clean.
+
+**Not exercised against a real cycle or in a browser.** Nothing is captured
+until the first anchor day after 0160 is applied, and nothing is sent until the
+switch is on. A Vercel preview cannot test any of it (§45), and a preview writes
+to production Supabase (§1.1).
+
+### Deployment order — migration BEFORE code
+
+0160 must be applied to production before the merge. It is additive, but **not
+inert**: from the next 00:05 UTC it records a row per holder on that anchor day.
+That is the point, and nothing is sent while `batch_reviews_enabled` is off.
+Code arriving first would select tables that do not exist on the dashboard home
+(the card read fails quietly) and on the admin page (shows unavailable).
+Applied the other way round, the reset still runs, because the capture is only
+called by the replaced function.
+
+Switch-on: wait for one capture, check its figures by hand against
+`lead_assignments`, run `GET /api/cron/batch-reviews?dryRun=true`, then flip the
+switch. Confirm `MESSAGING_TOKEN_SECRET` is set in Vercel production.
+
+### Deferred
+
+- **Reviews are read 1,000 at a time on the admin page** (about 40 months at
+  today's book). Page them when that bites.
+- **A per-lead "how good was this lead" rating.** Today the rating is per batch.
+- **Feeding the answers into routing or quality** (§51.9's
+  `quality_flag`-into-retirement question, now with more evidence).
+- **The 5% figure itself** is still measured outside this database (§51.11).
+  This is the first source that could replace it, once enough batches are
+  answered.
+
