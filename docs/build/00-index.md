@@ -1,0 +1,89 @@
+# Build index: Lead Brief and self-serve funnel
+
+Source of truth for decisions: `claude/decision-register.md`. Every prompt below is written from its LOCKED items only. If a decision changes, update the register first, then the affected prompt, then this index.
+
+> **Where these files live.** `claude/decision-register.md` and `claude/build/0N-*.md` are paths in the **Claude project**, not in this repo. `docs/build/` is the repo copy: every batch reads it at the start and commits its own prompt file here. This file is the index, committed on 2026-10-08 with the corrections marked **Corrected** below. They come from checking the index against the codebase, not from the decision register.
+
+## Run order — parallel waves
+
+| Wave | Run together | Why they don't collide |
+|---|---|---|
+| 1 | **01** (same session as the Lead Brief prompt) + **03 Part B steps 1 and message drafts** (Claude chat) | 03 Part B is Monday labels and message wording only, no code |
+| 2 | **02** + **04** in separate Claude Code sessions, plus the **06 Phase 0 audit** (report only) | 02 = funnel, checkout, Stripe webhook. 04 = pause, confirm screen, engine committed demand. **Corrected: they DO share one file** — see "02 and 04 share the Stripe webhook" below |
+| 3 | **03 Part A** + **05** + **06 build** | 03A = Monday sync and route report. 05 = address queue. 06 = held-lead predicate. Different files, but run the function-overlap check in the merge rule: git cannot see two migrations rewriting the same function |
+| 4 | **07** | Needs live brief data |
+
+**Never run together:**
+- **01 with anything that touches code.** Every batch depends on it.
+- **04 and 06 builds.** Both touch which leads a customer is eligible for. 06 builds after 04 merges.
+- **02 and 03 Part A.** 03A writes to `funnel_sessions`, which 02 creates.
+- **04 and 05.** 05 needs 04's confirm screen.
+
+### 02 and 04 share the Stripe webhook *(Corrected)*
+
+`src/app/api/webhook/stripe/route.ts` (1,737 lines) handles both batches' areas:
+
+| Area | Approx. lines | Batch |
+|---|---|---|
+| Pause resume-detection block in `customer.subscription.*` (CLAUDE.md §21) | ~800–860 | 04 (pause) |
+| `invoice.paid`, both products | ~915–1400 | 02 (checkout) |
+| `checkout.session.completed`, including top-up success via `record_lead_topup_success` | ~1635–1720 | 02 (checkout) **and** 04 (top-ups) |
+
+Rules for running them in parallel:
+- Each batch changes only its own branches of the file and does not restructure shared code.
+- Whichever merges second rebases and re-runs the full `npx vitest run`. That includes the two guards that read this file: `src/lib/__tests__/lapsePastDueGuard.test.ts` and `src/lib/__tests__/mondayCancel.test.ts`.
+- Remember CLAUDE.md §23.6: **nothing may throw out of the webhook**.
+
+### Parallel merge rule (applies to every batch running alongside another)
+
+1. Before merging, rebase on main.
+2. Renumber this batch's new migrations to the next free number after main's latest. Never edit a migration that is already merged. **Corrected, renumbering also means updating:**
+   - the matching `supabase/tests/0NNN_*_test.sql` filename;
+   - every test that reads the migration by path. 17 test files do this today; find them with `grep -rn "supabase/migrations/0NNN" src`;
+   - every CLAUDE.md reference to the old number.
+3. **Corrected: apply the migration to production only AFTER this rebase and renumber**, just before merging. Never at PR-open while another batch is running in parallel. Renumbering a migration that is already applied leaves the file name and production's ledger (`supabase_migrations.schema_migrations`) disagreeing, which is the trap CLAUDE.md §43 records for 0130. §1.1's rule still holds — the migration goes on before the merge — this only pins *when* before.
+4. **Corrected: check for function overlap.** List every function each batch's migrations create or replace (`create or replace function public.<name>`) and stop on any name both batches touch. Git shows no conflict, because the two files have different names, yet whichever sorts later silently replaces the other's function body. CLAUDE.md §34/§35 and §63.3 record the related overload trap: adding a defaulted parameter creates a second function instead of replacing the first.
+5. Resolve CLAUDE.md conflicts by keeping both sections. **Corrected:** also renumber this batch's own `## N.` section to the next free number after main's latest, and fix its internal § cross-references. Two parallel batches will otherwise both write the same section number. This has happened before: §40 was first written as §28.
+6. **Corrected:** run `npm run gen:context` after rebasing and commit the result. `scripts/generate-section-index.mjs` reads both the CLAUDE.md headings and the `supabase/migrations/` directory, and `src/lib/feedback/__tests__/sectionIndex.test.ts` fails the build if `src/lib/feedback/sectionIndex.ts` is stale.
+7. Re-run that batch's verification on the rebased branch before merging: `npx tsc --noEmit`, `npm run lint`, `npx vitest run`, `npm run build`, and its SQL suites.
+
+| # | File | Where it runs | Depends on | Wave | Status |
+|---|---|---|---|---|---|
+| — | `claude/lead-brief-build-prompt.md` | Claude Code (already pasted 5 Oct) | — | 1 | In progress (no branch pushed as of 8 Oct) |
+| 01 | `claude/build/01-lead-brief-additions.md` | **Same** Claude Code session as the Lead Brief prompt | Lead Brief prompt | 1 | Not started |
+| 02 | `claude/build/02-funnel-and-checkout.md` | New Claude Code session | 01 merged | 2 | Not started |
+| 03 | `claude/build/03-enquiry-workflow.md` | Part A: Claude Code. Part B: Claude chat | A: 02 merged. B: none for labels and drafts; the live n8n edits need 02 deployed | A: 3, B: 1 | Not started |
+| 04 | `claude/build/04-area-changes-pause-topups.md` | New Claude Code session | 01 merged | 2 | Not started |
+| 05 | `claude/build/05-address-change-guard.md` | New Claude Code session | 04 merged | 3 | Not started |
+| 06 | `claude/build/06-lead-data-completeness.md` | New Claude Code session | Audit: 01 merged. Build: 04 merged and Zac's scope choice | Audit: 2, build: 3 | Not started |
+| 07 | `claude/build/07-feed-learning-and-source-reporting.md` | New Claude Code session | 01 merged and live with data | 4 | Not started |
+
+## How to use
+
+1. Paste **01** into the Claude Code session that has the Lead Brief prompt. Let Phase 0 run with the extra checks.
+2. Run each later batch in a fresh Claude Code session, only after the batch it depends on is merged to main.
+3. Every batch starts by reading `docs/build/` in the repo and committing its own file there. The repo keeps the same history as the Claude project.
+4. Every batch has a Phase 0 audit and STOP gates. Nothing merges without a Vercel preview review. A preview runs against **production** Supabase (CLAUDE.md §1.1), and Deployment Protection answers 302 to `vercel.com/sso-api` on previews (§45), so anything needing a signed-in session is checked on `leads.stayful.co.uk` after merge.
+5. When a batch merges, update its status here.
+
+## Decisions Zac still makes inside the batches
+
+These questions are raised at a batch's Phase 0, not before.
+
+- **01 A12, check 2:** how "Not for me" interacts with the 15% replacement. No replacement copy appears in the funnel until this is decided.
+- **01 A11:** how behind-pace widening is implemented. It stops if it would need a change to `assign_lead_to_customer`.
+- ~~**04:** whether a top-up purchase flow exists. If it doesn't, building one needs approval.~~ **Answered: it exists** (CLAUDE.md §31.5, §66.3, §69.4):
+  - `src/app/dashboard/topup/` with `src/app/api/customer/topup/route.ts`
+  - the emailed link `src/app/topup/[token]/` with `src/app/api/topup/[token]/route.ts`
+  - the Stripe logic in `src/lib/topupCharge.ts` and `src/lib/chargeIntent.ts`
+  - credit is granted by `record_lead_topup_success`, called from the Stripe webhook — the same file 02 changes (see above)
+
+  04 builds on this flow rather than adding a second one.
+- **06:** whether incomplete leads are held for brief customers only, or for everyone.
+
+## Outside the code
+
+- **Make the lead-database repo private.** **Corrected:** confirmed **public** on 2026-10-06 and again on 2026-10-08 (GitHub `"visibility": "public"`). CLAUDE.md names customers, so this matters beyond the build docs. Zac is switching it to private (GitHub → Settings → Danger Zone) on 2026-10-09. This file was committed the day before, while the repo was still public. Once it's private, check two things:
+  - Vercel still deploys from the repo (the team is on Pro, which supports private repos);
+  - GitHub Actions CI (`.github/workflows/ci.yml`) now draws on private-repo minutes.
+- Batch 03 Part B: every WhatsApp and email message is drafted for Zac's approval before it goes live.
