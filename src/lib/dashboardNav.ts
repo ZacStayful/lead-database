@@ -317,7 +317,10 @@ export function isColumnsPath(pathname: string): boolean {
   const p = pathname.split("?")[0].replace(/\/$/, "");
   if (/^\/dashboard\/conversations(\/[^/]+)?$/.test(p) && !p.endsWith("/snippets")) return true;
   if (/^\/dashboard\/leads\/[^/]+$/.test(p)) {
-    return !["priority", "add", "expired"].includes(p.split("/").pop() ?? "");
+    // ⚠️ Every static page under /dashboard/leads must be listed, or it is
+    // laid out as a lead's three-column workspace. "brief" is the Lead Brief
+    // editor (Phase 5).
+    return !["priority", "add", "expired", "brief"].includes(p.split("/").pop() ?? "");
   }
   return false;
 }

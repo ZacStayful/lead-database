@@ -74,6 +74,19 @@ export const ROUTES: RouteEntry[] = [
     section: 4,
   },
   {
+    path: "/dashboard/leads/brief",
+    purpose:
+      "A Lead Brief customer's 'Your brief': their area, essentials and ranked priorities. Priorities apply to the next leads; an area change starts at the next renewal.",
+    files: [
+      "src/app/dashboard/leads/brief/page.tsx",
+      "src/components/leadBrief/BriefPrioritiesEditor.tsx",
+      "src/components/leadBrief/BriefAreaEditor.tsx",
+      "src/app/api/customer/lead-brief/edit/route.ts",
+      "src/lib/leadBrief/editBrief.ts",
+    ],
+    section: 4,
+  },
+  {
     path: "/dashboard/leads/[id]",
     purpose:
       "One lead: contact details, income analysis, notes, pipeline stage, and the one outcome panel that ends it.",

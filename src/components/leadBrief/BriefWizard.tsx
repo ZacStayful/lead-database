@@ -3,13 +3,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { BriefPreviewView } from "@/components/leadBrief/BriefPreviewView";
+import { WhereStep } from "@/components/leadBrief/steps/WhereStep";
+import { TravelStep, type Travel } from "@/components/leadBrief/steps/TravelStep";
+import { EssentialsStep } from "@/components/leadBrief/steps/EssentialsStep";
 import {
-  BRIEF_BEDROOM_OPTIONS,
   BRIEF_COPY,
-  BRIEF_GROSS_OPTIONS,
   ISSUE_QUESTION,
   PREVIEW_COPY,
   SWITCH_COPY,
@@ -32,7 +31,6 @@ import type { ClientBriefPreview } from "@/lib/leadBrief/preview";
  */
 
 type Step = 1 | 2 | 3 | "preview";
-type Travel = 10 | 25 | 50 | null;
 type Issue = { code: string; value?: string; outcode?: string };
 
 export interface BriefWizardProps {
@@ -237,52 +235,13 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
 
         {n === 1 && (
           <div className="space-y-4">
-            <div className="space-y-1">
-              <h2 className="font-medium text-ink">{BRIEF_COPY.q1.title}</h2>
-              <p className="text-sm text-ink-2">{BRIEF_COPY.q1.help}</p>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="brief-postcode">{BRIEF_COPY.q1.postcodeLabel}</Label>
-              <Input
-                id="brief-postcode"
-                value={postcode}
-                autoComplete="postal-code"
-                placeholder={BRIEF_COPY.q1.postcodePlaceholder}
-                onChange={(e) => setPostcode(e.target.value)}
-              />
-            </div>
-            {areas.map((a, i) => (
-              <div key={i} className="flex items-end gap-2">
-                <div className="flex-1 space-y-1">
-                  <Label htmlFor={`brief-area-${i}`}>{BRIEF_COPY.q1.addArea}</Label>
-                  <Input
-                    id={`brief-area-${i}`}
-                    value={a}
-                    placeholder={BRIEF_COPY.q1.areaPlaceholder}
-                    onChange={(e) =>
-                      setAreas(areas.map((x, j) => (j === i ? e.target.value : x)))
-                    }
-                  />
-                </div>
-                <Button
-                  variant="ghost"
-                  onClick={() => setAreas(areas.flatMap((x, j) => (j === i ? [] : [x])))}
-                >
-                  {BRIEF_COPY.q1.removeArea}
-                </Button>
-              </div>
-            ))}
-            <div className="space-y-1">
-              <Button variant="outline" onClick={() => setAreas([...areas, ""])} disabled={areas.length >= 10}>
-                {BRIEF_COPY.q1.addArea}
-              </Button>
-              <p className="text-xs text-ink-2">{BRIEF_COPY.q1.addAreaHelp}</p>
-            </div>
-            {issuesFor(1).map((m) => (
-              <p key={m} className="text-sm text-alert">
-                {m}
-              </p>
-            ))}
+            <WhereStep
+              postcode={postcode}
+              onPostcode={setPostcode}
+              areas={areas}
+              onAreas={setAreas}
+              issues={issuesFor(1)}
+            />
             <div className="flex gap-2">
               <Button onClick={() => setStep(2)} disabled={postcode.trim() === ""}>
                 {BRIEF_COPY.next}
@@ -293,33 +252,7 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
 
         {n === 2 && (
           <div className="space-y-4">
-            <div className="space-y-1">
-              <h2 className="font-medium text-ink">{BRIEF_COPY.q2.title}</h2>
-              <p className="text-sm text-ink-2">{BRIEF_COPY.q2.help}</p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {BRIEF_COPY.q2.options.map((o) => (
-                <button
-                  key={String(o.value)}
-                  type="button"
-                  onClick={() => setTravel(o.value)}
-                  className={
-                    travel === o.value
-                      ? "rounded-md border border-brand bg-brand-light px-3 py-3 text-left text-sm font-medium text-brand-dark"
-                      : "rounded-md border border-line px-3 py-3 text-left text-sm hover:border-brand"
-                  }
-                  aria-pressed={travel === o.value}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            {travel === null && <p className="text-xs text-ink-2">{BRIEF_COPY.q2.anywhereNote}</p>}
-            {issuesFor(2).map((m) => (
-              <p key={m} className="text-sm text-alert">
-                {m}
-              </p>
-            ))}
+            <TravelStep travel={travel} onTravel={setTravel} issues={issuesFor(2)} />
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setStep(1)}>
                 {BRIEF_COPY.back}
@@ -333,49 +266,13 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
 
         {n === 3 && (
           <div className="space-y-4">
-            <div className="space-y-1">
-              <h2 className="font-medium text-ink">{BRIEF_COPY.q3.title}</h2>
-              <p className="text-sm text-ink-2">{BRIEF_COPY.q3.help}</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label htmlFor="brief-beds">{BRIEF_COPY.q3.bedroomsLabel}</Label>
-                <select
-                  id="brief-beds"
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={beds === null ? "" : String(beds)}
-                  onChange={(e) => setBeds(e.target.value === "" ? null : Number(e.target.value))}
-                >
-                  <option value="">{BRIEF_COPY.q3.anyLabel}</option>
-                  {BRIEF_BEDROOM_OPTIONS.map((b) => (
-                    <option key={b} value={b}>
-                      {BRIEF_COPY.q3.bedroomsOption(b)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="brief-gross">{BRIEF_COPY.q3.revenueLabel}</Label>
-                <select
-                  id="brief-gross"
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={gross === null ? "" : String(gross)}
-                  onChange={(e) => setGross(e.target.value === "" ? null : Number(e.target.value))}
-                >
-                  <option value="">{BRIEF_COPY.q3.anyLabel}</option>
-                  {BRIEF_GROSS_OPTIONS.map((g) => (
-                    <option key={g} value={g}>
-                      {BRIEF_COPY.q3.revenueOption(g)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            {issuesFor(3).map((m) => (
-              <p key={m} className="text-sm text-alert">
-                {m}
-              </p>
-            ))}
+            <EssentialsStep
+              beds={beds}
+              onBeds={setBeds}
+              gross={gross}
+              onGross={setGross}
+              issues={issuesFor(3)}
+            />
             {errorBlock}
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="ghost" onClick={() => setStep(2)} disabled={busy !== null}>

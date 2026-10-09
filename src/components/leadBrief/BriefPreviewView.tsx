@@ -28,6 +28,10 @@ import type { ClientBriefPreview } from "@/lib/leadBrief/preview";
  *
  * The trade-offs and the bottleneck are shown exactly as the engine returns
  * them (A6, A7). The customer can always confirm (A3).
+ *
+ * `allowSwitch` (default true) offers "Switch to 10 leads a month". The "Your
+ * brief" editor (Phase 5) passes false: a plan change there belongs on the
+ * Packages page, and the area being previewed starts at the next renewal.
  */
 
 const LABEL_ORDER: LabelKey[] = ["top_match", "strong_match", "first_pick", "nearby_opportunity"];
@@ -41,6 +45,7 @@ export interface BriefPreviewViewProps {
   switched: boolean;
   switchOpen: boolean;
   busy: boolean;
+  allowSwitch?: boolean;
   onToggleArea: (area: string) => void;
   onWiden: () => void;
   onOpenSwitch: () => void;
@@ -58,7 +63,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function BriefPreviewView(props: BriefPreviewViewProps) {
-  const { preview: p } = props;
+  const { preview: p, allowSwitch = true } = props;
   const coverage = [...p.coverage].sort((a, b) => b.plan - a.plan);
   const otherAreas = p.priorityAreas.length - 1;
   const outside = outsideCapLine(p.priorityOutsideCap);
@@ -111,7 +116,7 @@ export function BriefPreviewView(props: BriefPreviewViewProps) {
                   {PREVIEW_COPY.widen}
                 </Button>
               )}
-              {p.bottleneck.canSwitchToSmallerPlan && !props.switched && (
+              {p.bottleneck.canSwitchToSmallerPlan && allowSwitch && !props.switched && (
                 <Button variant="outline" onClick={props.onOpenSwitch} disabled={props.busy}>
                   {PREVIEW_COPY.switchTo10}
                 </Button>
@@ -122,7 +127,7 @@ export function BriefPreviewView(props: BriefPreviewViewProps) {
                 </a>
               </Button>
             </div>
-            {props.switchOpen && (
+            {allowSwitch && props.switchOpen && (
               <div className="space-y-3 rounded-md border border-line bg-rail p-3">
                 <p>{switchExplainer(props.renewalIso)}</p>
                 <div className="flex flex-wrap gap-2">

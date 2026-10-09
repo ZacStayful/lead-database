@@ -131,12 +131,19 @@ describe("the plan comes from the row (switch to 10, approved 9 Oct)", () => {
   });
 
   it("no brief file calls Stripe itself", () => {
+    // Walks the component folder recursively: the Q1–Q3 step components
+    // (Phase 5) live in a subfolder.
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]
+      );
     const files = [
       ...readdirSync("src/lib/leadBrief").flatMap((f) => (f.endsWith(".ts") ? [join("src/lib/leadBrief", f)] : [])),
-      ...readdirSync("src/components/leadBrief").map((f) => join("src/components/leadBrief", f)),
-      "src/app/api/customer/lead-brief/route.ts",
-      "src/app/api/customer/lead-brief/preview/route.ts",
+      ...walk("src/components/leadBrief"),
+      ...walk("src/app/api/customer/lead-brief"),
+      "src/app/api/cron/activate-lead-briefs/route.ts",
       "src/app/onboarding/brief/page.tsx",
+      "src/app/dashboard/leads/brief/page.tsx",
     ];
     for (const f of files) {
       expect(code(f), f).not.toMatch(/getStripe|from "stripe"|subscriptions\.update/);
