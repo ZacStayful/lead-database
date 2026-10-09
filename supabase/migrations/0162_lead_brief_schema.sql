@@ -221,8 +221,9 @@ create table if not exists public.customer_lead_briefs (
   -- The threshold for each essential. Each is set exactly when its essential
   -- is chosen. min_gross uses the GROSS_THRESHOLDS list from §68
   -- (src/lib/filterPrediction.ts), the same list customers.filter_min_gross
-  -- is checked against (0158).
-  min_bedrooms          integer check (min_bedrooms between 1 and 10),
+  -- is checked against (0158). A bedroom minimum is never above 5:
+  -- MAX_MIN_BEDROOMS in src/lib/leadBrief/plans.ts, pinned by a test.
+  min_bedrooms          integer check (min_bedrooms between 1 and 5),
   min_gross             integer
                           check (min_gross in (25000, 30000, 40000, 50000, 75000)),
   -- "Add another area" (A8 Q1): extra outcodes the customer works.

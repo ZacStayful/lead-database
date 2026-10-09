@@ -422,6 +422,10 @@ select test_util.refused('{"essentials":"''{revenue}''::text[]","min_gross":"450
   '⚠️ a revenue threshold off the GROSS_THRESHOLDS list is refused');
 select test_util.refused('{"essentials":"''{bedrooms}''::text[]","min_bedrooms":"0"}',
   'zero bedrooms is not a minimum');
+select test_util.accepted('{"essentials":"''{bedrooms}''::text[]","min_bedrooms":"5"}',
+  'a 5-bedroom minimum is the highest allowed');
+select test_util.refused('{"essentials":"''{bedrooms}''::text[]","min_bedrooms":"6"}',
+  '⚠️ a bedroom minimum above 5 is refused');
 select test_util.refused('{"essentials":"''{bedrooms,bedrooms}''::text[]","min_bedrooms":"3"}',
   'an essential at most once');
 select test_util.refused('{"essentials":"''{location}''::text[]"}',
