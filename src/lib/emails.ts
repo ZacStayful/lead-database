@@ -1604,6 +1604,99 @@ export async function sendCardDeclinedEmail(params: {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * The guarded checkout's two notes to Zac (batch 02 Phase 4)
+ * ------------------------------------------------------------------ */
+
+function adminRow(k: string, v: string): string {
+  return `<tr><td style="padding:6px 0;color:#6b706a;font-size:13px;width:170px;vertical-align:top">${k}</td><td style="padding:6px 0;font-size:14px">${v}</td></tr>`;
+}
+
+/**
+ * Somebody started a checkout whose phone matches an existing Management
+ * customer under a different name (decision C5). The checkout went ahead:
+ * phone alone never merges two people (§57.3), so this is a note for a person
+ * to read, not a refusal.
+ */
+export async function sendPossibleDuplicateCustomerEmail(params: {
+  name: string;
+  email: string;
+  phone: string | null;
+  source: string;
+  matches: { id: string; email: string; name: string | null }[];
+}): Promise<{ id: string | null; error: unknown }> {
+  const list = params.matches
+    .map((m) => `<li>${esc(m.name ?? "(no name)")} · ${esc(m.email)} · <a href="${APP_URL}/admin/customers/${m.id}">open</a></li>`)
+    .join("");
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Possible duplicate at checkout</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">A checkout was started with a phone number that an existing Management customer already has, under a different name. The checkout went ahead.</p>
+    <table style="width:100%;border-collapse:collapse">
+      ${adminRow("Name given", esc(params.name))}
+      ${adminRow("Email given", esc(params.email))}
+      ${adminRow("Phone", esc(params.phone ?? ""))}
+      ${adminRow("Route", esc(params.source))}
+    </table>
+    <h2 style="margin:20px 0 6px;font-size:14px">Customers on that number</h2>
+    <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.6">${list}</ul>
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to: supportTo(),
+      subject: `[Checkout] Possible duplicate — ${params.name}`,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * The webhook backstop found a second Management subscription for one person
+ * and cancelled the newer one (decision C3). Both ids are in the email, and
+ * each step says whether it worked, so anything left to do by hand is named.
+ */
+export async function sendDuplicateSubscriptionEmail(params: {
+  duplicateSubscriptionId: string;
+  keptSubscriptionId: string;
+  stripeCustomerId: string;
+  email: string | null;
+  detectedFrom: string;
+  cancelled: string;
+  refund: string;
+  error: string | null;
+}): Promise<{ id: string | null; error: unknown }> {
+  const dash = (id: string, kind: "subscriptions" | "customers") =>
+    `<a href="https://dashboard.stripe.com/${kind}/${encodeURIComponent(id)}">${esc(id)}</a>`;
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Second Management subscription cancelled</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">The same person ended up with two Management subscriptions. The newer one has been cancelled and its first payment refunded, so they are charged once.</p>
+    <table style="width:100%;border-collapse:collapse">
+      ${adminRow("Cancelled (the newer)", dash(params.duplicateSubscriptionId, "subscriptions"))}
+      ${adminRow("Kept (the older)", dash(params.keptSubscriptionId, "subscriptions"))}
+      ${adminRow("Stripe customer", dash(params.stripeCustomerId, "customers"))}
+      ${adminRow("Email", esc(params.email ?? "(unknown)"))}
+      ${adminRow("Noticed on", esc(params.detectedFrom))}
+      ${adminRow("Cancellation", esc(params.cancelled))}
+      ${adminRow("Refund", esc(params.refund))}
+      ${params.error ? adminRow("Needs a look", esc(params.error)) : ""}
+    </table>
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to: supportTo(),
+      subject: `[Checkout] Duplicate subscription cancelled — ${params.email ?? params.stripeCustomerId}`,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /**
  * A dead-lead claim that needs a person to read it (§51).
  *
@@ -1920,3 +2013,4 @@ export async function sendBatchReviewEmail(params: {
     return { id: null, error };
   }
 }
+

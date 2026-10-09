@@ -7,9 +7,9 @@ import { isAdminUser } from "@/lib/auth";
 import { requireEnv } from "@/lib/env";
 import {
   OFFER_TTL_MS,
-  computeCheckoutUrls,
   type PostCallOffer,
 } from "@/lib/postCallOffers";
+import { computeCheckoutUrls, payTokenSecret } from "@/lib/checkout/payToken";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ function randomCode(): string {
 /**
  * Create a single-use, 24h-expiring Promotion Code wrapping the post-call
  * coupon. NOT restricted to any price/product, so it works on either Management
- * Payment Link unmodified. Retries a couple of times if Stripe reports the
+ * plan's checkout unmodified. Retries a couple of times if Stripe reports the
  * random code already exists.
  */
 async function createPromoCode(
@@ -123,12 +123,13 @@ export async function POST(request: NextRequest) {
   }
 
   // Fail fast on missing link config before touching Stripe, so we never mint a
-  // promo code we can't build URLs for.
-  try {
-    computeCheckoutUrls("probe");
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Configuration error";
-    return NextResponse.json({ error: message }, { status: 500 });
+  // promo code we can't build URLs for. The links are /pay/[offerToken]
+  // (batch 02 Phase 4), which need MESSAGING_TOKEN_SECRET to sign.
+  if (!payTokenSecret()) {
+    return NextResponse.json(
+      { error: "Cannot build payment links: MESSAGING_TOKEN_SECRET is not set." },
+      { status: 500 }
+    );
   }
 
   const admin = createAdminClient();
@@ -149,7 +150,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       status: "existing",
       promo_code_string: existing.promo_code_string,
-      ...computeCheckoutUrls(existing.promo_code_string),
+      ...computeCheckoutUrls(existing.id),
     });
   }
 
@@ -185,6 +186,8 @@ export async function POST(request: NextRequest) {
   };
 
   let dbError: { code?: string; message?: string } | null = null;
+  // The row's id signs its /pay links, so the insert reads it back.
+  let offerId: string | null = existing?.id ?? null;
   if (existing) {
     // Expired-unused row → reuse it in place so we never hold two unredeemed
     // rows for one email (and the unique index never conflicts).
@@ -194,8 +197,13 @@ export async function POST(request: NextRequest) {
       .eq("id", existing.id);
     dbError = error;
   } else {
-    const { error } = await admin.from("post_call_offers").insert(rowValues);
+    const { data: inserted, error } = await admin
+      .from("post_call_offers")
+      .insert(rowValues)
+      .select("id")
+      .maybeSingle<{ id: string }>();
     dbError = error;
+    offerId = inserted?.id ?? null;
   }
 
   if (dbError && !existing && dbError.code === "23505") {
@@ -217,12 +225,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         status: "existing",
         promo_code_string: winner.promo_code_string,
-        ...computeCheckoutUrls(winner.promo_code_string),
+        ...computeCheckoutUrls(winner.id),
       });
     }
   }
 
-  if (dbError) {
+  if (dbError || !offerId) {
     // Stripe succeeded but the DB write failed: the promo code is now orphaned
     // in Stripe. Surface its id for manual reconciliation — we deliberately do
     // NOT auto-rollback the Stripe side.
@@ -244,6 +252,6 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     status: "created",
     promo_code_string: promo.code,
-    ...computeCheckoutUrls(promo.code),
+    ...computeCheckoutUrls(offerId),
   });
 }

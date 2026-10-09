@@ -78,8 +78,13 @@ export const FUNNEL_COPY = {
     `Your code ${code} takes 10% off your first month. It expires at ${until}.`,
   continueToPayment: "Continue to payment",
   startingPayment: "Opening payment",
+  /** The checkout refused because brief routing is off (02 Phase 4). */
   paymentNotReady:
     "Payment isn't open on this page yet. Book a call and we'll get you set up.",
+  paymentFailed: "We couldn't open payment just now. Please try again in a minute, or book a call.",
+  /** On /login?notice=payment_received, where Stripe sends a payer (02 Phase 4). */
+  paymentReceived:
+    "Payment received, thank you. Log in below. If you haven't set a password yet, check your email for a link to do it.",
   noPreviewYet: "See your preview first, so each plan can show its area.",
 
   // --- errors -----------------------------------------------------------------

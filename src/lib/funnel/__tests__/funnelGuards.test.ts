@@ -253,8 +253,14 @@ describe("the funnel screens", () => {
     expect(FLOW).toContain("anywayLine={FUNNEL_COPY.previewAnyway}");
   });
 
-  it("a 404 from checkout (not built until Phase 4) never ends the journey", () => {
-    expect(FLOW).toContain("if (res.status !== 404 && handleTerminal(res.status, data)) return;");
+  it("treats the checkout's answers like every other route's, and names each refusal", () => {
+    // Phase 4 built the route, so its 404 means an unknown link again.
+    expect(FLOW).not.toContain("res.status !== 404");
+    const pay = FLOW.slice(FLOW.indexOf("async function startPayment"), FLOW.indexOf("function choosePlan"));
+    expect(pay).toContain("if (handleTerminal(res.status, data)) return;");
+    expect(pay).toContain('data.code === "payment_not_open"');
+    expect(pay).toContain("FUNNEL_COPY.paymentNotReady");
+    expect(pay).toContain("FUNNEL_COPY.paymentFailed");
   });
 });
 

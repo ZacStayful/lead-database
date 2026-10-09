@@ -48,6 +48,18 @@ export function alreadySetUpLoginUrl(): string {
   return `${APP_URL}${ALREADY_SET_UP_LOGIN_PATH}`;
 }
 
+/**
+ * Where Stripe sends somebody after paying through the guarded checkout (02
+ * Phase 4), from either route. Activation is the webhook's job and may land a
+ * few seconds later, so the page says what happens next rather than
+ * assuming they can already sign in.
+ */
+export const PAYMENT_RECEIVED_LOGIN_PATH = "/login?notice=payment_received";
+
+export function paymentReceivedLoginUrl(): string {
+  return `${APP_URL}${PAYMENT_RECEIVED_LOGIN_PATH}`;
+}
+
 /* ------------------------------------------------------------------ *
  * The "Send to my partner" link (02 Phase 3)
  * ------------------------------------------------------------------ */

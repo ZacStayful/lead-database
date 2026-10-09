@@ -76,16 +76,20 @@ one-time Stripe configuration — the app never creates these itself:
    name `Post-call 10%`. Copy its id into `STRIPE_POST_CALL_COUPON_ID`. The coupon
    may apply to both Management products, but must **not** be single-redemption at
    the coupon level (`max_redemptions` is enforced per promotion **code**, so one
-   coupon backs many prospects) and must work on either Management Payment Link —
-   one code, either link.
-2. **Enable "Allow promotion codes"** on **both** existing Management Payment
-   Links (Stripe dashboard, or
-   `payment_links.update(id, { allow_promotion_codes: true })`):
-   - 10 leads / £150 — `https://buy.stripe.com/5kQdR8bzM6Ha5fh48P4Ja01`
-   - 20 leads / £300 — `https://buy.stripe.com/eVq14m8nA4z29vx20H4Ja00`
-3. **Store both link base URLs** in `STRIPE_MANAGEMENT_10_PAYMENT_LINK_URL` and
-   `STRIPE_MANAGEMENT_20_PAYMENT_LINK_URL`. The offer route appends
-   `?prefilled_promo_code=<code>` to whichever link the caller sends.
+   coupon backs many prospects) and must not be restricted to one price — one
+   code, either plan.
+2. **Set `MESSAGING_TOKEN_SECRET`.** Since batch 02 Phase 4 the offer's links are
+   `/pay/<offer token>?plan=10|20`, signed with that secret. They go through the
+   guarded checkout (`src/lib/checkout/startManagementCheckout.ts`), which
+   refuses an existing customer, reuses an open checkout rather than opening a
+   second, and applies the code server-side.
+
+The two raw Stripe Payment Links (`STRIPE_MANAGEMENT_10_PAYMENT_LINK_URL` /
+`_20_`) are **no longer read by the app**. Leave the env vars and the Payment
+Link objects in Stripe as they are: anything outside the app still pointing at
+them (an n8n workflow, a saved email template) keeps working, and a second
+Management subscription paid through one is caught by the Stripe webhook's
+duplicate backstop (`src/lib/checkout/duplicateSubscription.ts`).
 
 The app generates one Promotion Code per prospect (wrapping the coupon,
 `max_redemptions: 1`, `expires_at` = +24h) via `POST /api/admin/post-call-offer`,
