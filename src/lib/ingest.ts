@@ -16,6 +16,11 @@ import {
   fulfilOwedReplacementsForLead,
 } from "@/lib/owedReplacements";
 import { enrolOnAssignment } from "@/lib/messaging/sequences";
+import {
+  briefRoutingEnabled,
+  fetchRankedBriefCandidates,
+  recordBriefMatch,
+} from "@/lib/leadBrief/routing";
 import { sendLandlordReferral } from "@/lib/landlordReferralSend";
 import {
   assessLeadQuality,
@@ -166,11 +171,17 @@ function buildGuaranteedRentInsert(
  *   4. If no filtered candidate remains, fall back to unfiltered order.
  * A customer belongs to exactly one pool (filter is off or active/pending), so
  * consuming from the front of each list keeps assignments unique.
+ *
+ * Lead Brief customers (0163) are in neither pool. They come LAST ("brief
+ * last", Phase 0 §2): `brief` — already ranked by score.ts — fills only the
+ * slots the loop above leaves empty, so a legacy customer's place on a lead
+ * is exactly what it was. Escalation passes three arguments and is unchanged.
  */
 export function selectCombinedCandidates(
   filtered: { customer_id: string; priority_score: number }[],
   unfiltered: { customer_id: string; deficit: number }[],
-  max: number
+  max: number,
+  brief: string[] = []
 ): string[] {
   const f = [...filtered];
   const u = [...unfiltered];
@@ -203,6 +214,13 @@ export function selectCombinedCandidates(
     } else {
       break;
     }
+  }
+
+  // After the loop, never inside it: a brief customer only ever takes a slot
+  // no legacy candidate wanted.
+  for (const customerId of brief) {
+    if (result.length >= max) break;
+    if (!result.includes(customerId)) result.push(customerId);
   }
 
   return result;
@@ -503,11 +521,34 @@ async function attachIncomeProjection(
  * Returns the number of NEW assignments made. This is the single "assign as
  * many as we can right now" path shared by fresh ingest, the duplicate top-up,
  * and the admin assign-pending sweep.
+ *
+ * Lead Brief customers (Phase 4) take part according to `opts.brief`:
+ *
+ *   include  the default. Legacy customers first, then brief customers in any
+ *            slot left over — in the service area and first-pick areas first,
+ *            then (with `includePace`, the default) behind-pace widening (A11).
+ *   exclude  legacy only. The morning release's first pass, which is therefore
+ *            exactly the pass that ran before the brief existed.
+ *   only     brief only. The morning release's second and third passes, which
+ *            offer a lead's first sale before its second (releaseLeads.ts).
+ *
+ * Brief customers are only ever fetched while `lead_brief_enabled` is "true",
+ * and only for a Management lead. With the switch off every call is the call
+ * it was before 0163.
  */
+export type BriefRoutingMode = "include" | "exclude" | "only";
+
+export interface AutoAssignOptions {
+  brief?: BriefRoutingMode;
+  includePace?: boolean;
+}
+
 export async function autoAssignLead(
   supabase: ReturnType<typeof createAdminClient>,
-  lead: Lead
+  lead: Lead,
+  opts: AutoAssignOptions = {}
 ): Promise<number> {
+  const briefMode: BriefRoutingMode = opts.brief ?? "include";
   // A customer-owned lead belongs to the person who added it, and is routed to
   // nobody UNTIL it qualifies — a paid analysis returning figures we trust
   // (§32). A qualified one is ordinary supply for exactly one more operator and
@@ -572,50 +613,60 @@ export async function autoAssignLead(
   // §64. Anyone owed a replacement this lead satisfies is served FIRST,
   // before ordinary routing: no credit, no curve, no cap — it is the slot
   // they already paid for. Fails open on a failed read.
-  const owedPlaced = await fulfilOwedReplacementsForLead(
-    supabase,
-    lead,
-    remaining,
-    (l, c, a) => completeAssignment(supabase, l, c, a, false)
-  );
+  //
+  // Not in a brief-only pass: that runs straight after a full pass over the
+  // same leads (releaseLeads.ts), which has just done this.
+  const owedPlaced =
+    briefMode === "only"
+      ? 0
+      : await fulfilOwedReplacementsForLead(
+          supabase,
+          lead,
+          remaining,
+          (l, c, a) => completeAssignment(supabase, l, c, a, false)
+        );
   remaining -= owedPlaced;
   if (remaining <= 0) return owedPlaced;
 
   const leadType = lead.lead_type;
 
-  // Ask for enough candidates to SEE contention, not merely enough to fill the
-  // slots we currently have. A lead with three open slots and five filtered
-  // customers wanting it is contended, and asking for three would hide that.
-  const probe = Math.max(remaining, CONTENDED_FILTERED_CUSTOMERS);
-  const [filteredRes, unfilteredRes] = await Promise.all([
-    supabase.rpc("get_filtered_candidates_for_lead", {
-      p_lead_id: lead.id,
-      p_max: probe,
-      p_lead_type: leadType,
-    }),
-    supabase.rpc("get_unfiltered_candidates_for_lead", {
-      p_lead_id: lead.id,
-      p_max: probe,
-      p_lead_type: leadType,
-    }),
-  ]);
+  let filtered: { customer_id: string; priority_score: number }[] = [];
+  let unfiltered: { customer_id: string; deficit: number }[] = [];
+  if (briefMode !== "only") {
+    // Ask for enough candidates to SEE contention, not merely enough to fill the
+    // slots we currently have. A lead with three open slots and five filtered
+    // customers wanting it is contended, and asking for three would hide that.
+    const probe = Math.max(remaining, CONTENDED_FILTERED_CUSTOMERS);
+    const [filteredRes, unfilteredRes] = await Promise.all([
+      supabase.rpc("get_filtered_candidates_for_lead", {
+        p_lead_id: lead.id,
+        p_max: probe,
+        p_lead_type: leadType,
+      }),
+      supabase.rpc("get_unfiltered_candidates_for_lead", {
+        p_lead_id: lead.id,
+        p_max: probe,
+        p_lead_type: leadType,
+      }),
+    ]);
 
-  if (filteredRes.error || unfilteredRes.error) {
-    console.error(
-      "candidate selection failed",
-      filteredRes.error ?? unfilteredRes.error
-    );
-    return 0;
+    if (filteredRes.error || unfilteredRes.error) {
+      console.error(
+        "candidate selection failed",
+        filteredRes.error ?? unfilteredRes.error
+      );
+      return 0;
+    }
+
+    filtered = (filteredRes.data ?? []) as {
+      customer_id: string;
+      priority_score: number;
+    }[];
+    unfiltered = (unfilteredRes.data ?? []) as {
+      customer_id: string;
+      deficit: number;
+    }[];
   }
-
-  const filtered = (filteredRes.data ?? []) as {
-    customer_id: string;
-    priority_score: number;
-  }[];
-  const unfiltered = (unfilteredRes.data ?? []) as {
-    customer_id: string;
-    deficit: number;
-  }[];
 
   // A contended lead opens its fourth slot NOW rather than after ten days of
   // nobody working it. Escalation raises the cap for a lead going to waste
@@ -648,7 +699,21 @@ export async function autoAssignLead(
     }
   }
 
-  const customerIds = selectCombinedCandidates(filtered, unfiltered, slots);
+  // Brief customers only for the slots legacy customers leave (Phase 0 §2), so
+  // the brief pool is not even read when the legacy pools fill the lead.
+  let brief: string[] = [];
+  if (
+    briefMode !== "exclude" &&
+    leadType === "management" &&
+    selectCombinedCandidates(filtered, unfiltered, slots).length < slots &&
+    (await briefRoutingEnabled(supabase))
+  ) {
+    brief = await fetchRankedBriefCandidates(supabase, lead, {
+      includePace: opts.includePace ?? true,
+    });
+  }
+
+  const customerIds = selectCombinedCandidates(filtered, unfiltered, slots, brief);
 
   const price = leadPriceFor(leadType);
 
@@ -695,6 +760,11 @@ export async function completeAssignment(
 
   const typedCustomer = customer as Customer | null;
   if (!typedCustomer) return;
+
+  // Lead Brief (Phase 4): the label and "why" on a brief customer's delivery.
+  // A no-op for every other customer, and it never throws. First, so Phase 5
+  // can put the label in the alerts below.
+  await recordBriefMatch(supabase, typedCustomer, lead, assignmentId);
 
   // New-lead alerts (in-portal notification + Resend email) are gated together
   // on the `new_lead` preference. The instant SMS below is a SEPARATE stream

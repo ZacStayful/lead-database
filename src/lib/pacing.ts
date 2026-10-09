@@ -126,6 +126,43 @@ export function computeGrPacing(customer: Customer, now: Date = new Date()): Pac
   };
 }
 
+/**
+ * A11 / D9: the shipped behind-pace threshold for a Lead Brief customer, as a
+ * percentage of their monthly allocation (0162 seeds lead_brief_pace_deficit_pct).
+ */
+export const BRIEF_PACE_DEFICIT_PCT_DEFAULT = 20;
+
+/**
+ * lead_brief_pace_deficit_pct as 0163 reads it: a plain non-negative number,
+ * anything else (absent, blank, malformed) reads as the shipped 20 — never as
+ * an error and never as 0, which would put everyone behind pace.
+ */
+export function briefPacePctFrom(value: string | null | undefined): number {
+  const v = (value ?? "").trim();
+  return /^[0-9]+(\.[0-9]+)?$/.test(v) ? Number(v) : BRIEF_PACE_DEFICIT_PCT_DEFAULT;
+}
+
+/**
+ * Whether a Lead Brief customer is behind pace (A11, D9): deficit at least
+ * ceil(monthly_allocation × pct / 100). The deficit is computePacing's, which
+ * mirrors the SQL every candidate function ranks by.
+ *
+ * ⚠️ THE SQL DECIDES. get_brief_candidates_for_lead (0163) applies the same
+ * rule under its own clock and is what admits a behind-pace lead; this mirror
+ * only spares the morning release a round trip per customer who is plainly
+ * not behind. Change the two together.
+ */
+export function isBehindBriefPace(
+  customer: Customer,
+  pct: number,
+  now: Date = new Date()
+): boolean {
+  // A null allocation makes the SQL comparison null, which is false.
+  if (customer.monthly_allocation == null) return false;
+  const threshold = Math.ceil((customer.monthly_allocation * pct) / 100);
+  return computePacing(customer, now).deficit >= threshold;
+}
+
 export function statusFor(deficit: number): PacingStatus {
   if (deficit >= 3) return "behind";
   if (deficit <= -3) return "ahead";

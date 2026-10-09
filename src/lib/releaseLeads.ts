@@ -16,9 +16,17 @@
  * Credit-gated (the same eligibility as fresh ingest), so it never gives paid
  * leads away, and it never charges twice: assign_lead_to_customer refuses a
  * duplicate under the row lock whatever this loop hands it.
+ *
+ * Lead Brief (Phase 4) adds two passes AFTER this one, and none inside it:
+ * the first pass leaves brief customers out (autoAssignLead's `exclude`), so
+ * it is exactly the pass that ran before the brief existed, and only then do
+ * brief customers get the leads it left — first sales first, then behind-pace
+ * widening (src/lib/leadBrief/briefRelease.ts). Both are off while
+ * lead_brief_enabled is, and neither runs in a dry run.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { autoAssignLead } from "@/lib/ingest";
+import { releaseToBriefCustomers, type BriefReleaseResult } from "@/lib/leadBrief/briefRelease";
 import { DEFAULT_MAX_ASSIGNMENTS, type Lead, type LeadType } from "@/lib/types";
 
 export interface ReleaseLeadsResult {
@@ -31,6 +39,8 @@ export interface ReleaseLeadsResult {
   dry_run?: boolean;
   /** Dry run only: the leads that would have been offered, oldest first. */
   would_offer?: { lead_id: string; lead_name: string; lead_type: string }[];
+  /** Lead Brief passes 2 and 3; absent when they did not run. */
+  brief?: BriefReleaseResult;
 }
 
 export async function releasePendingLeads(
@@ -95,9 +105,18 @@ export async function releasePendingLeads(
       truncated = true;
       break;
     }
-    const made = await autoAssignLead(admin, lead);
+    // ⚠️ `exclude`: brief customers are never offered a lead in this pass.
+    const made = await autoAssignLead(admin, lead, { brief: "exclude" });
     assignments += made;
     if (made > 0) filled += 1;
+  }
+
+  // The Lead Brief passes, only after a complete first pass and only where
+  // Management leads are in scope.
+  let brief: BriefReleaseResult | undefined;
+  if (!truncated && opts.leadType !== "guaranteed_rent") {
+    brief = await releaseToBriefCustomers(admin, { deadline: started + budgetMs });
+    if (brief.truncated) truncated = true;
   }
 
   return {
@@ -106,5 +125,6 @@ export async function releasePendingLeads(
     leads_topped_up: filled,
     assignments,
     ...(truncated ? { truncated } : {}),
+    ...(brief ? { brief } : {}),
   };
 }

@@ -35,6 +35,8 @@ describe("the allow-list is closed", () => {
       "landlord_prefs_nudge_second_hours",
       "landlord_prefs_reask_days",
       "landlord_referral_nudge_enabled",
+      "lead_brief_enabled",
+      "lead_brief_pace_deficit_pct",
       "lead_sync_enabled",
       "messaging_email_enabled",
       "messaging_enabled",
@@ -204,6 +206,10 @@ describe("every spec's fallback is what the reader actually falls back to", () =
     batch_review_delay_days: "7",
     batch_review_reminder_days: "3",
     batch_review_token_days: "30",
+    // Lead Brief (Phase 4). routing.ts reads the switch as `=== "true"` and
+    // fails closed; 0163 reads the percentage with a default of 20.
+    lead_brief_enabled: "false",
+    lead_brief_pace_deficit_pct: "20",
     // §55. The cron reads the switch as `!== "true"` (fails to off) and the cap
     // through `Number(config.get(...) ?? "30")`, so both must match here or the
     // admin page shows a limit the chase is not actually using.
