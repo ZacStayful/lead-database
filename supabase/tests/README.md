@@ -100,6 +100,41 @@ not touch it:
 - **ACLs** on every signature touched, both swap overloads included, and
   invariant 7.
 
+## What `0162_lead_brief_schema_test.sql` covers
+
+0161 and 0162 add the Lead Brief storage (docs/build/) and are inert, so these
+assertions are about shape and constraints. Every refusal must be a CHECK
+violation (23514) specifically, through `test_util.assert_check_violation`: a
+validator that raises some other error is a 500 on a bad write.
+
+- **`leads.outcode`** is generated from the postcode: case and surrounding
+  space ignored, a missing space tolerated, an outcode absent from the centroid
+  list (M50) still stored, an outcode-only or missing postcode giving null, and
+  a postcode change moving it. It cannot be written directly.
+- **One active and one pending brief per customer** (A10), versions unique,
+  superseded unlimited; an active brief must be confirmed, and only a
+  superseded one carries its stamp.
+- **The base postcode** is canonical and its outcode is its outward part,
+  including four cases that start with the right outcode and still fail.
+- **Travel and mode** (A8) as a list: 10 is local, 25 or 50 growing, anywhere
+  has no limit. A NULL limit on `local` is refused, which is the bug this
+  suite found in the first draft.
+- **The radius cap** (A3): 40 miles on a 10-lead plan, 75 on 20, never beyond
+  the customer's own travel limit.
+- **Essentials and their thresholds** set together, the revenue threshold on
+  the `GROSS_THRESHOLDS` list; **priorities** a ranked array of distinct keys;
+  **area lists** upper-case, distinct, base outcode inside the service area,
+  pace outcodes outside it; **expected mix** whole counts on the four labels.
+- **The validators answer false, never NULL**, called directly.
+- **`lead_assignments.match_*`** null together, and the money path still
+  writes none of them; deleting a brief nulls the pointer and keeps the label.
+- **`area_competition`**: one row per area, codes in the right format.
+- **Posture**: RLS on with no policies on both tables, no new SECURITY DEFINER
+  function, invariant 7, and the switch shipping off.
+
+The default of `customers.lead_brief_required` is deliberately not asserted:
+the go-live migration flips it, and this suite runs after every migration.
+
 ## Adding a test file
 
 Write assertions with the helpers the suite defines:
