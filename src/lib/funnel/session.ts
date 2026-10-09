@@ -47,6 +47,17 @@ export function isAlreadySetUp(customer: ProductCustomerFields | null | undefine
  * POST /api/funnel/session — what n8n sends
  * ------------------------------------------------------------------ */
 
+/**
+ * Which n8n message brought the enquirer in (batch 03, 0166). The closed list
+ * mirrors 0166's CHECK, and a test holds the two equal.
+ */
+export const FUNNEL_ENTRY_POINTS = ["instant", "chase", "no_show", "post_call"] as const;
+export type FunnelEntryPoint = (typeof FUNNEL_ENTRY_POINTS)[number];
+
+/** Which option the instant message put first: the alternate-week test (0166). */
+export const FUNNEL_OFFER_ORDERS = ["call_first", "funnel_first"] as const;
+export type FunnelOfferOrder = (typeof FUNNEL_OFFER_ORDERS)[number];
+
 export interface FunnelSessionRequest {
   mondayItemId: string | null;
   name: string;
@@ -54,13 +65,19 @@ export interface FunnelSessionRequest {
   email: string;
   /** E.164 when it resolves to a UK mobile, otherwise as sent (§57.8). Null when absent. */
   phone: string | null;
+  /** Null when n8n sent none (a caller from before batch 03). */
+  entryPoint: FunnelEntryPoint | null;
+  /** Only ever set alongside entryPoint 'instant'; see parseSessionRequest. */
+  offerOrder: FunnelOfferOrder | null;
 }
 
 export type FunnelSessionRequestError =
   | "email_invalid"
   | "name_missing"
   | "monday_item_id_invalid"
-  | "management_only";
+  | "management_only"
+  | "entry_point_invalid"
+  | "offer_order_invalid";
 
 export type ParsedSessionRequest =
   | { ok: true; value: FunnelSessionRequest }
@@ -98,6 +115,11 @@ export function parseSessionRequest(body: unknown): ParsedSessionRequest {
     mondayItemId = id.trim();
   }
 
+  const entryPoint = closedValue(b.entry_point, FUNNEL_ENTRY_POINTS);
+  if (entryPoint === undefined) return { ok: false, error: "entry_point_invalid" };
+  const offerOrder = closedValue(b.offer_order, FUNNEL_OFFER_ORDERS);
+  if (offerOrder === undefined) return { ok: false, error: "offer_order_invalid" };
+
   return {
     ok: true,
     value: {
@@ -105,8 +127,66 @@ export function parseSessionRequest(body: unknown): ParsedSessionRequest {
       name: name.slice(0, 200),
       email,
       phone: sessionPhone(b.phone),
+      entryPoint,
+      // The offer order is a fact about the INSTANT message (locked decision 4:
+      // "which option comes first in the instant message"). Sent with any other
+      // entry point it describes a different message, and storing it would put
+      // that enquirer in the alternate-week test's cohort by mistake, so it is
+      // dropped rather than refused: the chase still gets its link.
+      offerOrder: entryPoint === "instant" ? offerOrder : null,
     },
   };
+}
+
+/**
+ * One value from a closed list, trimmed and lower-cased. Absent (undefined,
+ * null or "") is null; anything else not on the list is `undefined`, which
+ * the caller turns into a 400, so a typo in n8n is loud rather than stored.
+ */
+function closedValue<T extends string>(raw: unknown, allowed: readonly T[]): T | null | undefined {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim().toLowerCase();
+  return (allowed as readonly string[]).includes(v) ? (v as T) : undefined;
+}
+
+/**
+ * E1 (docs/build/03-phase0-report.md): the entry point to write onto an
+ * EXISTING session, or null to leave it alone.
+ *
+ * One email has one open session (0165), so the chase, a no-show and the
+ * post-call step all find the session the instant message created. The entry
+ * point is the last one n8n sent BEFORE THE FIRST ANSWER: it moves while the
+ * enquirer has answered nothing, and is frozen from then on. The route's write
+ * repeats the first_answered_at test in its own WHERE, so an answer landing
+ * between this read and that write still wins.
+ *
+ * ⚠️ Answers already stored also freeze it, even without the stamp: a session
+ * answered before 0166 has answers and no first_answered_at.
+ */
+export function entryPointToWrite(
+  session: {
+    entry_point: string | null;
+    first_answered_at: string | null;
+    answers: Record<string, unknown> | null;
+  },
+  incoming: FunnelEntryPoint | null
+): FunnelEntryPoint | null {
+  if (!incoming) return null;
+  if (session.first_answered_at) return null;
+  if (session.answers && Object.keys(session.answers).length > 0) return null;
+  if (session.entry_point === incoming) return null;
+  return incoming;
+}
+
+/**
+ * Whether a save is the session's first answer, so the answers route stamps
+ * first_answered_at (0166). An answer is any question field present in the
+ * saved patch, null included: "no travel limit" and "any bedrooms" are
+ * answers. A save carrying only the plan is not.
+ */
+export function isFirstAnswer(firstAnsweredAt: string | null, savedAnswers: Record<string, unknown>): boolean {
+  return !firstAnsweredAt && Object.keys(savedAnswers).length > 0;
 }
 
 /**

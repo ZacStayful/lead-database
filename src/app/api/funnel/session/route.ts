@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isAlreadySetUp, parseSessionRequest } from "@/lib/funnel/session";
+import { entryPointToWrite, isAlreadySetUp, parseSessionRequest } from "@/lib/funnel/session";
 import { customersByEmail, readFunnelEnabled } from "@/lib/funnel/server";
 import {
   alreadySetUpLoginUrl,
@@ -16,7 +16,12 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST /api/funnel/session — n8n asks for an enquirer's funnel link
- * (batch 02 Phase 2). Body: { monday_item_id, name, email, phone }.
+ * (batch 02 Phase 2). Body: { monday_item_id, name, email, phone,
+ * entry_point?, offer_order? }.
+ *
+ * entry_point and offer_order are batch 03's (0166): which message brought the
+ * enquirer in, and which option the instant message put first. Both are
+ * optional, so a caller from before 03 keeps working.
  *
  * Bearer N8N_WEBHOOK_SECRET, the /api/webhook/n8n check. n8n branches on
  * `status`, so every outcome a caller can act on is a 200:
@@ -76,6 +81,7 @@ export async function POST(request: NextRequest) {
   if (!existing.ok) return NextResponse.json({ code: "lookup_failed" }, { status: 503 });
   if (existing.session) {
     await fillMissing(admin, existing.session, req);
+    await recordEntryPoint(admin, existing.session, req);
     return linkResponse("existing", existing.session.id, secret);
   }
 
@@ -88,6 +94,8 @@ export async function POST(request: NextRequest) {
     email: req.email,
     phone: req.phone,
     monday_item_id: req.mondayItemId,
+    entry_point: req.entryPoint,
+    offer_order: req.offerOrder,
   });
   if (error) {
     // 23505 is a second request for the same email landing between our read
@@ -103,7 +111,14 @@ export async function POST(request: NextRequest) {
   return linkResponse("created", id, secret);
 }
 
-type OpenSession = { id: string; phone: string | null; monday_item_id: string | null };
+type OpenSession = {
+  id: string;
+  phone: string | null;
+  monday_item_id: string | null;
+  entry_point: string | null;
+  first_answered_at: string | null;
+  answers: Record<string, unknown> | null;
+};
 
 async function openSessionFor(
   admin: ReturnType<typeof createAdminClient>,
@@ -111,7 +126,7 @@ async function openSessionFor(
 ): Promise<{ ok: true; session: OpenSession | null } | { ok: false }> {
   const { data, error } = await admin
     .from("funnel_sessions")
-    .select("id, phone, monday_item_id")
+    .select("id, phone, monday_item_id, entry_point, first_answered_at, answers")
     .eq("email", email)
     .neq("step", "paid")
     .maybeSingle();
@@ -139,6 +154,33 @@ async function fillMissing(
   if (Object.keys(patch).length === 0) return;
   const { error } = await admin.from("funnel_sessions").update(patch).eq("id", session.id);
   if (error) console.error("[funnel/session] could not fill missing fields", error.message);
+}
+
+/**
+ * E1 (docs/build/03-phase0-report.md): a later n8n call moves the entry point
+ * only while the enquirer has answered nothing (entryPointToWrite), and the
+ * write repeats that test in its own WHERE, so an answer saved between our
+ * read and this write keeps the entry point it was given.
+ *
+ * ⚠️ offer_order is never written here. It is set once, by the call that
+ * creates the session, because it is the alternate-week test's cohort.
+ *
+ * Best effort: a failed write costs a reporting label, never the link.
+ */
+async function recordEntryPoint(
+  admin: ReturnType<typeof createAdminClient>,
+  session: OpenSession,
+  req: { entryPoint: Parameters<typeof entryPointToWrite>[1] }
+): Promise<void> {
+  const next = entryPointToWrite(session, req.entryPoint);
+  if (!next) return;
+  const { error } = await admin
+    .from("funnel_sessions")
+    .update({ entry_point: next })
+    .eq("id", session.id)
+    .is("first_answered_at", null)
+    .neq("step", "paid");
+  if (error) console.error("[funnel/session] could not record the entry point", error.message);
 }
 
 function linkResponse(status: "created" | "existing", sessionId: string, secret: string) {

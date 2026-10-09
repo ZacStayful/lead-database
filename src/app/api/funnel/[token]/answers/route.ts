@@ -6,7 +6,7 @@ import {
   parseAnswersPatch,
   readStoredAnswers,
 } from "@/lib/funnel/answers";
-import { advanceStep, namesOtherProduct } from "@/lib/funnel/session";
+import { advanceStep, isFirstAnswer, namesOtherProduct } from "@/lib/funnel/session";
 import { FUNNEL_NO_STORE, funnelGate } from "@/lib/funnel/server";
 
 export const runtime = "nodejs";
@@ -77,6 +77,20 @@ export async function POST(request: NextRequest, { params }: { params: { token: 
   if (error) {
     console.error("[funnel/answers] could not save", error.message);
     return NextResponse.json({ code: "unavailable" }, { status: 503, headers: NO_STORE });
+  }
+
+  // The first answer (batch 03, 0166): the point the session's entry_point is
+  // frozen at (E1), and Phase 2's "Funnel started". Claimed by its own write,
+  // guarded on the stamp still being null, so two first saves racing each
+  // other leave the earlier time, and a later save never moves it. Best
+  // effort: the answer itself is already saved.
+  if (isFirstAnswer(session.first_answered_at, patch.answers as Record<string, unknown>)) {
+    const { error: stampError } = await admin
+      .from("funnel_sessions")
+      .update({ first_answered_at: new Date().toISOString() })
+      .eq("id", session.id)
+      .is("first_answered_at", null);
+    if (stampError) console.error("[funnel/answers] could not stamp the first answer", stampError.message);
   }
 
   return NextResponse.json({ ok: true }, { headers: NO_STORE });

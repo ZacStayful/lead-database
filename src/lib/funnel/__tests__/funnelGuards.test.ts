@@ -28,6 +28,7 @@ const FLOW = source("src/components/funnel/FunnelFlow.tsx");
 const EXITS = source("src/components/funnel/FunnelExits.tsx");
 const LOGIN = source("src/app/login/page.tsx");
 const MIGRATION = readFileSync("supabase/migrations/0165_funnel.sql", "utf8");
+const ROUTES_MIGRATION = readFileSync("supabase/migrations/0166_funnel_routes.sql", "utf8");
 
 const at = (src: string, needle: string) => {
   const i = src.indexOf(needle);
@@ -70,6 +71,78 @@ describe("POST /api/funnel/session", () => {
   it("fills blanks on an existing session and never overwrites a stored value", () => {
     expect(SESSION).toContain("if (!session.monday_item_id && req.mondayItemId)");
     expect(SESSION).toContain("if (!session.phone && req.phone)");
+  });
+});
+
+describe("POST /api/funnel/session — batch 03's route fields (0166)", () => {
+  const insert = () => SESSION.slice(at(SESSION, '.from("funnel_sessions").insert'), at(SESSION, "if (error)"));
+  const record = () =>
+    SESSION.slice(at(SESSION, "async function recordEntryPoint"), at(SESSION, "function linkResponse"));
+
+  it("a new session stores the entry point and the offer order n8n sent", () => {
+    expect(insert()).toContain("entry_point: req.entryPoint");
+    expect(insert()).toContain("offer_order: req.offerOrder");
+  });
+
+  it("an existing session's entry point moves only through recordEntryPoint", () => {
+    const existing = SESSION.slice(at(SESSION, "if (existing.session)"), at(SESSION, "const id = randomUUID()"));
+    expect(existing).toContain("await recordEntryPoint(admin, existing.session, req);");
+    // Two writes name the column: the insert and recordEntryPoint's update.
+    // (The third mention is the OpenSession type, `entry_point: string | null`.)
+    expect(SESSION.match(/entry_point: (?!string)/g)).toEqual(["entry_point: ", "entry_point: "]);
+  });
+
+  it("E1: the entry point is frozen at the first answer, and the write repeats the test", () => {
+    const fn = record();
+    expect(fn).toContain("entryPointToWrite(session, req.entryPoint)");
+    expect(fn).toContain('.is("first_answered_at", null)');
+    expect(fn).toContain('.neq("step", "paid")');
+    expect(fn).toContain(".update({ entry_point: next })");
+  });
+
+  it("the offer order is set once, by the insert, and never updated", () => {
+    expect(SESSION.match(/offer_order:/g)?.length).toBe(1);
+    expect(record()).not.toContain("offer_order");
+  });
+
+  it("the open-session read carries what entryPointToWrite needs", () => {
+    expect(SESSION).toContain('.select("id, phone, monday_item_id, entry_point, first_answered_at, answers")');
+  });
+});
+
+describe("POST /api/funnel/[token]/answers — the first-answer stamp (0166)", () => {
+  it("stamps only after the answers are saved, and only while the stamp is null", () => {
+    const save = at(ANSWERS, ".update(update)");
+    const stamp = at(ANSWERS, ".update({ first_answered_at: new Date().toISOString() })");
+    expect(stamp).toBeGreaterThan(save);
+    const block = ANSWERS.slice(stamp, at(ANSWERS, "return NextResponse.json({ ok: true }"));
+    expect(block).toContain('.is("first_answered_at", null)');
+  });
+
+  it("asks isFirstAnswer, so a save carrying only the plan never stamps it", () => {
+    expect(ANSWERS).toContain("isFirstAnswer(session.first_answered_at, patch.answers");
+  });
+
+  it("the stamp is best effort: a failed stamp never fails a saved answer", () => {
+    const block = ANSWERS.slice(at(ANSWERS, "stampError"), at(ANSWERS, "return NextResponse.json({ ok: true }"));
+    expect(block).not.toContain("return ");
+  });
+
+  it("the session row read by the token routes carries the stamp", () => {
+    const columns = SERVER.match(/FUNNEL_SESSION_COLUMNS =\s*"([^"]+)"/);
+    expect(columns).not.toBeNull();
+    expect(columns![1].split(",").map((c) => c.trim())).toContain("first_answered_at");
+  });
+});
+
+describe("0166 keeps the Monday claims off funnel_sessions (E3)", () => {
+  it("adds exactly the three route columns to funnel_sessions, and no claim column", () => {
+    const added = Array.from(ROUTES_MIGRATION.matchAll(/add column if not exists (\w+)/g), (m) => m[1]);
+    expect(added).toEqual(["entry_point", "offer_order", "first_answered_at"]);
+  });
+
+  it("gives funnel_monday_writes no trigger, so a claim moves nothing", () => {
+    expect(ROUTES_MIGRATION).not.toMatch(/create trigger/i);
   });
 });
 

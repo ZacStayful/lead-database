@@ -8,14 +8,19 @@
  * the product they hold. The body parser is what stops n8n writing a row 0165
  * would refuse, or a Guaranteed Rent enquirer being sold Management.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   advanceStep,
+  entryPointToWrite,
+  FUNNEL_ENTRY_POINTS,
+  FUNNEL_OFFER_ORDERS,
   FUNNEL_PREVIEW_LIMIT,
   FUNNEL_PREVIEW_WINDOW_SECONDS,
   FUNNEL_STEPS,
   funnelEnabledFrom,
   isAlreadySetUp,
+  isFirstAnswer,
   namesOtherProduct,
   parseSessionRequest,
   previewAllowed,
@@ -78,17 +83,31 @@ describe("isAlreadySetUp", () => {
 describe("parseSessionRequest", () => {
   const ok = { monday_item_id: "13049622496", name: "  Jane   Smith ", email: " Jane@Example.COM ", phone: "07700 900123" };
 
-  it("reads the four named fields, normalised", () => {
+  it("reads the named fields, normalised; a caller from before batch 03 gets null routes", () => {
     const r = parseSessionRequest(ok);
     expect(r).toEqual({
       ok: true,
-      value: { mondayItemId: "13049622496", name: "Jane Smith", email: "jane@example.com", phone: "+447700900123" },
+      value: {
+        mondayItemId: "13049622496",
+        name: "Jane Smith",
+        email: "jane@example.com",
+        phone: "+447700900123",
+        entryPoint: null,
+        offerOrder: null,
+      },
     });
   });
 
   it("ignores every other field in the body", () => {
-    const r = parseSessionRequest({ ...ok, step: "paid", customer_id: "x", token_hash: "f".repeat(64) });
-    expect(r.ok && Object.keys(r.value).sort()).toEqual(["email", "mondayItemId", "name", "phone"]);
+    const r = parseSessionRequest({ ...ok, step: "paid", customer_id: "x", token_hash: "f".repeat(64), first_answered_at: "x" });
+    expect(r.ok && Object.keys(r.value).sort()).toEqual([
+      "email",
+      "entryPoint",
+      "mondayItemId",
+      "name",
+      "offerOrder",
+      "phone",
+    ]);
   });
 
   it("refuses what 0165 would refuse", () => {
@@ -118,6 +137,100 @@ describe("parseSessionRequest", () => {
       expect(parseSessionRequest({ ...ok, product })).toEqual({ ok: false, error: "management_only" });
     }
     expect(parseSessionRequest({ ...ok, product: "management" }).ok).toBe(true);
+  });
+});
+
+describe("parseSessionRequest — entry_point and offer_order (batch 03, 0166)", () => {
+  const ok = { name: "Jane Smith", email: "jane@example.com" };
+
+  it("accepts every entry point on 0166's list", () => {
+    for (const entry_point of FUNNEL_ENTRY_POINTS) {
+      const r = parseSessionRequest({ ...ok, entry_point });
+      expect(r.ok && r.value.entryPoint).toBe(entry_point);
+    }
+  });
+
+  it("trims and lower-cases what n8n sends", () => {
+    const r = parseSessionRequest({ ...ok, entry_point: " Instant ", offer_order: "FUNNEL_FIRST" });
+    expect(r.ok && [r.value.entryPoint, r.value.offerOrder]).toEqual(["instant", "funnel_first"]);
+  });
+
+  it("refuses an unknown entry point or offer order, loudly", () => {
+    for (const entry_point of ["website", "no-show", "post call", 3, true]) {
+      expect(parseSessionRequest({ ...ok, entry_point })).toEqual({ ok: false, error: "entry_point_invalid" });
+    }
+    for (const offer_order of ["random", "call-first", 1]) {
+      expect(parseSessionRequest({ ...ok, entry_point: "instant", offer_order })).toEqual({
+        ok: false,
+        error: "offer_order_invalid",
+      });
+    }
+  });
+
+  it("reads absent, null and empty as none", () => {
+    for (const v of [undefined, null, ""]) {
+      const r = parseSessionRequest({ ...ok, entry_point: v, offer_order: v });
+      expect(r.ok && [r.value.entryPoint, r.value.offerOrder]).toEqual([null, null]);
+    }
+  });
+
+  it("keeps the offer order only for the instant message (locked decision 4)", () => {
+    for (const offer_order of FUNNEL_OFFER_ORDERS) {
+      const instant = parseSessionRequest({ ...ok, entry_point: "instant", offer_order });
+      expect(instant.ok && instant.value.offerOrder).toBe(offer_order);
+    }
+    for (const entry_point of ["chase", "no_show", "post_call", undefined]) {
+      const other = parseSessionRequest({ ...ok, entry_point, offer_order: "funnel_first" });
+      expect(other.ok && other.value.offerOrder).toBeNull();
+    }
+  });
+
+  it("holds both lists equal to 0166's CHECKs", () => {
+    const sql = readFileSync("supabase/migrations/0166_funnel_routes.sql", "utf8");
+    const list = (name: string) => {
+      const m = sql.match(new RegExp(`${name} in \\(([^)]*)\\)`));
+      expect(m, `missing CHECK list for ${name}`).not.toBeNull();
+      return m![1].split(",").map((v) => v.trim().replace(/'/g, ""));
+    };
+    expect(list("entry_point")).toEqual([...FUNNEL_ENTRY_POINTS]);
+    expect(list("offer_order")).toEqual([...FUNNEL_OFFER_ORDERS]);
+  });
+});
+
+describe("entryPointToWrite (E1)", () => {
+  const fresh = { entry_point: "instant", first_answered_at: null, answers: {} };
+
+  it("moves the entry point while nothing has been answered", () => {
+    expect(entryPointToWrite(fresh, "chase")).toBe("chase");
+    expect(entryPointToWrite({ ...fresh, entry_point: null }, "no_show")).toBe("no_show");
+  });
+
+  it("is frozen from the first answer", () => {
+    expect(entryPointToWrite({ ...fresh, first_answered_at: "2026-10-09T10:00:00Z" }, "post_call")).toBeNull();
+  });
+
+  it("is frozen by stored answers even without the stamp (a session answered before 0166)", () => {
+    expect(entryPointToWrite({ ...fresh, answers: { basePostcode: "YO10 5DD" } }, "chase")).toBeNull();
+    expect(entryPointToWrite({ ...fresh, answers: { travelLimitMiles: null } }, "chase")).toBeNull();
+  });
+
+  it("writes nothing when nothing changes or nothing was sent", () => {
+    expect(entryPointToWrite(fresh, "instant")).toBeNull();
+    expect(entryPointToWrite(fresh, null)).toBeNull();
+    expect(entryPointToWrite({ ...fresh, answers: null }, null)).toBeNull();
+  });
+});
+
+describe("isFirstAnswer", () => {
+  it("is a save carrying any question field, null included, before the stamp", () => {
+    expect(isFirstAnswer(null, { basePostcode: "YO10 5DD" })).toBe(true);
+    expect(isFirstAnswer(null, { travelLimitMiles: null })).toBe(true);
+    expect(isFirstAnswer(null, { minBedrooms: null })).toBe(true);
+  });
+
+  it("is not a plan-only save, or anything after the first", () => {
+    expect(isFirstAnswer(null, {})).toBe(false);
+    expect(isFirstAnswer("2026-10-09T10:00:00Z", { basePostcode: "YO10 5DD" })).toBe(false);
   });
 });
 

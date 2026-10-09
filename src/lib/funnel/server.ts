@@ -30,7 +30,7 @@ export async function readFunnelEnabled(admin: SupabaseClient): Promise<boolean>
 }
 
 export const FUNNEL_SESSION_COLUMNS =
-  "id, name, email, phone, monday_item_id, answers, base_postcode_locked, preview_snapshot, plan_selected, step, customer_id, discount_offer_id, paid_at";
+  "id, name, email, phone, monday_item_id, answers, base_postcode_locked, preview_snapshot, plan_selected, step, customer_id, discount_offer_id, paid_at, first_answered_at";
 
 export interface FunnelSessionRow {
   id: string;
@@ -46,6 +46,8 @@ export interface FunnelSessionRow {
   customer_id: string | null;
   discount_offer_id: string | null;
   paid_at: string | null;
+  /** When the first answer was saved (0166); null until then. */
+  first_answered_at: string | null;
 }
 
 export type SessionLookup =
