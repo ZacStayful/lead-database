@@ -1,5 +1,5 @@
 /**
- * Guards on the REAL funnel route files (batch 02 Phase 2).
+ * Guards on the REAL funnel route files (batch 02 Phases 2 and 3).
  *
  * vitest.config.mts is PURE UNITS ONLY, so a route handler is never run here.
  * These read the files themselves (§42.8: a test that writes its own copy of a
@@ -20,7 +20,12 @@ function source(path: string): string {
 
 const SESSION = source("src/app/api/funnel/session/route.ts");
 const PREVIEW = source("src/app/api/funnel/[token]/preview/route.ts");
+const ANSWERS = source("src/app/api/funnel/[token]/answers/route.ts");
+const SERVER = source("src/lib/funnel/server.ts");
 const START = source("src/app/start/[token]/page.tsx");
+const SUMMARY = source("src/app/start/[token]/summary/page.tsx");
+const FLOW = source("src/components/funnel/FunnelFlow.tsx");
+const EXITS = source("src/components/funnel/FunnelExits.tsx");
 const LOGIN = source("src/app/login/page.tsx");
 const MIGRATION = readFileSync("supabase/migrations/0165_funnel.sql", "utf8");
 
@@ -77,11 +82,11 @@ describe("POST /api/funnel/[token]/preview", () => {
     expect(PREVIEW).not.toMatch(/previews\[(10|20)\]\s*[,}]/);
   });
 
-  it("refuses an unknown session, a switched-off funnel and somebody already set up", () => {
-    const limiter = at(PREVIEW, 'admin.rpc("consume_funnel_preview"');
-    expect(at(PREVIEW, "readFunnelEnabled(admin)")).toBeLessThan(limiter);
-    expect(at(PREVIEW, "alreadySetUpRefusal(admin, session)")).toBeLessThan(limiter);
-    expect(PREVIEW).toContain('if (session.step === "paid") return refuse();');
+  it("passes funnelGate (switch, token, already set up) before anything else", () => {
+    const gate = at(PREVIEW, 'funnelGate(admin, params.token, "preview")');
+    expect(gate).toBeLessThan(at(PREVIEW, "request.json()"));
+    expect(gate).toBeLessThan(at(PREVIEW, 'admin.rpc("consume_funnel_preview"'));
+    expect(PREVIEW).toContain("if (!gate.ok) return gate.response;");
   });
 
   it("judges the input and the postcode lock BEFORE spending a preview", () => {
@@ -125,6 +130,134 @@ describe("POST /api/funnel/[token]/preview", () => {
   });
 });
 
+describe("funnelGate — the checks every token route shares", () => {
+  it("checks the switch, then the token, then 'already set up', in that order", () => {
+    const sw = at(SERVER, "readFunnelEnabled(admin)");
+    const tok = at(SERVER, "loadSessionByToken(admin, rawToken)");
+    const paid = at(SERVER, 'if (session.step === "paid") return alreadySetUp();');
+    const cust = at(SERVER, "customers.customers.some(isAlreadySetUp)) return alreadySetUp();");
+    expect(sw).toBeLessThan(tok);
+    expect(tok).toBeLessThan(paid);
+    expect(paid).toBeLessThan(cust);
+  });
+
+  it("fails closed: an unreadable customer list refuses rather than letting the visitor through", () => {
+    const block = SERVER.slice(at(SERVER, "if (!customers.ok)"), at(SERVER, "customers.customers.some(isAlreadySetUp))"));
+    expect(block).toContain("503");
+  });
+
+  it("every response it makes is uncacheable", () => {
+    const fn = SERVER.slice(at(SERVER, "export async function funnelGate"));
+    expect(fn).toContain("headers: FUNNEL_NO_STORE");
+  });
+});
+
+describe("POST /api/funnel/[token]/answers", () => {
+  it("passes funnelGate before reading anything", () => {
+    expect(at(ANSWERS, 'funnelGate(admin, params.token, "answers")')).toBeLessThan(at(ANSWERS, "request.json()"));
+    expect(ANSWERS).toContain("if (!gate.ok) return gate.response;");
+  });
+
+  it("saves only the parsed patch, merged over the stored answers read field by field", () => {
+    expect(ANSWERS).toContain("parseAnswersPatch(body)");
+    expect(ANSWERS).toContain("answers: mergeAnswers(readStoredAnswers(session.answers), patch.answers)");
+    // The body itself never reaches the row.
+    expect(ANSWERS).not.toMatch(/update\(\s*body/);
+    expect(ANSWERS).not.toMatch(/\.\.\.body/);
+  });
+
+  it("holds the postcode lock, before the write", () => {
+    const lock = at(ANSWERS, "answersLockRefuses(session.base_postcode_locked, patch.answers.basePostcode)");
+    expect(lock).toBeLessThan(at(ANSWERS, '.from("funnel_sessions")'));
+    expect(ANSWERS).toContain('"postcode_locked"');
+  });
+
+  it("refuses Guaranteed Rent, never moves a paid session, and only moves the step forward", () => {
+    expect(ANSWERS).toContain("if (namesOtherProduct(body))");
+    expect(ANSWERS).toContain('.neq("step", "paid")');
+    expect(ANSWERS).toContain('advanceStep(session.step, "questions_done")');
+  });
+
+  it("never reads the supply or spends a preview", () => {
+    expect(ANSWERS).not.toContain("loadBriefSupply");
+    expect(ANSWERS).not.toContain("consume_funnel_preview");
+  });
+
+  it("is never cached", () => {
+    expect(ANSWERS.match(/NextResponse\.json\(/g)?.length).toBe(ANSWERS.match(/headers: NO_STORE/g)?.length);
+  });
+});
+
+describe("GET /start/[token]/summary — the page a partner is sent", () => {
+  it("is opened by the summary token, never the funnel token", () => {
+    expect(SUMMARY).toContain("verifyFunnelSummaryToken(params.token, funnelTokenSecret())");
+    expect(SUMMARY).not.toContain("loadSessionByToken");
+    expect(SUMMARY).not.toContain("hashFunnelToken");
+  });
+
+  it("never reads the visitor's name, email or phone", () => {
+    const cols = SUMMARY.match(/SUMMARY_COLUMNS = "([^"]+)"/);
+    expect(cols).not.toBeNull();
+    const list = cols![1].split(",").map((c) => c.trim());
+    expect(list).toEqual(["id", "answers", "preview_snapshot", "plan_selected"]);
+    expect(SUMMARY).toContain(".select(SUMMARY_COLUMNS)");
+    expect(SUMMARY).not.toMatch(/\.select\("\*"\)/);
+    expect(SUMMARY).not.toMatch(/session\.(email|phone|name)\b/);
+  });
+
+  it("has no payment and no way into the funnel", () => {
+    expect(SUMMARY).not.toMatch(/checkout/i);
+    expect(SUMMARY).not.toContain("FunnelFlow");
+    expect(SUMMARY).not.toContain("continueToPayment");
+    // The exits carry no summary link here: the page is the summary.
+    expect(SUMMARY).toContain("<FunnelExits summaryPath={null} />");
+  });
+
+  it("is a 404 for anything that is not one of ours, and sends no referrer", () => {
+    expect(SUMMARY).toContain("if (!sessionId) notFound();");
+    expect(SUMMARY).toContain('referrer: "no-referrer"');
+  });
+
+  it("is switched off with the funnel", () => {
+    expect(SUMMARY).toContain("readFunnelEnabled(admin)");
+    expect(SUMMARY).toContain("if (!enabled || read.error || !read.data)");
+  });
+});
+
+describe("the funnel screens", () => {
+  it("never say 'Step x of 6' (02 Phase 3)", () => {
+    expect(FLOW).not.toMatch(/step \d+ of/i);
+    expect(FLOW).not.toContain("stepOf");
+  });
+
+  it("put both exits on every screen, through one Frame", () => {
+    expect(FLOW).toContain("<FunnelExits summaryPath={summaryPath} />");
+    // Every screen FunnelFlow returns is a Frame; none returns bare markup.
+    // (Screen-level returns sit at two or four spaces; a .map()'s are deeper.)
+    const body = FLOW.slice(at(FLOW, "export function FunnelFlow"), at(FLOW, "function Frame("));
+    const returns = body.match(/^ {2,4}return \(\s*<(\w+)/gm) ?? [];
+    expect(returns.length).toBe(5);
+    for (const r of returns) expect(r).toMatch(/<Frame$/);
+  });
+
+  it("the partner link is the summary path, and both exits leave without a referrer", () => {
+    expect(EXITS).toContain("href={summaryPath}");
+    expect(EXITS).toContain("href={BRIEF_BOOKING_URL}");
+    expect(EXITS.match(/rel="noopener noreferrer"/g)?.length).toBe(2);
+    expect(START).toContain("funnelSummaryPath(summaryToken)");
+    expect(START).toContain("deriveFunnelSummaryToken(session.id, funnelTokenSecret())");
+  });
+
+  it("render the preview without the switch-plan offer, and say what happens next in the funnel's words", () => {
+    expect(FLOW).toContain("allowSwitch={false}");
+    expect(FLOW).toContain("anywayLine={FUNNEL_COPY.previewAnyway}");
+  });
+
+  it("a 404 from checkout (not built until Phase 4) never ends the journey", () => {
+    expect(FLOW).toContain("if (res.status !== 404 && handleTerminal(res.status, data)) return;");
+  });
+});
+
 describe("GET /start/[token]", () => {
   it("sends a paid session and an existing customer to log in", () => {
     expect(START).toContain('if (session.step === "paid") redirect(ALREADY_SET_UP_LOGIN_PATH);');
@@ -137,6 +270,21 @@ describe("GET /start/[token]", () => {
 
   it("sends no referrer, because the token is in the path", () => {
     expect(START).toContain('referrer: "no-referrer"');
+  });
+
+  it("resumes where the visitor stopped, from what is saved", () => {
+    expect(START).toContain("readStoredAnswers(session.answers)");
+    expect(START).toContain("readPreviewSnapshot(session.preview_snapshot)");
+    expect(START).toContain("resumeScreen({ draft, step: session.step, hasPreview: snapshot !== null })");
+  });
+
+  it("hands the browser no contact details", () => {
+    const flow = START.slice(at(START, "<FunnelFlow"), at(START, "/>"));
+    expect(flow).not.toMatch(/session\.(email|phone|name)/);
+  });
+
+  it("shows a discount only while it can be used", () => {
+    expect(START).toContain("validDiscount(data as DiscountRow | null, new Date())");
   });
 
   it("the login page shows the notice the redirect names", () => {

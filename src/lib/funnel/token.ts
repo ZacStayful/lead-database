@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { APP_URL } from "@/lib/env";
 
 /**
@@ -46,4 +46,48 @@ export const ALREADY_SET_UP_LOGIN_PATH = "/login?notice=already_set_up";
 
 export function alreadySetUpLoginUrl(): string {
   return `${APP_URL}${ALREADY_SET_UP_LOGIN_PATH}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * The "Send to my partner" link (02 Phase 3)
+ * ------------------------------------------------------------------ */
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * ⚠️ A SECOND, READ-ONLY TOKEN, NEVER THE FUNNEL TOKEN. The funnel token can
+ * save answers, spend previews and (Phase 4) start a checkout, so a link
+ * forwarded to a business partner must not carry it. The summary token opens
+ * the summary page and nothing else.
+ *
+ * Shape `<session id>.<HMAC of "funnel-summary:<session id>">`, so no column is
+ * needed to look it up: the id says which session, the HMAC proves we issued
+ * it. Domain-separated from `funnel:`, so neither token can be turned into the
+ * other, and the funnel route refuses this shape outright (it is not 43
+ * characters of base64url).
+ */
+export function deriveFunnelSummaryToken(sessionId: string, secret: string | null | undefined): string | null {
+  if (!secret || !UUID.test(sessionId)) return null;
+  const mac = createHmac("sha256", secret).update(`funnel-summary:${sessionId}`).digest("base64url");
+  return `${sessionId}.${mac}`;
+}
+
+/** The session id a summary token opens, or null. Compared in constant time. */
+export function verifyFunnelSummaryToken(raw: string, secret: string | null | undefined): string | null {
+  if (!secret || typeof raw !== "string") return null;
+  const dot = raw.indexOf(".");
+  if (dot < 0) return null;
+  const id = raw.slice(0, dot);
+  const mac = raw.slice(dot + 1);
+  if (!UUID.test(id) || !/^[A-Za-z0-9_-]{43}$/.test(mac)) return null;
+  const expected = deriveFunnelSummaryToken(id, secret);
+  if (!expected) return null;
+  const a = Buffer.from(raw);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b) ? id : null;
+}
+
+/** The partner page's path: the doc's `/start/[token]/summary`, with the summary token. */
+export function funnelSummaryPath(summaryToken: string): string {
+  return `/start/${summaryToken}/summary`;
 }

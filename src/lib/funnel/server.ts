@@ -1,7 +1,8 @@
+import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProductCustomerFields } from "@/lib/products";
-import { funnelEnabledFrom, type FunnelStep } from "@/lib/funnel/session";
-import { hashFunnelToken, looksLikeFunnelToken } from "@/lib/funnel/token";
+import { funnelEnabledFrom, isAlreadySetUp, type FunnelStep } from "@/lib/funnel/session";
+import { alreadySetUpLoginUrl, hashFunnelToken, looksLikeFunnelToken } from "@/lib/funnel/token";
 
 /**
  * The funnel's reads (batch 02 Phase 2). SERVER-SIDE ONLY: every caller holds
@@ -29,7 +30,7 @@ export async function readFunnelEnabled(admin: SupabaseClient): Promise<boolean>
 }
 
 export const FUNNEL_SESSION_COLUMNS =
-  "id, name, email, phone, monday_item_id, answers, base_postcode_locked, preview_snapshot, plan_selected, step, customer_id, paid_at";
+  "id, name, email, phone, monday_item_id, answers, base_postcode_locked, preview_snapshot, plan_selected, step, customer_id, discount_offer_id, paid_at";
 
 export interface FunnelSessionRow {
   id: string;
@@ -43,6 +44,7 @@ export interface FunnelSessionRow {
   plan_selected: number | null;
   step: FunnelStep;
   customer_id: string | null;
+  discount_offer_id: string | null;
   paid_at: string | null;
 }
 
@@ -87,4 +89,49 @@ export async function customersByEmail(admin: SupabaseClient, email: string): Pr
     .limit(5);
   if (error) return { ok: false, message: error.message };
   return { ok: true, customers: (data ?? []) as (ProductCustomerFields & { id: string })[] };
+}
+
+/** Every funnel API response: per visitor, never cached anywhere. */
+export const FUNNEL_NO_STORE = { "Cache-Control": "no-store, private" } as const;
+
+export type FunnelGate =
+  | { ok: true; session: FunnelSessionRow }
+  | { ok: false; response: NextResponse };
+
+/**
+ * The checks every token-holding funnel route makes first, in one place so
+ * the routes cannot drift apart (02 Phases 2 and 3):
+ *
+ *   1. the switch: off is a 403, and an unreadable switch is off;
+ *   2. the token: an unknown session is a 404, a failed lookup a 503;
+ *   3. "already set up": a paid session, or somebody who already holds
+ *      Management, gets a 409 carrying the login link. An unreadable
+ *      customer list refuses (503) rather than guessing "not a customer".
+ */
+export async function funnelGate(admin: SupabaseClient, rawToken: string, tag: string): Promise<FunnelGate> {
+  const refuse = (body: Record<string, unknown>, status: number): FunnelGate => ({
+    ok: false,
+    response: NextResponse.json(body, { status, headers: FUNNEL_NO_STORE }),
+  });
+
+  if (!(await readFunnelEnabled(admin))) return refuse({ code: "funnel_disabled" }, 403);
+
+  const lookup = await loadSessionByToken(admin, rawToken);
+  if (!lookup.ok) {
+    console.error(`[funnel/${tag}] session lookup failed`, lookup.message);
+    return refuse({ code: "unavailable" }, 503);
+  }
+  const session = lookup.session;
+  if (!session) return refuse({ code: "not_found" }, 404);
+
+  const alreadySetUp = () => refuse({ code: "already_set_up", loginUrl: alreadySetUpLoginUrl() }, 409);
+  if (session.step === "paid") return alreadySetUp();
+  const customers = await customersByEmail(admin, session.email);
+  if (!customers.ok) {
+    console.error(`[funnel/${tag}] customer lookup failed`, customers.message);
+    return refuse({ code: "unavailable" }, 503);
+  }
+  if (customers.customers.some(isAlreadySetUp)) return alreadySetUp();
+
+  return { ok: true, session };
 }

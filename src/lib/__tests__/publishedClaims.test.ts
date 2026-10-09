@@ -154,3 +154,39 @@ describe("§54: what the public pages say about how leads arrive", () => {
     expect(copy).not.toMatch(/guarantee[ds]? (a|one) lead/i);
   });
 });
+
+describe("batch 02: what the self-serve funnel says to somebody about to pay", () => {
+  /**
+   * The funnel's FAQ is a published claim made at the moment of purchase. Its
+   * doc text said "a maximum of three operators. Never more." and "within
+   * minutes of assignment"; both were corrected before building (C4, approved
+   * 9 Oct), because escalation can take a lead past three (§18) and leads now
+   * arrive one a working day (§54). The replacement sentence is left out until
+   * its rule is decided (C7).
+   */
+  const FUNNEL = [
+    "lib/funnel/copy.ts",
+    "components/funnel/FunnelFlow.tsx",
+    "components/funnel/WhyItWorks.tsx",
+    "components/funnel/HowLeadsWork.tsx",
+    "app/start/[token]/summary/page.tsx",
+  ];
+
+  for (const path of FUNNEL) {
+    it(`${path} makes none of the corrected claims`, () => {
+      const src = prose(path);
+      expect(src).not.toMatch(/maximum of (two|three) (operators|subscribers)/i);
+      expect(src).not.toMatch(/never more/i);
+      expect(src).not.toMatch(/within minutes/i);
+      expect(src).not.toMatch(/never batched/i);
+      expect(src).not.toMatch(/replacement/i);
+      expect(src).not.toMatch(/zerobounce|verification service/i);
+    });
+  }
+
+  it("says what is true instead", () => {
+    const copy = prose("lib/funnel/copy.ts");
+    expect(copy).toMatch(/Each lead normally goes to up to three operators at once\./);
+    expect(copy).toContain("RELEASE_RULE");
+  });
+});
