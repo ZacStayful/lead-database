@@ -20119,3 +20119,33 @@ more, so the suite now reads all four closed lists back from
 code sends, and an empty table nothing reads. `funnel_sessions` held 0 rows
 when it was written, so nothing is backfilled. Code arriving first would fail
 every session insert on the two new columns.
+
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 9 Oct, before the merge** (§1.1),
+verbatim from the file (it has no function bodies, so the comment-stripped
+form would make no difference). Checked there rather than assumed:
+
+- **Nothing collided beforehand.** No 0166 column, constraint or table
+  existed; `origin/main` and every branch held no other 0166.
+- **Nothing outside 0166 moved.** Fingerprints of every `public` column,
+  constraint, index, all 160 functions with their ACLs, every policy, and
+  every customer's balances and statuses were identical before and after,
+  with 0166's own objects excluded. 110 customers, 655 leads and 687
+  assignments untouched; `funnel_enabled` still off; `funnel_sessions` still
+  empty. The column count went 1,205 → 1,214, which is exactly 0166's nine.
+- **What 0166 added reads back as written**: three nullable columns, both
+  CHECKs, the claim table with its four CHECKs, its primary key and its
+  cascading foreign key, RLS on with no policies, and no trigger of its own.
+- **Driven on production** inside a block that raises at the end, so every
+  write rolled back: a claim left the session's `updated_at` untouched (E3);
+  a second claim got 23505; a bad transition and an outcome without
+  `completed_at` were refused; every entry point and offer order was
+  accepted and `'organic'` and `''` refused. Afterwards: 0 sessions, 0
+  claims, same balance fingerprint.
+- `get_advisors` reports nothing new apart from `funnel_monday_writes` in the
+  deny-all list, which is the deliberate posture.
+
+⚠️ **The Supabase tool's `execute_sql` hangs on a statement containing
+`DELETE` or `ALTER TABLE`** (its confirmation prompt has nobody to answer it
+in an unattended session), and the call times out after 60 seconds having run
+nothing. A probe block that relies on the closing `raise` to roll back needs
+neither, so leave them out.
