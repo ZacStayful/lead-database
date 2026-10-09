@@ -7,6 +7,7 @@ import { AppShell } from "@/components/shell/AppShell";
 import { messagingActiveFor } from "@/lib/messaging/service";
 import { unreadReplyCount } from "@/lib/messaging/inbox";
 import { holdsProduct } from "@/lib/products";
+import { needsLeadBrief } from "@/lib/leadBrief/gate";
 import { adsEnabledFor } from "@/lib/ads/gate";
 import { buildSidebar, type NavFlags } from "@/lib/dashboardNav";
 import { initials } from "@/lib/utils";
@@ -44,6 +45,13 @@ export default async function DashboardLayout({
     // ⚠️ Never while an admin is viewing them (§62): it stamps first_login_at
     // and emails a welcome to somebody who has not logged in.
     if (!viewAs) await markFirstLoginAndNotify(customer);
+
+    // The Lead Brief gate (Phase 3). A flagged new Management customer
+    // completes their brief before the dashboard; confirming it stamps
+    // lead_brief_completed_at and this lets them through. False for every
+    // customer who existed before the brief shipped. Never while an admin is
+    // viewing the customer (§62): the admin sees their dashboard as it is.
+    if (!viewAs && needsLeadBrief(customer)) redirect("/onboarding/brief");
 
     const admin = createAdminClient();
     // ⌘K's lead rows are NOT loaded here: the palette fetches

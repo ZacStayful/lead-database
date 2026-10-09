@@ -16,6 +16,7 @@ import {
   type LeadVolumeData,
 } from "@/lib/filterPrediction";
 import type { Customer, FilterStatus } from "@/lib/types";
+import { SERVICE_AREA_NOTICE } from "@/lib/leadBrief/briefCopy";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +77,8 @@ export default async function LeadFilteringPage() {
     volumeUnavailable
   );
 
+  const briefCustomer = customer.lead_brief_required === true;
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
@@ -86,7 +89,17 @@ export default async function LeadFilteringPage() {
         </p>
       </div>
 
-      {panels.length === 0 ? (
+      {/* The Lead Brief (Phase 3, C15): a brief customer's Management area
+          comes from their brief, so its panel is replaced by this notice. GR
+          is unaffected (invariant 6). */}
+      {briefCustomer && (
+        <div className="rounded-lg border-[0.5px] border-border p-6 text-sm">
+          <p className="font-medium">{SERVICE_AREA_NOTICE.title}</p>
+          <p className="mt-1 text-muted-foreground">{SERVICE_AREA_NOTICE.body}</p>
+        </div>
+      )}
+
+      {panels.length === 0 && !briefCustomer ? (
         <div className="rounded-lg border-[0.5px] border-dashed border-border p-10 text-center text-sm text-muted-foreground">
           Lead filtering becomes available once you have an active subscription.
         </div>
@@ -109,9 +122,11 @@ function panelPropsFor(
 ): FilterPanelProps[] {
   const panels: FilterPanelProps[] = [];
 
+  // A brief customer's Management area comes from their brief (C15).
   const managementVisible =
-    customer.subscription_status === "active" ||
-    (customer.filter_status ?? "off") !== "off";
+    !customer.lead_brief_required &&
+    (customer.subscription_status === "active" ||
+      (customer.filter_status ?? "off") !== "off");
   if (managementVisible) {
     panels.push({
       product: "management",

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { SERVICE_AREA_FROM_BRIEF } from "@/lib/leadBrief/briefCopy";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendFilterLiftScheduledEmail } from "@/lib/emails";
@@ -137,6 +138,18 @@ export async function POST(req: NextRequest) {
   }
 
   const product: LeadType = isProduct(body.product) ? body.product : "management";
+
+  // The Lead Brief (Phase 3, C15). A brief customer's Management service area
+  // comes from their brief; setting a legacy filter here would flip
+  // filter_status and change their routing. Management only (invariant 6): a
+  // GR filter is unaffected. False for every customer who existed before the
+  // brief shipped, so nothing changes for them.
+  if (product === "management" && customer.lead_brief_required) {
+    return NextResponse.json(
+      { error: SERVICE_AREA_FROM_BRIEF, code: "lead_brief_customer" },
+      { status: 409 }
+    );
+  }
   const c = cols(product);
   const admin = createAdminClient();
   const currentStatus = String(customer[c.statusField] ?? "off");

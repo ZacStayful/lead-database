@@ -397,6 +397,12 @@ export interface Customer {
   monday_lead_interest: string | null;
   monday_status_synced_at: string | null;
   monday_status_error: string | null;
+  // The Lead Brief gate (0162). False on every customer who existed before the
+  // brief shipped, so nothing about them changes. A flagged Management customer
+  // is sent to /onboarding/brief until the brief is confirmed, which stamps
+  // lead_brief_completed_at. See src/lib/leadBrief/gate.ts.
+  lead_brief_required: boolean;
+  lead_brief_completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
