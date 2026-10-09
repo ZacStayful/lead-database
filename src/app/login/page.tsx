@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
 import { Eye, EyeOff } from "lucide-react";
 import { VIEW_AS_ROUTE } from "@/lib/viewAs";
+import { FUNNEL_COPY } from "@/lib/funnel/copy";
 
 export default function LoginPage() {
   return (
@@ -108,6 +109,12 @@ function LoginForm() {
           <CardTitle className="pt-2">Log in to your portal</CardTitle>
         </CardHeader>
         <CardContent>
+          {/* The funnel sends somebody who already holds Management here (batch 02). */}
+          {params.get("notice") === "already_set_up" && (
+            <p className="mb-4 rounded-md bg-muted/60 px-3 py-2 text-center text-sm text-foreground">
+              {FUNNEL_COPY.alreadySetUp}
+            </p>
+          )}
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
