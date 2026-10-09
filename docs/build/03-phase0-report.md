@@ -1,6 +1,6 @@
-# Batch 03 Part A — Phase 0 report (9 Oct 2026, awaiting Zac's review)
+# Batch 03 Part A — Phase 0 report and phase plan (approved 9 Oct 2026)
 
-This is the audit Phase 0 asks for. The proposed decisions (E1–E10, numbered only within batch 03) are waiting for Zac's review. Nothing has been built, and no migration has been written.
+This is the audit Phase 0 asks for. Zac approved it on 9 Oct 2026, with **E1–E10 decided as proposed** (numbered only within batch 03). Later phases cite them by number.
 
 ## Orientation
 
@@ -89,7 +89,7 @@ The page reuses `MIN_COHORT = 5` (`src/lib/retention.ts:752`) and §70.5's rule 
 
 ---
 
-## Conflicts and gaps, each quoting the doc section checked
+## Conflicts and gaps, each quoting the doc section checked (all decided 9 Oct as proposed)
 
 | # | Doc says | Conflict | Proposed |
 |---|---|---|---|
