@@ -67,6 +67,9 @@ const EDITOR_COMPONENTS = [
   "src/components/leadBrief/BriefSummaryBar.tsx",
   "src/app/dashboard/leads/brief/page.tsx",
 ].map((p) => readFileSync(p, "utf8"));
+// Batch 02: the self-serve funnel's copy is held to the same A9 list.
+const FUNNEL_COPY_SRC = readFileSync("src/lib/funnel/copy.ts", "utf8");
+const FUNNEL_PAGES = ["src/app/start/[token]/page.tsx"].map((p) => readFileSync(p, "utf8"));
 const CUSTOMER_TEXT = [
   stringLiterals(COPY),
   stringLiterals(LABEL_COPY),
@@ -75,6 +78,8 @@ const CUSTOMER_TEXT = [
   jsxText(VIEW),
   ...LABEL_COMPONENTS.map(jsxText),
   ...EDITOR_COMPONENTS.map(jsxText),
+  stringLiterals(FUNNEL_COPY_SRC),
+  ...FUNNEL_PAGES.map(jsxText),
 ].join("\n");
 
 const A9_BANNED = [
@@ -100,6 +105,7 @@ describe("brief copy — A9 words to avoid", () => {
     expect(CUSTOMER_TEXT).toContain("Where do you operate?");
     expect(CUSTOMER_TEXT).toContain("Why you got this lead");
     expect(CUSTOMER_TEXT).toContain("Save priorities");
+    expect(CUSTOMER_TEXT).toContain("already set up");
   });
 });
 
