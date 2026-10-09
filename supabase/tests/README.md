@@ -135,6 +135,30 @@ validator that raises some other error is a 500 on a bad write.
 The default of `customers.lead_brief_required` is deliberately not asserted:
 the go-live migration flips it, and this suite runs after every migration.
 
+## What `0165_funnel_test.sql` covers
+
+0165 is batch 02's storage for the self-serve funnel. It moves no money; the
+assertions are about the guards the checkout and the webhook will rely on:
+
+- **`funnel_sessions`**: a 64-hex token hash and never a raw token; **one
+  unpaid session per email**, which a paid session leaves; the email stored
+  lower-case and trimmed; the locked postcode in the same canonical shape as
+  `customer_lead_briefs.base_postcode`; plan 10 or 20; a closed step list; and
+  `step = 'paid'` exactly when `paid_at` is stamped. Deleting the customer or
+  the offer nulls the session's pointers.
+- **`consume_funnel_preview`**: counts 1, 2, … 21 (the caller refuses above
+  20), starts a new window at 1 once the old one has expired, and returns null
+  for an unknown session.
+- **`customers.signup_source`** defaults to `call` and is never null or
+  anything but `call` / `funnel`; `password_set_at` starts null.
+- **`post_call_offers.source`** admits `funnel` and still refuses junk, and
+  the one-live-code-per-email index (0037) still holds across sources.
+- **`duplicate_subscriptions`**: the primary key claims a duplicate once, and a
+  subscription cannot be recorded as a duplicate of itself.
+- **Posture**: RLS on with no policies on both tables, the limiter
+  `service_role` only with no defaults, invariant 7, and `funnel_enabled`
+  shipping off.
+
 ## Adding a test file
 
 Write assertions with the helpers the suite defines:
