@@ -56,7 +56,7 @@ describe("the new-lead email", () => {
 describe("the new-lead text", () => {
   const fn = (() => {
     const c = code(sms);
-    const start = c.indexOf("function composeMessage");
+    const start = c.indexOf("function composeNewLeadSms");
     return c.slice(start, c.indexOf("export async function sendNewLeadSms", start));
   })();
 

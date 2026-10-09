@@ -20,6 +20,7 @@ const row = (
     address: string | null;
     area: string | null;
     beds: string | null;
+    label: string | null;
     noAssignment: boolean;
   }> = {}
 ): NewLeadRow => ({
@@ -31,6 +32,7 @@ const row = (
         id: `a-${over.id ?? "n1"}`,
         lead_id: `l-${over.id ?? "n1"}`,
         viewed_at: over.viewedAt ?? null,
+        match_label: over.label ?? null,
         lead: {
           id: `l-${over.id ?? "n1"}`,
           lead_name: `Landlord ${over.id ?? "n1"}`,
@@ -117,6 +119,22 @@ describe("buildNewLeadCard", () => {
     expect(card?.primary.town).toBe("");
     expect(card?.primary.postcodeArea).toBeNull();
     expect(card?.primary.bedrooms).toBeNull();
+  });
+});
+
+describe("buildNewLeadCard — the Lead Brief label (Phase 5)", () => {
+  it("carries a brief customer's label onto the card", () => {
+    const card = buildNewLeadCard(
+      [row({ id: "a", label: "top_match" }), row({ id: "b", createdAt: "2026-09-18T08:00:00Z", label: "nearby_opportunity" })],
+      { now, viewerId: viewer }
+    );
+    expect(card?.primary.label).toBe("top_match");
+    expect(card?.rest[0].label).toBe("nearby_opportunity");
+  });
+
+  it("is null for everyone else, so their card is unchanged", () => {
+    const card = buildNewLeadCard([row()], { now, viewerId: viewer });
+    expect(card?.primary.label).toBeNull();
   });
 });
 

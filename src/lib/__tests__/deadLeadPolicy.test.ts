@@ -835,6 +835,12 @@ describe("the allowance stays unpublished in the COPY too", () => {
     // where the report control now renders.
     "components/lead/ContactPanel.tsx",
     "components/lead/WorkThisLead.tsx",
+    // Added by Lead Brief Phase 5: the label surfaces sit on the same card and
+    // panel, and "Not for me" is a reject a click from the report.
+    "lib/leadBrief/labelCopy.ts",
+    "components/leadBrief/MatchLabelBadge.tsx",
+    "components/leadBrief/WhyThisLead.tsx",
+    "components/leadBrief/NotForMe.tsx",
   ];
 
   for (const file of surfaces) {

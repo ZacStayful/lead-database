@@ -35,8 +35,14 @@ function senderParam(): Record<string, string> | null {
   return null;
 }
 
-/** Short, PII-light alert that drives the operator into the portal to call. */
-function composeMessage(lead: Lead): string {
+/**
+ * Short, PII-light alert that drives the operator into the portal to call.
+ *
+ * Lead Brief (Phase 5): a brief customer's text names the label and nothing
+ * else ("a new Top match just landed …"). Without a label the text is exactly
+ * what it always was, pinned by a test.
+ */
+export function composeNewLeadSms(lead: Lead, label?: string): string {
   const city = extractCity(lead.address);
   const beds = lead.bedrooms ? `, ${lead.bedrooms} bed` : "";
   const where = city ? ` in ${city}${beds}` : beds ? ` (${lead.bedrooms} bed)` : "";
@@ -44,14 +50,17 @@ function composeMessage(lead: Lead): string {
   // signed-out one goes through login AND BACK to it. Keyed on lead.id — the
   // lead page resolves its [id] as the lead_id, NOT the assignment id.
   const link = leadDeepLink(lead.id);
-  return `Stayful: a new lead just landed${where}. Be first to call — open it here: ${link}`;
+  const what = label ? `a new ${label}` : "a new lead";
+  return `Stayful: ${what} just landed${where}. Be first to call — open it here: ${link}`;
 }
 
 export async function sendNewLeadSms(params: {
   customer: Customer;
   lead: Lead;
+  /** Lead Brief (Phase 5): the label's display name, for a brief customer only. */
+  label?: string;
 }): Promise<SmsResult> {
-  const { customer, lead } = params;
+  const { customer, lead, label } = params;
 
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -73,7 +82,7 @@ export async function sendNewLeadSms(params: {
     const form = new URLSearchParams({
       ...sender,
       To: to,
-      Body: composeMessage(lead),
+      Body: composeNewLeadSms(lead, label),
     });
 
     const controller = new AbortController();

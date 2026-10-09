@@ -9,6 +9,7 @@ import {
   REPLACEMENT_NAV_LABEL,
   REPLACEMENT_PATH,
   availableSentence,
+  currentCycleStart,
   exhaustedSentence,
   holdSentence,
   nextGrantDate,
@@ -301,5 +302,61 @@ describe("a row whose slot is already a replacement (§53.12)", () => {
     // And so does a hold, or the button stays live on a failing card.
     expect(src).toContain("held !== null ||");
     expect(src).toContain("holdSentence(");
+  });
+});
+
+describe("currentCycleStart (Lead Brief Phase 5)", () => {
+  // ⚠️ The SQL replacement_cycle_start (0153), transcribed: the same coalesce
+  // order and month-end clamp, and on the anchor day it is TODAY. The "This
+  // month" line counts from it, so it must agree with the date the monthly
+  // counters reset on.
+  it("is today on the anchor day, and the last anchor day otherwise", () => {
+    const anchors = { billing_cycle_anchor: "2026-01-08" };
+    expect(currentCycleStart(anchors, new Date("2026-10-08T00:00:00Z"))).toBe("2026-10-08");
+    expect(currentCycleStart(anchors, new Date("2026-10-09T12:00:00Z"))).toBe("2026-10-08");
+    expect(currentCycleStart(anchors, new Date("2026-10-07T23:59:00Z"))).toBe("2026-09-08");
+  });
+
+  it("uses the same coalesce order as nextGrantDate", () => {
+    const now = new Date("2026-09-12T00:00:00Z");
+    expect(
+      currentCycleStart(
+        { billing_cycle_anchor: "2026-01-08", gr_billing_cycle_anchor: "2026-01-20", created_at: "2025-05-03" },
+        now
+      )
+    ).toBe("2026-09-08");
+    expect(
+      currentCycleStart({ billing_cycle_anchor: null, gr_billing_cycle_anchor: "2026-01-20", created_at: "2025-05-03" }, now)
+    ).toBe("2026-08-20");
+    expect(currentCycleStart({ billing_cycle_anchor: null, gr_billing_cycle_anchor: null, created_at: "2025-05-03" }, now)).toBe(
+      "2026-09-03"
+    );
+  });
+
+  it("clamps a 31st anchor to the last day of a short month", () => {
+    const anchors = { billing_cycle_anchor: "2026-01-31" };
+    expect(currentCycleStart(anchors, new Date("2026-03-01T00:00:00Z"))).toBe("2026-02-28");
+    expect(currentCycleStart(anchors, new Date("2026-02-28T00:00:00Z"))).toBe("2026-02-28");
+    expect(currentCycleStart(anchors, new Date("2026-04-30T00:00:00Z"))).toBe("2026-04-30");
+  });
+
+  it("is the inverse of nextGrantDate on every day of a year", () => {
+    for (const anchor of ["2026-01-01", "2026-01-15", "2026-01-29", "2026-01-31"]) {
+      const anchors = { billing_cycle_anchor: anchor };
+      for (let d = 0; d < 366; d++) {
+        const now = new Date(Date.UTC(2026, 0, 1) + d * 86_400_000);
+        const today = now.toISOString().slice(0, 10);
+        const start = currentCycleStart(anchors, now) as string;
+        const next = nextGrantDate(anchors, now) as string;
+        expect(start <= today).toBe(true);
+        expect(today < next).toBe(true);
+        expect(currentCycleStart(anchors, new Date(`${next}T00:00:00Z`))).toBe(next);
+      }
+    }
+  });
+
+  it("returns null when there is nothing to anchor on", () => {
+    expect(currentCycleStart({})).toBeNull();
+    expect(currentCycleStart({ billing_cycle_anchor: "not a date" })).toBeNull();
   });
 });

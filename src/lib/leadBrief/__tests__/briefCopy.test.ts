@@ -44,9 +44,23 @@ function jsxText(src: string): string {
 }
 
 const COPY = readFileSync("src/lib/leadBrief/briefCopy.ts", "utf8");
+const LABEL_COPY = readFileSync("src/lib/leadBrief/labelCopy.ts", "utf8");
 const WIZARD = readFileSync("src/components/leadBrief/BriefWizard.tsx", "utf8");
 const VIEW = readFileSync("src/components/leadBrief/BriefPreviewView.tsx", "utf8");
-const CUSTOMER_TEXT = [stringLiterals(COPY), jsxText(WIZARD), jsxText(VIEW)].join("\n");
+// Phase 5's label surfaces (labelCopy.ts and the three components) are held to
+// the same A9 list as the questionnaire.
+const LABEL_COMPONENTS = [
+  "src/components/leadBrief/MatchLabelBadge.tsx",
+  "src/components/leadBrief/WhyThisLead.tsx",
+  "src/components/leadBrief/NotForMe.tsx",
+].map((p) => readFileSync(p, "utf8"));
+const CUSTOMER_TEXT = [
+  stringLiterals(COPY),
+  stringLiterals(LABEL_COPY),
+  jsxText(WIZARD),
+  jsxText(VIEW),
+  ...LABEL_COMPONENTS.map(jsxText),
+].join("\n");
 
 const A9_BANNED = [
   /\bfilter/i,
@@ -69,6 +83,7 @@ describe("brief copy — A9 words to avoid", () => {
   it("the scan actually sees the copy (guards the guard)", () => {
     expect(CUSTOMER_TEXT).toContain("Every lead you pay for is delivered");
     expect(CUSTOMER_TEXT).toContain("Where do you operate?");
+    expect(CUSTOMER_TEXT).toContain("Why you got this lead");
   });
 });
 
@@ -242,8 +257,11 @@ describe("brief copy — fixed lists and links", () => {
 
   it("the copy module stays client-safe: only the import-free booking link", () => {
     const imports = Array.from(strip(COPY).matchAll(/^import .* from "([^"]+)";/gm)).map((m) => m[1]);
-    expect(imports).toEqual(["@/lib/prospect/copy"]);
+    // Phase 5: the label names and money helpers moved to labelCopy.ts, which
+    // must itself stay import-free so client components can use it.
+    expect(imports).toEqual(["@/lib/prospect/copy", "@/lib/leadBrief/labelCopy"]);
     const prospect = readFileSync("src/lib/prospect/copy.ts", "utf8");
     expect(strip(prospect)).not.toMatch(/^import /m);
+    expect(strip(LABEL_COPY)).not.toMatch(/^import /m);
   });
 });

@@ -135,7 +135,10 @@ describe("autoAssignLead — brief customers last, and only behind the switch", 
 
   it("labels a delivery in completeAssignment, right after the customer is loaded", () => {
     const loaded = INGEST.indexOf("if (!typedCustomer) return;");
-    const label = INGEST.indexOf("await recordBriefMatch(supabase, typedCustomer, lead, assignmentId);");
+    // Phase 5: the call gained `{ routed }` and its result feeds the alerts.
+    const label = INGEST.indexOf(
+      "const match = await recordBriefMatch(supabase, typedCustomer, lead, assignmentId, {"
+    );
     const alerts = INGEST.indexOf("const wantsNewLead = wantsNotification(");
     expect(loaded).toBeGreaterThan(-1);
     expect(label).toBeGreaterThan(loaded);
@@ -205,7 +208,10 @@ describe("routing.ts — the switch and the label", () => {
   });
 
   it("never relabels, and reads the active brief only", () => {
-    expect(ROUTING).toContain('.eq("id", assignmentId) .is("match_label", null);');
+    // Phase 5: `.select("id")` so a re-run that wrote nothing returns null and
+    // no alert carries a label that disagrees with the stored one.
+    expect(ROUTING).toContain('.eq("id", assignmentId) .is("match_label", null) .select("id");');
+    expect(ROUTING).toContain("if (!written || written.length === 0) return null;");
     expect(ROUTING).toContain('.eq("status", "active")');
   });
 

@@ -398,8 +398,14 @@ export async function sendNewLeadEmail(params: {
    * day's lead rather than one of a batch. Defaults to the old subject.
    */
   todaysLead?: boolean;
+  /**
+   * Lead Brief (Phase 5): a brief customer's label and its one-line reason.
+   * Absent for everyone else, and then the email is byte-for-byte what it was
+   * (pinned by a test).
+   */
+  match?: { label: string; reason: string };
 }): Promise<{ id: string | null; error: unknown }> {
-  const { to, lead, todaysLead = false } = params;
+  const { to, lead, todaysLead = false, match } = params;
   const city = extractCity(lead.address);
   const who = `${lead.lead_name}${city ? `, ${city}` : ""}`;
   const subject = todaysLead
@@ -435,7 +441,12 @@ export async function sendNewLeadEmail(params: {
   // button below.
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">A new lead is ready</h1>
-    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">A pre-screened landlord enquiry has just been assigned to you. Open it to see the full details and start making contact.</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">A pre-screened landlord enquiry has just been assigned to you. Open it to see the full details and start making contact.</p>${
+      match
+        ? `
+    <p style="margin:0 0 18px;font-size:14px"><strong style="color:${BRAND}">${esc(match.label)}</strong><br />${esc(match.reason)}</p>`
+        : ""
+    }
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px">${rows}</table>
     ${button(leadDeepLink(lead.id), "Open this lead")}
   `;

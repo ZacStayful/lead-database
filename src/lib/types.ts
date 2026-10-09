@@ -607,6 +607,12 @@ export interface Lead {
   enquiry_date: string | null;
   postcode: string | null;
   postcode_area: string | null;
+  /**
+   * The postcode's outward code (0161, a stored generated column). Optional
+   * because explicit selects and fixtures don't always carry it; the Lead
+   * Brief "why" panel reads it for its Nearby tip.
+   */
+  outcode?: string | null;
   lead_type: LeadType;
   assignment_count: number;
   /**
@@ -757,6 +763,18 @@ export interface LeadAssignment {
    * routing, scoring or reporting.
    */
   tags: string[];
+  /**
+   * Lead Brief (0162, Phases 4–5): how well this lead fits a brief customer's
+   * brief. All null on every other assignment — every surface that shows a
+   * label renders nothing without one, which is what keeps existing customers'
+   * screens unchanged. `match_reasons` is read through parseMatchReasons
+   * (leadBrief/labelCopy.ts), never trusted as typed. Optional because rows
+   * built by hand (realtime inserts, fixtures) may not carry them.
+   */
+  match_label?: "top_match" | "strong_match" | "first_pick" | "nearby_opportunity" | null;
+  match_score?: number | null;
+  match_reasons?: unknown;
+  match_brief_id?: string | null;
 }
 
 /**

@@ -221,3 +221,61 @@ describe("buildBriefMatch — the label on a delivery", () => {
     }
   });
 });
+
+describe("buildBriefMatch — what Phase 5 adds to the reasons", () => {
+  const routed = { received: 7, allocation: 20, days_left: 12 };
+  const weakInArea = lead("YO10", { gross: 10000, bedrooms: 1, occupancy: 20 });
+
+  it("stores the customer's progress on a routed Nearby lead only", () => {
+    const nearby = buildBriefMatch(weakInArea, BRIEF, { isFirstSale: true, progress: routed });
+    expect(nearby.label).toBe("nearby_opportunity");
+    expect(nearby.reasons.progress).toEqual(routed);
+    const pace = buildBriefMatch(lead("YO7"), BRIEF, { isFirstSale: true, progress: routed });
+    expect(pace.reasons.progress).toEqual(routed);
+    // Never on another label, and never on a hand-placed delivery (no progress passed).
+    const top = buildBriefMatch(lead("YO10", { gross: 50000, bedrooms: 4, occupancy: 70 }), BRIEF, {
+      isFirstSale: true,
+      progress: routed,
+    });
+    expect(top.reasons).not.toHaveProperty("progress");
+    expect(buildBriefMatch(weakInArea, BRIEF, { isFirstSale: true }).reasons).not.toHaveProperty("progress");
+    expect(buildBriefMatch(weakInArea, BRIEF, { isFirstSale: true, progress: null }).reasons).not.toHaveProperty(
+      "progress"
+    );
+  });
+
+  it("leaves progress out when the sentence would not be true", () => {
+    for (const progress of [
+      { received: 20, allocation: 20, days_left: 5 },
+      { received: 3, allocation: 20, days_left: 0 },
+    ]) {
+      expect(buildBriefMatch(weakInArea, BRIEF, { isFirstSale: true, progress }).reasons).not.toHaveProperty(
+        "progress"
+      );
+    }
+  });
+
+  it("stores the competition tier for a lead in a first-pick area only", () => {
+    const pick = buildBriefMatch(lead("YO8", { gross: 10000 }), BRIEF, { isFirstSale: true, competition: "low" });
+    expect(pick.reasons.competition).toBe("low");
+    const inArea = buildBriefMatch(weakInArea, BRIEF, { isFirstSale: true, competition: "low" });
+    expect(inArea.reasons).not.toHaveProperty("competition");
+    expect(buildBriefMatch(lead("YO8"), BRIEF, { isFirstSale: true, competition: null }).reasons).not.toHaveProperty(
+      "competition"
+    );
+  });
+
+  it("adds nothing beyond those two optional keys, and they carry no one else's data", () => {
+    const m = buildBriefMatch(lead("YO8", { gross: 10000 }), BRIEF, {
+      isFirstSale: false,
+      progress: routed,
+      competition: "medium",
+    });
+    expect(Object.keys(m.reasons).sort()).toEqual(["area", "competition", "first_pick", "priorities", "progress", "v"]);
+    expect(Object.keys(m.reasons.progress ?? {}).sort()).toEqual(["allocation", "days_left", "received"]);
+    const text = JSON.stringify(m.reasons).toLowerCase();
+    for (const banned of ["holder", "operator", "deficit", "volume", "count", "share"]) {
+      expect(text).not.toContain(banned);
+    }
+  });
+});
