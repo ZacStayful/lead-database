@@ -81,7 +81,10 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/poll-whatsapp-status` | `*/5 * * * *` | WhatsApp delivered/read (no vendor webhook), deferred-event recovery, **and sending due follow-up steps** (§40.9, §40.13) |
 | `/api/cron/draft-sequence-messages` | `0 17 * * *` | Draft tomorrow's follow-up steps into the review queue (§40.13) |
 | `/api/cron/contact-followups` | `15 8 * * *` | Today's follow-up prompt, and the weekly falling-behind notice (§42.8) |
+| `/api/cron/ticket-synthesis` | `20 * * * *` | Support tickets: after a two-hour grace window, email any request still waiting on its clarifying answers exactly as it was sent and mark it `abandoned`; retry failed synthesis, 5 a run (§50.3) |
 | `/api/cron/release-leads` | `30 7 * * 1-5` | Weekdays: the morning release — every banked lead re-offered, oldest first, through the one-a-working-day rule (§54). Lands before the 08:15 digest |
+| `/api/cron/prospect-nudges` | `* * * * *` | The booking chase: a WhatsApp and an email to an enquirer who has not booked, about two minutes after enquiring, then at 24 and 48 hours; Calendly checked before every send (§55). Switch `prospect_nudge_enabled` on `/admin/messaging` |
+| `/api/cron/monday-enquiry-sync` | `* * * * *` | Turn a new Facebook lead-ad enquiry on the enquiries board (18420649520) into a customer row and a booking chase (§57). Switch `enquiry_sync_enabled`: in the allow-list but with no control on any page (§57.11), so it is a SQL edit |
 | `/api/cron/lapse-past-due` | `0 6 * * *` | Write off a customer whose card has been failing for `past_due_lapse_days` (3): `account_status → cancelled`, board → `Cancelled`. Never calls Stripe (§59) |
 | `/api/cron/monday-lead-sync` | `*/5 * * * *` | Ingest NEW sellable items from both lead boards within minutes of them appearing; only ids not yet in `leads`. The two 09:00 syncs stay as the backstop (§63). Switch `lead_sync_enabled` on `/admin/allocation` |
 | `/api/cron/stayful-conflict-sweep` | `*/15 * * * *` | Withdraw any management lead that matches a landlord in one of the nine pipeline groups on Stayful's own Management Leads board (5891626711), owe each holder a replacement, and fill every open debt from stock (§64). Switch `stayful_conflict_enabled` on `/admin/allocation`; ships off |
@@ -99,9 +102,13 @@ Pro.** `GET /v2/teams` returns `plan: "pro"` for `zacs-projects-bcdb6016`
 That correction matters in three directions, so it is worth stating rather than
 just deleting:
 
-- The **14** crons in the table above genuinely all fire. Under Hobby only two
-  would, and §31.8 records a whole feature that was designed around believing
-  they might not.
+- ~~The **14** crons in the table above genuinely all fire.~~ ⚠️ **26** since
+  batch 02 Phase 5, all of them in the table above. The table had fallen three
+  rows behind `vercel.json` (ticket-synthesis, prospect-nudges and
+  monday-enquiry-sync were registered and never listed) and was brought back
+  into step in batch 02 Phase 6. Count `vercel.json`'s `crons` rather than
+  trusting a number here. Under Hobby only two would fire, and §31.8 records a
+  whole feature that was designed around believing they might not.
 - `maxDuration = 300` works. `parse-income-reports`, the 0092 backfill and
   `draft-sequence-messages` all rely on it; under Hobby they were being cut
   short at 60 seconds.
@@ -218,7 +225,8 @@ Other tables: `notifications`, `payments`, `lead_notes`, `lead_files`,
 `testimonials`, `public_activity_stats`, `lead_imports` (§30),
 `lead_analysis_jobs` / `lead_analysis_rows` / `lead_analysis_tokens` (§31),
 `support_tickets` / `support_ticket_notes` (§46), `ad_drafts` /
-`ad_creatives` / `ad_generation_requests` / `deleted_storage_objects` (§65).
+`ad_creatives` / `ad_generation_requests` / `deleted_storage_objects` (§65),
+`funnel_sessions` / `duplicate_subscriptions` (§75).
 
 ---
 
@@ -381,7 +389,8 @@ its single reclaim on a day when nobody had credit.
 `/api/customer/my-leads` (+ `/import/preview`, `/import/commit`, and
 `DELETE /[id]`) — customer-owned leads (§30),
 `/api/customer/ads` (+ `/[id]`, `/[id]/{simplify,template,answers,regenerate,render}`,
-`/[id]/image/[ratio]`, `/profile`) — the Facebook ad builder, owner-gated (§65).
+`/[id]/image/[ratio]`, `/profile`) — the Facebook ad builder, owner-gated (§65),
+`/api/customer/password-set` (§75 — stamps `password_set_at`, session only).
 
 `/api/customer/goal` is the **only** customer route with no admin client at
 all — it calls a `SECURITY DEFINER` RPC on the session client. Everything else
@@ -394,6 +403,16 @@ there is no session gate in front of it (the only middleware, `src/middleware.ts
 matches `/api` and refuses writes only while an admin is viewing a customer —
 §62), so the bug/feature form has always worked signed out. Since §46 it is also the first unauthenticated
 write of free text into a table, which is why its length caps are load-bearing.
+
+**The self-serve funnel (§75), no session, a credential instead:**
+`POST /api/funnel/session` (bearer `N8N_WEBHOOK_SECRET`, called by n8n);
+`POST /api/funnel/[token]/answers`, `/preview` and `/checkout` and the page
+`/start/[token]` (the funnel token is the credential); `/start/[token]/summary`
+(a second, read-only summary token); and `/pay/[offerToken]?plan=10|20` (the
+post-call payment link, its token an HMAC of the offer id). All of them refuse
+while `funnel_enabled` is off except `/pay`, which does not read that switch:
+it serves call-route offers, and a funnel offer opened there still needs
+`lead_brief_enabled` on (`startFunnelCheckout`).
 
 **Support and feature requests:** `/api/feedback` (POST, public) and
 `/api/support` (POST, session optional) — both log a ticket and then email it
@@ -699,6 +718,16 @@ for being new with no way to earn out of it.
   cancel_at_period_end: true, cancellation_details })` has not been exercised
   end to end against a real subscription, only the webhook's handling of the
   resulting event shape has been reasoned through.
+- Rehearse batch 02 (§75) in Stripe **test mode**, the same standing item
+  again. The guarded checkout, the duplicate-subscription backstop and funnel
+  provisioning have only been run against in-memory stubs. Before
+  `funnel_enabled` goes on:
+  - a funnel purchase makes an active customer with no invite, and the
+    sign-in email arrives through Resend and lands on the prefilled brief;
+  - a second tab on the same plan gets the same Checkout Session;
+  - a second Management subscription paid through a raw Payment Link is
+    recorded, cancelled and refunded, and the real customer stays active;
+  - one code exists per person across the funnel and the call route.
 
 ---
 
@@ -927,16 +956,31 @@ prospect still cannot satisfy it — self-serve **acquisition** stays retired, a
 that is now structural rather than a matter of care. The exception is per
 product: having once held management buys management back, not GR.
 
+⚠️ **"Self-serve acquisition stays retired" is no longer true of the platform,
+only of this route.** Batch 02 (§75) reopened it for **Management**: an
+enquirer who is sent a funnel link can pay without a call or an invite,
+through the guarded checkout (`startManagementCheckout`). Guaranteed Rent is
+still call-only. `/api/signup` and this route are unchanged and both guards
+above still hold here: the funnel is a separate door, not a loosening of this
+one. `previouslyHeldProduct()` is still what stops a waitlisted prospect
+buying here.
+
 **Nothing in the route grants a product.** The Stripe webhook does that, routing
 by price id: `invoice.paid` credits the leads and promotes `account_status` out
 of `invited`/`waitlisted`. So a self-serve buyer lands in exactly the same state
 as an admin-invited one, and an abandoned checkout changes nothing.
 
-**Management is capacity-gated here, GR is not** — the same asymmetry as signup
+~~**Management is capacity-gated here, GR is not** — the same asymmetry as signup
 (§16). The check is a headcount against `max_active_customers`, deliberately
 copied from `/api/signup` rather than using the weighted helper, so the cap
 means the same thing however a customer arrives. See the §16 note: those two
-readings of the same setting still disagree.
+readings of the same setting still disagree.~~
+
+⚠️ **Out of date: neither product is capacity-gated here.** §16 records that
+the gate was removed from both `/api/signup` and this route, and the route
+says so itself ("No capacity gate. Mirrors /api/signup, which also stopped
+refusing."). Nothing anywhere refuses a sale on capacity, the funnel's
+checkout included (§75).
 
 ### The one trap: the allocation column must be set before checkout
 
@@ -1215,6 +1259,12 @@ Two knock-ons left alone, both judgement calls rather than oversights:
 This adds an admin action, not self-serve re-subscription: `/api/customer/subscribe`
 still requires holding the other product, which is the §17 guard keeping self-serve
 acquisition retired.
+
+⚠️ That guard still holds on `/api/customer/subscribe`, but a cancelled
+Management customer now has a self-serve way back as well: a funnel link
+(§75). The funnel's "already set up" test is `holdsProduct`, which a
+cancellation fails, so somebody who left can come back through it. The invite
+route above is unchanged and is not part of the guarded checkout.
 
 ---
 
@@ -19539,3 +19589,428 @@ not admin gets 401; with the env var unset the curl gets 404.
 
 Code first, secret second: until `JARVIS_INTERNAL_SECRET` is set the route is
 a 404 and JARVIS shows the Monday funnel with churn marked approximate.
+
+---
+
+## 75. Self-serve funnel and guarded checkout *(0165)*
+
+A Management enquirer can now buy without a call. n8n sends them a link to a
+short funnel at `/start/[token]`: three questions, a non-binding Lead Brief
+preview for both plans, the objections answered on one page, then payment.
+Payment runs through **one guarded checkout** shared with the post-call link,
+so nobody already set up is charged again, and nobody pays twice from two
+tabs. A funnel payer becomes an active Lead Brief customer with no admin
+invite and no password step.
+
+Built as batch 02 (`docs/build/02-funnel-and-checkout.md`). The Phase 0
+report and the decisions it refers to as C1–C9 are in
+`docs/build/02-phase0-report.md`. ⚠️ The Lead Brief has no section in this
+file yet (its Phase 7 writes one); until then its rules are in
+`docs/build/lead-brief-build-prompt.md`, `01-lead-brief-additions.md` and
+migrations 0161–0164.
+
+`src/lib/funnel/*` · `src/lib/checkout/*` · `src/lib/postCallOfferIssue.ts` ·
+`/start/[token]` · `/pay/[offerToken]` · `/api/funnel/*` ·
+`/api/cron/funnel-discounts`
+
+⚠️ **Every funnel route, page and the discount cron refuse while
+`funnel_enabled` is off, and it ships off.** `/pay` does not read the switch:
+it is the post-call link and serves call-route offers whatever its value.
+
+### 75.1 — The journey
+
+1. **The link.** n8n calls `POST /api/funnel/session` (bearer
+   `N8N_WEBHOOK_SECRET`) with `{ monday_item_id, name, email, phone }`. Every
+   outcome n8n can act on is a 200 with a `status`:
+   - `created` / `existing`: `url` is the funnel link. One email always gets
+     the same link (75.3);
+   - `already_customer`: `loginUrl` instead;
+   - `funnel_disabled`: send the call route.
+
+   It fails closed: no token secret, an unreadable switch or an unreadable
+   customer list refuses rather than sending a link to somebody who may
+   already be paying.
+2. **The questions.** `/start/[token]` asks where they operate, how far they
+   will travel and what a lead must have, reusing the Lead Brief step
+   components. Every answer is saved by `POST /api/funnel/[token]/answers`,
+   so the link resumes where the visitor stopped.
+3. **The preview.** `POST /api/funnel/[token]/preview` runs the brief engine
+   for both plans (75.4).
+4. **Why it works.** The demo video (`NEXT_PUBLIC_FUNNEL_DEMO_URL`, hidden
+   when unset), a sample lead card and the FAQ (75.10).
+5. **The plan screen.** £150/10 or £300/20, each with its radius from the
+   preview and any live discount with its UK-time expiry. "Continue to
+   payment" posts to `POST /api/funnel/[token]/checkout`.
+6. **Payment.** Stripe Checkout through the one door (75.5). Stripe returns
+   them to `/login?notice=payment_received`.
+7. **Set-up.** `invoice.paid` runs `completeFunnelPayment` (75.7), which emails
+   a sign-in link through Resend. It lands on `/onboarding/brief`, opened on
+   their own answers (C1).
+8. **A password for next time.** Once the brief is confirmed, the dashboard
+   offers one (75.8).
+
+**Exits on every screen:** "Book a call instead" (`NEXT_PUBLIC_BOOKING_URL`,
+falling back to `BOOKING_URL` in `src/lib/prospect/copy.ts`, the same
+Calendly link the booking chase uses) and "Send to my
+partner".
+
+⚠️ **Payment also needs `lead_brief_enabled`.** A funnel payer is set up with
+`lead_brief_required = true`, 0163 keeps such customers out of both legacy
+candidate pools, and brief routing only runs while `lead_brief_enabled` is
+on. Taking the money with it off would sell leads that nothing routes, so
+`startFunnelCheckout` refuses with `payment_not_open` (409) and the plan
+screen offers a call. It also refuses a session that has never previewed
+(`preview_required`), because the plan screen and the confirmation are both
+built from the preview.
+
+### 75.2 — What 0165 added
+
+| | |
+|---|---|
+| `funnel_sessions` | One row per journey. The token's **SHA-256 only** (75.3); name, lower-cased email, phone, the Monday item n8n sent; `answers` and `preview_snapshot` (what the confirmation is prefilled from, C1); `base_postcode_locked`; `plan_selected`; `step`; `checkout_session_id`; `customer_id`; `discount_offer_id`; the preview limiter's counter and window; `paid_at` |
+| `duplicate_subscriptions` | The webhook backstop's record of a second Management subscription it cancelled and refunded (75.6) |
+| `consume_funnel_preview(session, window_seconds)` | The preview rate limit: increment then compare (0130's `consume_reset_budget` shape), `security definer`, service role only. Returns null for an unknown session |
+| `customers.signup_source` | `'call'` or `'funnel'`; every existing row is `'call'` by the default (75.8) |
+| `customers.password_set_at` | When a funnel payer set a password (75.8) |
+| `post_call_offers.source` | Widened to admit `'funnel'` (75.9) |
+| `funnel_enabled` | The switch, seeded `'false'` |
+
+- `step` moves `started → questions_done → previewed → checkout_started →
+  paid` and **only ever forward** (`advanceStep`). A CHECK ties `paid` to
+  `paid_at`, so neither can be set without the other.
+- **One open session per email**: a partial unique index on `email where step
+  <> 'paid'`. A paid session drops out of it, so somebody who leaves and comes
+  back later can start again.
+- Both tables are RLS on with **no policies**. Every read and write goes
+  through a route on the service role, and the visitor has no session at all.
+- **Inert on its own.** No existing function was created, replaced or
+  re-granted. The only existing objects touched were one widened CHECK and
+  two new `customers` columns.
+- Applied to production on 9 Oct, before the merge, in five parts recorded as
+  `0165_funnel_part1`–`part5`: the apply tool timed out on the whole file four
+  times without reaching the database. Every object matches a scratch build
+  from the file except the two new columns' ordinal positions.
+
+### 75.3 — Three tokens on one secret
+
+All three are HMACs under `MESSAGING_TOKEN_SECRET`, each with its own prefix
+so none can be turned into another. All three **fail closed** without the
+secret: no link can be made or opened.
+
+| Token | Shape | Opens |
+|---|---|---|
+| Funnel | `HMAC("funnel:" + session id)`, 43 base64url characters | `/start/[token]`, answers, preview, checkout |
+| Partner summary | `<session id>.<HMAC("funnel-summary:" + id)>` | `/start/[token]/summary` only |
+| Pay | `<offer id>.<HMAC("post-call-pay:" + id)>` | `/pay/[offerToken]` only |
+
+- **The funnel token is derived, never stored (C6).** Only its SHA-256 is in
+  `token_hash`. Deriving it from the row id is what lets n8n ask twice, or
+  retry after a timeout, and send one enquirer one link. The batch-review link
+  does the same (§73.4).
+- **The summary token cannot do anything.** The funnel token saves answers,
+  spends previews and starts a payment, so it must never be forwarded. The
+  partner page reads `id, answers, preview_snapshot, plan_selected` and nothing
+  else (never name, email or phone), and has no payment button and no link
+  into the funnel. A funnel token in the summary path is a 404, and so is the
+  reverse.
+- **The pay token opens one offer's checkout.** Who is paying comes from the
+  offer row, and the visitor chooses only the plan, so a forwarded link can
+  only ever start a payment for that prospect.
+- Each token is in a URL path, so these pages send no referrer.
+
+### 75.4 — The preview never carries a volume
+
+⚠️ **The only response is `funnelPreviewBody`**: two `previewForClient`
+results (one per plan) plus the ticked similar areas, built field by field.
+That means miles, tiers, labels and the mix as a split of the customer's own
+allocation, and never an area's lead volume, a count or a forecast (02 locked
+decision 7, 01 A4). Anyone holding a funnel link reaches this route, so it
+must not be a way to read our supply. A test walks the response at every
+depth for any key naming a volume, count, supply, target or shortfall, and
+proves the walk catches the server preview.
+
+The order in the route is the rule:
+
+1. **`funnelGate`**, shared with the answers and checkout routes so they
+   cannot drift:
+   - the switch: off is a 403, and an unreadable switch reads as off;
+   - the token: an unknown session is a 404, a failed lookup a 503;
+   - "already set up": a paid session, or somebody who holds Management, is a
+     409 carrying the login link.
+2. **The input and the postcode lock**: cheap, and judged before the limiter,
+   so a typo never spends a preview. The first preview locks the base postcode
+   for the token by a claim-by-write; another postcode is a 409
+   (`postcode_locked`), and changing it means contacting Zac. The lock holds on
+   the answers route too.
+3. **The rate limit**: 20 previews per token per rolling 24 hours, failing
+   closed (429 `rate_limited`).
+4. **The supply**, which is the expensive read the limit exists to bound.
+
+**Pre-ticking** follows the questionnaire, taking the recommended similar area
+from the 10-lead plan. Its 40-mile cap is the smaller of the two, so one
+ticked list serves both columns.
+
+### 75.5 — One door for a Management payment
+
+`startManagementCheckout` (`src/lib/checkout/startManagementCheckout.ts`), with
+its decisions in the pure `rules.ts`. In order:
+
+1. **Already a customer?** Somebody holding Management (`holdsProduct`, so
+   `past_due` counts) gets the login link and no checkout. ⚠️ **Email decides;
+   phone alone never merges two people (C5, §57.3).** A Management customer on
+   the same phone blocks the checkout only when the name also matches;
+   otherwise it goes ahead and Zac is emailed about the possible duplicate.
+2. **One Stripe customer per email**: the row's own id, else the first live
+   Stripe customer with this email, else a new one (created with an
+   idempotency key).
+3. **One open checkout at a time.** An open Management session on that Stripe
+   customer for the same price and the same discount, with more than ten
+   minutes left, is handed back; every other open Management session is
+   expired. ⚠️ **This is what stops two tabs paying twice**: Stripe completes
+   a session once. Top-up, analysis and Guaranteed Rent sessions are never
+   touched.
+4. Otherwise **a new session**, with this person's live code applied
+   server-side (`discounts`), or `allow_promotion_codes` when there is none.
+   The session and its subscription carry `source`, `plan`, and where they
+   apply `funnel_session_id`, `offer_id` and `supabase_customer_id`.
+
+⚠️ **It never links a Stripe customer to a row that has none.** An enquirer's
+waitlisted row must reach `invoice.paid` as an unknown Stripe customer,
+because that is the path that links the row by email and makes the login
+(`provisionPaidSubscriber`). Writing the id here would send them down the
+known-customer path: credited, promoted, and left with no way to sign in. It
+does write `monthly_allocation` onto a row that does not hold Management,
+§17's trap, and §33 corrects the row from the invoice anyway.
+
+⚠️ **NOTHING HERE GRANTS ANYTHING.** Payment is what activates a customer, as
+it always has. An abandoned checkout leaves every row as it was.
+
+⚠️ **THE ONE DOOR COVERS TWO ROUTES, NOT EVERY CHECKOUT.** It serves:
+- `POST /api/funnel/[token]/checkout` (`source = 'funnel'`), through
+  `startFunnelCheckout`;
+- `GET /pay/[offerToken]?plan=10|20` (`source = 'call'`), the post-call link.
+  A funnel-issued offer opened there goes through `startFunnelCheckout`
+  instead, so its payer is still set up as a funnel customer.
+
+These still build their own Stripe sessions and are **not** behind it:
+- the admin invite and resend-invite routes (§18; the 02 prompt forbade
+  changing them);
+- `/api/customer/subscribe` (§17, a cross-sell or a buy-back);
+- `/api/signup` (owners only).
+
+Check 3 still sees an open invite session on the same Stripe customer and
+expires or reuses it, and the backstop (75.6) catches a second subscription
+from any of them.
+
+**Stripe Payment Links are no longer read by the app.** Post-call offers link
+to `/pay` (`computeCheckoutUrls`, same field names). The two
+`STRIPE_MANAGEMENT_{10,20}_PAYMENT_LINK_URL` vars and the Payment Link
+objects stay as they are: anything outside the app still pointing at them
+keeps working, and a second subscription paid through one is caught by the
+backstop.
+
+`/pay` has a side effect on GET by design, because a link in an email has to
+work when clicked. What it creates is safe to repeat: the same Stripe customer,
+and the same open session handed back. Its plan buttons are plain links, never
+prefetched.
+
+### 75.6 — The webhook backstop (C3)
+
+`duplicateSubscription.ts`. When one person (the same Stripe customer, or
+another Stripe customer with the same email) has two live Management
+subscriptions, **the newer one** is:
+
+1. **recorded** in `duplicate_subscriptions`, FIRST;
+2. cancelled immediately;
+3. refunded its first invoice;
+4. reported to Zac by email, through Resend, with both ids.
+
+⚠️ **THE RECORD IS WHAT MAKES THE REST SAFE.** Cancelling the duplicate fires
+`customer.subscription.deleted`, and on a shared Stripe customer that event
+would otherwise set the **real** customer to cancelled (the management branch
+writes `account_status = 'cancelled'` on whichever row matches). Every event
+for a recorded subscription is skipped, and so is every invoice. If the record
+cannot be written, nothing is cancelled. The primary key is the idempotency
+claim, so two deliveries cannot both act on one duplicate.
+
+"Newer" is decided the same way from either side: the oldest live subscription
+is kept, with the id breaking a same-second tie. Not counted as live: one
+already recorded, one scheduled to cancel at period end (that customer is
+leaving, so a new subscription is a genuine return), and Guaranteed Rent (a
+customer may hold both products).
+
+Two call sites, each one additive line at the top of its branch:
+
+| Where | Does |
+|---|---|
+| `customer.subscription.*`, before anything else | skip a recorded duplicate (finishing anything left undone); check a new one on `created`, and on `updated` while the subscription is under 24 hours old, because Stripe does not promise the order |
+| the top of `invoice.paid` Management, **before any credit** | skip a recorded duplicate's invoice; check a subscription's first invoice, because it can arrive before its subscription event |
+
+⚠️ **NEVER THROWS** (§23.6). The webhook deletes its `stripe_events` claim on a
+throw, so Stripe would redeliver an event that may already have credited
+somebody. Every step is caught and logged, an unfinished step is written to
+the row's `error` and named in the email so it can be finished by hand, and
+when the check itself cannot run the event is processed exactly as before.
+
+### 75.7 — Setting up a funnel payer
+
+`completeFunnelPayment` (`src/lib/funnel/payment.ts`), the one additive call in
+the `invoice.paid` Management branch, after the duplicate check.
+
+⚠️ **IT RUNS BEFORE THE CUSTOMER READ, NOT AFTER `pushMondayStatus` AS PHASE 0
+FIRST PROPOSED. ZAC APPROVED THE MOVE ON 9 OCT.** At the later point,
+`provisionPaidSubscriber` has already made the login and emailed a
+set-password link, so a funnel payer would get two emails and C2's "no
+password step" would be lost. Running first, it makes the login, and the
+provisioning that follows finds `user_id` set and sends nothing. Linking the
+Stripe customer, crediting the invoice and promoting the row to `active` are
+still the webhook's own code, untouched.
+
+It acts only on a subscription's **first** invoice
+(`billing_reason = 'subscription_create'`) when the subscription is tagged
+`source = 'funnel'`. Every other invoice costs nothing. It then:
+
+1. finds the customer row for the session's email, or creates it `waitlisted`
+   and sized to the chosen plan;
+2. makes the login with an unusable random password and links it
+   (`.is("user_id", null)`);
+3. sets `lead_brief_required = true`, so the dashboard sends their first
+   sign-in to `/onboarding/brief`;
+4. puts the session's Monday item on the row if the row has none, so the
+   webhook's own `pushMondayStatus` labels it "Management Customer";
+5. marks the session `paid` by a conditional write (`.neq("step", "paid")`).
+   ⚠️ Only the delivery that wins sends the email;
+6. sends a magic link through Resend: `generateLink({ type: "magiclink" })`
+   mints it and sends nothing (invariant 10, §15), and the URL is
+   `/auth/confirm?token_hash=…&type=magiclink&next=/onboarding/brief`.
+
+⚠️ **A failed email does not release the claim.** `invoice.paid` is not
+redelivered once it succeeds, so a released claim would never be retried. The
+way in is "Forgot your password?" on the login page, and the
+payment-received notice says so.
+
+⚠️ **It writes no money column and never throws**, for the same reason as the
+backstop.
+
+**The confirmation (C1).** The brief is not written at payment.
+`/onboarding/brief` reads the customer's own paid session and gives
+`BriefWizard` an `initial` prefill. The wizard asks for the preview again on
+arrival (the preview is non-binding, locked decision 6) and opens on it. If the
+radius has changed since payment it says so (`radiusChangedSincePayment`).
+From there it is the ordinary wizard, and the existing confirm route
+recalculates once more and writes the brief. Nothing goes into
+`customer_lead_briefs` before payment: that table needs a customer, its
+origin CHECK refuses `'funnel'`, and `pending_confirmation` belongs to batch 04.
+
+### 75.8 — The signup source, and a password for next time
+
+`customers.signup_source` is `'funnel'` only when `completeFunnelPayment` made
+the login itself. A returning customer who already had one keeps `'call'` and
+their history. **It is reporting only, and nothing gates on it.**
+
+A funnel payer signs in the first time by magic link and knows no password.
+`offerSetPassword()` shows "Set a password for next time" on the dashboard when
+`signup_source = 'funnel'`, `password_set_at` is null and the brief is
+confirmed, and never while an admin is viewing the customer (§62). Setting one
+at `/reset-password` posts to `POST /api/customer/password-set`: session only,
+no request body, and the first stamp wins.
+
+### 75.9 — The funnel discount
+
+`/api/cron/funnel-discounts`, every 15 minutes, only while `funnel_enabled` is
+on. A failed settings read is a 500 (§18.3), and an admin `?dryRun=true` lists
+who would get a code.
+
+A session gets the same single-use, 24-hour `FOUNDING10-` code as a post-call
+prospect (locked decision 3) when it:
+- is at `previewed` or `checkout_started`, unpaid, with no code yet;
+- has been quiet for at least an hour;
+- has been quiet for **under a week**. A session abandoned long ago is not
+  chased, which also stops the first run after switch-on mailing everybody who
+  ever previewed.
+
+It runs 25 sessions a run, and skips anybody already set up.
+
+⚠️ **ONE CODE PER PERSON, ACROSS BOTH ROUTES.** There is one issuing path,
+`issuePostCallOffer` (`src/lib/postCallOfferIssue.ts`), lifted verbatim out of
+the admin offer route and used by both:
+- a live code is returned unchanged, so a call-route code is linked to the
+  funnel session rather than doubled;
+- an expired row is reused in place (0037's one-unredeemed-row-per-email
+  index);
+- a lost insert race returns the winner.
+
+The code is linked to the session only while it is still unpaid and unlinked,
+so a session gets one code ever.
+
+The code reaches them through `post-call-offer-reminders` (12h, 4h and 1h
+before it expires), registered again in `vercel.json` by Phase 5. The reminder
+names the funnel rather than "our web meeting" for a funnel code. It is also
+shown on the funnel's plan screen. ⚠️ **The first message about the code is
+the 12-hour reminder**, about twelve hours after it is made. An "it's yours"
+email at issue would be a small follow-up.
+
+### 75.10 — Copy
+
+`src/lib/funnel/copy.ts`. It is in the A9 words-to-avoid scan and in
+`publishedClaims.test.ts`, as is every funnel screen.
+
+- **C4.** "Each lead normally goes to up to three operators at once." Never
+  "never more" (escalation goes to five, §18). The speed answer is
+  `releaseCopy.ts`'s one-a-working-day rule (§54), never "within minutes".
+- **C7.** The replacement sentence is left out.
+- **C9.** "More than 9 in 10 are financially modelled", decided by Zac on
+  9 Oct: 182 of the last 198 Management leads carried a projected figure
+  (92%). Re-measure it over the last 60 days; under 90% means rewording.
+- Prices come from `PLANS`, and a discount's expiry is printed in UK time.
+
+### 75.11 — Guaranteed Rent is excluded
+
+GR enquiries stay on the call-only process (locked decision 1):
+- every funnel route refuses a body naming any other product
+  (`namesOtherProduct` → `management_only`);
+- n8n is refused a session for one;
+- "already set up" is `holdsProduct(…, "management")` only, so a GR-only
+  customer may use the funnel to add Management;
+- the backstop never treats a GR subscription as a duplicate.
+
+### Verification
+
+| Phase | What | Mutations |
+|---|---|---|
+| 1 | 0165: 42 SQL assertions, all 25 SQL suites on a scratch Postgres 16 from empty, applied three times | 11 |
+| 2 | Session and preview API | 21 |
+| 3 | The funnel pages | 23 |
+| 4 | The guarded checkout and the backstop | 32 |
+| 5 | Provisioning and the discount | 43 |
+
+All 130 mutations were caught. 4,149 vitest cases passed at Phase 5.
+
+⚠️ **Nothing here has run against live Stripe, Supabase Auth or Resend.** The
+checkout, the backstop and provisioning are verified against in-memory stubs.
+The Stripe connector was not authorised in the build session, and a Vercel
+preview cannot be used: Deployment Protection answers 302 (§45), and a
+preview runs against production Supabase (§1.1). §12 carries the test-mode
+rehearsal.
+
+### Switch-on order
+
+1. **The Lead Brief goes live** (`lead_brief_enabled`). Until it does, the
+   funnel can be walked but not paid for.
+2. **Check the env.** `MESSAGING_TOKEN_SECRET` (already set in production,
+   §73) and `STRIPE_POST_CALL_COUPON_ID`. `NEXT_PUBLIC_BOOKING_URL` and
+   `NEXT_PUBLIC_FUNNEL_DEMO_URL` are optional. ⚠️ `NEXT_PUBLIC_*` is baked in
+   at build time, so **redeploy** after setting either.
+3. **Rehearse in Stripe test mode** (§12).
+4. **The n8n workflow** that calls `POST /api/funnel/session` (batch 03 Part B).
+5. **`funnel_enabled`.**
+
+### Deferred
+
+- Moving the invite, resend-invite and `/api/customer/subscribe` routes behind
+  the one door. The backstop covers them in the meantime.
+- An email when a funnel code is issued (75.9).
+- Guaranteed Rent in the funnel, which is a product decision rather than a
+  build.
+- An admin view of funnel sessions. Today `funnel_sessions` and
+  `duplicate_subscriptions` are read by SQL only.

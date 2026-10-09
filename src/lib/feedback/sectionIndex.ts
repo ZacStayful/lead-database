@@ -81,6 +81,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 72, title: "Cancellation reasons reach the sales board", migrations: "no migration" },
   { n: 73, title: "Asking how each month's leads went", migrations: "0160" },
   { n: 74, title: "JARVIS reads the retention figures", migrations: "no migration" },
+  { n: 75, title: "Self-serve funnel and guarded checkout", migrations: "0165" },
 ];
 
 /**
@@ -125,6 +126,7 @@ export const DEFERRED: string[] = [
   "Review the return-likelihood thresholds once ~20 pauses have completed. They are stated guesses (§21) and get_pause_outcomes() is what will let them be checked against what actually happened.",
   "~~Enable cancellation-reason collection on the Stripe billing portal.~~ ⚠️ This entry claimed it was already enabled on live configuration bpc_1Tz1VxCpQPIFzv4r. During the 0101 work that configuratio…",
   "Rehearse the §29 cancel flow in Stripe test mode (the same standing item as §24's tier swap): the API path subscriptions.update({ cancel_at_period_end: true, cancellation_details }) has not been exer…",
+  "Rehearse batch 02 (§75) in Stripe test mode, the same standing item again. The guarded checkout, the duplicate-subscription backstop and funnel provisioning have only been run against in-memory stubs…",
 ];
 
 /** Highest committed migration, from the directory rather than the prose. */

@@ -96,14 +96,24 @@ The app generates one Promotion Code per prospect (wrapping the coupon,
 triggered either from the admin **Offers** page or by an n8n workflow (bearer
 `N8N_WEBHOOK_SECRET`) when a Monday item enters the "Web meeting sat" group.
 Reminder email + SMS fire at 12h / 4h / 1h remaining via
-`/api/cron/post-call-offer-reminders`, stopping once the code is redeemed. That
-endpoint must be hit **every ~15 minutes** with an `Authorization: Bearer
-$CRON_SECRET` header. On a Vercel **Pro** plan add it to `vercel.json` crons;
-on **Hobby** (daily-cron limit) drive it from an external scheduler instead
-(e.g. an n8n Schedule trigger — the same n8n instance already used here). Redemption is detected on the Stripe `invoice.paid` webhook and
-surfaced in admin as a **"Discount applied — N-lead plan"** badge. SMS reminders
-also require `TWILIO_MESSAGING_FROM` (a Twilio number or Messaging Service SID);
-if unset, email still sends.
+`/api/cron/post-call-offer-reminders`, stopping once the code is redeemed. It
+runs every 15 minutes from `vercel.json` (registered again in batch 02 Phase 5;
+the team is on Vercel Pro, CLAUDE.md §2). Redemption is detected on the Stripe
+`invoice.paid` webhook and surfaced in admin as a **"Discount applied — N-lead
+plan"** badge. SMS reminders also need a Twilio sender, `TWILIO_SMS_FROM` or
+`TWILIO_MESSAGING_SERVICE_SID`; if neither is set, the email still sends.
+
+#### Self-serve funnel
+
+A Management enquirer can also pay without a call, through a short funnel at
+`/start/<token>` that n8n sends them (`POST /api/funnel/session`, bearer
+`N8N_WEBHOOK_SECRET`). The funnel pays through the same guarded checkout as the
+post-call link, and a funnel payer gets the same discount code if they preview
+and do not pay within an hour. It needs `MESSAGING_TOKEN_SECRET` and the coupon
+above; `NEXT_PUBLIC_BOOKING_URL` and `NEXT_PUBLIC_FUNNEL_DEMO_URL` are optional
+(see `.env.example`). It stays off until the `funnel_enabled` setting is
+switched on, and payment also needs `lead_brief_enabled`. CLAUDE.md §75 has
+the rules and the switch-on order.
 
 ### 4. n8n
 
@@ -167,9 +177,10 @@ assigned a lead by any path. Admins can also set a customer's management
 | Area | Route | Notes |
 | --- | --- | --- |
 | Public | `/`, `/login`, `/signup` | Landing, auth, Stripe checkout |
+| Funnel | `/start/[token]`, `/start/[token]/summary`, `/pay/[offerToken]` | Self-serve funnel and the post-call payment link; a signed token instead of a session (CLAUDE.md §75) |
 | Customer | `/dashboard`, `/dashboard/leads`, `/dashboard/notifications`, `/dashboard/settings` | Realtime lead feed |
 | Admin | `/admin`, `/admin/customers`, `/admin/customers/[id]`, `/admin/leads`, `/admin/leads/[id]`, `/admin/offers` | Requires `role: admin` |
-| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation`, `/api/admin/post-call-offer`, `/api/cron/post-call-offer-reminders` | Plus customer assignment / lead reject / billing-portal helpers |
+| API | `/api/webhook/n8n`, `/api/webhook/stripe`, `/api/leads/export`, `/api/admin/assign`, `/api/admin/customers/[id]/allocation`, `/api/admin/post-call-offer`, `/api/cron/post-call-offer-reminders`, `/api/funnel/session`, `/api/funnel/[token]/{answers,preview,checkout}`, `/api/cron/funnel-discounts` | Plus customer assignment / lead reject / billing-portal helpers |
 
 ## Design
 
