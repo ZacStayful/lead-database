@@ -87,11 +87,8 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/stayful-conflict-sweep` | `*/15 * * * *` | Withdraw any management lead that matches a landlord in one of the nine pipeline groups on Stayful's own Management Leads board (5891626711), owe each holder a replacement, and fill every open debt from stock (§64). Switch `stayful_conflict_enabled` on `/admin/allocation`; ships off |
 | `/api/cron/batch-reviews` | `40 9 * * *` | The monthly lead-batch review (§73): the shortfall email on reset day, the review email 7 days after a billing month ends, one reminder 3 days later. Reads the snapshot `reset_monthly_counts` captures. Switch `batch_reviews_enabled` on `/admin/allocation`; ships off |
 | `/api/cron/activate-lead-briefs` | `20 0 * * *` | Lead Brief: make each area change saved in the "Your brief" editor the customer's active brief once their renewal has come, after the 00:05 reset (0164). A change saved for a different plan than the customer is now on is left for them to review, not applied. Not tied to `lead_brief_enabled` |
-
-`/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
-— removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs
-~15-minute cadence to hit its 12h/4h/1h windows and is currently driven by
-nothing. See §12.
+| `/api/cron/post-call-offer-reminders` | `*/15 * * * *` | The 12h / 4h / 1h email and text before a `FOUNDING10-` code expires. Registered again by batch 02 Phase 5 (it had been removed in `173a746` under Hobby's daily-cron cap). A funnel-issued code's links go back through the funnel's own checkout |
+| `/api/cron/funnel-discounts` | `*/15 * * * *` | Batch 02 Phase 5: somebody who previewed in the funnel and has not paid an hour later gets the 24-hour `FOUNDING10-` code, one per person across both routes. Runs only while `funnel_enabled` is on |
 
 ⚠️ **THE HOBBY WARNING THAT USED TO BE HERE IS OUT OF DATE. The team is on
 Pro.** `GET /v2/teams` returns `plan: "pro"` for `zacs-projects-bcdb6016`
@@ -657,8 +654,9 @@ for being new with no way to earn out of it.
 
 ## 12. Deferred
 
-- Drive `/api/cron/post-call-offer-reminders` (no scheduler; table is empty so
-  nothing has been missed yet).
+- ~~Drive `/api/cron/post-call-offer-reminders` (no scheduler; table is empty so
+  nothing has been missed yet).~~ **Registered by batch 02 Phase 5**, every 15
+  minutes. `post_call_offers` was still empty when it was.
 - Decide whether discard should gate on notes only (§5E).
 - Decide whether a rejected lead should be reclaimable (currently excluded).
 - Decide whether Goals should get a GR equivalent (§13 — deliberately none).

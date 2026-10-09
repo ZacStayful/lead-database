@@ -29,6 +29,8 @@ const WEBHOOK = source("src/app/api/webhook/stripe/route.ts");
 const CHECKOUT = source("src/lib/checkout/startManagementCheckout.ts");
 const BACKSTOP = source("src/lib/checkout/duplicateSubscription.ts");
 const FUNNEL_ROUTE = source("src/app/api/funnel/[token]/checkout/route.ts");
+const FUNNEL_CHECKOUT = source("src/lib/funnel/checkout.ts");
+const OFFER_ISSUE = source("src/lib/postCallOfferIssue.ts");
 const PAY = source("src/app/pay/[offerToken]/page.tsx");
 const OFFERS = source("src/lib/postCallOffers.ts");
 const PAY_TOKEN = source("src/lib/checkout/payToken.ts");
@@ -121,31 +123,36 @@ describe("the one door", () => {
   it("post-call links are built from the offer id, never the code", () => {
     expect(PAY_TOKEN).not.toContain("prefilled_promo_code");
     expect(PAY_TOKEN).toContain("export function computeCheckoutUrls(offerId: string)");
-    expect(OFFER_ROUTE).toContain("computeCheckoutUrls(existing.id)");
-    expect(OFFER_ROUTE).toContain("computeCheckoutUrls(winner.id)");
-    expect(OFFER_ROUTE).toContain("computeCheckoutUrls(offerId)");
+    // One issuing path (Phase 5): the route links whichever offer it returns, by id.
+    expect(OFFER_ROUTE).toContain("await issuePostCallOffer(admin, {");
+    expect(OFFER_ROUTE).toContain("computeCheckoutUrls(issued.offerId)");
     expect(OFFER_ROUTE).not.toMatch(/computeCheckoutUrls\([^)]*promo/);
+    expect(OFFER_ROUTE).not.toContain("promotionCodes.create");
+    expect(OFFER_ISSUE).not.toContain("prefilled_promo_code");
     expect(REMINDERS).toContain("computeCheckoutUrls(offer.id)");
   });
 });
 
-describe("POST /api/funnel/[token]/checkout", () => {
-  it("runs the funnel gate first, then refuses without a preview or with brief routing off", () => {
+describe("POST /api/funnel/[token]/checkout, and the funnel checkout it shares with /pay", () => {
+  it("runs the funnel gate first, then the shared checkout, which refuses without a preview or with brief routing off", () => {
     const gate = FUNNEL_ROUTE.indexOf('funnelGate(admin, params.token, "checkout")');
     const json = FUNNEL_ROUTE.indexOf("await request.json()");
-    const preview = FUNNEL_ROUTE.indexOf("if (!session.preview_snapshot)");
-    const brief = FUNNEL_ROUTE.indexOf("if (!(await briefRoutingEnabled(admin)))");
-    const door = FUNNEL_ROUTE.indexOf("await startManagementCheckout(admin, {");
-    for (const at of [gate, json, preview, brief, door]) expect(at).toBeGreaterThan(-1);
+    const shared = FUNNEL_ROUTE.indexOf("await startFunnelCheckout(admin, session, plan, funnelUrl(params.token))");
+    const preview = FUNNEL_CHECKOUT.indexOf('if (!session.preview_snapshot) return { status: "refused", code: "preview_required" };');
+    const brief = FUNNEL_CHECKOUT.indexOf('if (!(await briefRoutingEnabled(admin))) return { status: "refused", code: "payment_not_open" };');
+    const door = FUNNEL_CHECKOUT.indexOf("await startManagementCheckout(admin, {");
+    for (const at of [gate, json, shared, preview, brief, door]) expect(at).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(json);
+    expect(json).toBeLessThan(shared);
     expect(preview).toBeLessThan(door);
     expect(brief).toBeLessThan(door);
-    expect(FUNNEL_ROUTE).toContain('{ code: "preview_required" }, { status: 409');
-    expect(FUNNEL_ROUTE).toContain('{ code: "payment_not_open" }, { status: 409');
+    // Both refusals reach the browser as a 409 naming the code.
+    expect(FUNNEL_ROUTE).toContain('{ code: result.code }, { status: 409');
+    expect(FUNNEL_ROUTE).not.toContain("startManagementCheckout");
   });
 
   it("takes who is paying from the session, never the body, as source 'funnel'", () => {
-    const call = FUNNEL_ROUTE.slice(FUNNEL_ROUTE.indexOf("await startManagementCheckout(admin, {"));
+    const call = FUNNEL_CHECKOUT.slice(FUNNEL_CHECKOUT.indexOf("await startManagementCheckout(admin, {"));
     expect(call).toContain("email: session.email,");
     expect(call).toContain("phone: session.phone,");
     expect(call).toContain("name: session.name,");
@@ -154,8 +161,8 @@ describe("POST /api/funnel/[token]/checkout", () => {
   });
 
   it("records checkout_started without ever moving a paid session", () => {
-    expect(FUNNEL_ROUTE).toContain('step: advanceStep(session.step, "checkout_started")');
-    expect(FUNNEL_ROUTE).toContain('.neq("step", "paid")');
+    expect(FUNNEL_CHECKOUT).toContain('step: advanceStep(session.step, "checkout_started")');
+    expect(FUNNEL_CHECKOUT).toContain('.neq("step", "paid")');
   });
 });
 

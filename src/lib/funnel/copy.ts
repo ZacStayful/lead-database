@@ -82,9 +82,36 @@ export const FUNNEL_COPY = {
   paymentNotReady:
     "Payment isn't open on this page yet. Book a call and we'll get you set up.",
   paymentFailed: "We couldn't open payment just now. Please try again in a minute, or book a call.",
-  /** On /login?notice=payment_received, where Stripe sends a payer (02 Phase 4). */
+  /**
+   * On /login?notice=payment_received, where Stripe sends a payer (02 Phase 4).
+   * A funnel payer is emailed a sign-in link (Phase 5), a call payer a
+   * set-password link, so the line names neither.
+   */
   paymentReceived:
-    "Payment received, thank you. Log in below. If you haven't set a password yet, check your email for a link to do it.",
+    "Payment received, thank you. We've emailed you a link to get into your account. If it hasn't arrived in a few minutes, use \"Forgot your password?\" below.",
+
+  // --- the sign-in email a funnel payer gets (02 Phase 5, C2) ------------------
+  welcomeSubject: "Your Stayful leads account is ready",
+  welcomeTitle: (firstName: string) => `You're all set, ${firstName}`,
+  welcomeBody:
+    "Your payment has gone through. Sign in with the button below to confirm your lead brief. It opens on the preview you saw, worked out again now, so you can check it before your leads start.",
+  welcomeButton: "Sign in and confirm your brief",
+  /**
+   * The discount reminder to somebody who previewed in the funnel and never
+   * had a call (02 Phase 5). The post-call email says "Following our web
+   * meeting", which would be untrue here. HTML-free: emails.ts escapes it.
+   */
+  reminderIntro: (remaining: string) =>
+    `Since you looked at your lead preview, we've set aside a one-time 10% off your first month. It's single-use and expires in ${remaining}.`,
+  reminderLinks: "The code is already applied when you use either link below:",
+
+  /** The dashboard card that offers a password after the brief (02 Phase 5, C2). */
+  setPasswordTitle: "Set a password for next time",
+  setPasswordBody:
+    "You signed in with a link from your email. Set a password now and you can log in straight away next time.",
+  setPasswordButton: "Set a password",
+  welcomeExpiry:
+    "The button works once. If it has stopped working, go to the login page and use \"Forgot your password?\" to get a new link.",
   noPreviewYet: "See your preview first, so each plan can show its area.",
 
   // --- errors -----------------------------------------------------------------

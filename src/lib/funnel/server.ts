@@ -68,6 +68,28 @@ export async function loadSessionByToken(admin: SupabaseClient, raw: string): Pr
   return { ok: true, session: (data as FunnelSessionRow | null) ?? null };
 }
 
+/**
+ * The funnel session an offer was issued to (Phase 5's discount), if any.
+ * `/pay` sends that offer's payment through the funnel's own checkout, so the
+ * payer is set up as a funnel customer (sign-in link, brief) rather than a
+ * call customer. Newest first: a session is linked to at most one offer, but
+ * an offer row is reused in place when it expires (postCallOfferIssue.ts).
+ */
+export async function funnelSessionForOffer(
+  admin: SupabaseClient,
+  offerId: string
+): Promise<{ ok: true; session: FunnelSessionRow | null } | { ok: false; message: string }> {
+  const { data, error } = await admin
+    .from("funnel_sessions")
+    .select(FUNNEL_SESSION_COLUMNS)
+    .eq("discount_offer_id", offerId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return { ok: false, message: error.message };
+  return { ok: true, session: (data as FunnelSessionRow | null) ?? null };
+}
+
 export type CustomerLookup =
   | { ok: true; customers: (ProductCustomerFields & { id: string })[] }
   | { ok: false; message: string };

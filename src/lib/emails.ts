@@ -1,5 +1,6 @@
 import { TODAYS_LEAD_SUBJECT_PREFIX } from "@/lib/releaseCopy";
 import { Resend } from "resend";
+import { FUNNEL_COPY } from "@/lib/funnel/copy";
 import { APP_URL, LOGIN_URL } from "@/lib/env";
 import {
   FEATURE_REQUEST_LABEL,
@@ -328,18 +329,25 @@ export async function sendPostCallReminderEmail(params: {
   remaining: string;
   checkoutUrl10: string;
   checkoutUrl20: string;
+  /** Where the code came from. 'funnel' had no call, so it is not thanked for one (02 Phase 5). */
+  origin?: "call" | "funnel";
 }): Promise<{ id: string | null; error: unknown }> {
   const { to, prospectName, promoCode, remaining, checkoutUrl10, checkoutUrl20 } =
     params;
+  const fromFunnel = params.origin === "funnel";
   const firstName = prospectName?.trim().split(/\s+/)[0];
   const greeting = firstName ? `, ${esc(firstName)}` : "";
   const subject = `Your 10% Stayful discount expires in ${remaining}`;
   const inner = `
     <h1 style="margin:0 0 4px;font-size:18px">Your discount is still waiting${greeting}</h1>
-    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">Following our web meeting, we set aside a one-time <strong>10% off your first month</strong>. It's single-use and expires in <strong>${esc(remaining)}</strong>.</p>
+    ${
+      fromFunnel
+        ? `<p style="margin:0 0 12px;color:#6b706a;font-size:14px">${esc(FUNNEL_COPY.reminderIntro(remaining))}</p>`
+        : `<p style="margin:0 0 12px;color:#6b706a;font-size:14px">Following our web meeting, we set aside a one-time <strong>10% off your first month</strong>. It's single-use and expires in <strong>${esc(remaining)}</strong>.</p>`
+    }
     <p style="margin:0 0 6px;color:#6b706a;font-size:14px">Your discount code:</p>
     <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:20px;font-weight:700;letter-spacing:1px;background:#f5f6f5;border:0.5px solid #d9dbd8;border-radius:8px;padding:12px 16px;text-align:center;margin:0 0 18px">${esc(promoCode)}</div>
-    <p style="margin:0 0 10px;color:#6b706a;font-size:14px">The code is already applied when you use the link for the plan we discussed:</p>
+    <p style="margin:0 0 10px;color:#6b706a;font-size:14px">${fromFunnel ? esc(FUNNEL_COPY.reminderLinks) : "The code is already applied when you use the link for the plan we discussed:"}</p>
     <div style="margin:0 0 8px">${button(checkoutUrl10, "Activate — 10-lead plan (£150/mo)")}</div>
     <div>${button(checkoutUrl20, "Activate — 20-lead plan (£300/mo)")}</div>
   `;
@@ -381,6 +389,39 @@ export async function sendAccountReadyEmail(params: {
       from: fromAddress(),
       to,
       subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * The sign-in email a funnel payer gets (batch 02 Phase 5, C2): no password
+ * step. The link is a magic link minted with admin `generateLink` (which sends
+ * nothing) and verified at /auth/confirm, so this Resend email is the only
+ * message (§15). The words live in FUNNEL_COPY, inside the A9 scan.
+ */
+export async function sendFunnelWelcomeEmail(params: {
+  to: string;
+  contactName: string;
+  signInUrl: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, signInUrl } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">${esc(FUNNEL_COPY.welcomeTitle(firstName))}</h1>
+    <p style="margin:0 0 12px;color:#6b706a;font-size:14px">${esc(FUNNEL_COPY.welcomeBody)}</p>
+    ${button(signInUrl, FUNNEL_COPY.welcomeButton)}
+    <p style="margin:18px 0 0;color:#8a8f88;font-size:12px">${esc(FUNNEL_COPY.welcomeExpiry)}</p>
+    <p style="margin:12px 0 0;color:#8a8f88;font-size:12px">If the button doesn't work, copy this link into your browser:<br>${esc(signInUrl)}</p>
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject: FUNNEL_COPY.welcomeSubject,
       html: shell(inner),
     });
     return { id: data?.id ?? null, error };

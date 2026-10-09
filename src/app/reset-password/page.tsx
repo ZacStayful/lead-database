@@ -91,6 +91,11 @@ export default function ResetPasswordPage() {
       return;
     }
 
+    // Record that they now have a password (batch 02 Phase 5), which takes a
+    // funnel customer's "set a password" card away. Best effort: a failure
+    // only leaves the card showing.
+    await fetch("/api/customer/password-set", { method: "POST" }).catch(() => undefined);
+
     // The recovery session is now an authenticated session — send them to the
     // right place based on their role.
     const { data } = await supabase.auth.getUser();

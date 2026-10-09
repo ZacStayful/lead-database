@@ -36,6 +36,7 @@ import {
   sendSubscriptionResumedEmail,
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
+import { completeFunnelPayment } from "@/lib/funnel/payment";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 import {
   applyPendingPlanChange,
@@ -1194,6 +1195,12 @@ export async function POST(request: NextRequest) {
           // any credit: a second Management subscription's invoice credits
           // nothing, and its first invoice is refunded. Never throws.
           if (await skipDuplicateInvoice(admin, stripe, { invoice, subscriptionId })) break;
+
+          // Batch 02 Phase 5: a funnel payer's login and sign-in link. BEFORE
+          // the customer read on purpose (approved 9 Oct): provisioning below
+          // then finds the login already made and sends no set-password email
+          // (C2). It writes no money column and never throws.
+          await completeFunnelPayment(admin, stripe, { invoice, subscriptionId });
 
           // Management renewal. The credit granted each month is the customer's
           // plan allocation (10 or 20). Read the customer first so we can both

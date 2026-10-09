@@ -12,6 +12,10 @@
  *   - otherwise: straight on to Stripe, with this person's code applied while
  *     it is still valid (an expired code just means full price).
  *
+ * ⚠️ AN OFFER THE FUNNEL ISSUED GOES THROUGH THE FUNNEL'S OWN CHECKOUT (Phase
+ * 5): `source = 'funnel'` and its session id, so the payer gets the sign-in
+ * link and the brief like any funnel payer. Paid as a call it would skip both.
+ *
  * ⚠️ IT HAS A SIDE EFFECT ON GET, by the doc's design: a link in an email has
  * to work when clicked. What it creates is safe to repeat: the same Stripe
  * customer, and the same open session handed back (rules.ts). The plan
@@ -24,6 +28,8 @@ import { Logo } from "@/components/Logo";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BRIEF_BOOKING_URL } from "@/lib/leadBrief/briefCopy";
 import { startManagementCheckout } from "@/lib/checkout/startManagementCheckout";
+import { startFunnelCheckout } from "@/lib/funnel/checkout";
+import { funnelSessionForOffer } from "@/lib/funnel/server";
 import { checkoutPlanFromParam, type CheckoutPlan } from "@/lib/checkout/rules";
 import { payPath, payTokenSecret, verifyPayToken } from "@/lib/checkout/payToken";
 import { PAY_COPY } from "@/lib/checkout/copy";
@@ -41,13 +47,14 @@ export const metadata = {
 };
 
 /** Only what the page needs: who is paying and their code. */
-const OFFER_PAGE_COLUMNS = "id, prospect_email, prospect_name, prospect_phone, promo_code_string, expires_at, redeemed_at";
+const OFFER_PAGE_COLUMNS = "id, prospect_email, prospect_name, prospect_phone, promo_code_string, expires_at, redeemed_at, source";
 
 interface OfferPageRow extends DiscountRow {
   id: string;
   prospect_email: string;
   prospect_name: string | null;
   prospect_phone: string | null;
+  source: string;
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -142,6 +149,24 @@ export default async function PayPage({
     );
   }
 
+  const cancelUrl = `${APP_URL}${payPath(params.offerToken)}?cancelled=1`;
+
+  if (offer.source === "funnel") {
+    const found = await funnelSessionForOffer(admin, offer.id);
+    if (!found.ok) {
+      console.error("[pay] funnel session lookup failed", found.message);
+      return <Unavailable />;
+    }
+    if (found.session) {
+      const funnel = await startFunnelCheckout(admin, found.session, plan, cancelUrl);
+      // redirect() throws to leave the render, so these sit outside any try.
+      if (funnel.status === "checkout") redirect(funnel.url);
+      if (funnel.status === "already_customer") redirect(funnel.loginUrl);
+      console.error("[pay] funnel checkout not opened", funnel.status === "refused" ? funnel.code : funnel.status);
+      return <Unavailable />;
+    }
+  }
+
   const result = await startManagementCheckout(admin, {
     email: offer.prospect_email,
     phone: offer.prospect_phone,
@@ -150,7 +175,7 @@ export default async function PayPage({
     source: "call",
     discountOfferId: offer.id,
     successUrl: paymentReceivedLoginUrl(),
-    cancelUrl: `${APP_URL}${payPath(params.offerToken)}?cancelled=1`,
+    cancelUrl,
   });
 
   // redirect() throws to leave the render, so it sits outside any try.

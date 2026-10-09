@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { BriefPreviewView } from "@/components/leadBrief/BriefPreviewView";
@@ -18,6 +18,7 @@ import {
   type BriefIssueCode,
 } from "@/lib/leadBrief/briefCopy";
 import type { ClientBriefPreview } from "@/lib/leadBrief/preview";
+import { radiusChangedSincePayment, type BriefConfirmationInitial } from "@/lib/funnel/confirmationRules";
 
 /**
  * The Lead Brief questionnaire: three questions (A8), then the preview, then
@@ -28,6 +29,14 @@ import type { ClientBriefPreview } from "@/lib/leadBrief/preview";
  * (approved 9 Oct): the plan changes at the next renewal, nothing is charged
  * or refunded today. The preview is then recomputed, and the server reads the
  * plan from the customer's row.
+ *
+ * CONFIRMATION MODE (batch 02 Phase 5, C1): a funnel payer arrives with
+ * `initial`, the answers from the preview they paid against. The wizard
+ * starts filled in, asks the server for the preview again (it is
+ * non-binding, locked decision 6) and opens on it, saying so when the radius
+ * has changed since they paid. Everything after that is the ordinary wizard:
+ * they can go back and change any answer, and the confirm route recomputes
+ * once more and reports a change (409 radius_changed).
  */
 
 type Step = 1 | 2 | 3 | "preview";
@@ -36,15 +45,21 @@ type Issue = { code: string; value?: string; outcode?: string };
 export interface BriefWizardProps {
   renewalIso: string | null;
   switchPending: boolean;
+  /** A funnel payer's answers from before payment (C1). Absent: the questions start empty. */
+  initial?: BriefConfirmationInitial | null;
 }
 
-export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
-  const [step, setStep] = useState<Step>(1);
-  const [postcode, setPostcode] = useState("");
-  const [areas, setAreas] = useState<string[]>([]);
-  const [travel, setTravel] = useState<Travel | undefined>(undefined);
-  const [beds, setBeds] = useState<number | null>(null);
-  const [gross, setGross] = useState<number | null>(null);
+export function BriefWizard({ renewalIso, switchPending, initial = null }: BriefWizardProps) {
+  // With `initial`, a preview that cannot be built lands on question 3, one
+  // Back away from everything else, rather than on an empty question 1.
+  const [step, setStep] = useState<Step>(initial ? 3 : 1);
+  const [postcode, setPostcode] = useState(initial?.basePostcode ?? "");
+  const [areas, setAreas] = useState<string[]>(initial?.priorityOutcodes ?? []);
+  const [travel, setTravel] = useState<Travel | undefined>(initial ? initial.travelLimitMiles : undefined);
+  const [beds, setBeds] = useState<number | null>(initial?.minBedrooms ?? null);
+  const [gross, setGross] = useState<number | null>(initial?.minGross ?? null);
+  const [opening, setOpening] = useState(Boolean(initial));
+  const opened = useRef(false);
 
   const [preview, setPreview] = useState<ClientBriefPreview | null>(null);
   const [ticked, setTicked] = useState<string[]>([]);
@@ -71,7 +86,7 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
   async function requestPreview(
     similarAreas?: string[],
     essentials?: { beds: number | null; gross: number | null }
-  ) {
+  ): Promise<ClientBriefPreview | null> {
     setBusy("preview");
     setError(null);
     try {
@@ -88,13 +103,13 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
         setPreview(data.preview);
         setTicked(Array.isArray(data.similarAreas) ? data.similarAreas : []);
         setStep("preview");
-        return;
+        return data.preview as ClientBriefPreview;
       }
       if (res.status === 400 && Array.isArray(data.issues)) {
         setIssues(data.issues);
         const first = ISSUE_QUESTION[data.issues[0]?.code as BriefIssueCode];
         setStep(first === undefined || first === "preview" ? step : first);
-        return;
+        return null;
       }
       setError(res.status === 503 ? BRIEF_COPY.unavailable : BRIEF_COPY.saveFailed);
     } catch {
@@ -102,7 +117,23 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
     } finally {
       setBusy(null);
     }
+    return null;
   }
+
+  // Confirmation mode: recalculate the paid-for preview once, on arrival.
+  useEffect(() => {
+    if (!initial || opened.current) return;
+    opened.current = true;
+    void (async () => {
+      const fresh = await requestPreview(initial.similarAreas);
+      if (fresh && radiusChangedSincePayment(initial, fresh.serviceRadiusMiles)) {
+        setNotice(radiusChangedLine(fresh.serviceRadiusMiles, fresh.basePostcode));
+      }
+      setOpening(false);
+    })();
+    // Runs once: `initial` is fixed for the page's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function confirm() {
     if (!preview) return;
@@ -177,11 +208,23 @@ export function BriefWizard({ renewalIso, switchPending }: BriefWizardProps) {
   const totalQuestions = 3;
   const errorBlock = error ? <p className="text-sm text-alert">{error}</p> : null;
 
+  if (opening && !preview) {
+    return (
+      <Card>
+        <CardContent className="space-y-2 pt-6">
+          <h1 className="text-xl font-semibold text-ink">{PREVIEW_COPY.title}</h1>
+          <p className="text-sm text-ink-2">{BRIEF_COPY.reopening}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (step === "preview" && preview) {
     return (
       <div className="space-y-6">
         <div className="space-y-1">
           <h1 className="text-xl font-semibold text-ink">{PREVIEW_COPY.title}</h1>
+          {initial && <p className="text-sm text-ink-2">{BRIEF_COPY.confirmIntro}</p>}
         </div>
         {notice && <p className="rounded-md bg-brand-light p-3 text-sm text-brand-dark">{notice}</p>}
         {issuesFor("preview").map((m) => (
