@@ -16,10 +16,13 @@ import { deriveReviewToken } from "@/lib/batchReview/review";
 import {
   alreadySetUpLoginUrl,
   ALREADY_SET_UP_LOGIN_PATH,
+  deriveFunnelSummaryToken,
   deriveFunnelToken,
+  funnelSummaryPath,
   funnelUrl,
   hashFunnelToken,
   looksLikeFunnelToken,
+  verifyFunnelSummaryToken,
 } from "@/lib/funnel/token";
 
 const ID = "6f1c7a52-3f7e-4c4e-9a0e-7a1b2c3d4e5f";
@@ -87,5 +90,45 @@ describe("links", () => {
   it("an existing customer is sent to log in with the notice", () => {
     expect(ALREADY_SET_UP_LOGIN_PATH).toBe("/login?notice=already_set_up");
     expect(alreadySetUpLoginUrl()).toMatch(/\/login\?notice=already_set_up$/);
+  });
+});
+
+describe("the partner summary token", () => {
+  const SECRET = "s3cret";
+
+  it("opens the session it was made for, and only with our secret", () => {
+    const t = deriveFunnelSummaryToken(ID, SECRET)!;
+    expect(t.startsWith(`${ID}.`)).toBe(true);
+    expect(verifyFunnelSummaryToken(t, SECRET)).toBe(ID);
+    expect(verifyFunnelSummaryToken(t, "other")).toBeNull();
+    expect(verifyFunnelSummaryToken(t, null)).toBeNull();
+  });
+
+  it("is domain-separated from the funnel token, so neither becomes the other", () => {
+    const funnel = deriveFunnelToken(ID, SECRET)!;
+    const summary = deriveFunnelSummaryToken(ID, SECRET)!;
+    expect(summary.split(".")[1]).not.toBe(funnel);
+    expect(summary.split(".")[1]).toBe(
+      createHmac("sha256", SECRET).update(`funnel-summary:${ID}`).digest("base64url")
+    );
+    // A funnel token is never a summary token, and a summary token never opens the funnel.
+    expect(verifyFunnelSummaryToken(funnel, SECRET)).toBeNull();
+    expect(looksLikeFunnelToken(summary)).toBe(false);
+  });
+
+  it("refuses a token for another session, a tampered one and junk", () => {
+    const t = deriveFunnelSummaryToken(ID, SECRET)!;
+    const other = "6f1c7a52-3f7e-4c4e-9a0e-7a1b2c3d4e60";
+    expect(verifyFunnelSummaryToken(`${other}.${t.split(".")[1]}`, SECRET)).toBeNull();
+    expect(verifyFunnelSummaryToken(`${t.slice(0, -1)}${t.endsWith("A") ? "B" : "A"}`, SECRET)).toBeNull();
+    for (const junk of ["", ".", ID, `${ID}.`, "x.y", `${ID}.${"a".repeat(44)}`]) {
+      expect(verifyFunnelSummaryToken(junk, SECRET)).toBeNull();
+    }
+    expect(deriveFunnelSummaryToken("not-a-uuid", SECRET)).toBeNull();
+    expect(deriveFunnelSummaryToken(ID, null)).toBeNull();
+  });
+
+  it("the path is the doc's /start/[token]/summary", () => {
+    expect(funnelSummaryPath("abc.def")).toBe("/start/abc.def/summary");
   });
 });

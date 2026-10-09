@@ -82,6 +82,37 @@ export interface FunnelPreviewBody {
 
 export const FUNNEL_PREVIEW_BODY_KEYS = ["plans", "similarAreas"] as const;
 
+/**
+ * funnel_sessions.preview_snapshot read back for resume and for the partner
+ * summary. It was written by `funnelPreviewBody`, so this only checks the
+ * outline the screens rely on (both plans present, each with its radius and
+ * coverage) and returns null for anything else: a snapshot that cannot be
+ * shown is treated as no preview, and the visitor previews again.
+ */
+export function readPreviewSnapshot(raw: unknown): FunnelPreviewBody | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.plans) || !Array.isArray(r.similarAreas)) return null;
+  const plans = r.plans as unknown[];
+  const shown = BRIEF_PLANS.map((plan) =>
+    plans.find((p) => !!p && typeof p === "object" && (p as { plan?: unknown }).plan === plan)
+  );
+  const usable = shown.every((p) => {
+    const c = p as Record<string, unknown> | undefined;
+    return (
+      !!c &&
+      typeof c.serviceRadiusMiles === "number" &&
+      typeof c.basePostcode === "string" &&
+      Array.isArray(c.coverage)
+    );
+  });
+  if (!usable) return null;
+  return {
+    plans: shown as ClientBriefPreview[],
+    similarAreas: (r.similarAreas as unknown[]).flatMap((a) => (typeof a === "string" ? [a] : [])),
+  };
+}
+
 export function funnelPreviewBody(
   result: Extract<FunnelPreviewResult, { ok: true }>
 ): FunnelPreviewBody {

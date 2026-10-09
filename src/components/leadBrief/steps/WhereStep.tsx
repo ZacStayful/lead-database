@@ -8,7 +8,10 @@ import { BRIEF_COPY } from "@/lib/leadBrief/briefCopy";
 /**
  * A8 Q1, "Where do you operate?". Shared by the questionnaire and the "Your
  * brief" editor (Phase 5), so the question reads the same in both. The caller
- * renders its own navigation. Every word is in briefCopy.ts.
+ * renders its own navigation. Every word is in briefCopy.ts, except
+ * `postcodeLockedNote`, which the funnel passes in (batch 02): once a funnel
+ * link has previewed a postcode it is locked, so the box is read-only and the
+ * note says how to change it.
  */
 export function WhereStep({
   postcode,
@@ -17,6 +20,7 @@ export function WhereStep({
   onAreas,
   issues,
   idPrefix = "brief",
+  postcodeLockedNote = null,
 }: {
   postcode: string;
   onPostcode: (v: string) => void;
@@ -24,6 +28,7 @@ export function WhereStep({
   onAreas: (v: string[]) => void;
   issues: string[];
   idPrefix?: string;
+  postcodeLockedNote?: string | null;
 }) {
   return (
     <>
@@ -38,8 +43,15 @@ export function WhereStep({
           value={postcode}
           autoComplete="postal-code"
           placeholder={BRIEF_COPY.q1.postcodePlaceholder}
+          readOnly={postcodeLockedNote !== null}
+          aria-describedby={postcodeLockedNote !== null ? `${idPrefix}-postcode-locked` : undefined}
           onChange={(e) => onPostcode(e.target.value)}
         />
+        {postcodeLockedNote !== null && (
+          <p id={`${idPrefix}-postcode-locked`} className="text-xs text-ink-2">
+            {postcodeLockedNote}
+          </p>
+        )}
       </div>
       {areas.map((a, i) => (
         <div key={i} className="flex items-end gap-2">

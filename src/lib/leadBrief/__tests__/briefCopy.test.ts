@@ -69,7 +69,15 @@ const EDITOR_COMPONENTS = [
 ].map((p) => readFileSync(p, "utf8"));
 // Batch 02: the self-serve funnel's copy is held to the same A9 list.
 const FUNNEL_COPY_SRC = readFileSync("src/lib/funnel/copy.ts", "utf8");
-const FUNNEL_PAGES = ["src/app/start/[token]/page.tsx"].map((p) => readFileSync(p, "utf8"));
+const FUNNEL_PAGES = [
+  "src/app/start/[token]/page.tsx",
+  "src/app/start/[token]/summary/page.tsx",
+  "src/components/funnel/FunnelFlow.tsx",
+  "src/components/funnel/WhyItWorks.tsx",
+  "src/components/funnel/HowLeadsWork.tsx",
+  "src/components/funnel/FunnelExits.tsx",
+  "src/components/funnel/FunnelSummaryPreview.tsx",
+].map((p) => readFileSync(p, "utf8"));
 const CUSTOMER_TEXT = [
   stringLiterals(COPY),
   stringLiterals(LABEL_COPY),
@@ -106,6 +114,8 @@ describe("brief copy — A9 words to avoid", () => {
     expect(CUSTOMER_TEXT).toContain("Why you got this lead");
     expect(CUSTOMER_TEXT).toContain("Save priorities");
     expect(CUSTOMER_TEXT).toContain("already set up");
+    expect(CUSTOMER_TEXT).toContain("How many other operators get the same lead?");
+    expect(CUSTOMER_TEXT).toContain("Send to my partner");
   });
 });
 

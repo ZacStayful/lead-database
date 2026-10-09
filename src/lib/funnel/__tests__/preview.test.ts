@@ -20,6 +20,7 @@ import {
   funnelPreviewBody,
   FUNNEL_PREVIEW_BODY_KEYS,
   postcodeLockRefuses,
+  readPreviewSnapshot,
 } from "@/lib/funnel/preview";
 import { leads, supply } from "../../leadBrief/__tests__/fixtures";
 
@@ -161,5 +162,28 @@ describe("postcodeLockRefuses", () => {
     const typed = body({ basePostcode: " yo105dd " }).input.basePostcode;
     const canonical = computeBriefPreview({ ...YORK_BRIEF, basePostcode: typed }, 10, YORK, { today: TODAY });
     expect(canonical.ok && canonical.preview.brief.basePostcode).toBe("YO10 5DD");
+  });
+});
+
+describe("readPreviewSnapshot", () => {
+  const body = funnelPreviewBody(ok());
+
+  it("reads back exactly what the preview route stored", () => {
+    expect(readPreviewSnapshot(JSON.parse(JSON.stringify(body)))).toEqual(body);
+  });
+
+  it("returns null for anything the screens could not show", () => {
+    expect(readPreviewSnapshot(null)).toBeNull();
+    expect(readPreviewSnapshot({})).toBeNull();
+    expect(readPreviewSnapshot({ plans: [body.plans[0]], similarAreas: [] })).toBeNull();
+    expect(
+      readPreviewSnapshot({ plans: [{ ...body.plans[0], serviceRadiusMiles: "35" }, body.plans[1]], similarAreas: [] })
+    ).toBeNull();
+    expect(readPreviewSnapshot({ plans: body.plans, similarAreas: "HG" })).toBeNull();
+  });
+
+  it("puts the plans in plan order whatever order they were stored in", () => {
+    const r = readPreviewSnapshot({ plans: [body.plans[1], body.plans[0]], similarAreas: [] });
+    expect(r?.plans.map((p) => p.plan)).toEqual([10, 20]);
   });
 });

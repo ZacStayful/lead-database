@@ -32,6 +32,10 @@ import type { ClientBriefPreview } from "@/lib/leadBrief/preview";
  * `allowSwitch` (default true) offers "Switch to 10 leads a month". The "Your
  * brief" editor (Phase 5) passes false: a plan change there belongs on the
  * Packages page, and the area being previewed starts at the next renewal.
+ *
+ * `anywayLine` replaces the bottleneck's closing "you can still confirm your
+ * brief" sentence. The funnel (batch 02) passes its own: a visitor there has
+ * no brief to confirm yet, only a plan to choose.
  */
 
 const LABEL_ORDER: LabelKey[] = ["top_match", "strong_match", "first_pick", "nearby_opportunity"];
@@ -46,6 +50,7 @@ export interface BriefPreviewViewProps {
   switchOpen: boolean;
   busy: boolean;
   allowSwitch?: boolean;
+  anywayLine?: string;
   onToggleArea: (area: string) => void;
   onWiden: () => void;
   onOpenSwitch: () => void;
@@ -140,7 +145,7 @@ export function BriefPreviewView(props: BriefPreviewViewProps) {
                 </div>
               </div>
             )}
-            <p className="text-ink-2">{PREVIEW_COPY.canConfirmAnyway}</p>
+            <p className="text-ink-2">{props.anywayLine ?? PREVIEW_COPY.canConfirmAnyway}</p>
           </CardContent>
         </Card>
       )}

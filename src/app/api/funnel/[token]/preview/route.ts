@@ -12,23 +12,16 @@ import {
 import {
   advanceStep,
   FUNNEL_PREVIEW_WINDOW_SECONDS,
-  isAlreadySetUp,
   namesOtherProduct,
   previewAllowed,
 } from "@/lib/funnel/session";
-import {
-  customersByEmail,
-  loadSessionByToken,
-  readFunnelEnabled,
-  type FunnelSessionRow,
-} from "@/lib/funnel/server";
-import { alreadySetUpLoginUrl } from "@/lib/funnel/token";
+import { FUNNEL_NO_STORE, funnelGate, type FunnelSessionRow } from "@/lib/funnel/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const NO_STORE = { "Cache-Control": "no-store, private" };
+const NO_STORE = FUNNEL_NO_STORE;
 
 /**
  * POST /api/funnel/[token]/preview — the funnel's Lead Brief preview, for both
@@ -40,7 +33,8 @@ const NO_STORE = { "Cache-Control": "no-store, private" };
  * reaches this route, so it must not be a way to read our supply.
  *
  * The order is deliberate:
- *   1. The switch, the token and "already set up" before anything else.
+ *   1. The switch, the token and "already set up" before anything else
+ *      (`funnelGate`, shared with the answers route).
  *   2. The input is judged (pure and cheap) and the postcode lock checked
  *      BEFORE the rate limit, so a typo or a refused postcode never spends one
  *      of the 20 previews.
@@ -50,20 +44,9 @@ const NO_STORE = { "Cache-Control": "no-store, private" };
 export async function POST(request: NextRequest, { params }: { params: { token: string } }) {
   const admin = createAdminClient();
 
-  if (!(await readFunnelEnabled(admin))) {
-    return NextResponse.json({ code: "funnel_disabled" }, { status: 403, headers: NO_STORE });
-  }
-
-  const lookup = await loadSessionByToken(admin, params.token);
-  if (!lookup.ok) {
-    console.error("[funnel/preview] session lookup failed", lookup.message);
-    return NextResponse.json({ code: "unavailable" }, { status: 503, headers: NO_STORE });
-  }
-  const session = lookup.session;
-  if (!session) return NextResponse.json({ code: "not_found" }, { status: 404, headers: NO_STORE });
-
-  const setUp = await alreadySetUpRefusal(admin, session);
-  if (setUp) return setUp;
+  const gate = await funnelGate(admin, params.token, "preview");
+  if (!gate.ok) return gate.response;
+  const session = gate.session;
 
   let body: unknown;
   try {
@@ -140,30 +123,6 @@ export async function POST(request: NextRequest, { params }: { params: { token: 
     console.error("[funnel/preview] failed", err);
     return NextResponse.json({ code: "preview_failed" }, { status: 500, headers: NO_STORE });
   }
-}
-
-/**
- * 02 Phase 2: somebody already set up is sent to log in, not shown a preview
- * of a product they hold. A paid session is the same thing by another route.
- * An unreadable customer list refuses (503) rather than guessing "not a
- * customer".
- */
-async function alreadySetUpRefusal(
-  admin: ReturnType<typeof createAdminClient>,
-  session: FunnelSessionRow
-): Promise<NextResponse | null> {
-  const refuse = () =>
-    NextResponse.json(
-      { code: "already_set_up", loginUrl: alreadySetUpLoginUrl() },
-      { status: 409, headers: NO_STORE }
-    );
-  if (session.step === "paid") return refuse();
-  const customers = await customersByEmail(admin, session.email);
-  if (!customers.ok) {
-    console.error("[funnel/preview] customer lookup failed", customers.message);
-    return NextResponse.json({ code: "unavailable" }, { status: 503, headers: NO_STORE });
-  }
-  return customers.customers.some(isAlreadySetUp) ? refuse() : null;
 }
 
 /**
