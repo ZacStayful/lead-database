@@ -88,6 +88,13 @@ export const MAX_SIMILAR_AREAS = 5;
 export const MAX_TRADEOFFS = 3;
 
 /**
+ * The highest bedroom minimum a customer can set, as an essential or as a
+ * priority threshold. Also the CHECK on customer_lead_briefs.min_bedrooms
+ * (0162); a guard test keeps the two equal.
+ */
+export const MAX_MIN_BEDROOMS = 5;
+
+/**
  * Below this many values in the service area, a "typical for your area"
  * threshold falls back to the national figure (the MIN_RELIABLE_MATCHES idea
  * from filterPrediction.ts, at the same size).

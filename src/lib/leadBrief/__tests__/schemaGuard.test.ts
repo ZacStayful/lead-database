@@ -6,6 +6,7 @@ import { MILES_TO_KM } from "@/components/filtering/format";
 import { KM_PER_MILE, OUTCODE_PATTERN_SOURCE } from "@/lib/leadBrief/geo";
 import {
   BRIEF_PLANS,
+  MAX_MIN_BEDROOMS,
   PLAN_MAX_MILES,
   TRAVEL_LIMIT_OPTIONS,
   operatingModeFor,
@@ -44,6 +45,13 @@ describe("0162 — the plan caps (A3)", () => {
 
   it("cover exactly the two plans", () => {
     expect([...BRIEF_PLANS]).toEqual([10, 20]);
+  });
+});
+
+describe("0162 — the bedroom minimum", () => {
+  it("is never above 5, in both places", () => {
+    expect(MAX_MIN_BEDROOMS).toBe(5);
+    expect(m0162).toContain(`check (min_bedrooms between 1 and ${MAX_MIN_BEDROOMS})`);
   });
 });
 

@@ -1,6 +1,7 @@
 import { hasCentroid } from "@/lib/leadBrief/geo";
 import {
   isTravelLimit,
+  MAX_MIN_BEDROOMS,
   operatingModeFor,
   type OperatingMode,
   type TravelLimit,
@@ -125,7 +126,7 @@ export function normaliseBriefInput(input: BriefInput): NormaliseResult {
   const minBedrooms = input.minBedrooms ?? null;
   if (
     minBedrooms !== null &&
-    !(Number.isInteger(minBedrooms) && minBedrooms >= 1 && minBedrooms <= 10)
+    !(Number.isInteger(minBedrooms) && minBedrooms >= 1 && minBedrooms <= MAX_MIN_BEDROOMS)
   ) {
     issues.push({ code: "min_bedrooms_invalid" });
   }
@@ -168,7 +169,13 @@ export function normaliseBriefInput(input: BriefInput): NormaliseResult {
   const thresholds: Partial<Record<PriorityKey, number>> = {};
   for (const [k, v] of Object.entries(input.thresholds ?? {})) {
     const key = k as PriorityKey;
-    if (!(PRIORITY_KEYS as string[]).includes(k) || typeof v !== "number" || !(v > 0)) {
+    if (
+      !(PRIORITY_KEYS as string[]).includes(k) ||
+      typeof v !== "number" ||
+      !(v > 0) ||
+      // A bedroom threshold is a whole number of bedrooms, never above 5.
+      (key === "bedrooms" && !(Number.isInteger(v) && v <= MAX_MIN_BEDROOMS))
+    ) {
       issues.push({ code: "threshold_invalid", key });
       continue;
     }

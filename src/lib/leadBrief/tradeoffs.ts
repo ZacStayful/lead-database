@@ -15,9 +15,10 @@ import type { EssentialKey } from "@/lib/leadBrief/types";
  *             lowest (£25k) the essential is dropped
  *   bedrooms  one bedroom fewer (4+ → 3+); from 2+ the essential is dropped
  *
- * A trade-off is offered when it brings the area in, or when the area could
- * not fill the plan at all and the relaxed brief can (`fillsPlan`). The
- * engine returns facts; the wording — always a gain, never "drop your
+ * A trade-off is offered only when it brings the area in (A6: ranked by miles
+ * saved). When the essentials are what keeps the area from covering the plan
+ * at all, that is the bottleneck's job (bottleneck.ts), not a trade-off's.
+ * The engine returns facts; the wording — always a gain, never "drop your
  * requirement" (A6) — belongs to the copy module (Phase 3).
  */
 export interface Tradeoff {
@@ -27,8 +28,6 @@ export interface Tradeoff {
   to: number | null;
   radiusMiles: number;
   milesSaved: number;
-  /** The current brief cannot fill the plan from its area; this one can. */
-  fillsPlan: boolean;
 }
 
 export function relaxedThreshold(essential: EssentialKey, current: number): number | null {
@@ -37,6 +36,23 @@ export function relaxedThreshold(essential: EssentialKey, current: number): numb
     return i > 0 ? GROSS_THRESHOLDS[i - 1] : null;
   }
   return current > 2 ? current - 1 : null;
+}
+
+/** The brief with one essential set to `to`, or dropped when `to` is null. */
+export function relaxBrief(
+  brief: NormalisedBrief,
+  essential: EssentialKey,
+  to: number | null
+): NormalisedBrief {
+  const essentials = to === null ? brief.essentials.filter((e) => e !== essential) : brief.essentials;
+  return essential === "revenue"
+    ? { ...brief, minGross: to, essentials }
+    : { ...brief, minBedrooms: to, essentials };
+}
+
+/** The current threshold of an essential, or null when it is not one. */
+export function essentialThreshold(brief: NormalisedBrief, essential: EssentialKey): number | null {
+  return essential === "revenue" ? brief.minGross : brief.minBedrooms;
 }
 
 export function computeTradeoffs(args: {
@@ -49,49 +65,27 @@ export function computeTradeoffs(args: {
   const { brief, current } = args;
 
   const candidates: { essential: EssentialKey; from: number; relaxed: NormalisedBrief; to: number | null }[] = [];
-  if (brief.minGross !== null) {
-    const to = relaxedThreshold("revenue", brief.minGross);
-    candidates.push({
-      essential: "revenue",
-      from: brief.minGross,
-      to,
-      relaxed: {
-        ...brief,
-        minGross: to,
-        essentials: to === null ? brief.essentials.filter((e) => e !== "revenue") : brief.essentials,
-      },
-    });
-  }
-  if (brief.minBedrooms !== null) {
-    const to = relaxedThreshold("bedrooms", brief.minBedrooms);
-    candidates.push({
-      essential: "bedrooms",
-      from: brief.minBedrooms,
-      to,
-      relaxed: {
-        ...brief,
-        minBedrooms: to,
-        essentials: to === null ? brief.essentials.filter((e) => e !== "bedrooms") : brief.essentials,
-      },
-    });
+  for (const essential of ["revenue", "bedrooms"] as const) {
+    const from = essentialThreshold(brief, essential);
+    if (from === null) continue;
+    const to = relaxedThreshold(essential, from);
+    candidates.push({ essential, from, to, relaxed: relaxBrief(brief, essential, to) });
   }
 
   for (const c of candidates) {
     const area = args.areaFor(c.relaxed);
     const milesSaved = current.radiusMiles - area.radiusMiles;
-    const fillsPlan = !current.meetsTarget && area.meetsTarget;
-    if (milesSaved > 0 || fillsPlan) {
+    if (milesSaved > 0) {
       out.push({
         essential: c.essential,
         from: c.from,
         to: c.to,
         radiusMiles: area.radiusMiles,
-        milesSaved: Math.max(milesSaved, 0),
-        fillsPlan,
+        milesSaved,
       });
     }
   }
 
-  out.sort((a, b) => b.milesSaved - a.milesSaved || Number(b.fillsPlan) - Number(a.fillsPlan));
+  out.sort((a, b) => b.milesSaved - a.milesSaved);
   return out.slice(0, MAX_TRADEOFFS);
 }

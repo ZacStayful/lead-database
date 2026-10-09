@@ -9,7 +9,7 @@ import {
   type MatchContext,
 } from "@/lib/leadBrief/match";
 import { computeSimilarAreas, dissimilarity, figuresFor } from "@/lib/leadBrief/similarAreas";
-import { computeTradeoffs, relaxedThreshold } from "@/lib/leadBrief/tradeoffs";
+import { computeTradeoffs, relaxBrief, relaxedThreshold } from "@/lib/leadBrief/tradeoffs";
 import type { NormalisedBrief } from "@/lib/leadBrief/input";
 import type { ServiceArea } from "@/lib/leadBrief/serviceArea";
 import type { BriefPriority } from "@/lib/leadBrief/types";
@@ -297,7 +297,7 @@ describe("trade-offs (A6)", () => {
       areaFor: (b) => (b.minGross === 50000 ? sa(30) : b.minBedrooms === 2 ? sa(60) : sa(60)),
     });
     expect(t).toEqual([
-      { essential: "revenue", from: 75000, to: 50000, radiusMiles: 30, milesSaved: 30, fillsPlan: false },
+      { essential: "revenue", from: 75000, to: 50000, radiusMiles: 30, milesSaved: 30 },
     ]);
   });
 
@@ -314,27 +314,27 @@ describe("trade-offs (A6)", () => {
     ]);
   });
 
-  it("at equal miles, puts the relaxation that fills the plan first", () => {
-    const t = computeTradeoffs({
-      brief,
-      current: sa(75, false),
-      areaFor: (b) => (b.minGross === 50000 ? sa(70, false) : b.minBedrooms === 2 ? sa(70, true) : sa(75, false)),
-    });
-    expect(t.map((x) => [x.essential, x.fillsPlan])).toEqual([
-      ["bedrooms", true],
-      ["revenue", false],
-    ]);
-  });
-
-  it("offers a relaxation that fills a plan the area could not", () => {
+  it("⚠️ never offers a relaxation that saves no miles, even one that would cover the plan", () => {
+    // Covering the plan when the essentials are what hold the area back is
+    // the bottleneck's job (bottleneck.ts). A trade-off is miles saved (A6).
     const t = computeTradeoffs({
       brief,
       current: sa(75, false),
       areaFor: (b) => (b.minBedrooms === 2 ? sa(75, true) : sa(75, false)),
     });
-    expect(t).toEqual([
-      { essential: "bedrooms", from: 3, to: 2, radiusMiles: 75, milesSaved: 0, fillsPlan: true },
-    ]);
+    expect(t).toEqual([]);
+  });
+
+  it("relaxBrief keeps an essential and its threshold together, as 0162 requires", () => {
+    const lower = relaxBrief(brief, "bedrooms", 2);
+    expect(lower.minBedrooms).toBe(2);
+    expect(lower.essentials).toEqual(["revenue", "bedrooms"]);
+    const dropped = relaxBrief(brief, "bedrooms", null);
+    expect(dropped.minBedrooms).toBeNull();
+    expect(dropped.essentials).toEqual(["revenue"]);
+    const noRevenue = relaxBrief(brief, "revenue", null);
+    expect(noRevenue.minGross).toBeNull();
+    expect(noRevenue.essentials).toEqual(["bedrooms"]);
   });
 
   it("offers nothing when there are no essentials", () => {

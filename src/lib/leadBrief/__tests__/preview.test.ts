@@ -113,7 +113,7 @@ describe("computeBriefPreview — York on the 20-lead plan", () => {
     expect(p.serviceRadiusMiles).toBe(30);
     expect(p.meetsTarget).toBe(true);
     expect(p.mixLeansNearby).toBe(false);
-    expect(p.cannotMeet).toBeNull();
+    expect(p.bottleneck).toBeNull();
     expect(p.supplyCheck).toEqual({ target: 26, deliverable: 26, weeks: 13 });
   });
 
@@ -251,15 +251,24 @@ describe("computeBriefPreview — no supply nearby", () => {
   // what is left to test is the service area itself.
   const far = supply({ leads: leads(300, "E1"), filteredAreas: ["E"] });
 
-  it("⚠️ widens to the cap, says the plan cannot be met there, and leans the mix to Nearby (widen, never block)", () => {
+  it("⚠️ widens to the cap and leans the mix to Nearby, and tells the customer nothing about a shortfall (A3)", () => {
+    // The plan is always filled: a short month rolls over. Short of the target
+    // is recorded server-side for the stored brief and the admin side only.
     const p = preview(YORK_BRIEF, 20, far);
     expect(p.serviceRadiusMiles).toBe(75);
     expect(p.meetsTarget).toBe(false);
     expect(p.mixLeansNearby).toBe(true);
+    expect(p.bottleneck).toBeNull();
     expect(p.expectedMix).toEqual({ top_match: 0, strong_match: 0, first_pick: 0, nearby_opportunity: 20 });
     expect(p.coverage).toEqual([
       { plan: 10, radiusMiles: 40, meetsTarget: false },
       { plan: 20, radiusMiles: 75, meetsTarget: false },
+    ]);
+    const client = previewForClient(p);
+    expect(client.bottleneck).toBeNull();
+    expect(client.coverage).toEqual([
+      { plan: 10, radiusMiles: 40 },
+      { plan: 20, radiusMiles: 75 },
     ]);
     expectStorable(p);
   });
@@ -280,29 +289,17 @@ describe("computeBriefPreview — no supply nearby", () => {
     expect(limited.expectedMix.nearby_opportunity).toBe(20);
   });
 
-  it("A7: offers the three ways forward, with no waitlist", () => {
-    const p = preview(YORK_BRIEF, 20, far);
-    expect(p.cannotMeet).toEqual({
-      reason: "area",
-      canWiden: false,
-      canSwitchToSmallerPlan: true,
-      canBookCall: true,
-    });
-  });
-
-  it("offers widening only while the customer's own travel limit is what binds", () => {
-    const at = (travel: 10 | 25 | 50 | null, plan: BriefPlan) =>
-      preview({ basePostcode: "YO10", travelLimitMiles: travel }, plan, far).cannotMeet!.canWiden;
-    expect(at(25, 20)).toBe(true);
-    expect(at(50, 20)).toBe(true);
-    expect(at(null, 20)).toBe(false);
-    // 50 miles is already past the 10-lead plan's 40-mile maximum.
-    expect(at(50, 10)).toBe(false);
-    expect(at(25, 10)).toBe(true);
-  });
-
-  it("does not offer a smaller plan to someone already on it", () => {
-    expect(preview(YORK_BRIEF, 10, far).cannotMeet!.canSwitchToSmallerPlan).toBe(false);
+  it("⚠️ never tells a customer their plan can't be filled, at any travel limit, on either plan, with or without essentials", () => {
+    for (const travel of [10, 25, 50, null] as const) {
+      for (const plan of [10, 20] as const) {
+        for (const essentials of [{}, { minBedrooms: 4 }, { minGross: 75000 }]) {
+          const p = preview({ basePostcode: "YO10", travelLimitMiles: travel, ...essentials }, plan, far);
+          expect(p.meetsTarget).toBe(false);
+          // Thin even without essentials: supply, not the brief.
+          expect(p.bottleneck).toBeNull();
+        }
+      }
+    }
   });
 
   it("never reaches past the travel limit, and reports a priority area beyond it", () => {
@@ -318,40 +315,79 @@ describe("computeBriefPreview — no supply nearby", () => {
   it("an empty book is a preview too, not a crash", () => {
     const p = preview(YORK_BRIEF, 20, supply());
     expect(p.meetsTarget).toBe(false);
-    expect(p.cannotMeet?.reason).toBe("area");
+    expect(p.bottleneck).toBeNull();
     expectStorable(p);
   });
 });
 
-describe("computeBriefPreview — essentials that cannot be met", () => {
-  it("⚠️ says the essentials are the reason when the area alone could fill the plan", () => {
-    const p = preview({ ...YORK_BRIEF, minBedrooms: 6, minGross: 75000 }, 20, YORK);
+describe("computeBriefPreview — essentials holding the area back (the bottleneck)", () => {
+  it("⚠️ names the essential and the first step down that covers the plan — 5+ bedrooms needs 3+, not 4+", () => {
+    // Only Harrogate's leads are 4-bed and none are 5-bed; 3+ takes in York
+    // and Leeds too.
+    const p = preview({ ...YORK_BRIEF, minBedrooms: 5 }, 20, YORK);
     expect(p.meetsTarget).toBe(false);
     expect(p.serviceRadiusMiles).toBe(75);
-    expect(p.cannotMeet).toEqual({
-      reason: "essentials",
+    expect(p.bottleneck).toEqual({
+      causes: [{ essential: "bedrooms", relaxTo: 3 }],
       canWiden: false,
-      canSwitchToSmallerPlan: true,
+      canSwitchToSmallerPlan: false,
       canBookCall: true,
     });
     expect(p.expectedMix.nearby_opportunity).toBe(20);
     expectStorable(p);
   });
 
-  it("offers the one-step relaxation that fills the plan, as a gain", () => {
-    // Only Harrogate's leads are 4-bed; at 3+ the 30-mile circle fills it.
-    const p = preview({ ...YORK_BRIEF, minBedrooms: 4 }, 20, YORK);
-    expect(p.cannotMeet?.reason).toBe("essentials");
-    expect(p.tradeoffs).toEqual([
-      { essential: "bedrooms", from: 4, to: 3, radiusMiles: 30, milesSaved: 45, fillsPlan: true },
+  it("walks revenue down the threshold list: £75k+ needs £40k+ here", () => {
+    const p = preview({ ...YORK_BRIEF, minGross: 75000 }, 20, YORK);
+    expect(p.bottleneck?.causes).toEqual([{ essential: "revenue", relaxTo: 40000 }]);
+  });
+
+  it("names both essentials when only relaxing both together covers the plan", () => {
+    const p = preview({ ...YORK_BRIEF, minGross: 75000, minBedrooms: 5 }, 20, YORK);
+    expect(p.bottleneck?.causes).toEqual([
+      { essential: "revenue", relaxTo: null },
+      { essential: "bedrooms", relaxTo: null },
     ]);
     expectStorable(p);
   });
 
-  it("calls it the area, not the essentials, when dropping them would not help either", () => {
-    const p = preview({ ...YORK_BRIEF, minBedrooms: 10, minGross: 75000 }, 20, supply());
-    expect(p.cannotMeet?.reason).toBe("area");
-    expect(p.tradeoffs).toEqual([]);
+  it("a trade-off is still offered beside it when it brings the area in", () => {
+    const p = preview({ ...YORK_BRIEF, minBedrooms: 4 }, 20, YORK);
+    expect(p.bottleneck?.causes).toEqual([{ essential: "bedrooms", relaxTo: 3 }]);
+    expect(p.tradeoffs).toEqual([
+      { essential: "bedrooms", from: 4, to: 3, radiusMiles: 30, milesSaved: 45 },
+    ]);
+  });
+
+  it("⚠️ says nothing when supply is thin even without the essentials: that is not the customer's brief", () => {
+    const far = supply({ leads: leads(300, "E1"), filteredAreas: ["E"] });
+    expect(preview({ ...YORK_BRIEF, minBedrooms: 4 }, 20, far).bottleneck).toBeNull();
+  });
+
+  it("offers widening only when a larger travel limit would cover the plan", () => {
+    // Ten miles round York holds only 3-bed leads; the 4-bed ones are in Harrogate.
+    const s = supply({ leads: [...leads(200, "YO10"), ...leads(120, "HG1", { bedrooms: 4 })] });
+    const p = preview({ basePostcode: "YO10", travelLimitMiles: 10, minBedrooms: 4 }, 20, s);
+    expect(p.bottleneck).toEqual({
+      causes: [{ essential: "bedrooms", relaxTo: 3 }],
+      canWiden: true,
+      canSwitchToSmallerPlan: false,
+      canBookCall: true,
+    });
+  });
+
+  it("offers the 10-lead plan only when it would be covered", () => {
+    const s = supply({ leads: [...leads(200, "YO10"), ...leads(60, "HG1", { bedrooms: 4 })] });
+    const p = preview({ ...YORK_BRIEF, minBedrooms: 4 }, 20, s);
+    expect(p.bottleneck?.canSwitchToSmallerPlan).toBe(true);
+    expect(preview({ ...YORK_BRIEF, minBedrooms: 4 }, 10, s).bottleneck).toBeNull();
+  });
+
+  it("refuses a bedroom minimum above 5", () => {
+    expect(computeBriefPreview({ ...YORK_BRIEF, minBedrooms: 6 }, 20, YORK, { today: TODAY })).toEqual({
+      ok: false,
+      issues: [{ code: "min_bedrooms_invalid" }],
+    });
   });
 
   it("refuses an input it cannot place with issues, never a throw", () => {
@@ -426,12 +462,10 @@ describe("previewForClient — what a browser may see (A4, locked decision 9)", 
       [
         "basePostcode",
         "baseOutcode",
-        "cannotMeet",
+        "bottleneck",
         "coverage",
         "expectedMix",
         "firstPicks",
-        "meetsTarget",
-        "mixLeansNearby",
         "moreFirstPicks",
         "operatingMode",
         "plan",
@@ -447,8 +481,10 @@ describe("previewForClient — what a browser may see (A4, locked decision 9)", 
   });
 
   it("carries no key, at any depth, that names a volume, a count or the supply", () => {
-    // "mixLeansNearby" is not a /lead/ hit: L-e-a-n-s.
-    const banned = /count|volume|supply|deliverable|weeks|holder|contention|deficit|sample|lead|outcodes$/i;
+    // ⚠️ Nor anything that says the area falls short: the plan is always
+    // filled, and only the customer's own essentials are ever named.
+    const banned =
+      /count|volume|supply|deliverable|weeks|holder|contention|deficit|sample|lead|outcodes$|meets|target|lean|short|cannot/i;
     const walk = (v: unknown, path: string) => {
       if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
       else if (v && typeof v === "object") {
@@ -462,6 +498,8 @@ describe("previewForClient — what a browser may see (A4, locked decision 9)", 
     // And the walk itself can see a leak: a server-side key fails it.
     expect(() => walk({ serviceOutcodes: [] }, "probe")).toThrow();
     expect(() => walk({ x: { supplyCheck: {} } }, "probe")).toThrow();
+    expect(() => walk({ coverage: [{ meetsTarget: false }] }, "probe")).toThrow();
+    expect(() => walk({ mixLeansNearby: true }, "probe")).toThrow();
   });
 
   it("⚠️ names no outcode beyond the base, the customer's own areas and the nearest first picks", () => {
@@ -489,9 +527,10 @@ describe("previewForClient — what a browser may see (A4, locked decision 9)", 
     expect(server.expectedMix.top_match).not.toBe(999);
   });
 
-  it("keeps the A7 options and the trade-offs a customer acts on", () => {
-    expect(client.cannotMeet).toEqual(server.cannotMeet);
+  it("keeps the bottleneck, the trade-offs and the radii a customer acts on", () => {
+    expect(server.bottleneck).not.toBeNull();
+    expect(client.bottleneck).toEqual(server.bottleneck);
     expect(client.tradeoffs).toEqual(server.tradeoffs);
-    expect(client.coverage).toEqual(server.coverage.map(({ plan, radiusMiles, meetsTarget }) => ({ plan, radiusMiles, meetsTarget })));
+    expect(client.coverage).toEqual(server.coverage.map(({ plan, radiusMiles }) => ({ plan, radiusMiles })));
   });
 });

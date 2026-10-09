@@ -131,6 +131,17 @@ describe("normaliseBriefInput", () => {
     expect(r.ok && r.brief.essentials).toEqual(["revenue", "bedrooms"]);
   });
 
+  it("allows a bedroom minimum or threshold up to 5, and no higher", () => {
+    const r = normaliseBriefInput({
+      basePostcode: "YO10",
+      travelLimitMiles: null,
+      minBedrooms: 5,
+      thresholds: { bedrooms: 5 },
+    });
+    expect(r.ok && r.brief.minBedrooms).toBe(5);
+    expect(r.ok && r.brief.thresholds.bedrooms).toBe(5);
+  });
+
   it("⚠️ refuses a base with no centroid (M50 is real but cannot be placed)", () => {
     const r = normaliseBriefInput({ basePostcode: "M50 2HN", travelLimitMiles: 10 });
     expect(r).toEqual({ ok: false, issues: [{ code: "base_outcode_unplaceable", outcode: "M50" }] });
@@ -141,9 +152,12 @@ describe("normaliseBriefInput", () => {
     [{ minGross: 45000 }, "min_gross_invalid"],
     [{ minBedrooms: 0 }, "min_bedrooms_invalid"],
     [{ minBedrooms: 2.5 }, "min_bedrooms_invalid"],
+    [{ minBedrooms: 6 }, "min_bedrooms_invalid"],
     [{ ranking: ["location", "location"] as never }, "ranking_invalid"],
     [{ similarAreas: ["YO10"] }, "similar_area_invalid"],
     [{ thresholds: { revenue: -1 } }, "threshold_invalid"],
+    [{ thresholds: { bedrooms: 6 } }, "threshold_invalid"],
+    [{ thresholds: { bedrooms: 3.5 } }, "threshold_invalid"],
   ])("refuses %j", (extra, code) => {
     const r = normaliseBriefInput({ basePostcode: "YO10", travelLimitMiles: 25, ...extra });
     expect(r.ok).toBe(false);

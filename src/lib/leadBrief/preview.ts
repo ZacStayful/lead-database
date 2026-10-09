@@ -1,5 +1,6 @@
 import { deliverableAtConfidence } from "@/lib/filterForecast";
 import { computeFirstPicks, computePaceOutcodes, tierForOutcode } from "@/lib/leadBrief/areas";
+import { computeBottleneck, type Bottleneck } from "@/lib/leadBrief/bottleneck";
 import {
   leadShare,
   meetsEssentials,
@@ -22,7 +23,6 @@ import {
 import { evaluateLead, labelFor, resolvePriorities, type MatchContext } from "@/lib/leadBrief/match";
 import {
   BRIEF_PLANS,
-  PLAN_MAX_MILES,
   PREVIEW_FIRST_PICKS,
   type BriefPlan,
   type OperatingMode,
@@ -57,19 +57,8 @@ import type {
 export interface PlanCoverage {
   plan: BriefPlan;
   radiusMiles: number;
+  /** SERVER-ONLY: whether this plan's area reaches the target (Phase 6 reads it). */
   meetsTarget: boolean;
-}
-
-/** A7: the three ways forward when the plan cannot be filled inside the cap. */
-export interface CannotMeet {
-  /** "essentials": the area could fill the plan without them. "area": it could not either way. */
-  reason: "essentials" | "area";
-  /** Widen your area: the customer's own travel limit is what binds. */
-  canWiden: boolean;
-  /** Switch to 10 leads a month. */
-  canSwitchToSmallerPlan: boolean;
-  /** Book a call is always offered. There is no waitlist (A7). */
-  canBookCall: true;
 }
 
 export interface BriefPreview {
@@ -80,7 +69,14 @@ export interface BriefPreview {
   /** SERVER-ONLY: every outcode in the service area. */
   serviceOutcodes: string[];
   priorityOutsideCap: string[];
+  /**
+   * SERVER-ONLY. Whether the area reaches the plan × 1.3 target. False is not
+   * a failure: the plan is always filled, a short month rolls over, and the
+   * mix leans to Nearby (A3). It feeds the stored brief and the admin side,
+   * never the customer (previewForClient leaves it out).
+   */
   meetsTarget: boolean;
+  /** SERVER-ONLY, stored as customer_lead_briefs.mix_leans_nearby (A3). */
   mixLeansNearby: boolean;
   /** Nearest first. */
   firstPickOutcodes: string[];
@@ -95,7 +91,8 @@ export interface BriefPreview {
   tradeoffs: Tradeoff[];
   /** A5: both plans, side by side. */
   coverage: PlanCoverage[];
-  cannotMeet: CannotMeet | null;
+  /** The customer's essentials holding the area back, or null. Never supply (bottleneck.ts). */
+  bottleneck: Bottleneck | null;
   /** SERVER-ONLY diagnostics. */
   supplyCheck: { target: number; deliverable: number; weeks: number };
 }
@@ -218,19 +215,7 @@ export function computeBriefPreview(
     areaFor: (b) => areaFor(b, plan),
   });
 
-  let cannotMeet: CannotMeet | null = null;
-  if (!service.meetsTarget) {
-    const withoutEssentials = brief.essentials.length > 0
-      ? areaFor({ ...brief, minBedrooms: null, minGross: null, essentials: [] }, plan)
-      : null;
-    cannotMeet = {
-      reason: withoutEssentials?.meetsTarget ? "essentials" : "area",
-      canWiden:
-        brief.travelLimitMiles !== null && brief.travelLimitMiles < PLAN_MAX_MILES[plan],
-      canSwitchToSmallerPlan: plan === 20,
-      canBookCall: true,
-    };
-  }
+  const bottleneck = computeBottleneck({ brief, plan, current: service, areaFor });
 
   return {
     ok: true,
@@ -255,7 +240,7 @@ export function computeBriefPreview(
       priorityAreaTiers,
       tradeoffs,
       coverage,
-      cannotMeet,
+      bottleneck,
       supplyCheck: { target: service.target, deliverable: service.deliverable, weeks: supply.weeks },
     },
   };
@@ -266,6 +251,11 @@ export function computeBriefPreview(
  * trade-offs and the mix as a split of the customer's own allocation — and
  * nothing that counts leads: no service or behind-pace outcode lists, no
  * forecast, no supply. The first picks are named only as the nearest few.
+ *
+ * ⚠️ NOTHING HERE SAYS THE AREA FALLS SHORT. The plan is always filled and a
+ * short month rolls over, so `meetsTarget` and `mixLeansNearby` stay
+ * server-side and the coverage rows carry radii only. The one shortfall a
+ * customer is told about is their own essentials (`bottleneck`).
  *
  * Built field by field, never by spreading the preview, so a field added to
  * BriefPreview later cannot reach a client by accident (the §27.2 rule). A
@@ -278,9 +268,8 @@ export interface ClientBriefPreview {
   operatingMode: OperatingMode;
   travelLimitMiles: TravelLimit;
   serviceRadiusMiles: number;
-  meetsTarget: boolean;
-  mixLeansNearby: boolean;
-  coverage: PlanCoverage[];
+  /** A5: the radius for each plan. */
+  coverage: { plan: BriefPlan; radiusMiles: number }[];
   priorityAreas: { outcode: string; tier: CompetitionTier | null }[];
   priorityOutsideCap: string[];
   firstPicks: { outcode: string; tier: CompetitionTier | null }[];
@@ -289,7 +278,7 @@ export interface ClientBriefPreview {
   tradeoffs: Tradeoff[];
   expectedMix: Record<MatchLabel, number>;
   priorities: BriefPriority[];
-  cannotMeet: CannotMeet | null;
+  bottleneck: Bottleneck | null;
 }
 
 export function previewForClient(preview: BriefPreview): ClientBriefPreview {
@@ -300,13 +289,7 @@ export function previewForClient(preview: BriefPreview): ClientBriefPreview {
     operatingMode: preview.brief.operatingMode,
     travelLimitMiles: preview.brief.travelLimitMiles,
     serviceRadiusMiles: preview.serviceRadiusMiles,
-    meetsTarget: preview.meetsTarget,
-    mixLeansNearby: preview.mixLeansNearby,
-    coverage: preview.coverage.map((c) => ({
-      plan: c.plan,
-      radiusMiles: c.radiusMiles,
-      meetsTarget: c.meetsTarget,
-    })),
+    coverage: preview.coverage.map((c) => ({ plan: c.plan, radiusMiles: c.radiusMiles })),
     priorityAreas: preview.priorityAreaTiers.map((p) => ({ outcode: p.outcode, tier: p.tier })),
     priorityOutsideCap: [...preview.priorityOutsideCap],
     firstPicks: preview.firstPickTiers.map((p) => ({ outcode: p.outcode, tier: p.tier })),
@@ -325,10 +308,16 @@ export function previewForClient(preview: BriefPreview): ClientBriefPreview {
       to: t.to,
       radiusMiles: t.radiusMiles,
       milesSaved: t.milesSaved,
-      fillsPlan: t.fillsPlan,
     })),
     expectedMix: { ...preview.expectedMix },
     priorities: preview.priorities.map((p) => ({ key: p.key, threshold: p.threshold })),
-    cannotMeet: preview.cannotMeet ? { ...preview.cannotMeet } : null,
+    bottleneck: preview.bottleneck
+      ? {
+          causes: preview.bottleneck.causes.map((c) => ({ essential: c.essential, relaxTo: c.relaxTo })),
+          canWiden: preview.bottleneck.canWiden,
+          canSwitchToSmallerPlan: preview.bottleneck.canSwitchToSmallerPlan,
+          canBookCall: preview.bottleneck.canBookCall,
+        }
+      : null,
   };
 }
