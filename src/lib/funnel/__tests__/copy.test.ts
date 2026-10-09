@@ -73,8 +73,10 @@ describe("the FAQ (02 Phase 3, with C4 and C7)", () => {
     expect(all).not.toMatch(/guarantee/i);
   });
 
-  it("C9: does not claim every lead is financially modelled", () => {
+  it("C9: states the modelled share, never 'each one' or 'nearly every one'", () => {
+    expect(FUNNEL_FAQ[1].a).toContain("More than 9 in 10 are financially modelled");
     expect(all).not.toMatch(/each one is financially modelled/i);
+    expect(all).not.toMatch(/nearly every ?one/i);
   });
 });
 

@@ -130,11 +130,15 @@ export const FUNNEL_FAQ: readonly { q: string; a: string }[] = [
   },
   {
     q: "Are these leads any good?",
-    // C9 (raised at the Phase 3 gate): the doc says "Each one is financially
-    // modelled". 182 of the 198 Management leads ingested in the last 60 days
-    // carry a projected figure (§25: some items have no analysis), so the
-    // literal sentence is not true of every lead.
-    a: "Every lead is a landlord who searched Google for short-term let management and completed an enquiry form. Nearly every one is financially modelled against the landlord's current income using live Airbnb data for their postcode. Before any lead reaches you, the landlord receives an email telling them a trusted local operator will be in touch. They're expecting your call.",
+    // C9 (decided by Zac, 9 Oct): the doc says "Each one is financially
+    // modelled", which is not true of every lead (§25: some Monday items carry
+    // no analysis). Measured 9 Oct: 182 of the 198 Management leads ingested
+    // in the last 60 days carry a projected figure (92%). All-time is 302 of
+    // 337 (89.6%), so the sentence is a claim about what a buyer gets now, and
+    // the last-60-days figure is the one to re-measure: if it ever reads under
+    // 90%, reword this. "Nearly every one" was read as "nearly everyone", so it
+    // states the share instead.
+    a: "Every lead is a landlord who searched Google for short-term let management and completed an enquiry form. More than 9 in 10 are financially modelled against the landlord's current income using live Airbnb data for their postcode. Before any lead reaches you, the landlord receives an email telling them a trusted local operator will be in touch. They're expecting your call.",
   },
   {
     q: "How fast do leads arrive, and how do I contact them?",
