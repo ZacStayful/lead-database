@@ -19477,3 +19477,67 @@ Settled with Zac on 2026-10-01:
   This is the first source that could replace it, once enough batches are
   answered.
 
+
+---
+
+## 74. JARVIS reads the retention figures *(no migration)*
+
+Zac's voice command centre (`ZacStayful/Jarvis`) presents the lead-database
+funnel beside the landlord pipeline: new enquiries, web meetings booked and
+sat, conversion after a meeting — and **churn per customer**. The funnel it
+reads itself from the Monday enquiries board (18420649520, §23/§57); churn it
+cannot, because the board carries only our lossy mirror of it (cancel reason
+on 10 of 105 items, end dates once overwritten by automation `7920935830`).
+The honest figures are §70's, so this exposes them.
+
+`GET /api/internal/retention` · `src/lib/retentionSummary.ts` (pure) ·
+`src/lib/__tests__/retentionSummary.test.ts`
+
+### 74.1 — Same read, same arithmetic, one new file of shaping
+
+The route calls `getRetentionData()` and hands the result to
+`summariseRetention()`, which calls §70's `renewalRetention`, `bandedMrr`,
+`reasonCrossTab`, `dataQuality` and `churnedBeforePaying` unchanged. Nothing
+is recomputed and nothing can disagree with `/admin/retention`. The only new
+logic is one headline per product: `churnRatePct = churned / payingEver`,
+where `payingEver` is rows with a first paid invoice and `churned` is rows
+that paid and then ended; `churnedNeverPaid` is beside it, never in it
+(§70.5's rule).
+
+⚠️ **Rows are built field by field; `SUMMARY_ROW_KEYS` is the whitelist and
+the test pins it.** `docs/public-api-phase1.md` §0 records that the failure
+which actually ships is `{ ...row }` putting an internal column into a
+contract. `LifecycleRow` carries `customerId`, `key`, `tenureAnchor`,
+`reasonRaw` and `reasonSource`; none leave. Email does — JARVIS joins our row
+to the board item by email, which is on every item and every row.
+
+### 74.2 — Its own secret, failing closed
+
+`x-internal-secret` must equal **`JARVIS_INTERNAL_SECRET`** (Vercel, production
+and preview). Unset → 404, the analyser's `INTERNAL_API_SECRET` shape
+(`analyserClient.ts`), so a half-deployed secret is never an open door; wrong
+→ 401. With no header at all an admin session is accepted instead, so the
+route can be opened in a browser like `/api/admin/monday-status-check`.
+
+⚠️ **Not `ADMIN_SECRET_KEY`.** That key also authorises invite, reset-password
+and assign. JARVIS is read-only and gets a secret that can reach nothing else.
+
+⚠️ **Not the public API** (§27.1). No API key, no `/api/v1`, no rate limiter:
+one server to another with a shared secret, like the analyser call in the
+other direction. The view-as middleware matches the path but only refuses
+mutating methods, so the GET passes.
+
+### Verification
+
+`npm run typecheck && npm test && npm run build` — the build registers
+`ƒ /api/internal/retention`. Then, against the preview deploy with the secret
+set: `curl -H "x-internal-secret: $S" …/api/internal/retention | jq
+'.products[] | {leadType, payingEver, churned, churnRatePct}'` and confirm the
+numbers match the Retention page; `jq '.lifecycle[0] | keys'` must list exactly
+the eighteen `SUMMARY_ROW_KEYS`. Without the header a browser session that is
+not admin gets 401; with the env var unset the curl gets 404.
+
+### Deployment order
+
+Code first, secret second: until `JARVIS_INTERNAL_SECRET` is set the route is
+a 404 and JARVIS shows the Monday funnel with churn marked approximate.

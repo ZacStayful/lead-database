@@ -80,6 +80,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 71, title: "A customer's own analysed leads become market data", migrations: "no migration here" },
   { n: 72, title: "Cancellation reasons reach the sales board", migrations: "no migration" },
   { n: 73, title: "Asking how each month's leads went", migrations: "0160" },
+  { n: 74, title: "JARVIS reads the retention figures", migrations: "no migration" },
 ];
 
 /**
