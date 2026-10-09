@@ -36,6 +36,7 @@ function session(over: Partial<FunnelSessionRow> = {}): FunnelSessionRow & Recor
     customer_id: null,
     discount_offer_id: "o1",
     paid_at: null,
+    first_answered_at: null,
     ...over,
   };
 }

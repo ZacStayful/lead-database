@@ -159,6 +159,29 @@ assertions are about the guards the checkout and the webhook will rely on:
   `service_role` only with no defaults, invariant 7, and `funnel_enabled`
   shipping off.
 
+## What `0166_funnel_routes_test.sql` covers
+
+0166 is batch 03's record of which route an enquirer came by. It is inert:
+three nullable columns and a claim table nothing writes yet.
+
+- **The three columns**: a session inserted without them (the shape the
+  deployed session route writes) still inserts with all three null;
+  `entry_point` and `offer_order` admit every value on their closed lists and
+  null, and refuse junk, a capitalised value and an empty string. All four
+  closed lists (these two, the claim's transition and outcome) are also read
+  back from `pg_get_constraintdef`, so a list widened by one value fails.
+- **E1**: the route's entry-point write, in its own shape, moves the value
+  while `first_answered_at` is null and changes nothing once it is stamped;
+  the first stamp wins.
+- **`funnel_monday_writes`**: the primary key is the claim (a second claim for
+  the same session and transition collides on 23505); closed transition and
+  outcome lists; `outcome` and `completed_at` set together; the detail cap;
+  the FK and the cascade on deleting the session.
+- **E3**: a claim does not move the session's `updated_at` (the funnel
+  discount's clock), the claim table has no trigger, and the session's own
+  touch trigger still works.
+- **Posture**: RLS on with no policies, no new function, invariant 7.
+
 ## Adding a test file
 
 Write assertions with the helpers the suite defines:

@@ -19620,7 +19620,8 @@ it is the post-call link and serves call-route offers whatever its value.
 ### 75.1 — The journey
 
 1. **The link.** n8n calls `POST /api/funnel/session` (bearer
-   `N8N_WEBHOOK_SECRET`) with `{ monday_item_id, name, email, phone }`. Every
+   `N8N_WEBHOOK_SECRET`) with `{ monday_item_id, name, email, phone }`, plus
+   batch 03's optional `entry_point` and `offer_order` (§76). Every
    outcome n8n can act on is a 200 with a `status`:
    - `created` / `existing`: `url` is the funnel link. One email always gets
      the same link (75.3);
@@ -20014,3 +20015,137 @@ rehearsal.
   build.
 - An admin view of funnel sessions. Today `funnel_sessions` and
   `duplicate_subscriptions` are read by SQL only.
+
+---
+
+## 76. Which route an enquirer came by *(0166)*
+
+Batch 03 Part A (`docs/build/03-enquiry-workflow.md`) reports conversion and
+churn by the route an enquirer took: the instant message, the chase, a
+no-show follow-up, or the recap after a call. n8n sends all the messages; the
+app records which one brought each enquirer in, keeps Monday's status column
+in step with the funnel, and reports. Management only. The Phase 0 report and
+the decisions it calls E1–E10 are in `docs/build/03-phase0-report.md`.
+
+This section is Phase 1: the data. Phases 2–4 add to it.
+
+`src/lib/funnel/session.ts` · `POST /api/funnel/session` ·
+`POST /api/funnel/[token]/answers`
+
+### 76.1 — What n8n sends
+
+`POST /api/funnel/session` accepts two optional fields beside 75.1's four:
+
+| Field | Values |
+|---|---|
+| `entry_point` | `instant` · `chase` · `no_show` · `post_call` |
+| `offer_order` | `call_first` · `funnel_first` |
+
+Both are trimmed and lower-cased; absent, null or `""` is null, so a caller
+from before batch 03 keeps working. Anything else is a 400
+(`entry_point_invalid` / `offer_order_invalid`), so a typo in n8n is loud
+rather than stored. The closed lists are `FUNNEL_ENTRY_POINTS` /
+`FUNNEL_OFFER_ORDERS` and a test holds them equal to 0166's CHECKs.
+
+⚠️ **`offer_order` is kept only alongside `entry_point = 'instant'`.** It is
+the alternate-week test's cohort, and locked decision 4 defines it as which
+option the INSTANT message puts first. Sent with any other entry point it
+describes a different message, so it is dropped rather than refused: the
+chase still gets its link. It is written by the insert that creates the
+session and never updated.
+
+### 76.2 — E1: the entry point is the last one before the first answer
+
+One email has one open session (0165), so the chase, a no-show and the
+post-call step all find the session the instant message created. The entry
+point is therefore the last value n8n sent **before the first answer**:
+
+- `entryPointToWrite()` returns null once `first_answered_at` is set **or**
+  the stored answers are non-empty (a session answered before 0166 has
+  answers and no stamp);
+- the route's write repeats the test in its own WHERE
+  (`.is("first_answered_at", null)`, `.neq("step", "paid")`), so an answer
+  stamped between the read and the write wins.
+
+⚠️ **One small window is accepted.** The first-answer stamp is a second write,
+after the answers are saved (76.3), so an n8n call landing in that one round
+trip can still move the entry point. n8n's calls for one enquirer are hours
+apart; the cost would be a reporting label.
+
+The entry-point write moves the session's `updated_at` (0165's touch
+trigger), which is the funnel discount's clock. That is harmless: it only
+happens before any answer, and the discount only picks sessions at
+`previewed` or `checkout_started`.
+
+### 76.3 — `first_answered_at`
+
+Stamped by `POST /api/funnel/[token]/answers` after a save that carries at
+least one question field (`isFirstAnswer`; a save with only the plan does not
+count), guarded on the column still being null, so two first saves leave the
+earlier time and nothing moves it later. It is best effort: a failed stamp is
+logged and the saved answer still returns 200. It freezes the entry point
+(76.2) and is what Phase 2 writes "Funnel started" from.
+
+### 76.4 — E3: the Monday claims are in their own table
+
+`funnel_monday_writes`, one row per (session, transition), transition
+`started` or `finished`, claimed by INSERT before the Monday call (the
+`credit_invoice` discipline). Phase 2 writes it; nothing does yet.
+
+⚠️ **Not a column on `funnel_sessions`.** That table's touch trigger stamps
+`updated_at` on every update, and the discount's "quiet for an hour" test
+reads `updated_at`, so a claim column there would reset the clock each time a
+Monday write was claimed. The claim table has no trigger, and the SQL suite
+asserts a claim leaves the session's `updated_at` where it was.
+
+RLS on with no policies (service role only).
+
+### Verification
+
+0166: 33 SQL assertions (`supabase/tests/0166_funnel_routes_test.sql`), all
+26 SQL suites on a scratch Postgres 16 from empty, the migration applied three
+times. 27 mutations, all caught: 17 against the TypeScript and its file-text
+guards, 10 against the migration through the SQL suite.
+
+⚠️ **Three SQL mutations survived the first pass**: an extra value on the
+offer-order list, an extra transition, and a Monday claim column on
+`funnel_sessions`. Refusing a few junk values cannot see a list widened by one
+more, so the suite now reads all four closed lists back from
+`pg_get_constraintdef` and checks `funnel_sessions`' columns by name.
+
+### Deployment order — migration BEFORE code
+
+0166 is inert: three nullable columns, two CHECKs over values only the new
+code sends, and an empty table nothing reads. `funnel_sessions` held 0 rows
+when it was written, so nothing is backfilled. Code arriving first would fail
+every session insert on the two new columns.
+
+✅ **Applied to `znlfwbnvhlacwzgfalcf` on 9 Oct, before the merge** (§1.1),
+verbatim from the file (it has no function bodies, so the comment-stripped
+form would make no difference). Checked there rather than assumed:
+
+- **Nothing collided beforehand.** No 0166 column, constraint or table
+  existed; `origin/main` and every branch held no other 0166.
+- **Nothing outside 0166 moved.** Fingerprints of every `public` column,
+  constraint, index, all 160 functions with their ACLs, every policy, and
+  every customer's balances and statuses were identical before and after,
+  with 0166's own objects excluded. 110 customers, 655 leads and 687
+  assignments untouched; `funnel_enabled` still off; `funnel_sessions` still
+  empty. The column count went 1,205 → 1,214, which is exactly 0166's nine.
+- **What 0166 added reads back as written**: three nullable columns, both
+  CHECKs, the claim table with its four CHECKs, its primary key and its
+  cascading foreign key, RLS on with no policies, and no trigger of its own.
+- **Driven on production** inside a block that raises at the end, so every
+  write rolled back: a claim left the session's `updated_at` untouched (E3);
+  a second claim got 23505; a bad transition and an outcome without
+  `completed_at` were refused; every entry point and offer order was
+  accepted and `'organic'` and `''` refused. Afterwards: 0 sessions, 0
+  claims, same balance fingerprint.
+- `get_advisors` reports nothing new apart from `funnel_monday_writes` in the
+  deny-all list, which is the deliberate posture.
+
+⚠️ **The Supabase tool's `execute_sql` hangs on a statement containing
+`DELETE` or `ALTER TABLE`** (its confirmation prompt has nobody to answer it
+in an unattended session), and the call times out after 60 seconds having run
+nothing. A probe block that relies on the closing `raise` to roll back needs
+neither, so leave them out.
