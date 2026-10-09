@@ -45,7 +45,8 @@ export function fakeDb(
         if (pk && rows.some((r) => r[pk] === toInsert![pk])) {
           return { data: null, error: { code: "23505", message: "duplicate key" } };
         }
-        const stored = { ...toInsert };
+        // A real table defaults its id; so does this one, when the row brings none.
+        const stored = { ...(toInsert.id === undefined ? { id: `${table}_${rows.length + 1}` } : {}), ...toInsert };
         rows.push(stored);
         writes.push({ table, op: "insert", values: { ...toInsert } });
         opts.onWrite?.(table, "insert", toInsert);
@@ -80,6 +81,16 @@ export function fakeDb(
         filters.push((r) => r[col] !== v);
         return builder;
       },
+      lt: (col: string, v: string | number) => {
+        filters.push((r) => r[col] != null && (r[col] as string | number) < v);
+        return builder;
+      },
+      gt: (col: string, v: string | number) => {
+        filters.push((r) => r[col] != null && (r[col] as string | number) > v);
+        return builder;
+      },
+      // Row order is insertion order here; tests that care seed it that way.
+      order: () => builder,
       limit: (n: number) => {
         limit = n;
         return builder;

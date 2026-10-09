@@ -114,7 +114,7 @@ export const KNOWN_ISSUES: string[] = [
 
 /** §12, one line per entry. A feature request matching one of these is a decision, not a build. */
 export const DEFERRED: string[] = [
-  "Drive /api/cron/post-call-offer-reminders (no scheduler; table is empty so nothing has been missed yet).",
+  "~~Drive /api/cron/post-call-offer-reminders (no scheduler; table is empty so nothing has been missed yet).~~ Registered by batch 02 Phase 5, every 15 minutes. post_call_offers was still empty when it…",
   "Decide whether discard should gate on notes only (§5E).",
   "Decide whether a rejected lead should be reclaimable (currently excluded).",
   "Decide whether Goals should get a GR equivalent (§13 — deliberately none).",

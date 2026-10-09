@@ -1,64 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { randomInt } from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getStripe } from "@/lib/stripe";
 import { isAdminUser } from "@/lib/auth";
-import { requireEnv } from "@/lib/env";
-import {
-  OFFER_TTL_MS,
-  type PostCallOffer,
-} from "@/lib/postCallOffers";
+import type { PostCallOffer } from "@/lib/postCallOffers";
+import { issuePostCallOffer } from "@/lib/postCallOfferIssue";
 import { computeCheckoutUrls, payTokenSecret } from "@/lib/checkout/payToken";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// Readable code alphabet — no 0/O/1/I/L to avoid transcription errors when a
-// prospect types the code from an SMS.
-const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-
-function randomCode(): string {
-  let suffix = "";
-  for (let i = 0; i < 4; i += 1) {
-    suffix += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
-  }
-  return `FOUNDING10-${suffix}`;
-}
-
-/**
- * Create a single-use, 24h-expiring Promotion Code wrapping the post-call
- * coupon. NOT restricted to any price/product, so it works on either Management
- * plan's checkout unmodified. Retries a couple of times if Stripe reports the
- * random code already exists.
- */
-async function createPromoCode(
-  expiresUnix: number
-): Promise<{ id: string; code: string }> {
-  const stripe = getStripe();
-  const coupon = requireEnv("STRIPE_POST_CALL_COUPON_ID");
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const code = randomCode();
-    try {
-      const promo = await stripe.promotionCodes.create({
-        coupon,
-        code,
-        max_redemptions: 1,
-        expires_at: expiresUnix,
-      });
-      return { id: promo.id, code: promo.code };
-    } catch (err) {
-      // Only a duplicate-code collision is worth retrying; rethrow anything else.
-      const message = err instanceof Error ? err.message : String(err);
-      lastErr = err;
-      if (!/already exists/i.test(message)) throw err;
-    }
-  }
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error("Could not allocate a unique promotion code");
-}
 
 /**
  * POST /api/admin/post-call-offer
@@ -134,124 +83,30 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient();
 
-  // Duplicate check FIRST. At most one unredeemed row can exist per email
-  // (enforced by uq_post_call_offers_unredeemed_email).
-  const { data: existing } = await admin
-    .from("post_call_offers")
-    .select("*")
-    .eq("prospect_email", prospectEmail)
-    .is("redeemed_at", null)
-    .maybeSingle<PostCallOffer>();
-
-  const nowMs = Date.now();
-
-  if (existing && new Date(existing.expires_at).getTime() > nowMs) {
-    // Active offer already exists — return it unchanged, no new live code.
-    return NextResponse.json({
-      status: "existing",
-      promo_code_string: existing.promo_code_string,
-      ...computeCheckoutUrls(existing.id),
-    });
-  }
-
-  // No active offer. Mint a fresh Stripe promo code.
-  const offerCreatedAt = new Date(nowMs);
-  const expiresAt = new Date(nowMs + OFFER_TTL_MS);
-  const expiresUnix = Math.floor(expiresAt.getTime() / 1000);
-
-  let promo: { id: string; code: string };
-  try {
-    promo = await createPromoCode(expiresUnix);
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Stripe promotion code creation failed";
-    console.error("post-call-offer: Stripe promo create failed", err);
-    return NextResponse.json({ error: message }, { status: 502 });
-  }
-
-  const rowValues = {
-    prospect_email: prospectEmail,
-    prospect_phone: prospectPhone,
-    prospect_name: prospectName,
-    stripe_promo_code_id: promo.id,
-    promo_code_string: promo.code,
-    offer_created_at: offerCreatedAt.toISOString(),
-    expires_at: expiresAt.toISOString(),
+  // The issuing itself (live offer returned unchanged, expired row reused,
+  // a lost race returned as existing) is shared with the funnel's discount
+  // (batch 02 Phase 5), so there is one path to a code.
+  const issued = await issuePostCallOffer(admin, {
+    email: prospectEmail,
+    name: prospectName,
+    phone: prospectPhone,
     source,
-    // Reset reminder flags when reusing an expired row.
-    reminder_12h_sent_at: null,
-    reminder_4h_sent_at: null,
-    reminder_1h_sent_at: null,
-    created_by: adminUserId,
-  };
+    createdBy: adminUserId,
+  });
 
-  let dbError: { code?: string; message?: string } | null = null;
-  // The row's id signs its /pay links, so the insert reads it back.
-  let offerId: string | null = existing?.id ?? null;
-  if (existing) {
-    // Expired-unused row → reuse it in place so we never hold two unredeemed
-    // rows for one email (and the unique index never conflicts).
-    const { error } = await admin
-      .from("post_call_offers")
-      .update(rowValues)
-      .eq("id", existing.id);
-    dbError = error;
-  } else {
-    const { data: inserted, error } = await admin
-      .from("post_call_offers")
-      .insert(rowValues)
-      .select("id")
-      .maybeSingle<{ id: string }>();
-    dbError = error;
-    offerId = inserted?.id ?? null;
+  if (!issued.ok && issued.reason === "stripe_failed") {
+    return NextResponse.json({ error: issued.message }, { status: 502 });
   }
-
-  if (dbError && !existing && dbError.code === "23505") {
-    // Lost a concurrent generation race (e.g. an n8n retry firing twice): another
-    // request created the active offer between our duplicate check and this
-    // insert. Return the winning offer instead of a 500. Our just-created promo
-    // code is a harmless 24h orphan (logged, not auto-deleted).
-    console.error(
-      "post-call-offer: concurrent insert lost; orphaned promo",
-      promo.id
-    );
-    const { data: winner } = await admin
-      .from("post_call_offers")
-      .select("*")
-      .eq("prospect_email", prospectEmail)
-      .is("redeemed_at", null)
-      .maybeSingle<PostCallOffer>();
-    if (winner) {
-      return NextResponse.json({
-        status: "existing",
-        promo_code_string: winner.promo_code_string,
-        ...computeCheckoutUrls(winner.id),
-      });
-    }
-  }
-
-  if (dbError || !offerId) {
-    // Stripe succeeded but the DB write failed: the promo code is now orphaned
-    // in Stripe. Surface its id for manual reconciliation — we deliberately do
-    // NOT auto-rollback the Stripe side.
-    console.error("post-call-offer: DB write failed after Stripe create", {
-      stripe_promo_code_id: promo.id,
-      dbError,
-    });
+  if (!issued.ok) {
     return NextResponse.json(
-      {
-        error:
-          "Offer created in Stripe but failed to persist. Manually reconcile " +
-          `the orphaned Stripe promotion code: ${promo.id}`,
-        orphaned_stripe_promo_code_id: promo.id,
-      },
+      { error: issued.message, orphaned_stripe_promo_code_id: issued.orphanedPromoCodeId },
       { status: 500 }
     );
   }
 
   return NextResponse.json({
-    status: "created",
-    promo_code_string: promo.code,
-    ...computeCheckoutUrls(offerId),
+    status: issued.status,
+    promo_code_string: issued.promoCode,
+    ...computeCheckoutUrls(issued.offerId),
   });
 }

@@ -122,6 +122,7 @@ async function handle(request: NextRequest) {
       remaining,
       checkoutUrl10: urls.checkout_url_10,
       checkoutUrl20: urls.checkout_url_20,
+      origin: offer.source === "funnel" ? "funnel" : "call",
     });
     if (emailRes.error) {
       failures.push(`${offer.id}: email_failed`);

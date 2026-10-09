@@ -98,3 +98,22 @@ describe("nothing in the funnel's copy states a volume or a count", () => {
     expect(text).not.toMatch(/\bper area\b/i);
   });
 });
+
+describe("what a funnel payer is told (02 Phase 5)", () => {
+  it("the sign-in email asks for no password (C2)", () => {
+    const email = [FUNNEL_COPY.welcomeTitle("Jo"), FUNNEL_COPY.welcomeBody, FUNNEL_COPY.welcomeButton].join(" ");
+    expect(email).not.toMatch(/password/i);
+    expect(FUNNEL_COPY.welcomeButton).toBe("Sign in and confirm your brief");
+  });
+
+  it("the discount reminder never claims a call that did not happen", () => {
+    const text = FUNNEL_COPY.reminderIntro("12 hours") + FUNNEL_COPY.reminderLinks;
+    expect(text).not.toMatch(/meeting|call|spoke|discussed/i);
+    expect(text).toContain("expires in 12 hours");
+  });
+
+  it("the payment-received notice names neither kind of link, and gives the way in if none arrives", () => {
+    expect(FUNNEL_COPY.paymentReceived).toContain("emailed you a link");
+    expect(FUNNEL_COPY.paymentReceived).toContain("Forgot your password?");
+  });
+});

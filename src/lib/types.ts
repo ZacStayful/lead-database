@@ -403,6 +403,12 @@ export interface Customer {
   // lead_brief_completed_at. See src/lib/leadBrief/gate.ts.
   lead_brief_required: boolean;
   lead_brief_completed_at: string | null;
+  // Batch 02 (0165). 'funnel' when the self-serve funnel made their login
+  // (src/lib/funnel/payment.ts); 'call' for everyone else, every existing row
+  // included. password_set_at is stamped when they set a password, and a
+  // funnel customer without one is offered the "set a password" card.
+  signup_source: "call" | "funnel";
+  password_set_at: string | null;
   created_at: string;
   updated_at: string;
 }

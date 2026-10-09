@@ -13,6 +13,8 @@ import { ExportButton } from "@/components/dashboard/ExportButton";
 import { AnnouncementBanner } from "@/components/dashboard/AnnouncementBanner";
 import { NewLeadCard } from "@/components/dashboard/NewLeadCard";
 import { BatchReviewCard } from "@/components/dashboard/BatchReviewCard";
+import { SetPasswordCard } from "@/components/dashboard/SetPasswordCard";
+import { offerSetPassword } from "@/lib/funnel/passwordPrompt";
 import { NEW_LEAD_CARD_DAYS, buildNewLeadCard, type NewLeadRow } from "@/lib/home/newLeadCard";
 import { CompanyLetAgreement } from "@/components/dashboard/CompanyLetAgreement";
 import { StatCards, type StatCard } from "@/components/home/StatCards";
@@ -64,7 +66,7 @@ export const dynamic = "force-dynamic";
  * Lead sources, which says so on its card.
  */
 export default async function DashboardPage() {
-  const { user, customer } = await getCurrentCustomer();
+  const { user, customer, viewAs } = await getCurrentCustomer();
   if (!user) redirect("/login");
 
   if (!customer) {
@@ -332,6 +334,9 @@ export default async function DashboardPage() {
       </div>
 
       {newLeadCard && <NewLeadCard card={newLeadCard} />}
+
+      {/* Never while an admin views the customer: the link would act on the admin's own login. */}
+      {!viewAs && offerSetPassword(customer) && <SetPasswordCard />}
 
       {openReview && (
         <BatchReviewCard

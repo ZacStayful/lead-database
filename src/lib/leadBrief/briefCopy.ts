@@ -104,6 +104,10 @@ export const BRIEF_COPY = {
   next: "Next",
   seePreview: "See your match preview",
   working: "Working out your area",
+  /** A funnel payer's first sign-in opens on their preview (batch 02 Phase 5, C1). */
+  reopening: "Opening the preview you saw before paying",
+  confirmIntro:
+    "This is the preview you saw before paying, worked out again now. Check it, change anything you need, then confirm it to start your leads.",
   confirm: "Confirm my brief",
   confirming: "Saving your brief",
   unavailable:
