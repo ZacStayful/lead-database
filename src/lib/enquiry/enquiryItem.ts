@@ -69,8 +69,22 @@ export const INCOMPLETE_ITEM_GRACE_MS = 24 * 60 * 60 * 1000;
  * one-click opt-out on the board for somebody already being worked by hand.
  *
  * An empty cell counts: a brand-new item can arrive before the status is set.
+ *
+ * ⚠️ THE TWO FUNNEL LABELS ARE HERE ON PURPOSE (batch 03, E7). The funnel can
+ * move an item to "Funnel started" before this one-minute sync has claimed it,
+ * and a label not on this list is skipped AND CLAIMED FOR GOOD (§57.4), so that
+ * enquirer would never get a customer row. The sync's `already_linked` check
+ * still stops a duplicate for an item that was ingested first.
+ *
+ * Literals rather than imports from monday.ts, because this module stays pure
+ * (syncGuards.test.ts). mondayFunnel.test.ts holds them equal to
+ * ENQUIRY_FUNNEL_STATUS, so there is still one definition.
  */
-export const INGESTABLE_STATUS_LABELS: readonly string[] = ["New Enquiries"];
+export const INGESTABLE_STATUS_LABELS: readonly string[] = [
+  "New Enquiries",
+  "Funnel started",
+  "Funnel finished, not paid",
+];
 
 /** Domains that only ever appear in a test submission. */
 const TEST_EMAIL_DOMAINS = new Set([

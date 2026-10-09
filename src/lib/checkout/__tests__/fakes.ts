@@ -41,8 +41,9 @@ export function fakeDb(
       if (op === "insert" && toInsert) {
         const failure = opts.failInsert?.[table];
         if (failure) return { data: null, error: failure };
-        const pk = opts.primaryKeys?.[table];
-        if (pk && rows.some((r) => r[pk] === toInsert![pk])) {
+        // A composite key is written "a,b" (funnel_monday_writes, 0166).
+        const pk = opts.primaryKeys?.[table]?.split(",");
+        if (pk && rows.some((r) => pk.every((c) => r[c] === toInsert![c]))) {
           return { data: null, error: { code: "23505", message: "duplicate key" } };
         }
         // A real table defaults its id; so does this one, when the row brings none.

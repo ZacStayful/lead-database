@@ -37,6 +37,7 @@ import {
 } from "@/lib/emails";
 import { provisionPaidSubscriber } from "@/lib/provisioning";
 import { completeFunnelPayment } from "@/lib/funnel/payment";
+import { pushSignupSource } from "@/lib/funnel/mondayFunnelSync";
 import { stampEpisodeEnded } from "@/lib/pauseEpisodes";
 import {
   applyPendingPlanChange,
@@ -84,6 +85,34 @@ async function pushMondayStatus(
     logMondayPush(customerId, reason, push);
   } catch (err) {
     console.error("[monday-status] push threw", { reason, err });
+  }
+}
+
+/**
+ * Batch 03 Phase 2 (§76, E4): write "Call" or "Funnel" into the customer's
+ * Sign-up source cell on the enquiries board. Management only, and on a FIRST
+ * paid invoice only (`subscription_create`, which fires again for a returning
+ * customer's new subscription): a renewal says nothing new about the route.
+ *
+ * ⚠️ THE TRY/CATCH IS LOAD-BEARING, as pushMondayStatus's is: a throw here
+ * would delete the stripe_events claim and have Stripe redeliver an invoice
+ * that has already been credited. pushSignupSource never throws; this is the
+ * second stop.
+ */
+async function pushSignupSourceCell(
+  admin: ReturnType<typeof createAdminClient>,
+  customerId: string,
+  invoice: Stripe.Invoice
+): Promise<void> {
+  if (invoice.billing_reason !== "subscription_create") return;
+  try {
+    const push = await pushSignupSource(admin, customerId);
+    if (push.error) console.error("[monday-signup-source] push failed", { customerId, error: push.error });
+    else if (push.skipped && push.skipped !== "unchanged") {
+      console.warn("[monday-signup-source] skipped", { customerId, skipped: push.skipped });
+    }
+  } catch (err) {
+    console.error("[monday-signup-source] push threw", { customerId, err });
   }
 }
 
@@ -1504,6 +1533,10 @@ export async function POST(request: NextRequest) {
           // successful payment clears past_due, so the label rule returns
           // Management Customer again with no special handling.
           await pushMondayStatus(admin, customer.id, "invoice.paid/management");
+
+          // Batch 03 Phase 2: the Sign-up source cell, AFTER the push above,
+          // which is what resolves and stores the customer's board item.
+          await pushSignupSourceCell(admin, customer.id, invoice);
 
           // See the GR branch: per product, audit-only, best-effort.
           await resolveCardDeclines(

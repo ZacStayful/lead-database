@@ -252,6 +252,13 @@ describe("decideEnquiryItem — the status gate is the only source signal we hav
     expect(decide({ statusLabel: "" }).action).toBe("ingest");
   });
 
+  // Batch 03, E7: the funnel can move an item before this sync claims it, and
+  // a label off the list is skipped and claimed for good (§57.4).
+  it("ingests an item the funnel has already labelled", () => {
+    expect(decide({ statusLabel: "Funnel started" }).action).toBe("ingest");
+    expect(decide({ statusLabel: "Funnel finished, not paid" }).action).toBe("ingest");
+  });
+
   it("skips every label someone set by hand", () => {
     for (const label of [
       "Web meeting booked",
