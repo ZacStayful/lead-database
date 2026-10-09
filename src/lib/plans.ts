@@ -206,6 +206,18 @@ export function stripeGrPriceIdFor(allocation: number): string {
   return id;
 }
 
+/**
+ * Every MANAGEMENT price id configured in this environment, including the
+ * historical £300/20 alias `STRIPE_MONTHLY_PRICE_ID` (see stripePriceIdFor).
+ * The guarded checkout (02 Phase 4) reads it to recognise an open Management
+ * Checkout Session, whichever route created it.
+ */
+export function configuredManagementPriceIds(): string[] {
+  const ids = Object.values(PLANS).map((plan) => process.env[plan.priceEnv]);
+  ids.push(process.env.STRIPE_MONTHLY_PRICE_ID);
+  return Array.from(new Set(ids.filter((id): id is string => Boolean(id))));
+}
+
 /** Every GR price id configured in this environment, in plan order. */
 export function configuredGrPriceIds(): string[] {
   return Object.values(GR_PLANS)

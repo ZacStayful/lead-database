@@ -77,6 +77,7 @@ const FUNNEL_PAGES = [
   "src/components/funnel/HowLeadsWork.tsx",
   "src/components/funnel/FunnelExits.tsx",
   "src/components/funnel/FunnelSummaryPreview.tsx",
+  "src/app/pay/[offerToken]/page.tsx",
 ].map((p) => readFileSync(p, "utf8"));
 const CUSTOMER_TEXT = [
   stringLiterals(COPY),
@@ -87,6 +88,7 @@ const CUSTOMER_TEXT = [
   ...LABEL_COMPONENTS.map(jsxText),
   ...EDITOR_COMPONENTS.map(jsxText),
   stringLiterals(FUNNEL_COPY_SRC),
+  stringLiterals(readFileSync("src/lib/checkout/copy.ts", "utf8")),
   ...FUNNEL_PAGES.map(jsxText),
 ].join("\n");
 

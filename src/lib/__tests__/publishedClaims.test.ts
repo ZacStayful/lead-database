@@ -170,6 +170,9 @@ describe("batch 02: what the self-serve funnel says to somebody about to pay", (
     "components/funnel/WhyItWorks.tsx",
     "components/funnel/HowLeadsWork.tsx",
     "app/start/[token]/summary/page.tsx",
+    // The post-call payment page (02 Phase 4), which replaced the raw Payment Links.
+    "lib/checkout/copy.ts",
+    "app/pay/[offerToken]/page.tsx",
   ];
 
   for (const path of FUNNEL) {

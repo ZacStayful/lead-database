@@ -3,12 +3,15 @@
  *
  * A post_call_offer is a single-use, 24-hour, 10%-off (first month only) Stripe
  * Promotion Code generated per prospect after a web meeting. The same code works
- * on BOTH Management Payment Links (10-lead / 20-lead) because the underlying
- * coupon is percentage-based and not price-restricted — the plan is chosen by
- * whoever sends the link, not at generation time.
+ * on BOTH Management plans (10-lead / 20-lead) because the underlying coupon is
+ * percentage-based and not price-restricted — the plan is chosen by whoever
+ * sends the link, not at generation time.
  *
  * This module touches nothing in the allocation / pacing / GR domain.
  */
+// ⚠️ IMPORT-FREE AT RUNTIME. PostCallOfferPanel is a client component and
+// imports offerState from here, so anything that reaches node:crypto (the
+// /pay link, computeCheckoutUrls) lives in checkout/payToken.ts instead.
 
 export const OFFER_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -23,7 +26,7 @@ export interface PostCallOffer {
   expires_at: string;
   redeemed_at: string | null;
   redeemed_plan: "10" | "20" | null;
-  source: "manual" | "auto_monday";
+  source: "manual" | "auto_monday" | "funnel";
   reminder_12h_sent_at: string | null;
   reminder_4h_sent_at: string | null;
   reminder_1h_sent_at: string | null;
@@ -37,26 +40,7 @@ export interface CheckoutUrls {
   checkout_url_20: string;
 }
 
-/**
- * Compute both plan checkout URLs for a promo code. The link base URLs come from
- * env; if either is unset we throw so the caller surfaces a clear config error
- * rather than handing out a broken half-URL.
- */
-export function computeCheckoutUrls(code: string): CheckoutUrls {
-  const base10 = process.env.STRIPE_MANAGEMENT_10_PAYMENT_LINK_URL;
-  const base20 = process.env.STRIPE_MANAGEMENT_20_PAYMENT_LINK_URL;
-  if (!base10 || !base20) {
-    throw new Error(
-      "Missing STRIPE_MANAGEMENT_10_PAYMENT_LINK_URL and/or " +
-        "STRIPE_MANAGEMENT_20_PAYMENT_LINK_URL environment variables."
-    );
-  }
-  const q = `?prefilled_promo_code=${encodeURIComponent(code)}`;
-  return {
-    checkout_url_10: `${base10}${q}`,
-    checkout_url_20: `${base20}${q}`,
-  };
-}
+// computeCheckoutUrls(offerId) builds these: see checkout/payToken.ts.
 
 export type OfferState =
   | { kind: "none" }

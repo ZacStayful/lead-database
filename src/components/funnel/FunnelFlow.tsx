@@ -28,8 +28,9 @@ import type { FunnelPreviewBody } from "@/lib/funnel/preview";
  * Every word is in funnel/copy.ts or, for the questions and the preview the
  * Lead Brief already has, briefCopy.ts. Never "Step x of 6" (02 Phase 3).
  *
- * "Continue to payment" posts to the guarded checkout, which is Phase 4. Until
- * that route exists the request fails and the visitor is offered a call.
+ * "Continue to payment" posts to the guarded checkout (02 Phase 4) and follows
+ * the Stripe URL it returns. Every refusal is a sentence on this screen, with
+ * the call booking beside it; none of them loses the visitor's answers.
  */
 
 type Plan = 10 | 20;
@@ -190,12 +191,12 @@ export function FunnelFlow(props: FunnelFlowProps) {
         window.location.assign(data.url);
         return;
       }
-      // A 404 here is the checkout route not existing yet (it is Phase 4), not
-      // an unknown link, so it must not end the journey.
-      if (res.status !== 404 && handleTerminal(res.status, data)) return;
-      setError(FUNNEL_COPY.paymentNotReady);
+      if (handleTerminal(res.status, data)) return;
+      if (data.code === "payment_not_open") setError(FUNNEL_COPY.paymentNotReady);
+      else if (data.code === "preview_required") setError(FUNNEL_COPY.noPreviewYet);
+      else setError(FUNNEL_COPY.paymentFailed);
     } catch {
-      setError(FUNNEL_COPY.paymentNotReady);
+      setError(FUNNEL_COPY.paymentFailed);
     } finally {
       setBusy(null);
     }

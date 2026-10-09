@@ -115,6 +115,12 @@ function LoginForm() {
               {FUNNEL_COPY.alreadySetUp}
             </p>
           )}
+          {/* The guarded checkout sends a payer here (batch 02 Phase 4). */}
+          {params.get("notice") === "payment_received" && (
+            <p className="mb-4 rounded-md bg-muted/60 px-3 py-2 text-center text-sm text-foreground">
+              {FUNNEL_COPY.paymentReceived}
+            </p>
+          )}
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

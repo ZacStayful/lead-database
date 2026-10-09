@@ -11,6 +11,10 @@ import {
 } from "@/lib/cardDeclines";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  skipDuplicateInvoice,
+  skipDuplicateSubscriptionEvent,
+} from "@/lib/checkout/duplicateSubscription";
+import {
   applyPastDueEpisode,
   clearWriteOffCancellation,
   mapStripeSubscriptionStatus as mapStatus,
@@ -414,6 +418,20 @@ export async function POST(request: NextRequest) {
         // cancellation would set account_status = 'cancelled' on a customer
         // whose management subscription was never involved.
         const isGuaranteedRent = isGuaranteedRentPriceId(subPriceIds);
+
+        // The duplicate-subscription backstop (batch 02 Phase 4, C3): a
+        // second Management subscription for one person is recorded,
+        // cancelled and refunded, and its events stop here, so cancelling it
+        // can never mark the real customer cancelled. Never throws.
+        if (
+          await skipDuplicateSubscriptionEvent(admin, stripe, {
+            eventType: event.type,
+            subscription: sub,
+            isGuaranteedRent,
+          })
+        ) {
+          break;
+        }
 
         // Read the current cancellation stamps before writing, so the first
         // cancellation date is preserved rather than overwritten by a later one.
@@ -1171,6 +1189,11 @@ export async function POST(request: NextRequest) {
             await pushMetaPurchase(admin, customer.id, invoice, "guaranteed_rent");
             break;
           }
+
+          // The duplicate-subscription backstop (batch 02 Phase 4, C3), before
+          // any credit: a second Management subscription's invoice credits
+          // nothing, and its first invoice is refunded. Never throws.
+          if (await skipDuplicateInvoice(admin, stripe, { invoice, subscriptionId })) break;
 
           // Management renewal. The credit granted each month is the customer's
           // plan allocation (10 or 20). Read the customer first so we can both

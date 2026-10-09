@@ -6,10 +6,10 @@ import { getStripe } from "@/lib/stripe";
 import { sendPostCallReminderEmail } from "@/lib/emails";
 import { sendSms } from "@/lib/sms";
 import {
-  computeCheckoutUrls,
   formatRemaining,
   type PostCallOffer,
 } from "@/lib/postCallOffers";
+import { computeCheckoutUrls } from "@/lib/checkout/payToken";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -106,7 +106,7 @@ async function handle(request: NextRequest) {
     const remaining = formatRemaining(offer.expires_at, nowMs);
     let urls;
     try {
-      urls = computeCheckoutUrls(offer.promo_code_string);
+      urls = computeCheckoutUrls(offer.id);
     } catch (err) {
       failures.push(`${offer.id}: ${err instanceof Error ? err.message : "url_error"}`);
       continue;
