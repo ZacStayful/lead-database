@@ -38,6 +38,9 @@ import { formatDate } from "@/lib/utils";
 import { cityForArea } from "@/lib/postcode";
 import { filterCriteriaPhrase } from "@/lib/home/filterCaption";
 import { bankedCreditSentence, planVsFilter } from "@/lib/planVsFilter";
+import { isBriefCustomer } from "@/lib/leadBrief/routing";
+import { thisMonthLine } from "@/lib/leadBrief/labelSummary";
+import { currentCycleStart } from "@/lib/quality/replacementEntitlement";
 import {
   RELEASE_SETTING_KEYS,
   computeGrPacing,
@@ -122,6 +125,12 @@ export default async function DashboardPage() {
 
   const workSummary = computeWorkSummary(assignments);
   const now = new Date();
+  // Lead Brief (Phase 5): only a brief customer's deliveries carry a label,
+  // so everyone else gets null here and the line never renders.
+  const briefCustomer = isBriefCustomer(customer);
+  const monthLabelLine = briefCustomer
+    ? thisMonthLine(assignments, currentCycleStart(customer, now))
+    : null;
   const today = londonDate(now);
   const sixtyDaysAgo = new Date(now.getTime() - 60 * 86_400_000).toISOString();
 
@@ -152,7 +161,7 @@ export default async function DashboardPage() {
     admin
       .from("notifications")
       .select(
-        "id, created_at, lead_assignments(id, lead_id, viewed_at, lead:leads(id, lead_name, address, postcode_area, bedrooms, lead_type, gross_annual_income, owner_customer_id))"
+        "id, created_at, lead_assignments(id, lead_id, viewed_at, match_label, lead:leads(id, lead_name, address, postcode_area, bedrooms, lead_type, gross_annual_income, owner_customer_id))"
       )
       .eq("customer_id", customer.id)
       .eq("notification_type", "new_lead")
@@ -346,8 +355,9 @@ export default async function DashboardPage() {
 
       <StatCards cards={cards} />
 
-      {(managementDebitNote || grDebitNote) && (
+      {(managementDebitNote || grDebitNote || monthLabelLine) && (
         <div className="space-y-1 text-sm text-ink-2">
+          {monthLabelLine && <p>{monthLabelLine}</p>}
           {managementDebitNote && <p>{managementDebitNote}</p>}
           {grDebitNote && <p>Guaranteed rent: {grDebitNote}</p>}
         </div>
@@ -371,7 +381,7 @@ export default async function DashboardPage() {
 
       <div className="pt-2">
         <h2 className="mb-3 text-lg font-semibold">Your leads</h2>
-        <LeadFeed customerId={customer.id} assignments={assignments} />
+        <LeadFeed customerId={customer.id} assignments={assignments} labelsFollow={briefCustomer} />
       </div>
     </div>
   );

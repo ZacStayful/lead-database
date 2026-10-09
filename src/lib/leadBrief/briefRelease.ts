@@ -198,7 +198,7 @@ export async function releaseToBriefCustomers(
       if (assignError || !assignmentId) continue;
       lead.assignment_count = (lead.assignment_count ?? 0) + 1;
       result.pace_assignments += 1;
-      await completeAssignment(admin, lead, b.customer_id, assignmentId as string);
+      await completeAssignment(admin, lead, b.customer_id, assignmentId as string, true, "routed");
     }
   }
 

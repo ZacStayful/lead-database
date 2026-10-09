@@ -8,6 +8,8 @@ import { cn, initials, formatDate, formatGBP, formatLeadAge } from "@/lib/utils"
 import { statusBadge } from "@/components/dashboard/leadStatus";
 import { pipelineStatusText, pipelineBadgeClass } from "@/components/dashboard/pipelineStage";
 import { IncomeProjection } from "@/components/dashboard/IncomeProjection";
+import { MatchLabelBadge } from "@/components/leadBrief/MatchLabelBadge";
+import { WhyThisLead } from "@/components/leadBrief/WhyThisLead";
 import type { AssignmentWithLead } from "@/lib/types";
 import {
   BarChart3,
@@ -146,6 +148,8 @@ export function LeadCard({
             >
               {pipelineStatusText(assignment.pipeline_stage)}
             </Badge>
+            {/* Lead Brief (Phase 5): nothing without a label. */}
+            <MatchLabelBadge label={assignment.match_label} />
             {lead.owner_customer_id && (
               <Badge
                 variant="outline"
@@ -292,6 +296,14 @@ export function LeadCard({
             />
           </div>
           <IncomeProjection lead={lead} className="mt-3" />
+          {/* Lead Brief (Phase 5): nothing without a label, and no "Not for
+              me" here — the dead-lead link sits in this card's action row. */}
+          <WhyThisLead
+            label={assignment.match_label}
+            reasons={assignment.match_reasons}
+            leadOutcode={lead.outcode}
+            className="mt-3"
+          />
           {lead.lead_profile && (
             <div className="mt-3 rounded-md bg-muted/50 p-3 text-sm">
               <p className="mb-1 font-medium text-muted-foreground">

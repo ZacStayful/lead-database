@@ -30,6 +30,8 @@ export interface NewLeadRow {
     id: string;
     lead_id: string;
     viewed_at: string | null;
+    /** Lead Brief (Phase 5). Null for every non-brief delivery. */
+    match_label?: string | null;
     lead: {
       id: string;
       lead_name: string;
@@ -54,6 +56,8 @@ export interface NewLeadItem {
   projectedGross: string | null;
   receivedLabel: string;
   href: string;
+  /** Lead Brief (Phase 5): the label key, or null. The badge renders nothing for null. */
+  label: string | null;
 }
 
 export interface NewLeadCard {
@@ -114,6 +118,7 @@ export function buildNewLeadCard(
         : null,
       receivedLabel: receivedLabel(row.created_at, opts.now),
       href: `${leadPagePath(lead.id)}?from=leads`,
+      label: a.match_label ?? null,
     });
   }
   if (items.length === 0) return null;

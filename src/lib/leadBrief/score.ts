@@ -5,6 +5,7 @@ import { capMilesFor, isBriefPlan, isTravelLimit } from "@/lib/leadBrief/plans";
 import {
   PRIORITY_KEYS,
   type BriefPriority,
+  type CompetitionTier,
   type MatchLabel,
   type PriorityKey,
   type SupplyLead,
@@ -198,12 +199,38 @@ export interface MatchReasonPriority {
  * the lead. Nothing about another holder, how many there are, any deficit or
  * any area volume (locked decision 9), and a test pins the key set.
  */
+/**
+ * The customer's own progress through their cycle at the moment a ROUTED
+ * Nearby lead arrived (Phase 5): "sent to keep your N leads on track. You're on
+ * x of N, with d days left". Stored, not recomputed, because the sentence
+ * describes that moment.
+ */
+export interface MatchProgress {
+  /** Leads received this cycle, this one included. */
+  received: number;
+  /** The plan's allocation net of any pool debit (pacing's effectiveAllocation). */
+  allocation: number;
+  /** Days until the next renewal. */
+  days_left: number;
+}
+
 export interface MatchReasons {
   v: typeof MATCH_REASONS_VERSION;
   area: MatchArea;
   /** The First pick label, or the "First pick" tag on a Top match. */
   first_pick: boolean;
   priorities: MatchReasonPriority[];
+  /**
+   * Phase 5. Present only on a Nearby lead that routing sent to keep the
+   * customer on pace, and only while it reads true (x < N, days left). A
+   * hand-placed lead never carries it, so its reason stays neutral.
+   */
+  progress?: MatchProgress;
+  /**
+   * Phase 5. The admin-set competition tier (D5) of a lead in a first-pick
+   * area, so the First pick reason can say "low competition" only when it is.
+   */
+  competition?: CompetitionTier;
 }
 
 export interface BriefMatchRecord {
@@ -227,7 +254,13 @@ function round1(v: number | null): number | null {
 export function buildBriefMatch(
   lead: SupplyLead,
   brief: BriefScoringFields & BriefAreaFields,
-  flags: { isFirstSale: boolean }
+  flags: {
+    isFirstSale: boolean;
+    /** Phase 5: the customer's progress, for a routed delivery only. */
+    progress?: MatchProgress | null;
+    /** Phase 5: the lead's admin-set tier, when known. */
+    competition?: CompetitionTier | null;
+  }
 ): BriefMatchRecord {
   const evaluation = evaluateForBrief(lead, brief);
   const area = matchAreaFor(lead.outcode, brief);
@@ -238,19 +271,26 @@ export function buildBriefMatch(
     isFirstSale: flags.isFirstSale,
     paceOnly: area === "pace" || area === "outside",
   });
-  return {
-    label,
-    score: evaluation.score,
-    reasons: {
-      v: MATCH_REASONS_VERSION,
-      area,
-      first_pick: label === "first_pick" || firstPickTag,
-      priorities: evaluation.results.map((r) => ({
-        key: r.key,
-        threshold: r.threshold,
-        value: r.key === "location" ? round1(r.value) : r.value,
-        met: r.met,
-      })),
-    },
+  const reasons: MatchReasons = {
+    v: MATCH_REASONS_VERSION,
+    area,
+    first_pick: label === "first_pick" || firstPickTag,
+    priorities: evaluation.results.map((r) => ({
+      key: r.key,
+      threshold: r.threshold,
+      value: r.key === "location" ? round1(r.value) : r.value,
+      met: r.met,
+    })),
   };
+  const p = flags.progress;
+  if (
+    label === "nearby_opportunity" &&
+    p &&
+    p.received < p.allocation &&
+    p.days_left > 0
+  ) {
+    reasons.progress = { received: p.received, allocation: p.allocation, days_left: p.days_left };
+  }
+  if (area === "first_pick" && flags.competition) reasons.competition = flags.competition;
+  return { label, score: evaluation.score, reasons };
 }

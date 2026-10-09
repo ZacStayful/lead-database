@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describeError } from "@/lib/logError";
+import { tierForOutcode } from "@/lib/leadBrief/areas";
+import { areaOfOutcode } from "@/lib/leadBrief/geo";
 import {
   buildBriefMatch,
   rankBriefCandidates,
@@ -8,7 +10,11 @@ import {
   type BriefCandidateRow,
   type BriefMatchRecord,
   type BriefScoringFields,
+  type MatchProgress,
 } from "@/lib/leadBrief/score";
+import type { CompetitionTier } from "@/lib/leadBrief/types";
+import { computePacing } from "@/lib/pacing";
+import { nextGrantDate } from "@/lib/quality/replacementEntitlement";
 import type { Customer, Lead } from "@/lib/types";
 
 /**
@@ -134,13 +140,21 @@ type BriefRow = BriefScoringFields & BriefAreaFields & { id: string };
  * row behind (discard deletes it), so a lead discarded untouched by its first
  * holder can read as a first sale to the next.
  *
- * Written only where no label is set yet, so a retry cannot relabel.
+ * Written only where no label is set yet, so a retry cannot relabel. A run
+ * that writes nothing returns null, so an alert can never carry a label that
+ * disagrees with the one stored.
+ *
+ * Phase 5: `routed` says routing sent this lead (autoAssignLead, or the
+ * release's pace pass). Only then is the customer's progress stored, because
+ * only then is "sent to keep your leads on track" true. Every hand placement —
+ * an admin assign, a swap, a replacement — stays neutral.
  */
 export async function recordBriefMatch(
   admin: SupabaseClient,
   customer: Customer,
   lead: Lead,
-  assignmentId: string
+  assignmentId: string,
+  opts: { routed: boolean } = { routed: false }
 ): Promise<BriefMatchRecord | null> {
   if (!isBriefCustomer(customer) || lead.lead_type !== "management") return null;
   try {
@@ -170,8 +184,21 @@ export async function recordBriefMatch(
       });
     }
 
-    const record = buildBriefMatch(supplyLeadOf(lead), brief as BriefRow, { isFirstSale });
-    const { error: writeErr } = await admin
+    const supplyLead = supplyLeadOf(lead);
+    const inFirstPickArea =
+      supplyLead.outcode !== null &&
+      ((brief as BriefRow).first_pick_outcodes ?? []).includes(supplyLead.outcode) &&
+      !((brief as BriefRow).service_outcodes ?? []).includes(supplyLead.outcode);
+    const competition = inFirstPickArea
+      ? await competitionTierFor(admin, supplyLead.outcode as string)
+      : null;
+
+    const record = buildBriefMatch(supplyLead, brief as BriefRow, {
+      isFirstSale,
+      progress: opts.routed ? deliveryProgress(customer) : null,
+      competition,
+    });
+    const { data: written, error: writeErr } = await admin
       .from("lead_assignments")
       .update({
         match_label: record.label,
@@ -180,14 +207,68 @@ export async function recordBriefMatch(
         match_brief_id: (brief as BriefRow).id,
       })
       .eq("id", assignmentId)
-      .is("match_label", null);
+      .is("match_label", null)
+      .select("id");
     if (writeErr) {
       console.error("[lead-brief] match write failed", { assignmentId, error: writeErr });
       return null;
     }
+    if (!written || written.length === 0) return null;
     return record;
   } catch (error) {
     console.error("[lead-brief] recordBriefMatch failed", { assignmentId, error });
     return null;
   }
+}
+
+/**
+ * The customer's progress at the moment a lead arrives, for the Nearby reason
+ * (Phase 5). Read from the customer row completeAssignment loads AFTER the
+ * assign, so `received` includes this lead.
+ *
+ *   received   leads_received_this_month
+ *   allocation pacing's effectiveAllocation, as the dashboard card shows it
+ *   days_left  days from today to the next renewal (nextGrantDate), the date
+ *              every renewal message prints
+ *
+ * Null when a figure is missing. buildBriefMatch then also drops it whenever
+ * the sentence would be false (x ≥ N, or no days left).
+ */
+export function deliveryProgress(customer: Customer, now: Date = new Date()): MatchProgress | null {
+  const received = customer.leads_received_this_month;
+  if (typeof received !== "number" || !Number.isFinite(received)) return null;
+  const allocation = computePacing(customer, now).effectiveAllocation;
+  const renewal = nextGrantDate(customer, now);
+  if (!renewal) return null;
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const days_left = Math.round((Date.parse(`${renewal}T00:00:00Z`) - today) / 86_400_000);
+  if (!Number.isFinite(days_left)) return null;
+  return { received, allocation, days_left };
+}
+
+/**
+ * The admin-set tier (D5) of a lead's outcode, falling back to its postcode
+ * area. Null on any failure, which only drops the "low competition" clause.
+ */
+async function competitionTierFor(
+  admin: SupabaseClient,
+  outcode: string
+): Promise<CompetitionTier | null> {
+  const codes = [outcode, areaOfOutcode(outcode)];
+  const { data, error } = await admin
+    .from("area_competition")
+    .select("area_kind, area_code, tier")
+    .eq("source", "admin")
+    .in("area_code", codes);
+  if (error) {
+    console.error("[lead-brief] competition tier read failed; leaving it out", error.message);
+    return null;
+  }
+  const map: Record<string, CompetitionTier> = {};
+  for (const r of (data ?? []) as { area_kind: string; area_code: string; tier: string }[]) {
+    if (r.tier === "high" || r.tier === "medium" || r.tier === "low") {
+      map[`${r.area_kind}:${r.area_code}`] = r.tier;
+    }
+  }
+  return tierForOutcode(outcode, map);
 }

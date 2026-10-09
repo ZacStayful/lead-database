@@ -21,6 +21,7 @@ import {
   fetchRankedBriefCandidates,
   recordBriefMatch,
 } from "@/lib/leadBrief/routing";
+import { LABEL_NAMES, notificationLabel, reasonLine } from "@/lib/leadBrief/labelCopy";
 import { sendLandlordReferral } from "@/lib/landlordReferralSend";
 import {
   assessLeadQuality,
@@ -732,7 +733,7 @@ export async function autoAssignLead(
     if (assignError || !assignmentId) continue;
     assignmentsMade += 1;
 
-    await completeAssignment(supabase, lead, customerId, assignmentId);
+    await completeAssignment(supabase, lead, customerId, assignmentId, true, "routed");
   }
 
   return assignmentsMade;
@@ -750,7 +751,13 @@ export async function completeAssignment(
   assignmentId: string,
   // Admin overrides don't spend a credit when the customer is already at zero,
   // so the low/exhausted-credit warnings would misfire (and spam) — skip them.
-  sendThresholdWarnings = true
+  sendThresholdWarnings = true,
+  // Lead Brief (Phase 5): "routed" only when routing chose this customer
+  // (autoAssignLead's loop, the release's pace pass). Every hand placement —
+  // admin assign, swaps, claims, owed replacements — keeps the default, so a
+  // Nearby reason never claims "sent to keep your leads on track" for a lead
+  // nobody sent for that.
+  delivery: "routed" | "placed" = "placed"
 ): Promise<void> {
   const { data: customer } = await supabase
     .from("customers")
@@ -762,9 +769,12 @@ export async function completeAssignment(
   if (!typedCustomer) return;
 
   // Lead Brief (Phase 4): the label and "why" on a brief customer's delivery.
-  // A no-op for every other customer, and it never throws. First, so Phase 5
-  // can put the label in the alerts below.
-  await recordBriefMatch(supabase, typedCustomer, lead, assignmentId);
+  // A no-op for every other customer, and it never throws. First, so the
+  // alerts below can carry the label (Phase 5). Null for everyone else, and
+  // then every alert is exactly what it was.
+  const match = await recordBriefMatch(supabase, typedCustomer, lead, assignmentId, {
+    routed: delivery === "routed",
+  });
 
   // New-lead alerts (in-portal notification + Resend email) are gated together
   // on the `new_lead` preference. The instant SMS below is a SEPARATE stream
@@ -783,7 +793,7 @@ export async function completeAssignment(
         customer_id: customerId,
         lead_assignment_id: assignmentId,
         notification_type: "new_lead",
-        message: `New lead: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
+        message: `New lead${match ? notificationLabel(match.label) : ""}: ${lead.lead_name}${city ? ` in ${city}` : ""}`,
       })
       .select("id")
       .single();
@@ -805,6 +815,9 @@ export async function completeAssignment(
       to: typedCustomer.email,
       lead,
       todaysLead,
+      match: match
+        ? { label: LABEL_NAMES[match.label], reason: reasonLine(match.label, match.reasons) }
+        : undefined,
     });
     emailError = emailRes.error;
   }
@@ -812,7 +825,11 @@ export async function completeAssignment(
   // Instant SMS alert — wins the speed race to the landlord. Inert unless a
   // Twilio sender is configured; never allowed to break the assignment. Its own
   // opt-out (sms_alerts_enabled) is enforced inside sendNewLeadSms.
-  const sms = await sendNewLeadSms({ customer: typedCustomer, lead });
+  const sms = await sendNewLeadSms({
+    customer: typedCustomer,
+    lead,
+    label: match ? LABEL_NAMES[match.label] : undefined,
+  });
   if (sms.error) {
     console.error("sendNewLeadSms failed", { assignmentId, error: sms.error });
   }

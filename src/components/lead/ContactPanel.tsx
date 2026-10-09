@@ -25,6 +25,10 @@ import type { LeadWorkspaceData } from "@/lib/leadWorkspace";
 import { Avatar } from "@/components/conversations/Avatar";
 import { TagsEditor } from "./TagsEditor";
 import { WorkThisLead } from "./WorkThisLead";
+import { MatchLabelBadge } from "@/components/leadBrief/MatchLabelBadge";
+import { WhyThisLead } from "@/components/leadBrief/WhyThisLead";
+import { NotForMe } from "@/components/leadBrief/NotForMe";
+import { offersNotForMe } from "@/lib/leadBrief/labelCopy";
 import type { LeadWorkflow } from "./useLeadWorkflow";
 
 export function ContactPanel({
@@ -117,9 +121,28 @@ export function ContactPanel({
                   Your lead
                 </Badge>
               )}
+              {/* Lead Brief (Phase 5): nothing without a label. */}
+              <MatchLabelBadge label={assignment.match_label} />
             </div>
           </div>
         </div>
+
+        {/* Lead Brief (Phase 5): "Why you got this lead", in the header and
+            well away from "Work this lead", where the dead-lead report sits.
+            "Not for me" lives only here: Strong and Nearby leads, and only
+            while the existing reject rules allow it (cold, not won, not
+            already rejected, not the customer's own lead). */}
+        <WhyThisLead
+          label={assignment.match_label}
+          reasons={assignment.match_reasons}
+          leadOutcode={lead.outcode}
+          className="mt-3.5"
+          footer={
+            offersNotForMe(assignment.match_label) && wf.outcomes.canReject ? (
+              <NotForMe onReject={wf.handleReject} />
+            ) : null
+          }
+        />
 
         {/* Call / WhatsApp / Email — the events are the record (§42.6). */}
         <div className="flex gap-2 border-b border-rail py-3">

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MatchLabelBadge } from "@/components/leadBrief/MatchLabelBadge";
 import type { NewLeadCard as NewLeadCardModel, NewLeadItem } from "@/lib/home/newLeadCard";
 
 /**
@@ -53,6 +54,8 @@ export function NewLeadCard({ card }: { card: NewLeadCardModel }) {
       <h2 className="mt-1 text-base font-semibold">
         {p.name}
         {p.town ? <span className="font-normal text-muted-foreground"> · {p.town}</span> : null}
+        {/* Lead Brief (Phase 5): nothing without a label. */}
+        <MatchLabelBadge label={p.label} className="ml-2 align-middle" />
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">{summaryLine(p)}</p>
 

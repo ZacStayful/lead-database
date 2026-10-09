@@ -108,6 +108,46 @@ export function nextGrantDate(
   return target.toISOString().slice(0, 10);
 }
 
+/**
+ * The day the current cycle started: the most recent anchor day on or before
+ * today. The exact mirror of SQL's `replacement_cycle_start` (0153) — the same
+ * coalesce order, the same month-end clamp, UTC dates — and the day before
+ * `nextGrantDate`'s answer by one cycle. Lead Brief (Phase 5) counts "this
+ * month" from it.
+ */
+export function currentCycleStart(
+  anchors: ResetAnchors,
+  now: Date = new Date(),
+): string | null {
+  const raw =
+    anchors.billing_cycle_anchor ??
+    anchors.gr_billing_cycle_anchor ??
+    anchors.created_at ??
+    null;
+  if (!raw) return null;
+
+  const anchor = new Date(raw);
+  if (Number.isNaN(anchor.getTime())) return null;
+
+  const anchorDom = anchor.getUTCDate();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const today = now.getUTCDate();
+
+  const lastDomOf = (year: number, month: number) =>
+    new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const dayIn = (year: number, month: number) =>
+    Math.min(anchorDom, lastDomOf(year, month));
+
+  const thisMonth = dayIn(y, m);
+  const start =
+    thisMonth <= today
+      ? new Date(Date.UTC(y, m, thisMonth))
+      : new Date(Date.UTC(y, m - 1, dayIn(y, m - 1)));
+
+  return start.toISOString().slice(0, 10);
+}
+
 /** Heading for the tab and the nav. */
 export const REPLACEMENT_NAV_LABEL = "Replace a lead";
 export const REPLACEMENT_PATH = "/dashboard/replacements";

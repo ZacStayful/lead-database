@@ -1,9 +1,11 @@
 /**
  * Every customer-facing word on the Lead Brief questionnaire (Phase 3).
  *
- * IMPORT-FREE except for the one booking link, whose module is itself
- * import-free: the questionnaire is a client component, and nothing here may
- * pull the supply loader or supabase-js into the browser (§21.8).
+ * IMPORT-FREE except for the one booking link and the label copy, both
+ * modules themselves import-free: the questionnaire is a client component, and
+ * nothing here may pull the supply loader or supabase-js into the browser
+ * (§21.8). The label names and money formatting live in labelCopy.ts (Phase 5)
+ * and are re-exported here, so there is one definition of each.
  *
  * Copy rules, each pinned by briefCopy.test.ts:
  *   - A9: never the words the additions ban (the test lists them). We say
@@ -20,6 +22,15 @@
  */
 
 import { BOOKING_URL } from "@/lib/prospect/copy";
+import { LABEL_NAMES, grossShort, poundsLong, type LabelKey } from "@/lib/leadBrief/labelCopy";
+
+export {
+  grossShort,
+  poundsLong,
+  LABEL_NAMES,
+  LABEL_EXPLANATIONS,
+  type LabelKey,
+} from "@/lib/leadBrief/labelCopy";
 
 // --- fixed lists -----------------------------------------------------------
 
@@ -37,16 +48,6 @@ export const BRIEF_BEDROOM_OPTIONS = [1, 2, 3, 4, 5] as const;
 export const BRIEF_BOOKING_URL = process.env.NEXT_PUBLIC_BOOKING_URL || BOOKING_URL;
 
 // --- formatting helpers ----------------------------------------------------
-
-/** £50k, £75k. */
-export function grossShort(pounds: number): string {
-  return `£${Math.round(pounds / 1000)}k`;
-}
-
-/** £42,300. */
-export function poundsLong(pounds: number): string {
-  return `£${Math.round(pounds).toLocaleString("en-GB")}`;
-}
 
 /** "12 November" from an ISO date (YYYY-MM-DD), or null when unreadable. */
 export function dayMonth(isoDate: string | null | undefined): string | null {
@@ -213,27 +214,6 @@ export function coverageLine(args: {
     args.otherAreas > 0 ? `${args.basePostcode} and your other areas` : args.basePostcode;
   return `${args.plan} leads a month: within ${args.radiusMiles} miles of ${where}`;
 }
-
-export type LabelKey = "top_match" | "strong_match" | "first_pick" | "nearby_opportunity";
-
-export const LABEL_NAMES: Record<LabelKey, string> = {
-  top_match: "Top match",
-  strong_match: "Strong match",
-  first_pick: "First pick",
-  nearby_opportunity: "Nearby opportunity",
-};
-
-/**
- * The approved C4/C5/D6 wording. "First pick" says where the lead is, never
- * that the customer was the first or the closest operator to receive it.
- */
-export const LABEL_EXPLANATIONS: Record<LabelKey, string> = {
-  top_match: "Matches every one of your priorities.",
-  strong_match: "Matches all but one of your priorities.",
-  first_pick: "In one of your first-pick areas, close to your base.",
-  nearby_opportunity:
-    "Close to your area with fewer of your priorities met, or just outside your usual area to keep your leads on track.",
-};
 
 export type CompetitionTierKey = "high" | "medium" | "low";
 
