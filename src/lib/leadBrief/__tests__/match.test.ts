@@ -284,6 +284,7 @@ describe("trade-offs (A6)", () => {
     radiusMiles,
     outcodes: [],
     meetsTarget,
+    centres: ["YO10"],
     priorityOutsideCap: [],
     target: 26,
     deliverable: meetsTarget ? 26 : 10,

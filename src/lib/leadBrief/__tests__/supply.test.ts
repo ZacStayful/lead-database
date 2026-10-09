@@ -134,8 +134,8 @@ describe("toOtherBriefs", () => {
   const brief = (over: Record<string, unknown> = {}) => ({
     customer_id: "c1",
     base_outcode: "LS1",
-    travel_limit_miles: null,
-    allocation: 20,
+    priority_outcodes: ["BD1", "LS1"] as string[] | null,
+    travel_limit_miles: null as number | null,
     service_outcodes: ["LS1"],
     first_pick_outcodes: ["LS2"],
     locked_until: "2026-11-01",
@@ -143,14 +143,23 @@ describe("toOtherBriefs", () => {
     ...over,
   });
 
-  it("maps a live brief and works out its cap from its plan and travel limit", () => {
+  it("maps a live brief: its areas base first, its reach from its travel limit", () => {
     expect(toOtherBriefs([brief()])).toEqual([
-      { customerId: "c1", baseOutcode: "LS1", capMiles: 75, serviceOutcodes: ["LS1"], firstPickOutcodes: ["LS2"], lockedUntil: "2026-11-01" },
+      {
+        customerId: "c1",
+        // The base first, and a priority outcode equal to the base only once.
+        areaOutcodes: ["LS1", "BD1"],
+        // "Anywhere": first picks reach nationwide.
+        reachMiles: null,
+        serviceOutcodes: ["LS1"],
+        firstPickOutcodes: ["LS2"],
+        lockedUntil: "2026-11-01",
+      },
     ]);
-    expect(toOtherBriefs([brief({ allocation: 10 })])[0].capMiles).toBe(40);
-    expect(toOtherBriefs([brief({ travel_limit_miles: 25 })])[0].capMiles).toBe(25);
-    // Not one of the offered limits: read as no limit, never as a smaller cap.
-    expect(toOtherBriefs([brief({ travel_limit_miles: 30 })])[0].capMiles).toBe(75);
+    expect(toOtherBriefs([brief({ travel_limit_miles: 25 })])[0].reachMiles).toBe(25);
+    expect(toOtherBriefs([brief({ priority_outcodes: null })])[0].areaOutcodes).toEqual(["LS1"]);
+    // Not one of the offered limits (the 0162 CHECK refuses it): read as "anywhere".
+    expect(toOtherBriefs([brief({ travel_limit_miles: 30 })])[0].reachMiles).toBeNull();
   });
 
   it("⚠️ a customer who is no longer subscribed keeps no ground", () => {
@@ -187,8 +196,8 @@ describe("loadBriefSupply", () => {
         {
           customer_id: "c1",
           base_outcode: "HG1",
+          priority_outcodes: [],
           travel_limit_miles: 25,
-          allocation: 10,
           service_outcodes: ["HG1"],
           first_pick_outcodes: [],
           locked_until: null,
@@ -210,7 +219,7 @@ describe("loadBriefSupply", () => {
     // Trimmed, upper-cased, deduped and sorted; a bedroom-only filter names none.
     expect(s.filteredAreas).toEqual(["LS", "YO"]);
     expect(s.otherBriefs).toEqual([
-      { customerId: "c1", baseOutcode: "HG1", capMiles: 25, serviceOutcodes: ["HG1"], firstPickOutcodes: [], lockedUntil: null },
+      { customerId: "c1", areaOutcodes: ["HG1"], reachMiles: 25, serviceOutcodes: ["HG1"], firstPickOutcodes: [], lockedUntil: null },
     ]);
     // Only the three real tiers survive.
     expect(s.competition).toEqual({ "outcode:YO10": "low", "postcode_area:LS": "high" });

@@ -34,8 +34,8 @@ export function supply(over: Partial<BriefSupply> = {}): BriefSupply {
 export function otherBrief(over: Partial<OtherBrief> = {}): OtherBrief {
   return {
     customerId: "other",
-    baseOutcode: "LS1",
-    capMiles: 75,
+    areaOutcodes: ["LS1"],
+    reachMiles: null,
     serviceOutcodes: [],
     firstPickOutcodes: [],
     lockedUntil: null,

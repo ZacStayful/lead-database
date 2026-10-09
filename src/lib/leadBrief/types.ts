@@ -58,9 +58,13 @@ export interface SupplyLead {
 /** Another customer's active brief, as far as first picks and contention need it. */
 export interface OtherBrief {
   customerId: string;
-  baseOutcode: string;
-  /** min(travel limit, plan maximum) for that brief, in miles. */
-  capMiles: number;
+  /** Their base outcode first, then their priority outcodes. */
+  areaOutcodes: string[];
+  /**
+   * How far from their nearest area their first picks reach: their travel
+   * limit, or null for "anywhere" (nationwide).
+   */
+  reachMiles: number | null;
   serviceOutcodes: string[];
   firstPickOutcodes: string[];
   /** ISO date; their first picks are theirs until then. Null means unlocked. */

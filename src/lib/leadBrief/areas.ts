@@ -6,8 +6,16 @@ import type { BriefSupply, CompetitionTier } from "@/lib/leadBrief/types";
  */
 
 /**
- * First-pick areas: outcodes within the cap that no other customer is set up
- * to receive leads in, and where this customer is the nearest brief customer.
+ * First-pick areas: outcodes within the customer's travel limit of their
+ * nearest area that no other customer is set up to receive leads in, and
+ * where this customer is the nearest brief customer.
+ *
+ * Reach is the build prompt's "within travel_limit_miles of the customer",
+ * measured from whichever of their areas is nearest. ⚠️ For "anywhere" there
+ * is no limit: first picks are nationwide (Zac, 9 Oct). That departs from
+ * A3's "anywhere still respects the plan cap", and because routing admits
+ * first picks, an "anywhere" customer can receive a first-pick lead from
+ * anywhere in the country. Recorded, not silent.
  *
  * An outcode is NOT a first pick when:
  *   - its postcode area is named by an active legacy filter (C7: unfiltered
@@ -16,8 +24,9 @@ import type { BriefSupply, CompetitionTier } from "@/lib/leadBrief/types";
  *   - it is in another brief customer's service area;
  *   - another brief customer holds it as a first pick and their lock has not
  *     run out (first picks are locked per billing cycle);
- *   - another brief customer whose cap reaches it is nearer to it, or exactly
- *     as near — the customer who was there first keeps a tie.
+ *   - another brief customer whose reach includes it is nearer to it (from
+ *     their nearest area), or exactly as near — the customer who was there
+ *     first keeps a tie.
  *
  * ⚠️ NEVER A CLAIM OF EXCLUSIVITY (locked decision 7). Other operators can
  * still receive these leads; "first pick" means this customer is closest.
@@ -25,9 +34,10 @@ import type { BriefSupply, CompetitionTier } from "@/lib/leadBrief/types";
  * Nearest first.
  */
 export function computeFirstPicks(args: {
-  baseOutcode: string;
-  capMiles: number;
-  distances: Map<string, number>;
+  /** Miles from the customer's nearest area (distancesFromNearest). */
+  nearestDistances: Map<string, number>;
+  /** The travel limit, or null for "anywhere" (nationwide). */
+  reachMiles: number | null;
   supply: Pick<BriefSupply, "filteredAreas" | "otherBriefs">;
   /** ISO date (YYYY-MM-DD); a lock running until today is still held. */
   today: string;
@@ -43,13 +53,17 @@ export function computeFirstPicks(args: {
   }
 
   const out: string[] = [];
-  for (const oc of outcodesWithin(args.distances, args.capMiles)) {
+  const within =
+    args.reachMiles === null
+      ? Array.from(args.nearestDistances.keys())
+      : outcodesWithin(args.nearestDistances, args.reachMiles);
+  for (const oc of within) {
     if (filtered.has(areaOfOutcode(oc))) continue;
     if (othersService.has(oc) || othersLocked.has(oc)) continue;
-    const own = args.distances.get(oc)!;
+    const own = args.nearestDistances.get(oc)!;
     const someoneNearer = args.supply.otherBriefs.some((b) => {
-      const theirs = milesBetween(b.baseOutcode, oc);
-      return theirs !== null && theirs <= b.capMiles && theirs <= own;
+      const theirs = nearestOf(b.areaOutcodes, oc);
+      return theirs !== null && (b.reachMiles === null || theirs <= b.reachMiles) && theirs <= own;
     });
     if (someoneNearer) continue;
     out.push(oc);
@@ -57,23 +71,44 @@ export function computeFirstPicks(args: {
   return out;
 }
 
+/** Miles from `outcode` to the nearest of `areas`, or null when none can be placed. */
+export function nearestOf(areas: string[], outcode: string): number | null {
+  let best: number | null = null;
+  for (const a of areas) {
+    const d = milesBetween(a, outcode);
+    if (d !== null && (best === null || d < best)) best = d;
+  }
+  return best;
+}
+
 /**
- * A11: outcodes beyond the service area, out to the cap, nearest first — the
- * order routing offers them in while the customer is behind pace.
+ * A11: outcodes beyond the service area, within the cap of the base, nearest
+ * to the customer's areas first — the order routing offers them in while the
+ * customer is behind pace.
  *
  * The cap is the same A3 cap the service area uses (the smaller of the travel
- * limit and the plan maximum), so a behind-pace lead never comes from further
- * than the customer said they would travel. First picks are left out: routing
- * admits them anyway, so listing them twice would only blur the order.
+ * limit and the plan maximum, measured from the base), so a behind-pace lead
+ * never comes from further than the customer said they would travel. First
+ * picks are left out: routing admits them anyway, so listing them twice would
+ * only blur the order.
  */
 export function computePaceOutcodes(args: {
   capMiles: number;
-  distances: Map<string, number>;
+  /** Miles from the base: what the cap is measured on. */
+  baseDistances: Map<string, number>;
+  /** Miles from the customer's nearest area: the order. */
+  nearestDistances: Map<string, number>;
   serviceOutcodes: string[];
   firstPickOutcodes: string[];
 }): string[] {
   const skip = new Set([...args.serviceOutcodes, ...args.firstPickOutcodes]);
-  return outcodesWithin(args.distances, args.capMiles).filter((oc) => !skip.has(oc));
+  const out: string[] = [];
+  for (const oc of Array.from(args.nearestDistances.keys())) {
+    if (skip.has(oc)) continue;
+    const d = args.baseDistances.get(oc);
+    if (d !== undefined && d <= args.capMiles) out.push(oc);
+  }
+  return out;
 }
 
 /** The key area_competition rows are held under in BriefSupply.competition. */

@@ -68,6 +68,31 @@ export function distancesFrom(base: string): Map<string, number> | null {
   return new Map(rows);
 }
 
+/**
+ * Distance in miles from every outcode to the NEAREST of several centres —
+ * the customer's own areas — nearest first, ties by outcode. A customer who
+ * works YO10 and LS6 is "close" to anything near either, so their area grows
+ * around both together rather than around one of them. Centres with no
+ * centroid are ignored; null when none can be placed.
+ */
+export function distancesFromNearest(centres: string[]): Map<string, number> | null {
+  const placed = centres
+    .map((c) => OUTCODE_CENTROIDS[c.toUpperCase()])
+    .filter((c): c is NonNullable<typeof c> => c !== undefined);
+  if (placed.length === 0) return null;
+  const rows: [string, number][] = [];
+  for (const [outcode, c] of Object.entries(OUTCODE_CENTROIDS)) {
+    let best = Infinity;
+    for (const centre of placed) {
+      const d = haversineKm(centre, c) / KM_PER_MILE;
+      if (d < best) best = d;
+    }
+    rows.push([outcode, best]);
+  }
+  rows.sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  return new Map(rows);
+}
+
 /** Outcodes within `miles` of the base, nearest first. */
 export function outcodesWithin(distances: Map<string, number>, miles: number): string[] {
   const out: string[] = [];

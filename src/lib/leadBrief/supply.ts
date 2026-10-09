@@ -10,7 +10,7 @@ import {
   type RawLeadVolumeRow,
 } from "@/lib/filterPrediction";
 import { outcodeOfPostcode } from "@/lib/leadBrief/geo";
-import { capMilesFor, isTravelLimit } from "@/lib/leadBrief/plans";
+import { isTravelLimit } from "@/lib/leadBrief/plans";
 import type {
   BriefSupply,
   CompetitionTier,
@@ -120,8 +120,8 @@ async function fetchSupplyLeads(admin: SupabaseClient): Promise<SupplyLead[]> {
 interface BriefRow {
   customer_id: string;
   base_outcode: string;
+  priority_outcodes: string[] | null;
   travel_limit_miles: number | null;
-  allocation: number;
   service_outcodes: string[] | null;
   first_pick_outcodes: string[] | null;
   locked_until: string | null;
@@ -135,6 +135,10 @@ interface BriefRow {
  * Other customers' ACTIVE briefs, for first picks and brief-vs-brief
  * contention. Only customers still on a live management subscription count:
  * a cancelled customer's brief must not keep first picks from anyone.
+ *
+ * Their first-pick reach is their travel limit from their nearest area, or
+ * nationwide for "anywhere" — the same rule this customer's own first picks
+ * follow (areas.ts).
  */
 export function toOtherBriefs(rows: BriefRow[]): OtherBrief[] {
   const out: OtherBrief[] = [];
@@ -142,11 +146,12 @@ export function toOtherBriefs(rows: BriefRow[]): OtherBrief[] {
     const c = Array.isArray(r.customer) ? r.customer[0] : r.customer;
     if (!c || c.is_active === false) continue;
     if (c.subscription_status !== "active" && c.subscription_status !== "past_due") continue;
-    const travel = isTravelLimit(r.travel_limit_miles) ? r.travel_limit_miles : null;
+    const areas = [r.base_outcode];
+    for (const oc of r.priority_outcodes ?? []) if (!areas.includes(oc)) areas.push(oc);
     out.push({
       customerId: r.customer_id,
-      baseOutcode: r.base_outcode,
-      capMiles: capMilesFor(r.allocation <= 10 ? 10 : 20, travel),
+      areaOutcodes: areas,
+      reachMiles: isTravelLimit(r.travel_limit_miles) ? r.travel_limit_miles : null,
       serviceOutcodes: r.service_outcodes ?? [],
       firstPickOutcodes: r.first_pick_outcodes ?? [],
       lockedUntil: r.locked_until,
@@ -162,7 +167,7 @@ async function fetchOtherBriefs(
   let query = admin
     .from("customer_lead_briefs")
     .select(
-      "customer_id, base_outcode, travel_limit_miles, allocation, service_outcodes, first_pick_outcodes, locked_until, customer:customers!inner(is_active, subscription_status)"
+      "customer_id, base_outcode, priority_outcodes, travel_limit_miles, service_outcodes, first_pick_outcodes, locked_until, customer:customers!inner(is_active, subscription_status)"
     )
     .eq("status", "active");
   if (excludeCustomerId) query = query.neq("customer_id", excludeCustomerId);

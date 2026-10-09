@@ -7,7 +7,12 @@ import {
   weightedSupplyByOutcode,
 } from "@/lib/leadBrief/eligibility";
 import { computeExpectedMix } from "@/lib/leadBrief/expectedMix";
-import { areaOfOutcode, distancesFrom, outcodesWithin } from "@/lib/leadBrief/geo";
+import {
+  areaOfOutcode,
+  distancesFrom,
+  distancesFromNearest,
+  outcodesWithin,
+} from "@/lib/leadBrief/geo";
 import {
   normaliseBriefInput,
   type BriefInput,
@@ -110,15 +115,17 @@ export function computeBriefPreview(
   const brief = normalised.brief;
 
   // normaliseBriefInput refuses a base with no centroid, so this is non-null.
-  const distances = distancesFrom(brief.baseOutcode)!;
+  const baseDistances = distancesFrom(brief.baseOutcode)!;
   const today = opts.today ?? new Date().toISOString().slice(0, 10);
 
   const areaFor = (b: NormalisedBrief, p: BriefPlan): ServiceArea =>
     computeServiceArea({
       plan: p,
       travelLimitMiles: b.travelLimitMiles,
+      baseOutcode: b.baseOutcode,
       priorityOutcodes: b.priorityOutcodes,
-      distances,
+      similarAreas: b.similarAreas,
+      baseDistances,
       weightedSupply: weightedSupplyByOutcode(b, supply),
       weeks: supply.weeks,
     });
@@ -129,16 +136,19 @@ export function computeBriefPreview(
     return { plan: p, radiusMiles: a.radiusMiles, meetsTarget: a.meetsTarget };
   });
 
+  // First picks and the pace ring are ordered by distance from the customer's
+  // nearest area, not from the base alone.
+  const nearestDistances = distancesFromNearest(service.centres)!;
   const firstPickOutcodes = computeFirstPicks({
-    baseOutcode: brief.baseOutcode,
-    capMiles: service.capMiles,
-    distances,
+    nearestDistances,
+    reachMiles: brief.travelLimitMiles,
     supply,
     today,
   });
   const paceOutcodes = computePaceOutcodes({
     capMiles: service.capMiles,
-    distances,
+    baseDistances,
+    nearestDistances,
     serviceOutcodes: service.outcodes,
     firstPickOutcodes,
   });
@@ -189,7 +199,9 @@ export function computeBriefPreview(
   const ownAreas = [brief.baseOutcode, ...brief.priorityOutcodes].map(areaOfOutcode);
   const similarAreas = computeSimilarAreas({
     referenceAreas: Array.from(new Set(ownAreas)),
-    reachableAreas: new Set(outcodesWithin(distances, service.capMiles).map(areaOfOutcode)),
+    // Reachable: an area with an outcode inside the cap of the base, the same
+    // test that decides which of a ticked area's outcodes join the area.
+    reachableAreas: new Set(outcodesWithin(baseDistances, service.capMiles).map(areaOfOutcode)),
     leads: supply.leads,
     fallbackReferenceLeads: areaLeads,
     competition: supply.competition,
