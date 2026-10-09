@@ -294,6 +294,25 @@ export const MESSAGING_SETTINGS: MessagingSettingSpec[] = [
     min: 7,
     max: 90,
   },
+  // Lead Brief routing (Phase 4). The switch is read by TypeScript only, as
+  // `=== "true"` and failing closed (leadBrief/routing.ts), so an absent row is
+  // off and 0162 seeds it off. The percentage is read by 0163, which treats a
+  // malformed value as 20, and by pacing.ts's mirror. Its floor is 5: at 0
+  // every brief customer is behind pace and widening becomes the norm.
+  {
+    key: "lead_brief_enabled",
+    label: "Route new customers by their Lead Brief",
+    kind: "boolean",
+    fallback: "false",
+  },
+  {
+    key: "lead_brief_pace_deficit_pct",
+    label: "Behind pace at (% of plan)",
+    kind: "number",
+    fallback: "20",
+    min: 5,
+    max: 100,
+  },
 
   // -------------------------------------------------------------------------
   // Chasing an enquirer who never books a web meeting (§55). In THIS list for

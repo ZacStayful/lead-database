@@ -54,6 +54,9 @@ export default async function AdminAllocationPage() {
       s.key.startsWith("release_") ||
       s.key === "lead_sync_enabled" ||
       s.key === "stayful_conflict_enabled" ||
+      // Lead Brief routing (Phase 4): the other half of how a new customer's
+      // leads reach them.
+      s.key.startsWith("lead_brief_") ||
       // §73 — the monthly review emails sit here because a shortfall email is
       // about what allocation delivered.
       s.key.startsWith("batch_review")

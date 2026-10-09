@@ -231,6 +231,37 @@ select test_util.assert_eq(
     where customer_id = 'c1000000-0000-0000-0000-000000000003'),
   0, 'a customer already holding the lead is not offered it again');
 
+-- Every other path that reaches the money path, by hand (build prompt, Phase 4:
+-- "Manually test any path that reaches assign_lead_to_customer").
+--
+-- An admin force-assign is an admin decision: it reaches a brief customer
+-- whatever their brief says (here a 2-bed lead that misses their essential),
+-- spends a credit, and needs no filter override because they sit at 'off'.
+select public.admin_assign_lead(
+  'd1000000-0000-0000-0000-000000000002', 'c1000000-0000-0000-0000-000000000003', 15, 'management', false);
+select test_util.assert_eq(
+  (select lead_balance from public.customers where id = 'c1000000-0000-0000-0000-000000000003'),
+  18, 'admin_assign_lead reaches a brief customer and spends one credit');
+-- An admin assign to the flagged-but-unconfirmed customer still works too: the
+-- delivery gate is routing, never an admin's hand.
+select public.assign_lead_to_customer(
+  'd1000000-0000-0000-0000-000000000006', 'c1000000-0000-0000-0000-000000000004', 15, 'management');
+select test_util.assert_eq(
+  (select count(*)::int from public.lead_assignments
+    where customer_id = 'c1000000-0000-0000-0000-000000000004'),
+  1, 'the money path accepts an unconfirmed brief customer when called directly');
+-- Escalation and the morning release reach customers only through the two
+-- legacy pools and the brief pool; none returns the unconfirmed customer.
+select test_util.assert_eq(
+  (select count(*)::int from (
+     select customer_id from public.get_filtered_candidates_for_lead('d1000000-0000-0000-0000-000000000005', 10, 'management')
+     union all
+     select customer_id from public.get_unfiltered_candidates_for_lead('d1000000-0000-0000-0000-000000000005', 10, 'management')
+     union all
+     select customer_id from public.get_brief_candidates_for_lead('d1000000-0000-0000-0000-000000000005', 10, true)
+   ) x where customer_id = 'c1000000-0000-0000-0000-000000000004'),
+  0, 'no routing pool ever returns a flagged customer who has not confirmed');
+
 -- ---------------------------------------------------------------------------
 -- 4. ACLs and shape
 -- ---------------------------------------------------------------------------

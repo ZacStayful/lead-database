@@ -42,6 +42,13 @@ const NUMBER_FIELDS: { key: string; label: string; hint: string; min: number; ma
     max: 168,
   },
   {
+    key: "lead_brief_pace_deficit_pct",
+    label: "Lead Brief: behind pace at (% of plan)",
+    hint: "A Lead Brief customer this far behind their plan may be sent leads just beyond their usual area, nearest first and never past their plan's maximum distance. 20 is the shipped value.",
+    min: 5,
+    max: 100,
+  },
+  {
     key: "batch_review_delay_days",
     label: "Review email: days after the month",
     hint: "How long after a customer's billing month ends the review email goes, so the last leads of the month have had time to be rung. The shortfall email still goes on reset day.",
@@ -112,6 +119,7 @@ export function AllocationSettingsPanel({
   const pollOn = initial.lead_sync_enabled === "true";
   const stayfulOn = initial.stayful_conflict_enabled === "true";
   const reviewsOn = initial.batch_reviews_enabled === "true";
+  const briefOn = initial.lead_brief_enabled === "true";
 
   return (
     <div className="space-y-4">
@@ -171,6 +179,25 @@ export function AllocationSettingsPanel({
           </>
         }
         offWarning="Switch this off? Nothing new is flagged; leads already flagged stay withdrawn and replacements already owed are still delivered by the next matching lead."
+      />
+
+      <SettingSwitch
+        label="Route new customers by their Lead Brief"
+        on={briefOn}
+        busy={busy}
+        onChange={(next) => save({ lead_brief_enabled: next })}
+        description={
+          <>
+            A customer who has confirmed a Lead Brief is offered leads in their
+            service area and first-pick areas, best match first, after every
+            existing customer has had their turn on the same lead. In the
+            morning release they are offered leads nobody has bought yet before
+            a lead&apos;s second sale, and when they fall behind their plan,
+            leads just beyond their usual area. Existing customers are routed
+            exactly as before whether this is on or off.
+          </>
+        }
+        offWarning="Switch Lead Brief routing off? Customers who have confirmed a brief then receive nothing from routing until it is back on. Existing customers are unaffected."
       />
 
       <SettingSwitch
