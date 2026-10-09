@@ -203,6 +203,7 @@ describe("isColumnsPath", () => {
     expect(isColumnsPath("/dashboard/leads/priority")).toBe(false);
     expect(isColumnsPath("/dashboard/leads/add")).toBe(false);
     expect(isColumnsPath("/dashboard/leads/expired")).toBe(false);
+    expect(isColumnsPath("/dashboard/leads/brief")).toBe(false);
     expect(isColumnsPath("/dashboard/leads")).toBe(false);
     expect(isColumnsPath("/dashboard")).toBe(false);
   });

@@ -7,6 +7,12 @@ import { getWhatsappConnection, messagingActiveFor } from "@/lib/messaging/servi
 import { LeadsList } from "@/components/dashboard/LeadsList";
 import { ExportButton } from "@/components/dashboard/ExportButton";
 import { AddLeadsButton } from "@/components/dashboard/AddLeadsButton";
+import { BriefSummaryBar } from "@/components/leadBrief/BriefSummaryBar";
+import { briefPlanFor, canEditLeadBrief } from "@/lib/leadBrief/gate";
+import { BriefVersionsUnavailableError, loadBriefVersions } from "@/lib/leadBrief/briefVersions";
+import { readStoredPriorities } from "@/lib/leadBrief/editBrief";
+import { EDIT_COPY, pendingLine, summaryLine } from "@/lib/leadBrief/editCopy";
+import { nextGrantDate } from "@/lib/quality/replacementEntitlement";
 import type { AssignmentWithLead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +38,43 @@ export default async function LeadsPage() {
   const canSequence =
     (await messagingActiveFor(admin, isAdminUser(user))) &&
     (await getWhatsappConnection(admin, customer.id))?.status === "connected";
+
+  // "Your brief" bar (Lead Brief Phase 5), for a customer who has confirmed a
+  // brief and nobody else. A failed read hides the bar: the leads below matter
+  // more than a summary of how they are matched.
+  let briefBar: { summary: string; pending: string | null } | null = null;
+  if (canEditLeadBrief(customer)) {
+    try {
+      const versions = await loadBriefVersions(admin, customer.id);
+      const a = versions.active;
+      if (a) {
+        briefBar = {
+          summary: summaryLine({
+            radiusMiles: a.service_radius_miles,
+            basePostcode: a.base_postcode,
+            otherAreas: (a.priority_outcodes ?? []).length,
+            minBedrooms: a.min_bedrooms,
+            minGross: a.min_gross,
+            ranking: readStoredPriorities(a.priorities).map((p) => p.key),
+          }),
+          pending: !versions.scheduled
+            ? null
+            : briefPlanFor(customer) !== versions.scheduled.allocation
+              ? EDIT_COPY.pendingReview
+              : pendingLine(
+                  nextGrantDate({
+                    billing_cycle_anchor: customer.billing_cycle_anchor,
+                    gr_billing_cycle_anchor: customer.gr_billing_cycle_anchor,
+                    created_at: customer.created_at,
+                  })
+                ),
+        };
+      }
+    } catch (err) {
+      if (!(err instanceof BriefVersionsUnavailableError)) throw err;
+      console.error("[dashboard/leads] brief versions unavailable", err.message);
+    }
+  }
 
   // See the note on /dashboard: another operator's customer id never reaches
   // the browser.
@@ -73,6 +116,8 @@ export default async function LeadsPage() {
           </p>
         </div>
       </div>
+
+      {briefBar && <BriefSummaryBar summary={briefBar.summary} pending={briefBar.pending} />}
 
       <LeadsList assignments={assignments} canSequence={canSequence} />
     </div>

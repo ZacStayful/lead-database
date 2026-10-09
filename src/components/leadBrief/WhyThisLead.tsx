@@ -2,7 +2,9 @@
 
 import { useState, type ReactNode } from "react";
 import { Check, Minus, ChevronDown, ChevronUp } from "lucide-react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { BRIEF_EDITOR_HREF } from "@/lib/leadBrief/editCopy";
 import {
   WHY_COPY,
   checklistLines,
@@ -87,7 +89,10 @@ export function WhyThisLead({
           {tip && (
             <p className="rounded-md bg-brand-light px-3 py-2 text-brand-dark">
               <span className="font-medium">{WHY_COPY.tipLead}: </span>
-              {tip}
+              {tip}{" "}
+              <Link href={BRIEF_EDITOR_HREF} className="font-medium underline underline-offset-2">
+                {WHY_COPY.editBrief}
+              </Link>
             </p>
           )}
           {footer}

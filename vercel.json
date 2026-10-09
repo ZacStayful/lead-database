@@ -94,6 +94,10 @@
     {
       "path": "/api/cron/batch-reviews",
       "schedule": "40 9 * * *"
+    },
+    {
+      "path": "/api/cron/activate-lead-briefs",
+      "schedule": "20 0 * * *"
     }
   ]
 }

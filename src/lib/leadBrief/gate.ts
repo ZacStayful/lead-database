@@ -30,6 +30,20 @@ export function needsLeadBrief(customer: BriefGateFields | null | undefined): bo
 }
 
 /**
+ * Who may open the "Your brief" editor (Phase 5): a customer who has
+ * confirmed a brief and still holds Management. Everyone else is sent back to
+ * their leads, and the editor routes refuse them.
+ */
+export function canEditLeadBrief(customer: BriefGateFields | null | undefined): boolean {
+  if (!customer) return false;
+  return (
+    customer.lead_brief_required === true &&
+    !!customer.lead_brief_completed_at &&
+    holdsProduct(customer, "management")
+  );
+}
+
+/**
  * The plan a customer's brief is computed for: 10 or 20 leads a month.
  *
  * ⚠️ READ FROM THE ROW, NEVER FROM A REQUEST BODY. A pending tier change

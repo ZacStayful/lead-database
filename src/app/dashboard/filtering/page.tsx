@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentCustomer } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -17,6 +18,8 @@ import {
 } from "@/lib/filterPrediction";
 import type { Customer, FilterStatus } from "@/lib/types";
 import { SERVICE_AREA_NOTICE } from "@/lib/leadBrief/briefCopy";
+import { BRIEF_EDITOR_HREF, EDIT_COPY } from "@/lib/leadBrief/editCopy";
+import { canEditLeadBrief } from "@/lib/leadBrief/gate";
 
 export const dynamic = "force-dynamic";
 
@@ -96,6 +99,14 @@ export default async function LeadFilteringPage() {
         <div className="rounded-lg border-[0.5px] border-border p-6 text-sm">
           <p className="font-medium">{SERVICE_AREA_NOTICE.title}</p>
           <p className="mt-1 text-muted-foreground">{SERVICE_AREA_NOTICE.body}</p>
+          {canEditLeadBrief(customer) && (
+            <Link
+              href={BRIEF_EDITOR_HREF}
+              className="mt-2 inline-block font-medium text-brand-dark underline underline-offset-2"
+            >
+              {EDIT_COPY.editBriefLink}
+            </Link>
+          )}
         </div>
       )}
 

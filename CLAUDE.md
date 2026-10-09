@@ -86,6 +86,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/monday-lead-sync` | `*/5 * * * *` | Ingest NEW sellable items from both lead boards within minutes of them appearing; only ids not yet in `leads`. The two 09:00 syncs stay as the backstop (§63). Switch `lead_sync_enabled` on `/admin/allocation` |
 | `/api/cron/stayful-conflict-sweep` | `*/15 * * * *` | Withdraw any management lead that matches a landlord in one of the nine pipeline groups on Stayful's own Management Leads board (5891626711), owe each holder a replacement, and fill every open debt from stock (§64). Switch `stayful_conflict_enabled` on `/admin/allocation`; ships off |
 | `/api/cron/batch-reviews` | `40 9 * * *` | The monthly lead-batch review (§73): the shortfall email on reset day, the review email 7 days after a billing month ends, one reminder 3 days later. Reads the snapshot `reset_monthly_counts` captures. Switch `batch_reviews_enabled` on `/admin/allocation`; ships off |
+| `/api/cron/activate-lead-briefs` | `20 0 * * *` | Lead Brief: make each area change saved in the "Your brief" editor the customer's active brief once their renewal has come, after the 00:05 reset (0164). A change saved for a different plan than the customer is now on is left for them to review, not applied. Not tied to `lead_brief_enabled` |
 
 `/api/cron/post-call-offer-reminders` exists but has **no `vercel.json` entry**
 — removed in `173a746` when the plan was Hobby (daily-cron cap). The route needs

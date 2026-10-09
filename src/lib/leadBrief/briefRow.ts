@@ -1,5 +1,6 @@
 import { prioritiesForStorage } from "@/lib/leadBrief/match";
 import type { BriefPreview } from "@/lib/leadBrief/preview";
+import type { PriorityKey } from "@/lib/leadBrief/types";
 
 /**
  * A confirmed brief as one `customer_lead_briefs` row (0162). Pure, so the
@@ -22,14 +23,15 @@ import type { BriefPreview } from "@/lib/leadBrief/preview";
 export interface BriefRowInsert {
   customer_id: string;
   version: number;
-  status: "active";
+  /** "scheduled" for an area change saved in the editor (Phase 5); 0164 decides it again. */
+  status: "active" | "scheduled";
   origin: "customer";
   base_postcode: string;
   base_outcode: string;
   operating_mode: string;
   travel_limit_miles: number | null;
   allocation: number;
-  priorities: ReturnType<typeof prioritiesForStorage>;
+  priorities: (ReturnType<typeof prioritiesForStorage>[number] & { chosen?: true })[];
   essentials: string[];
   min_bedrooms: number | null;
   min_gross: number | null;
@@ -47,20 +49,32 @@ export interface BriefRowInsert {
 
 export function briefRowFromPreview(
   preview: BriefPreview,
-  opts: { customerId: string; version: number; lockedUntil: string | null; now: Date }
+  opts: {
+    customerId: string;
+    version: number;
+    lockedUntil: string | null;
+    now: Date;
+    /** Phase 5: an editor area save is "scheduled". Defaults to "active". */
+    status?: "active" | "scheduled";
+    /** Phase 5: priorities whose level the customer set, marked `"chosen": true`. */
+    chosenKeys?: PriorityKey[];
+  }
 ): BriefRowInsert {
   const b = preview.brief;
+  const chosen = new Set(opts.chosenKeys ?? []);
   return {
     customer_id: opts.customerId,
     version: opts.version,
-    status: "active",
+    status: opts.status ?? "active",
     origin: "customer",
     base_postcode: b.basePostcode,
     base_outcode: b.baseOutcode,
     operating_mode: b.operatingMode,
     travel_limit_miles: b.travelLimitMiles,
     allocation: preview.plan,
-    priorities: prioritiesForStorage(preview.priorities),
+    priorities: prioritiesForStorage(preview.priorities).map((p) =>
+      "threshold" in p && chosen.has(p.key) ? { ...p, chosen: true as const } : p
+    ),
     essentials: [...b.essentials],
     min_bedrooms: b.minBedrooms,
     min_gross: b.minGross,

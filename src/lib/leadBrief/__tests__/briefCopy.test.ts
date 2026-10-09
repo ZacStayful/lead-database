@@ -54,12 +54,27 @@ const LABEL_COMPONENTS = [
   "src/components/leadBrief/WhyThisLead.tsx",
   "src/components/leadBrief/NotForMe.tsx",
 ].map((p) => readFileSync(p, "utf8"));
+// Phase 5 Part B: the "Your brief" editor, its copy module, and the Q1–Q3
+// step components the questionnaire and the editor now share.
+const EDIT_COPY_SRC = readFileSync("src/lib/leadBrief/editCopy.ts", "utf8");
+const EDITOR_COMPONENTS = [
+  "src/components/leadBrief/steps/WhereStep.tsx",
+  "src/components/leadBrief/steps/TravelStep.tsx",
+  "src/components/leadBrief/steps/EssentialsStep.tsx",
+  "src/components/leadBrief/BriefPrioritiesEditor.tsx",
+  "src/components/leadBrief/BriefAreaEditor.tsx",
+  "src/components/leadBrief/BriefPendingChange.tsx",
+  "src/components/leadBrief/BriefSummaryBar.tsx",
+  "src/app/dashboard/leads/brief/page.tsx",
+].map((p) => readFileSync(p, "utf8"));
 const CUSTOMER_TEXT = [
   stringLiterals(COPY),
   stringLiterals(LABEL_COPY),
+  stringLiterals(EDIT_COPY_SRC),
   jsxText(WIZARD),
   jsxText(VIEW),
   ...LABEL_COMPONENTS.map(jsxText),
+  ...EDITOR_COMPONENTS.map(jsxText),
 ].join("\n");
 
 const A9_BANNED = [
@@ -84,6 +99,7 @@ describe("brief copy — A9 words to avoid", () => {
     expect(CUSTOMER_TEXT).toContain("Every lead you pay for is delivered");
     expect(CUSTOMER_TEXT).toContain("Where do you operate?");
     expect(CUSTOMER_TEXT).toContain("Why you got this lead");
+    expect(CUSTOMER_TEXT).toContain("Save priorities");
   });
 });
 
