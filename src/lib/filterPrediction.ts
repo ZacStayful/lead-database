@@ -740,7 +740,7 @@ export async function fetchLeadVolumeData(
 }
 
 /** The `leads`-side columns `lead_retired_from_allocation()` reads. */
-interface RawLeadVolumeRow extends LeadVolumeRow {
+export interface RawLeadVolumeRow extends LeadVolumeRow {
   id: string;
   pool_expired_at: string | null;
   pool_entered_at: string | null;
@@ -756,7 +756,7 @@ interface RawLeadVolumeRow extends LeadVolumeRow {
  * needs `claimed_from_pool_at`, which is why the claimed ids are fetched once
  * up front rather than joined per row.
  */
-function isRetired(row: RawLeadVolumeRow, claimedLeadIds: Set<string>): boolean {
+export function isRetired(row: RawLeadVolumeRow, claimedLeadIds: Set<string>): boolean {
   if (row.stayful_conflict_at != null) return true;
   if (row.pool_expired_at != null) return true;
   if (row.pool_entered_at != null && row.pool_entry_basis === "ignored") {
@@ -888,7 +888,7 @@ export async function fetchAreaContention(
  * design (§19) so this set stays small, but it is paginated on the same stable
  * sort as the main read for the same reason.
  */
-async function fetchRetiredLeadIds(admin: SupabaseClient): Promise<Set<string>> {
+export async function fetchRetiredLeadIds(admin: SupabaseClient): Promise<Set<string>> {
   const ids = new Set<string>();
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
