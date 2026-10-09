@@ -49,7 +49,7 @@ Rules for running them in parallel:
 
 | # | File | Where it runs | Depends on | Wave | Status |
 |---|---|---|---|---|---|
-| — | `claude/lead-brief-build-prompt.md` | Claude Code (already pasted 5 Oct) | — | 1 | Phase 0 approved 8 Oct. Phase 1 (0161, 0162; applied to production) and Phase 2 (engine, not wired) merged 9 Oct. Phase 3 (questionnaire) next. **Not complete: 02, 04 and 06 still wait** |
+| — | `claude/lead-brief-build-prompt.md` | Claude Code (already pasted 5 Oct) | — | 1 | Phase 0 approved 8 Oct. Phase 1 (0161, 0162; applied to production) and Phase 2 (engine, not wired) merged 9 Oct. Phase 3 (questionnaire, no migration) in review 9 Oct; Phase 4 (routing) next. **Not complete: 02, 04 and 06 still wait** |
 | 01 | `claude/build/01-lead-brief-additions.md` | **Same** Claude Code session as the Lead Brief prompt | Lead Brief prompt | 1 | Folded into the Phase 0 report (A12 checks answered); repo copy committed 8 Oct |
 | 02 | `claude/build/02-funnel-and-checkout.md` | New Claude Code session | 01 merged | 2 | Not started |
 | 03 | `claude/build/03-enquiry-workflow.md` | Part A: Claude Code. Part B: Claude chat | A: 02 merged. B: none for labels and drafts; the live n8n edits need 02 deployed | A: 3, B: 1 | Not started |
@@ -80,6 +80,7 @@ These questions are raised at a batch's Phase 0, not before.
 
   04 builds on this flow rather than adding a second one.
 - **06:** whether incomplete leads are held for brief customers only, or for everyone.
+- ~~**01 A7, "Switch to 10 leads a month" after payment.**~~ **Answered 9 Oct:** the existing §24 tier change (`POST /api/customer/subscription/plan`), unchanged. The price swaps with no proration: nothing is charged or refunded today, the next invoice is £150, and the allocation becomes 10 when it is paid. The brief is saved for the 10-lead area. §24 still needs a Stripe test-mode run before a customer can use it (CLAUDE.md §12).
 
 ## Outside the code
 
