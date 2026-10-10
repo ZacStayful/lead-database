@@ -231,6 +231,13 @@ export interface MatchReasons {
    * area, so the First pick reason can say "low competition" only when it is.
    */
   competition?: CompetitionTier;
+  /**
+   * Batch 04 Phase 4. Present only on a lead sent on a top-up credit, which
+   * is always a Nearby opportunity from beyond the service area (locked
+   * decision 6). The reason then reads "From just outside your area, as part
+   * of your top-up."
+   */
+  topup?: true;
 }
 
 export interface BriefMatchRecord {
@@ -260,17 +267,25 @@ export function buildBriefMatch(
     progress?: MatchProgress | null;
     /** Phase 5: the lead's admin-set tier, when known. */
     competition?: CompetitionTier | null;
+    /**
+     * Batch 04 Phase 4: sent on a top-up credit. Always Nearby opportunity
+     * (locked decision 6), whatever it scores and wherever outside the
+     * service area it is, with no progress and no competition clause.
+     */
+    topup?: boolean;
   }
 ): BriefMatchRecord {
   const evaluation = evaluateForBrief(lead, brief);
   const area = matchAreaFor(lead.outcode, brief);
   const inFirstPick =
     lead.outcode !== null && (brief.first_pick_outcodes ?? []).includes(lead.outcode);
-  const { label, firstPickTag } = labelFor(evaluation, {
-    inFirstPick,
-    isFirstSale: flags.isFirstSale,
-    paceOnly: area === "pace" || area === "outside",
-  });
+  const { label, firstPickTag } = flags.topup
+    ? { label: "nearby_opportunity" as const, firstPickTag: false }
+    : labelFor(evaluation, {
+        inFirstPick,
+        isFirstSale: flags.isFirstSale,
+        paceOnly: area === "pace" || area === "outside",
+      });
   const reasons: MatchReasons = {
     v: MATCH_REASONS_VERSION,
     area,
@@ -282,6 +297,10 @@ export function buildBriefMatch(
       met: r.met,
     })),
   };
+  if (flags.topup) {
+    reasons.topup = true;
+    return { label, score: evaluation.score, reasons };
+  }
   const p = flags.progress;
   if (
     label === "nearby_opportunity" &&

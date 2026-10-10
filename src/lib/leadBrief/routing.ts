@@ -154,7 +154,7 @@ export async function recordBriefMatch(
   customer: Customer,
   lead: Lead,
   assignmentId: string,
-  opts: { routed: boolean } = { routed: false }
+  opts: { routed: boolean; topup?: boolean } = { routed: false }
 ): Promise<BriefMatchRecord | null> {
   if (!isBriefCustomer(customer) || lead.lead_type !== "management") return null;
   try {
@@ -197,6 +197,8 @@ export async function recordBriefMatch(
       isFirstSale,
       progress: opts.routed ? deliveryProgress(customer) : null,
       competition,
+      // Batch 04 Phase 4: a lead sent on a top-up credit.
+      topup: opts.topup === true,
     });
     const { data: written, error: writeErr } = await admin
       .from("lead_assignments")

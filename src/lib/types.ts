@@ -410,6 +410,10 @@ export interface Customer {
   // lead_brief_completed_at. See src/lib/leadBrief/gate.ts.
   lead_brief_required: boolean;
   lead_brief_completed_at: string | null;
+  // Batch 04 Phase 4 (0170). How many of lead_balance came from a top-up and
+  // are kept for leads beyond the brief customer's service area. Part of
+  // lead_balance, never on top of it, and 0 for everyone not on a brief.
+  brief_topup_credits: number;
   // Batch 02 (0165). 'funnel' when the self-serve funnel made their login
   // (src/lib/funnel/payment.ts); 'call' for everyone else, every existing row
   // included. password_set_at is stamped when they set a password, and a

@@ -17,6 +17,7 @@ import {
   offersNotForMe,
   parseMatchReasons,
   reasonLine,
+  TOPUP_REASON,
   type LabelKey,
   type LabelPriority,
   type LabelReasons,
@@ -389,11 +390,20 @@ describe("labelCopy — words it never uses", () => {
     /!/,
   ];
 
+  // C3 (batch 04): the top-up reason is the one literal exempt from A9's
+  // "top-up" ban. Exactly that string is taken out, once, before the scan.
+  const scanned = literals.replace(JSON.stringify(TOPUP_REASON), "");
+
   for (const re of BANNED) {
     it(`never says ${re}`, () => {
-      expect(literals).not.toMatch(re);
+      expect(scanned).not.toMatch(re);
     });
   }
+
+  it("C3: the top-up reason appears once, word for word, and nothing else says top-up", () => {
+    expect(literals.split(JSON.stringify(TOPUP_REASON)).length - 1).toBe(1);
+    expect(TOPUP_REASON).toBe("From just outside your area, as part of your top-up.");
+  });
 
   it("the scan sees the copy (guards the guard)", () => {
     expect(literals).toContain("Why you got this lead");

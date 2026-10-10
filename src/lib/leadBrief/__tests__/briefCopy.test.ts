@@ -19,6 +19,7 @@ import {
   switchExplainer,
   tradeoffLine,
 } from "@/lib/leadBrief/briefCopy";
+import { TOPUP_REASON } from "@/lib/leadBrief/labelCopy";
 import { MATCH_LABELS } from "@/lib/leadBrief/types";
 
 /**
@@ -123,12 +124,26 @@ const A9_BANNED = [
   /non-?matching/i,
 ];
 
+/**
+ * C3 (batch 04 Phase 0, decided 10 Oct): the top-up reason is the one string
+ * A9's "top-up" ban does not reach. Exactly that literal is taken out, once,
+ * before the scan, so any other "top-up" in any scanned copy still fails.
+ */
+const TOPUP_LITERAL = JSON.stringify(TOPUP_REASON);
+const A9_TEXT = CUSTOMER_TEXT.replace(TOPUP_LITERAL, "");
+
 describe("brief copy — A9 words to avoid", () => {
   for (const re of A9_BANNED) {
     it(`never says ${re}`, () => {
-      expect(CUSTOMER_TEXT).not.toMatch(re);
+      expect(A9_TEXT).not.toMatch(re);
     });
   }
+
+  it("C3: the top-up reason is exempt, word for word, once and only once", () => {
+    expect(TOPUP_REASON).toBe("From just outside your area, as part of your top-up.");
+    expect(CUSTOMER_TEXT.split(TOPUP_LITERAL).length - 1).toBe(1);
+    expect(A9_TEXT).not.toContain(TOPUP_REASON);
+  });
 
   it("the scan actually sees the copy (guards the guard)", () => {
     expect(CUSTOMER_TEXT).toContain("Every lead you pay for is delivered");

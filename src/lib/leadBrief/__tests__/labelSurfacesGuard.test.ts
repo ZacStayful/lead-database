@@ -97,14 +97,24 @@ describe("the alerts carry the label, and only a routed delivery says it was sen
     expect(INGEST).toContain(
       'if (assignError || !assignmentId) continue; assignmentsMade += 1; await completeAssignment(supabase, lead, customerId, assignmentId, true, "routed");'
     );
-    expect(INGEST).toContain('delivery: "routed" | "placed" = "placed"');
+    expect(INGEST).toContain('delivery: "routed" | "placed" | "topup" = "placed"');
     expect(INGEST).toContain('routed: delivery === "routed",');
   });
 
   it("recordBriefMatch stores progress only for a routed delivery", () => {
     const routing = flat("src/lib/leadBrief/routing.ts");
     expect(routing).toContain("progress: opts.routed ? deliveryProgress(customer) : null,");
-    expect(routing).toContain("opts: { routed: boolean } = { routed: false }");
+    expect(routing).toContain("opts: { routed: boolean; topup?: boolean } = { routed: false }");
+  });
+
+  it("only the release's top-up pass calls a delivery a top-up (batch 04 Phase 4)", () => {
+    const topup = walk("src")
+      .filter((p) => read(p).includes('true, "topup")'))
+      .map((p) => p.replace(/\\/g, "/"))
+      .sort();
+    expect(topup).toEqual(["src/lib/leadBrief/briefRelease.ts"]);
+    expect(INGEST).toContain('topup: delivery === "topup",');
+    expect(flat("src/lib/leadBrief/routing.ts")).toContain("topup: opts.topup === true,");
   });
 
   it("the notification, the email and the text all take the stored match", () => {

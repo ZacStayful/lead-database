@@ -53,6 +53,8 @@ export interface LabelReasons {
   priorities: LabelPriority[];
   progress?: LabelProgress;
   competition?: LabelTier;
+  /** Batch 04 Phase 4: sent on a top-up credit. */
+  topup?: true;
 }
 
 const LABEL_KEYS: readonly LabelKey[] = ["top_match", "strong_match", "first_pick", "nearby_opportunity"];
@@ -208,6 +210,7 @@ export function parseMatchReasons(raw: unknown): LabelReasons | null {
   if (typeof r.competition === "string" && (TIERS as readonly string[]).includes(r.competition)) {
     out.competition = r.competition as LabelTier;
   }
+  if (r.topup === true) out.topup = true;
   return out;
 }
 
@@ -322,7 +325,15 @@ function firstPickReason(reasons: LabelReasons): string {
   return `This property is in one of your first-pick areas${near}${quiet}, which puts you in a strong position to sign this landlord.`;
 }
 
+/**
+ * Batch 04 locked decision 6, word for word. ⚠️ THE ONE PLACE label or reason
+ * copy may say "top-up" (C3): A9 bans the word everywhere else, and both
+ * banned-word scans exempt this exact string and nothing more.
+ */
+export const TOPUP_REASON = "From just outside your area, as part of your top-up.";
+
 function nearbyReason(reasons: LabelReasons): string {
+  if (reasons.topup) return TOPUP_REASON;
   const sent = progressSentence(reasons.progress);
   switch (reasons.area) {
     case "service":
