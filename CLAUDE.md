@@ -91,7 +91,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/batch-reviews` | `40 9 * * *` | The monthly lead-batch review (§73): the shortfall email on reset day, the review email 7 days after a billing month ends, one reminder 3 days later. Reads the snapshot `reset_monthly_counts` captures. Switch `batch_reviews_enabled` on `/admin/allocation`; ships off |
 | `/api/cron/activate-lead-briefs` | `20 0 * * *` | Lead Brief: make each area change saved in the "Your brief" editor the customer's active brief once their renewal has come, after the 00:05 reset (0164). A change saved for a different plan than the customer is now on is left for them to review, not applied. Not tied to `lead_brief_enabled` |
 | `/api/cron/post-call-offer-reminders` | `*/15 * * * *` | The 12h / 4h / 1h email and text before a `FOUNDING10-` code expires. Registered again by batch 02 Phase 5 (it had been removed in `173a746` under Hobby's daily-cron cap). A funnel-issued code's links go back through the funnel's own checkout |
-| `/api/cron/funnel-discounts` | `*/15 * * * *` | Batch 02 Phase 5: somebody who previewed in the funnel and has not paid an hour later gets the 24-hour `FOUNDING10-` code, one per person across both routes. Runs only while `funnel_enabled` is on |
+| `/api/cron/funnel-discounts` | `*/15 * * * *` | Batch 02 Phase 5: somebody who previewed in the funnel and has not paid an hour later gets the 24-hour `FOUNDING10-` code, one per person across both routes. Batch 03 Phase 2: writes the funnel's Monday statuses ("Funnel started", "Funnel finished, not paid") first, before the discount pass (§76.5). Runs only while `funnel_enabled` is on |
 
 ⚠️ **THE HOBBY WARNING THAT USED TO BE HERE IS OUT OF DATE. The team is on
 Pro.** `GET /v2/teams` returns `plan: "pro"` for `zacs-projects-bcdb6016`
@@ -19944,6 +19944,12 @@ the admin offer route and used by both:
 The code is linked to the session only while it is still unpaid and unlinked,
 so a session gets one code ever.
 
+⚠️ **The pass hands its own clock to `issuePostCallOffer`**, so "is the
+existing code still live" is judged at the same moment as "is this session
+due". It used to read the real clock there, which made no difference in
+production but turned `discount.test.ts`'s one-code-per-person case red the
+moment the real clock passed the fixture's expiry (10 Oct, PR #157).
+
 The code reaches them through `post-call-offer-reminders` (12h, 4h and 1h
 before it expires), registered again in `vercel.json` by Phase 5. The reminder
 names the funnel rather than "our web meeting" for a funnel code. It is also
@@ -20149,3 +20155,121 @@ form would make no difference). Checked there rather than assumed:
 in an unattended session), and the call times out after 60 seconds having run
 nothing. A probe block that relies on the closing `raise` to roll back needs
 neither, so leave them out.
+
+### 76.5 — Phase 2: three Monday writes, and where each runs
+
+| Write | Cell | Runs in | When |
+|---|---|---|---|
+| started | Status → "Funnel started" | `/api/cron/funnel-discounts` | the first answer is saved (`first_answered_at`), within the last week |
+| finished | Status → "Funnel finished, not paid" | the same cron | a session at `previewed` or `checkout_started`, unpaid, quiet between an hour and a week |
+| sign-up | Sign-up source → "Call" / "Funnel" | the Stripe webhook, `invoice.paid` Management | a first paid invoice (`subscription_create`) |
+
+`src/lib/funnel/mondayFunnel.ts` holds the rules (pure) and
+`src/lib/funnel/mondayFunnelSync.ts` the reads and writes. Nothing in either
+throws: the passes run beside the discount pass, and the sign-up write runs in
+the webhook, whose outer catch deletes its `stripe_events` claim (§23.6).
+
+⚠️ **"started" is written by the cron, NOT the answers route as the Phase 0
+plan said.** The funnel page waits on every answer save (`FunnelFlow`'s
+`saveThen`), and a status write is two Monday round trips with an 8-second
+timeout each, so writing it in the save would hold the visitor's first answer
+up for as long as Monday takes. In the cron the label lands within 15 minutes,
+well inside the 3-hour chase (Part B step 3), and a failed write is retried.
+A guard pins the answers route importing nothing from Monday.
+
+⚠️ **The passes run BEFORE the discount pass and before the coupon check**
+(E3). Both passes and the discount select on `funnel_sessions.updated_at`, and
+linking a code touches it (0165's trigger), so the other order would push
+"finished" back an hour. They need no coupon, so a missing one does not stop
+the board updating. A failed Monday run fails the cron run (500).
+
+### 76.6 — Written by id, guarded by text (E2, E10)
+
+The status is written as `{ index: <label id> }`, the id read from
+`MONDAY_STATUS_FUNNEL_STARTED` / `MONDAY_STATUS_FUNNEL_FINISHED`. ⚠️ **`index`
+is the label's id, not its display position**, checked read-only on 9 Oct:
+the item on "Cancelling" stores `{"index":19}` (id 19, position 13) and the one
+on "Wants to pay card declined" stores `{"index":3}` (id 3, position 6). A
+missing or non-numeric env var is `not_configured`, never a fallback to text.
+
+The guard reads the cell's TEXT first (`mayWriteFunnelLabel`, built on
+`mayWriteChaseLabel`): an empty cell, "New Enquiries", "Chasing to book" or
+"Chased no booking", and for "finished" also "Funnel started" (E2). It is an
+allow-list, so it refuses every protected status the batch doc names, and any
+label added to the board later, without naming them. "started" never walks a
+finished session back. ⚠️ **So `ENQUIRY_FUNNEL_STATUS`'s two strings must match
+the board exactly**: a mismatch makes "finished" refuse an item it should move.
+
+Sign-up source is a Status column with exactly "Call" and "Funnel", written by
+TEXT with `create_labels_if_missing: false`; only its id comes from env
+(`MONDAY_SIGNUP_SOURCE_COLUMN_ID`). The writer reads the cell first and skips
+when it already says this.
+
+### 76.7 — Each status change at most once (E3)
+
+Claimed by INSERT into `funnel_monday_writes` before the Monday read, then
+settled `written`, `skipped` (protected, unchanged, item gone, another board)
+or `failed`. A written or skipped claim blocks for good. ⚠️ **A `failed` claim,
+or one a dead run left unsettled, is taken over after an hour** by a conditional
+update on its outcome and age, so of two runs reaching for it exactly one gets
+it. Settling is conditional on the claim being unsettled.
+
+Nothing is claimed when the write could not happen anyway: not configured, or
+a session with no `monday_item_id`. Those are picked up once configured, or once
+a later n8n call fills the item in.
+
+The passes scan newest first (500 at most), drop sessions whose claim blocks,
+and write at most 25 per transition per run inside a 25-second budget, leaving
+the discount pass its time. `?dryRun=true` from an admin lists who is due, and
+works before Part B step 1 is done.
+
+### 76.8 — Sign-up source (E4)
+
+`signupRoute()`: `call` when `customers.signup_source = 'call'` **or** the paid
+session's `entry_point = 'post_call'` (they sat a call and paid on the recap
+page), otherwise `funnel`. `signup_source` stays exactly as batch 02 defined it
+(§75.8). The webhook writes it AFTER `pushMondayStatus`, which is what resolves
+and stores the customer's board item (§23.5), and on a first paid invoice only:
+`subscription_create` fires again for a returning customer's new subscription,
+a renewal says nothing new. ⚠️ **An unreadable session refuses to write rather
+than guess**, so a blip never labels a recap payer "Funnel". Management only;
+the GR branch is untouched.
+
+### 76.9 — The enquiry sync ingests a funnel-labelled item (E7)
+
+`INGESTABLE_STATUS_LABELS` gains both funnel labels. The funnel can move an
+item before the one-minute sync claims it, and a label off that list is
+skipped **and claimed for good** (§57.4), so the enquirer would never get a
+customer row. The `already_linked` check still stops a duplicate. ⚠️ The list
+is literals, because `enquiryItem.ts` must import nothing but `leadQuality`
+(`syncGuards.test.ts`); `mondayFunnel.test.ts` holds them equal to
+`ENQUIRY_FUNNEL_STATUS`.
+
+### Phase 2 verification
+
+`npx tsc --noEmit` clean, lint at the four pre-existing warnings, **4,237 vitest
+cases green**, `npm run build` passes. No migration.
+
+`mondayFunnel.test.ts` drives the guard over every label on the live Status
+column (read 9 Oct) plus the two new ones; `mondayFunnelSync.test.ts` runs the
+real sync against in-memory Supabase and a stateful fake board;
+`mondayFunnelGuards.test.ts` reads the real cron, webhook and writer files.
+
+⚠️ **34 mutations, all caught. One survived the first pass**: an ordering
+guard compared `indexOf("try {")` against the call, and `indexOf` is -1 for a
+missing needle, which is "less than" anything, so the try/catch could be
+removed with the guard green. It now asserts presence first. That is the shape
+§50.9 has recorded before.
+
+⚠️ **Not yet verified on a test item, because Part B step 1 is not done.** As
+of 9 Oct the board has neither funnel label and no Sign-up source column.
+Once they exist and their ids are set in Vercel (then redeploy), on one item Zac
+picks: run the cron's dry run, flip the item through "New Enquiries" → started
+→ finished, set a protected label and confirm nothing moves it, and pay one test
+invoice to see Sign-up source land once.
+
+### Phase 2 deployment order
+
+No migration (0166's table is all it needs). The code is inert until the three
+env vars are set: every write is `not_configured`, and the cron only runs while
+`funnel_enabled` is on. Part B step 1 first, then the env vars, then redeploy.

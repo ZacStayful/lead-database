@@ -116,7 +116,9 @@ export async function issueFunnelDiscounts(
     const issued = await issuePostCallOffer(
       admin,
       { email: session.email, name: session.name, phone: session.phone, source: "funnel", createdBy: null },
-      { stripe: opts.stripe }
+      // The pass's own clock, so "is the existing code still live" is judged
+      // at the same moment as "is this session due".
+      { stripe: opts.stripe, now: () => now.getTime() }
     );
     if (!issued.ok) {
       console.error("[funnel-discount] could not issue a code", session.id, issued.reason, issued.message);

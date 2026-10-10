@@ -333,6 +333,37 @@ export function mayWriteChaseLabel(current: string | null | undefined): boolean 
 }
 
 /**
+ * The two Status labels the FUNNEL owns (batch 03 Phase 2, §76).
+ *
+ * ⚠️ WRITTEN BY ID, READ BY TEXT. The write uses the label id from env
+ * (MONDAY_STATUS_FUNNEL_STARTED / _FINISHED, E10), so a renamed label still
+ * lands. The guard and the ingest list (E7) read the cell's TEXT, so these
+ * strings must match the board exactly: a mismatch makes the "finished"
+ * write refuse an item it should move, and the enquiry sync skip an item it
+ * should ingest. Part B step 1 creates them with exactly these names.
+ *
+ * A separate const from ENQUIRY_STATUS for the reason ENQUIRY_CHASE_STATUS
+ * gives: a different vocabulary, written by a different job.
+ */
+export const ENQUIRY_FUNNEL_STATUS = {
+  started: "Funnel started",
+  finished: "Funnel finished, not paid",
+} as const;
+
+/**
+ * The Sign-up source column's two labels (batch 03, E10). Written by text with
+ * create_labels_if_missing: false, so a typo fails rather than adding a third
+ * label; only the column id comes from env (MONDAY_SIGNUP_SOURCE_COLUMN_ID).
+ */
+export const ENQUIRY_SIGNUP_SOURCE = {
+  call: "Call",
+  funnel: "Funnel",
+} as const;
+
+export type EnquirySignupSourceLabel =
+  (typeof ENQUIRY_SIGNUP_SOURCE)[keyof typeof ENQUIRY_SIGNUP_SOURCE];
+
+/**
  * The three values the "What kind of leads" cell may hold.
  *
  * ONE DEFINITION, FOUR WRITERS — the enquiry form, the enquiry route, the
@@ -841,6 +872,116 @@ export async function setEnquiryCancellation(params: {
           [ENQUIRY_CANCEL_REASON_COLUMN]: { label: params.label },
           [ENQUIRY_CANCEL_COMMENT_COLUMN]: { text: params.comment },
         }),
+      }
+    );
+    return { written: true };
+  } catch (err) {
+    return {
+      written: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Set the Status cell of one enquiries-board item by LABEL ID (batch 03, E10).
+ *
+ * Monday's `{ index: n }` names the label's stable id (its key in the column's
+ * labels), not its display position: "Chasing to book" is id 13 and has no
+ * position at all. The id comes from env and is validated by the caller
+ * (funnelStatusLabelId), so a missing or non-numeric value never reaches here.
+ *
+ * WRITES ONLY. The caller reads the cell first and applies the funnel guard,
+ * because the guard is the point (a human-set label outranks the funnel).
+ *
+ * NEVER THROWS — the setEnquiryStatus contract. create_labels_if_missing
+ * stays false, so an id that names no label fails loudly rather than adding one.
+ */
+export async function setEnquiryStatusById(params: {
+  itemId: string;
+  labelId: number;
+}): Promise<MondayStatusWriteResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { written: false, skipped: "not_configured" };
+
+  try {
+    await mondayGraphql<{ change_multiple_column_values?: { id: string } }>(
+      token,
+      `mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+        change_multiple_column_values(
+          board_id: $boardId
+          item_id: $itemId
+          column_values: $values
+          create_labels_if_missing: false
+        ) { id }
+      }`,
+      {
+        boardId: enquiryBoardId(),
+        itemId: params.itemId,
+        values: JSON.stringify({ [ENQUIRY_STATUS_COLUMN]: { index: params.labelId } }),
+      }
+    );
+    return { written: true };
+  } catch (err) {
+    return {
+      written: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Set the Sign-up source cell ("Call" / "Funnel") on one enquiries-board item
+ * (batch 03, E10). The column id comes from env and is validated by the caller.
+ *
+ * READS BEFORE IT WRITES, the setEnquiryCancellation pattern: `unchanged` when
+ * the cell already says this, and `not_status_board` when the item is not on
+ * the enquiries board (a stored link can point at the GR board, §23.7, and a
+ * write naming the wrong board would fail at Monday anyway).
+ *
+ * NEVER THROWS: the caller is the Stripe webhook (§23.6).
+ */
+export async function setEnquirySignupSource(params: {
+  itemId: string;
+  columnId: string;
+  label: EnquirySignupSourceLabel;
+}): Promise<MondayStatusWriteResult> {
+  const token = process.env.MONDAY_API_TOKEN;
+  if (!token) return { written: false, skipped: "not_configured" };
+
+  try {
+    const current = await mondayGraphql<{
+      items?: (MondayItem & { board?: { id: string } })[];
+    }>(
+      token,
+      `query ($ids: [ID!]) { items(ids: $ids) { id name board { id } column_values(ids: ${JSON.stringify(
+        [params.columnId]
+      )}) { id text } } }`,
+      { ids: [params.itemId] }
+    );
+    const item = current.items?.[0];
+    if (!item) return { written: false, error: `item ${params.itemId} not found` };
+    if ((item.board?.id ?? "") !== enquiryBoardId()) {
+      return { written: false, skipped: "not_status_board" };
+    }
+    if (textFor(item, params.columnId).trim() === params.label) {
+      return { written: false, skipped: "unchanged" };
+    }
+
+    await mondayGraphql<{ change_multiple_column_values?: { id: string } }>(
+      token,
+      `mutation ($boardId: ID!, $itemId: ID!, $values: JSON!) {
+        change_multiple_column_values(
+          board_id: $boardId
+          item_id: $itemId
+          column_values: $values
+          create_labels_if_missing: false
+        ) { id }
+      }`,
+      {
+        boardId: enquiryBoardId(),
+        itemId: params.itemId,
+        values: JSON.stringify({ [params.columnId]: { label: params.label } }),
       }
     );
     return { written: true };
