@@ -32,7 +32,7 @@ The figures come from production (`znlfwbnvhlacwzgfalcf`), Monday and n8n, all r
 | **D1** | **Scope (a): hold incomplete leads from brief customers only.** Existing customers keep receiving them as today. This keeps Lead Brief locked decision 1 ("Every customer active before this ships keeps their current filter, routing and UI exactly as today … Nothing they receive changes") with no change to the register. Phase 1 still sets `held_reason` on every Management lead and refreshes held leads from Monday. The routing predicate goes **only** in `get_brief_candidates_for_lead` (0163). |
 | **D2** | **District only is held**, until the full postcode is collected. **Hold labels:** District only, Area data thin, Check bedrooms, No location. **Sellable labels:** Full address, Postcode only. **Blank label:** check the three fields directly. |
 | **D3** | **The label must move to release a label-held lead.** The app reads the label and never recomputes it, as the batch says. A lead is released when its label is sellable **and** the three fields are complete. A sellable label over blank fields (F1) stays held until the refresh fills them. **This needs work outside the repo:** n8n must recompute the label when Address, Bedrooms or the report change (F5). Until then, a hand-fixed lead needs a hand relabel on Monday. |
-| **D4** | **Repair F1's nine blank leads in a separate PR now**, independent of batch 06 and not on this batch's branch. |
+| **D4** | **Repair F1's nine blank leads now**, independent of batch 06 and not on this batch's branch. **Done 10 Oct**, directly on production; see F1. |
 
 ---
 
@@ -135,7 +135,13 @@ Each is stored with an empty address, no postcode and no bedrooms. Monday now ho
 
 **The cost:** **four were sold**: `595a5ef1`, `fa0ef439`, `7626cbd4` and `a6610c12`, **8 assignments** in all. Those customers hold a lead with no address and no bedrooms on screen. Items labelled after 9 Oct 07:56 arrived complete.
 
-**D4:** repaired in a separate PR.
+**D4: repaired on production on 10 Oct**, after this report merged. Done the way CLAUDE.md §49.5 records for the phone backfill, not through a new route:
+- The address and bedrooms were read from each Monday item, and the postcode and area were worked out by the shipped `extractPostcode` / `postcodeArea`. Those are the four columns `withPostcode` writes at ingest (`ingest.ts:108`). `outcode` is generated, so it was not written.
+- The old rows (all blank) were saved first.
+- The update was guarded on the lead id **and** its Monday item, on a Management marketplace lead, and on the address, bedrooms and postcode still being blank. So a row changed in the meantime would have been skipped, not overwritten. All nine matched.
+- `leads` has no triggers. A fingerprint of every other lead, every assignment and every customer's balances and counters was identical before and after.
+- Effect: the four sold leads now show their address and bedrooms to the customers holding them. All nine now have an outcode and a postcode area, so filtered customers can receive the ones with free slots from the next sync or release.
+- The nine were exactly the "postcode and bedrooms" group in §1. On the same 288 leads, "any of the three" falls from 43 to 34 (11.8%). The other figures in this report are as measured before the repair.
 
 ### F2 — An "Area data thin" lead shows a figure anyway
 
