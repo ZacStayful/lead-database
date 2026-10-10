@@ -79,7 +79,12 @@ const FUNNEL_PAGES = [
   "src/components/funnel/FunnelSummaryPreview.tsx",
   "src/app/pay/[offerToken]/page.tsx",
 ].map((p) => readFileSync(p, "utf8"));
+// Batch 04 Phase 2: the brief customer's pause card and its copy.
+const BRIEF_PAUSE_SRC = readFileSync("src/lib/briefPause.ts", "utf8");
+const BRIEF_PAUSE_CARD = readFileSync("src/components/dashboard/BriefPauseCard.tsx", "utf8");
 const CUSTOMER_TEXT = [
+  stringLiterals(BRIEF_PAUSE_SRC),
+  jsxText(BRIEF_PAUSE_CARD),
   stringLiterals(COPY),
   stringLiterals(LABEL_COPY),
   stringLiterals(EDIT_COPY_SRC),
@@ -118,6 +123,8 @@ describe("brief copy — A9 words to avoid", () => {
     expect(CUSTOMER_TEXT).toContain("already set up");
     expect(CUSTOMER_TEXT).toContain("How many other operators get the same lead?");
     expect(CUSTOMER_TEXT).toContain("Send to my partner");
+    expect(CUSTOMER_TEXT).toContain("Pausing your leads");
+    expect(CUSTOMER_TEXT).toContain("Start receiving leads again now?");
   });
 });
 

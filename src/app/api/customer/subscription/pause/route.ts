@@ -11,6 +11,8 @@ import {
   isPauseMonths,
   isPauseReason,
 } from "@/lib/pauseOptions";
+import { canEditLeadBrief } from "@/lib/leadBrief/gate";
+import { BRIEF_PAUSE_CUSTOMER_COLUMNS, pauseBriefCustomer, type BriefPauseCustomer } from "@/lib/briefPauseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,6 +78,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Batch 04 Phase 2: a Lead Brief customer pauses to a return DATE, not 1/2/3
+  // months (C6), and their area is kept or released by its length. Their own
+  // path, below; everything after this block is the existing route, unchanged
+  // for every other customer.
+  if (body && typeof body === "object" && "returnDate" in body) {
+    return pauseBrief(user.id, body as Record<string, unknown>);
+  }
+
   const { months, reasons, note } = (body ?? {}) as {
     months?: unknown;
     reasons?: unknown;
@@ -126,7 +136,7 @@ export async function POST(req: NextRequest) {
   const { data: customer, error: fetchError } = await admin
     .from("customers")
     .select(
-      "id, email, contact_name, account_status, subscription_status, stripe_subscription_id, paused_at, pause_count"
+      "id, email, contact_name, account_status, subscription_status, stripe_subscription_id, paused_at, pause_count, gr_subscription_status, lead_brief_required, lead_brief_completed_at"
     )
     .eq("user_id", user.id)
     .maybeSingle();
@@ -150,6 +160,19 @@ export async function POST(req: NextRequest) {
       {
         error:
           "Pausing is only available on an active management subscription.",
+      },
+      { status: 409 }
+    );
+  }
+
+  // A Lead Brief customer pauses to a date (above). A 1/2/3-month pause would
+  // skip what their pause does to their area (batch 04, locked decisions 2
+  // and 3), so it is refused rather than quietly taken.
+  if (canEditLeadBrief(customer)) {
+    return NextResponse.json(
+      {
+        error: "Please choose the date you'd like your leads to restart.",
+        code: "return_date_required",
       },
       { status: 409 }
     );
@@ -293,5 +316,41 @@ export async function POST(req: NextRequest) {
     pause_resumes_at: resumesAt.toISOString(),
     pause_months: months,
     pause_reasons: cleanReasons,
+  });
+}
+
+/**
+ * A Lead Brief customer's pause (batch 04 Phase 2). Everything it does lives
+ * in pauseBriefCustomer (src/lib/briefPauseServer.ts); this is the identity
+ * check. Identity from the session, never the body (§8).
+ */
+async function pauseBrief(userId: string, body: Record<string, unknown>) {
+  const admin = createAdminClient();
+  const { data: customer, error } = await admin
+    .from("customers")
+    .select(BRIEF_PAUSE_CUSTOMER_COLUMNS)
+    .eq("user_id", userId)
+    .maybeSingle<BriefPauseCustomer>();
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+
+  const result = await pauseBriefCustomer(
+    admin,
+    customer,
+    { returnDate: body.returnDate, reasons: body.reasons, note: body.note },
+    { now: new Date(), source: "subscription/pause/brief" }
+  );
+  if (!result.ok) {
+    return NextResponse.json(
+      result.code ? { error: result.error, code: result.code } : { error: result.error },
+      { status: result.status }
+    );
+  }
+  return NextResponse.json({
+    ok: true,
+    paused_at: result.pausedAt,
+    pause_resumes_at: result.resumesAtIso,
+    return_date: result.returnDate,
+    pause_holds_area: result.holdArea,
   });
 }

@@ -125,10 +125,14 @@ interface BriefRow {
   service_outcodes: string[] | null;
   first_pick_outcodes: string[] | null;
   locked_until: string | null;
-  customer:
-    | { is_active: boolean | null; subscription_status: string | null }
-    | { is_active: boolean | null; subscription_status: string | null }[]
-    | null;
+  customer: BriefCustomerRow | BriefCustomerRow[] | null;
+}
+
+interface BriefCustomerRow {
+  is_active: boolean | null;
+  subscription_status: string | null;
+  paused_at?: string | null;
+  pause_holds_area?: boolean | null;
 }
 
 /**
@@ -139,6 +143,13 @@ interface BriefRow {
  * Their first-pick reach is their travel limit from their nearest area, or
  * nationwide for "anywhere" — the same rule this customer's own first picks
  * follow (areas.ts).
+ *
+ * ⚠️ A CUSTOMER ON A LONG PAUSE IS RELEASED (batch 04, locked decision 3):
+ * over 4 weeks, their capacity goes at once, so their area and first picks are
+ * free for new sign-ups. A SHORT pause still counts (locked decision 2): they
+ * come back to exactly the same area, so new sign-ups nearby are sized around
+ * them. `pause_holds_area` is false only for a long brief pause, and means
+ * something only while paused_at is set (0167).
  */
 export function toOtherBriefs(rows: BriefRow[]): OtherBrief[] {
   const out: OtherBrief[] = [];
@@ -146,6 +157,7 @@ export function toOtherBriefs(rows: BriefRow[]): OtherBrief[] {
     const c = Array.isArray(r.customer) ? r.customer[0] : r.customer;
     if (!c || c.is_active === false) continue;
     if (c.subscription_status !== "active" && c.subscription_status !== "past_due") continue;
+    if (c.paused_at && c.pause_holds_area === false) continue;
     const areas = [r.base_outcode];
     for (const oc of r.priority_outcodes ?? []) if (!areas.includes(oc)) areas.push(oc);
     out.push({
@@ -167,7 +179,7 @@ async function fetchOtherBriefs(
   let query = admin
     .from("customer_lead_briefs")
     .select(
-      "customer_id, base_outcode, priority_outcodes, travel_limit_miles, service_outcodes, first_pick_outcodes, locked_until, customer:customers!inner(is_active, subscription_status)"
+      "customer_id, base_outcode, priority_outcodes, travel_limit_miles, service_outcodes, first_pick_outcodes, locked_until, customer:customers!inner(is_active, subscription_status, paused_at, pause_holds_area)"
     )
     .eq("status", "active");
   if (excludeCustomerId) query = query.neq("customer_id", excludeCustomerId);

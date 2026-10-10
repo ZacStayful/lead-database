@@ -868,6 +868,9 @@ export async function POST(request: NextRequest) {
               // The pause-ending notice stamp belongs to the pause it was sent
               // for (0101); a cleared pause means a future pause gets its own.
               pause_ending_notice_sent_at: null,
+              // A Lead Brief pause's area flag belongs to that pause too
+              // (0167). Already null for everybody else.
+              pause_holds_area: null,
               billing_cycle_anchor: new Date().toISOString().slice(0, 10),
               leads_received_this_month: 0,
               updated_at: new Date().toISOString(),
