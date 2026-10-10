@@ -20156,6 +20156,13 @@ in an unattended session), and the call times out after 60 seconds having run
 nothing. A probe block that relies on the closing `raise` to roll back needs
 neither, so leave them out.
 
+⚠️ **`apply_migration` holds the same way, and a SEMICOLON IN A COMMENT can
+trigger it** (found applying 0169, batch 04 Phase 3). The tool appears to split
+the SQL on every `;`, comments included, so `set x = y, -- old date (0101); the
+new one…` leaves a fragment that reads as an `UPDATE` with no `WHERE`, and the
+call times out having applied nothing. Keep semicolons out of comments inside a
+function body that a migration will apply through the tool.
+
 ### 76.5 — Phase 2: three Monday writes, and where each runs
 
 | Write | Cell | Runs in | When |

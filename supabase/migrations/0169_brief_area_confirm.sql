@@ -228,7 +228,7 @@ begin
 
   update customers
      set pause_resumes_at = p_resumes_at,
-         -- The notice belongs to the old date (0101); the new one gets its own.
+         -- The notice belongs to the old date (0101). The new one gets its own.
          pause_ending_notice_sent_at = null,
          updated_at = now()
    where id = p_customer_id
@@ -236,7 +236,7 @@ begin
      and pause_holds_area is false
   returning id into v_customer;
   if v_customer is null then
-    -- Checked above under the lock; a concurrent resume would have to clear
+    -- Checked above under the lock. A concurrent resume would have to clear
     -- paused_at without the lock. Undo rather than leave the episode moved.
     raise exception 'extend_brief_pause: customer % is no longer on a long pause', p_customer_id;
   end if;
