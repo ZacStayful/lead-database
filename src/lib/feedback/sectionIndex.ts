@@ -84,6 +84,7 @@ export const CLAUDE_SECTIONS: ClaudeSection[] = [
   { n: 75, title: "Self-serve funnel and guarded checkout", migrations: "0165" },
   { n: 76, title: "Which route an enquirer came by", migrations: "0166" },
   { n: 77, title: "A confirmed brief's postcode can't be changed in the editor", migrations: "no migration" },
+  { n: 78, title: "Area changes, pauses and top-ups (brief customers)", migrations: "0167–0170" },
 ];
 
 /**
