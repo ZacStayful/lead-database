@@ -135,7 +135,11 @@ export const EDIT_COPY = {
   area: {
     title: "Your area",
     intro:
-      "Your postcode, how far you travel and anything a lead must have. Changes start at your next renewal.",
+      "How far you travel, any other areas you work and anything a lead must have. Changes start at your next renewal.",
+    // Batch 05, locked decision 1. Says how to change it, without promising
+    // the review flow batch 05 will build.
+    postcodeLocked:
+      "Your postcode is the centre of your area, so it can't be changed here. To change it, get in touch through Support.",
     edit: "Change your area",
     preview: "See your new area",
     save: "Save this change",
@@ -156,6 +160,8 @@ export const EDIT_COPY = {
     nothingChanged: "That's the same as your current brief, so there's nothing to save.",
     radiusChanged:
       "Your new area has changed since you looked at it. Please check it again before saving.",
+    postcodeLocked:
+      "Your postcode can't be changed here. To change it, get in touch through Support.",
     unavailable: "We can't work out your area right now. Please try again in a minute.",
     failed: "We couldn't save that. Please try again.",
     level: "That level isn't available. Please choose another.",
