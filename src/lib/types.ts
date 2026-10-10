@@ -78,6 +78,13 @@ export interface Customer {
   // Per-episode detail (reasons, note, outcome) lives in subscription_pauses.
   paused_at: string | null;
   pause_resumes_at: string | null;
+  /**
+   * Lead Brief customers only (0167, batch 04): whether the CURRENT pause keeps
+   * their area (28 days or fewer) or releases it (longer). Null for any other
+   * pause. ⚠️ Meaningful only while paused_at is set — no CHECK ties the two,
+   * so read it as `paused_at && pause_holds_area === false` for a long pause.
+   */
+  pause_holds_area: boolean | null;
   pause_count: number;
   /** When the "pause ends soon, billing resumes" email went for the CURRENT
    *  pause (0101). Nulled when a new pause starts and when a pause clears. */
@@ -455,7 +462,16 @@ export interface PauseEpisode {
   customer_id: string;
   paused_at: string;
   resumes_at: string;
-  months: number;
+  /** 1, 2 or 3 from the pause card. Null only for a Lead Brief customer's
+   *  date-based pause (0167, batch 04 C6), which carries hold_area instead. */
+  months: number | null;
+  /** Lead Brief pauses only (0167): true when 28 days or fewer by London
+   *  dates (the area is kept), false when longer. Null for every other pause. */
+  hold_area: boolean | null;
+  /** When a long brief pause's area was recalculated, 7 days before return. */
+  recalibrated_at: string | null;
+  /** The pending_confirmation brief version that recalculation wrote. */
+  pending_brief_id: string | null;
   /** One or more values from PAUSE_REASONS, or the backfill sentinel. */
   reasons: string[];
   note: string | null;

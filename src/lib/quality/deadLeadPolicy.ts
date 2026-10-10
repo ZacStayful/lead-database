@@ -192,6 +192,12 @@ export interface AllowanceFields {
   gr_lapsed_at?: string | null;
   /** A paused management subscription puts management swaps on hold. */
   paused_at?: string | null;
+  /**
+   * A Lead Brief customer (0162). While paused they bank no management
+   * replacements (0167, batch 04 C2). ⚠️ An explicit-column select feeding the
+   * grant must name it, or a paused brief customer reads as still accruing.
+   */
+  lead_brief_required?: boolean | null;
 }
 
 export type ClaimCustomer = AllowanceFields & ProductCustomerFields;
@@ -252,9 +258,15 @@ export function committedAllocation(customer: ClaimCustomer): number {
   // the lapse writes account_status and leaves subscription_status past_due —
   // so the gate is applied here, where the grant is sized, and mirrored in
   // replacement_monthly_grant() in SQL.
+  //
+  // ⚠️ C2 (0167, batch 04): a PAUSED BRIEF customer banks nothing on the
+  // management side ("owed nothing for the paused period"). Every other paused
+  // customer still accrues (§61). Management only: GR keeps flowing to a
+  // paused management customer (invariant 6), so their GR share still accrues.
   if (
     holdsProduct(customer, "management" as LeadType) &&
-    !customer.lapsed_at
+    !customer.lapsed_at &&
+    !(customer.lead_brief_required === true && customer.paused_at)
   ) {
     total += Math.max(0, Math.trunc(customer.monthly_allocation ?? 0));
   }
@@ -274,7 +286,9 @@ export function committedAllocation(customer: ClaimCustomer): number {
  * the two must move together: SQL grants it, this one prints "N more are added
  * on …". Both products summed and rounded ONCE (§53.4's trap: round(1.0) +
  * round(1.0) on two 10-lead plans at 0.05 would be 2 against a true 1). A
- * paused customer still accrues, by decision; a lapsed one does not.
+ * paused customer still accrues, by decision, EXCEPT a Lead Brief customer,
+ * whose management share stops while paused (0167, batch 04 C2); a lapsed one
+ * does not accrue.
  *
  * Rendered as a number only — never as the percentage behind it.
  */

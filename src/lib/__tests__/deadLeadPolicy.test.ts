@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CLOSE_REASONS } from "@/lib/closeReasons";
@@ -131,6 +131,45 @@ describe("monthlyReplacementGrant", () => {
     expect(
       monthlyReplacementGrant({ ...customer, paused_at: "2026-09-13T00:00:00Z" }),
     ).toBe(2);
+    // An existing customer carries lead_brief_required = false (0162): §61's
+    // rule is unchanged for them.
+    expect(
+      monthlyReplacementGrant({
+        ...customer,
+        lead_brief_required: false,
+        paused_at: "2026-09-13T00:00:00Z",
+      }),
+    ).toBe(2);
+  });
+
+  // ⚠️ C2 (0167, batch 04 locked decision 1): a paused BRIEF customer is owed
+  // nothing for the paused period, replacements included.
+  it("gives a paused brief customer nothing on the management side", () => {
+    expect(
+      monthlyReplacementGrant({
+        ...customer,
+        lead_brief_required: true,
+        paused_at: "2026-09-13T00:00:00Z",
+      }),
+    ).toBe(0);
+  });
+
+  it("still grants a brief customer who is not paused", () => {
+    expect(
+      monthlyReplacementGrant({ ...customer, lead_brief_required: true, paused_at: null }),
+    ).toBe(2);
+  });
+
+  // A pause is a management state (§21): GR keeps flowing, and accruing.
+  it("keeps a paused brief customer's GR share", () => {
+    expect(
+      monthlyReplacementGrant({
+        ...customer,
+        gr_subscription_status: "active",
+        lead_brief_required: true,
+        paused_at: "2026-09-13T00:00:00Z",
+      }),
+    ).toBe(1);
   });
 
   // §59 writes account_status = cancelled and leaves subscription_status
@@ -533,6 +572,8 @@ describe("the balance reaches every reader (0153)", () => {
       .replace(/^\s*\/\/.*$/gm, "");
     expect(src).toContain("replacement_balance");
     expect(src).toContain("lapsed_at, gr_lapsed_at");
+    // C2 (0167): without it a paused brief customer reads as still accruing.
+    expect(src).toContain("lead_brief_required");
   });
 
   /**
@@ -540,11 +581,15 @@ describe("the balance reaches every reader (0153)", () => {
    * (§20, §26.7). The SQL credits it; the TypeScript prints "N more are added
    * on …". These pin the SQL body to the decisions the TypeScript encodes:
    * lapsed customers excluded on each product's own stamp, paused customers
-   * NOT excluded, both products summed under one round().
+   * NOT excluded unless they are brief customers (0167, C2), and then on the
+   * management term only, both products summed under one round().
+   *
+   * ⚠️ READ FROM THE LATEST MIGRATION THAT DEFINES IT. 0167 replaced 0153's
+   * body; a guard still reading 0153 would pass whatever production runs.
    */
   it("the SQL grant carries the same gates as monthlyReplacementGrant", () => {
     const sql = readFileSync(
-      resolve(__dirname, "..", "..", "..", "supabase/migrations/0153_replacement_balance.sql"),
+      resolve(__dirname, "..", "..", "..", "supabase/migrations/0167_brief_pause_data.sql"),
       "utf8",
     ).replace(/^\s*--.*$/gm, "");
     const start = sql.indexOf("create or replace function public.replacement_monthly_grant(");
@@ -552,9 +597,30 @@ describe("the balance reaches every reader (0153)", () => {
     const body = sql.slice(start, sql.indexOf("$$;", start));
     expect(body).toContain("and c.lapsed_at is null");
     expect(body).toContain("and c.gr_lapsed_at is null");
-    expect(body).not.toContain("paused_at");
     expect(body).toContain("coalesce(c.quality_allowance_pct, 0.10)");
     expect(body.match(/round\(/g)).toHaveLength(1);
+
+    // The pause gate is the brief one, once, and inside the MANAGEMENT term.
+    const briefGate =
+      "and not (coalesce(c.lead_brief_required, false) and c.paused_at is not null)";
+    expect(body.split(briefGate)).toHaveLength(2);
+    expect(body.match(/paused_at/g)).toHaveLength(1);
+    const grTerm = body.slice(body.indexOf("c.gr_subscription_status"));
+    expect(grTerm).not.toContain("paused_at");
+    expect(body.indexOf(briefGate)).toBeLessThan(body.indexOf("c.gr_subscription_status"));
+  });
+
+  it("no later migration redefines the grant behind 0167's back", () => {
+    const dir = resolve(__dirname, "..", "..", "..", "supabase/migrations");
+    const definers = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort()
+      .filter((f) =>
+        readFileSync(resolve(dir, f), "utf8").includes(
+          "create or replace function public.replacement_monthly_grant(",
+        ),
+      );
+    expect(definers.at(-1)).toBe("0167_brief_pause_data.sql");
   });
 
   it("the top-up RPC banks the share in both product branches", () => {

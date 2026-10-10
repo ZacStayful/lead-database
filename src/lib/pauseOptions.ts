@@ -67,6 +67,41 @@ export function pauseMonthsLabel(months: number): string {
   return months === 1 ? "1 month" : `${months} months`;
 }
 
+/** A timestamp's calendar date in London, as YYYY-MM-DD. */
+function londonYmd(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * How long a pause episode runs, for the admin pause detail.
+ *
+ * ⚠️ `months` IS NULL FOR A LEAD BRIEF CUSTOMER'S PAUSE (0167, batch 04 C6):
+ * that pause is chosen as 4 weeks or a return date, not as 1/2/3 months, so
+ * its length is shown in days, counted in London dates — the same count the
+ * 28-day rule in subscription_pauses_hold_area_length uses.
+ */
+export function pauseEpisodeLengthLabel(episode: {
+  months: number | null;
+  paused_at: string;
+  resumes_at: string;
+}): string {
+  if (typeof episode.months === "number") return pauseMonthsLabel(episode.months);
+  const from = londonYmd(episode.paused_at);
+  const to = londonYmd(episode.resumes_at);
+  if (!from || !to) return "Paused";
+  const days = Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000
+  );
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
 /** Spelt-out duration for email prose ("paused for two months"). */
 export function pauseMonthsWords(months: number): string {
   return months === 1 ? "one month" : months === 2 ? "two months" : "three months";
