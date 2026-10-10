@@ -6,6 +6,8 @@ import {
   resumeRefusalReason,
   type ResumableCustomer,
 } from "@/lib/resumePause";
+import { BRIEF_PAUSE_COPY, onLongBriefPause } from "@/lib/briefPause";
+import { settleLongPauseReturn } from "@/lib/briefPauseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest) {
   const { data: customer } = await admin
     .from("customers")
     .select(
-      "id, email, contact_name, stripe_subscription_id, paused_at, cancel_at_period_end"
+      "id, email, contact_name, phone, stripe_subscription_id, paused_at, cancel_at_period_end, pause_holds_area, monthly_allocation, pending_monthly_allocation"
     )
     .eq("user_id", user.id)
     .maybeSingle();
@@ -61,6 +63,37 @@ export async function POST(req: NextRequest) {
   const refusal = resumeRefusalReason(customer);
   if (refusal) {
     return NextResponse.json({ error: refusal }, { status: 409 });
+  }
+
+  // Batch 04 Phase 2: a Lead Brief customer ending a LONG pause early. Their
+  // area was released when they paused (locked decision 3), so it is
+  // recalculated first, exactly as on their return date. A changed area waits
+  // for them to confirm it (locked decision 4), and they stay paused until
+  // they do: no leads, and no billing.
+  if (onLongBriefPause(customer)) {
+    const settled = await settleLongPauseReturn(admin, customer, {
+      now: new Date(),
+      source: SOURCE,
+    });
+    if (settled.action === "hold") {
+      return NextResponse.json(
+        { error: BRIEF_PAUSE_COPY.areaToReview, code: "area_review_required" },
+        { status: 409 }
+      );
+    }
+    if (settled.action === "retry") {
+      console.error(`[${SOURCE}] long brief pause could not be settled`, {
+        customer: customer.id,
+        error: settled.error,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "We couldn't check your coverage area just now. Nothing has changed — please try again in a moment.",
+        },
+        { status: 503 }
+      );
+    }
   }
 
   const result = await resumePausedCustomer(

@@ -1038,6 +1038,88 @@ export async function sendPauseEndingSoonEmail(params: {
   }
 }
 
+/**
+ * Confirmation that a Lead Brief customer's leads are paused (batch 04
+ * Phase 2). Their pause is a return DATE, not 1/2/3 months, and what happens to
+ * their area depends on its length (locked decisions 2 and 3), so the existing
+ * month-based confirmation does not fit.
+ *
+ * `restartDate` is a YYYY-MM-DD London date: the day the pause ends.
+ */
+export async function sendBriefPauseConfirmationEmail(params: {
+  to: string;
+  contactName: string;
+  restartDate: string;
+  holdArea: boolean;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, restartDate, holdArea } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const date = ukLongDate(`${restartDate}T12:00:00Z`);
+  const subject = "Your Stayful leads are paused";
+  const areaLine = holdArea
+    ? "When you come back, nothing has changed: the same area, the same brief and the same quality of matches."
+    : "Your brief, your quality of matching and every credit you're owed stay exactly the same. Your coverage area is recalculated from live supply before you return. If it changes, we'll tell you first and you'll choose what happens next.";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Your leads are paused, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">While you're paused, no leads are sent and you're not charged. Your pause ends on <strong style="color:#1a1a1a">${esc(date)}</strong>.</p>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">${esc(areaLine)}</p>
+    <p style="margin:0 0 8px;font-size:14px"><strong style="color:#1a1a1a">Your database stays open the whole time</strong></p>
+    <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.7;color:#6b706a">
+      ${keepCrmBulletsHtml(esc)}
+    </ul>
+    ${button(`${APP_URL}/dashboard/settings`, "View settings")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
+/**
+ * A long pause's recalculated area differs from the one the customer had
+ * (batch 04 Phase 2, locked decision 3). The subject and first line are the
+ * batch's own wording. The customer reviews it on the dashboard, and their
+ * leads restart once they confirm (locked decision 4).
+ *
+ * `restartDate` is a YYYY-MM-DD London date.
+ */
+export async function sendBriefAreaUpdatedEmail(params: {
+  to: string;
+  contactName: string;
+  restartDate: string;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, restartDate } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const date = ukLongDate(`${restartDate}T12:00:00Z`);
+  const subject = "Your area has been updated";
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">Your area has been updated, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">Your area has been updated. Review it before your leads restart on <strong style="color:#1a1a1a">${esc(date)}</strong>.</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">We've recalculated your coverage area from live supply, so your leads match your brief as closely as possible. Your brief, your priorities and every credit you're owed stay the same.</p>
+    ${button(`${APP_URL}/dashboard`, "Review your area")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Join phrases as "a", "a and b", or "a, b and c". */
 function joinWithAnd(parts: string[]): string {
   if (parts.length <= 1) return parts[0] ?? "";

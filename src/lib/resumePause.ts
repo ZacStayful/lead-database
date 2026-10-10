@@ -135,6 +135,9 @@ export async function resumePausedCustomer(
       pause_resumes_at: null,
       // The notice stamp belongs to the pause it was sent for (0101).
       pause_ending_notice_sent_at: null,
+      // A Lead Brief pause's area flag belongs to that pause too (0167). Null
+      // for everybody else already, so this changes nothing for them.
+      pause_holds_area: null,
       billing_cycle_anchor: new Date().toISOString().slice(0, 10),
       leads_received_this_month: 0,
       updated_at: new Date().toISOString(),

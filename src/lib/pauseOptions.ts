@@ -108,3 +108,31 @@ export function pauseMonthsWords(months: number): string {
 }
 
 export const PAUSE_NOTE_MAX_LENGTH = 500;
+
+export type PauseReasonsCheck =
+  | { ok: true; reasons: PauseReason[]; note: string | null }
+  | { ok: false; error: string };
+
+/**
+ * The reasons and note a pause carries, judged with the same rules and the
+ * same words as the existing pause route. Used by a Lead Brief customer's
+ * pause (batch 04 Phase 2); the existing route keeps its own inline copy of
+ * these checks, untouched.
+ */
+export function checkPauseReasons(reasons: unknown, note: unknown): PauseReasonsCheck {
+  if (!Array.isArray(reasons) || reasons.length === 0) {
+    return { ok: false, error: "Please tell us why you are pausing — select at least one reason." };
+  }
+  if (!reasons.every(isPauseReason)) {
+    return { ok: false, error: `reason must be one of: ${Object.keys(PAUSE_REASONS).join(", ")}` };
+  }
+  const clean = Array.from(new Set(reasons as PauseReason[]));
+  const trimmed = typeof note === "string" && note.trim().length > 0 ? note.trim() : null;
+  if (trimmed && trimmed.length > PAUSE_NOTE_MAX_LENGTH) {
+    return { ok: false, error: `Please keep your note under ${PAUSE_NOTE_MAX_LENGTH} characters.` };
+  }
+  if (clean.includes("other") && !trimmed) {
+    return { ok: false, error: "Please tell us a little more about why you are pausing." };
+  }
+  return { ok: true, reasons: clean, note: trimmed };
+}

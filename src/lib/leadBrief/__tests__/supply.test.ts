@@ -170,6 +170,32 @@ describe("toOtherBriefs", () => {
     expect(toOtherBriefs([brief({ customer: { is_active: true, subscription_status: "past_due" } })])).toHaveLength(1);
   });
 
+  it("⚠️ batch 04: a LONG pause releases the customer's ground, a short one keeps it", () => {
+    const paused = (pause_holds_area: boolean | null) =>
+      brief({
+        customer: {
+          is_active: true,
+          subscription_status: "active",
+          paused_at: "2026-10-01T09:00:00Z",
+          pause_holds_area,
+        },
+      });
+    // Locked decision 3: over 4 weeks, their capacity is released at once.
+    expect(toOtherBriefs([paused(false)])).toEqual([]);
+    // Locked decision 2: up to 4 weeks, they still count.
+    expect(toOtherBriefs([paused(true)])).toHaveLength(1);
+    // Any other pause (no area flag) is left exactly as before.
+    expect(toOtherBriefs([paused(null)])).toHaveLength(1);
+    // The flag means nothing once the pause has ended (0167).
+    expect(
+      toOtherBriefs([
+        brief({
+          customer: { is_active: true, subscription_status: "active", paused_at: null, pause_holds_area: false },
+        }),
+      ])
+    ).toHaveLength(1);
+  });
+
   it("accepts the embedded customer as an array and null lists as empty", () => {
     const out = toOtherBriefs([
       brief({ customer: [{ is_active: true, subscription_status: "active" }], service_outcodes: null, first_pick_outcodes: null }),
@@ -235,6 +261,10 @@ describe("loadBriefSupply", () => {
     expect(leadsCall.select).toContain("postcode");
     expect(leadsCall.select).toContain("lead_quality_status");
     expect(calls.find((c) => c.table === "customer_lead_briefs")!.filters).toContainEqual(["eq", "status", "active"]);
+    // Batch 04: the pause columns toOtherBriefs releases a long pause on.
+    expect(calls.find((c) => c.table === "customer_lead_briefs")!.select).toMatch(
+      /customers!inner\([^)]*\bpaused_at\b[^)]*\bpause_holds_area\b[^)]*\)/
+    );
     expect(calls.find((c) => c.table === "area_competition")!.filters).toContainEqual(["eq", "source", "admin"]);
   });
 

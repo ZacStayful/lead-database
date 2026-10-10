@@ -22,6 +22,8 @@ import {
   type PauseReason,
 } from "@/lib/pauseOptions";
 import { KEEP_CRM_POINTS, KEEP_CRM_SUMMARY } from "@/lib/retentionCopy";
+import { canEditLeadBrief } from "@/lib/leadBrief/gate";
+import { BriefPauseCard } from "@/components/dashboard/BriefPauseCard";
 
 /** Missing / unset keys default to true — an opt-out is only an explicit false. */
 function prefOn(
@@ -105,6 +107,11 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     customer.pause_resumes_at
   );
   const [showPauseForm, setShowPauseForm] = useState(false);
+  // Batch 04 Phase 2: whether a Lead Brief customer's current pause keeps
+  // their area. Null for everyone else.
+  const [holdsAreaNow, setHoldsAreaNow] = useState<boolean | null>(
+    customer.pause_holds_area
+  );
   // Defaults to 3, which is what every pause was before the choice existed.
   const [selectedMonths, setSelectedMonths] = useState<PauseMonths>(3);
   const [selectedReasons, setSelectedReasons] = useState<Set<PauseReason>>(
@@ -263,6 +270,9 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
     customer.account_status === "active" &&
     customer.subscription_status === "active";
   const isPaused = Boolean(pausedAt);
+  // A Lead Brief customer pauses to a date, and their area is kept or
+  // recalculated by its length (batch 04 Phase 2): their own card, below.
+  const briefPause = canEditLeadBrief(customer);
 
   // One cancel section per held product. Deliberately NOT gated on
   // managementActive or the pause state — a paused customer deciding not to
@@ -397,7 +407,33 @@ export function SettingsPanel({ customer }: { customer: Customer }) {
         </CardContent>
       </Card>
 
-      {managementActive && (
+      {managementActive && briefPause && (
+        <BriefPauseCard
+          pausedAt={pausedAt}
+          pauseResumesAt={pauseResumesAt}
+          holdsAreaNow={holdsAreaNow}
+          canSwitchTo10={
+            (customer.monthly_allocation ?? 0) > 10 &&
+            customer.pending_monthly_allocation === null
+          }
+          switchPending={customer.pending_monthly_allocation === 10}
+          cancelPending={Boolean(customer.cancel_at_period_end)}
+          open={showPauseForm}
+          onOpenChange={setShowPauseForm}
+          onPaused={({ pausedAt: at, resumesAt, holdArea }) => {
+            setPausedAt(at);
+            setPauseResumesAt(resumesAt);
+            setHoldsAreaNow(holdArea);
+          }}
+          onResumed={() => {
+            setPausedAt(null);
+            setPauseResumesAt(null);
+            setHoldsAreaNow(null);
+          }}
+        />
+      )}
+
+      {managementActive && !briefPause && (
         <Card id="pause-subscription-card">
           <CardHeader>
             <CardTitle>Pause subscription</CardTitle>
