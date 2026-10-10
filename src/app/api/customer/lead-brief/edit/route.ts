@@ -6,6 +6,7 @@ import { parseBriefBody } from "@/lib/leadBrief/briefRequest";
 import { briefRowFromPreview } from "@/lib/leadBrief/briefRow";
 import { computeBriefForCustomer } from "@/lib/leadBrief/briefServer";
 import {
+  basePostcodeChanged,
   buildEditedPriorities,
   carryEditToScheduled,
   keptForRecompute,
@@ -42,7 +43,9 @@ export const maxDuration = 60;
  *     supply, never trusted from the browser; 409 `radius_changed` with a fresh
  *     preview if the radius moved since it was shown (A8's rule); 400
  *     `nothing_changed` when it is the current brief. Saved as the ONE
- *     scheduled version, which starts at the next renewal.
+ *     scheduled version, which starts at the next renewal. The base postcode
+ *     is NOT one of the answers that can change: a different one is 409
+ *     `postcode_locked` (batch 05, locked decision 1).
  *
  * DELETE cancels the scheduled change. The current brief is untouched.
  *
@@ -139,6 +142,13 @@ export async function POST(req: NextRequest) {
   const normalised = normaliseBriefInput(input);
   if (!normalised.ok) {
     return NextResponse.json({ code: "invalid_input", issues: normalised.issues }, { status: 400 });
+  }
+  // Batch 05, locked decision 1: the base postcode can't change here.
+  if (basePostcodeChanged(active, normalised.brief)) {
+    return NextResponse.json(
+      { code: "postcode_locked", lockedPostcode: active.base_postcode },
+      { status: 409 }
+    );
   }
   if (sameAreaAnswers(active, normalised.brief)) {
     return NextResponse.json({ code: "nothing_changed" }, { status: 400 });

@@ -9,9 +9,10 @@ import { BRIEF_COPY } from "@/lib/leadBrief/briefCopy";
  * A8 Q1, "Where do you operate?". Shared by the questionnaire and the "Your
  * brief" editor (Phase 5), so the question reads the same in both. The caller
  * renders its own navigation. Every word is in briefCopy.ts, except
- * `postcodeLockedNote`, which the funnel passes in (batch 02): once a funnel
- * link has previewed a postcode it is locked, so the box is read-only and the
- * note says how to change it.
+ * `postcodeLockedNote`, which the caller passes in when the postcode is locked:
+ * the funnel once a link has previewed one (batch 02), and the editor always
+ * (batch 05, locked decision 1). The box is then read-only and the note says
+ * how to change it.
  */
 export function WhereStep({
   postcode,

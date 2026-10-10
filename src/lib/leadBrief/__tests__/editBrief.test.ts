@@ -4,6 +4,7 @@ import {
   LOCATION_LEVELS,
   OCCUPANCY_LEVELS,
   REVENUE_LEVELS,
+  basePostcodeChanged,
   buildEditedPriorities,
   carryEditToScheduled,
   keptForRecompute,
@@ -15,6 +16,7 @@ import {
   type StoredPriority,
 } from "@/lib/leadBrief/editBrief";
 import { briefRowFromPreview } from "@/lib/leadBrief/briefRow";
+import { normaliseBriefInput } from "@/lib/leadBrief/input";
 import { computeBriefPreview } from "@/lib/leadBrief/preview";
 import { leads, supply } from "./fixtures";
 
@@ -309,6 +311,34 @@ describe("keptForRecompute", () => {
     expect(row.priorities[0]).toEqual({ key: "occupancy", threshold: 60, chosen: true });
     // An engine-set level is never marked chosen.
     expect(row.priorities.slice(1).some((p) => "chosen" in p)).toBe(false);
+  });
+});
+
+describe("basePostcodeChanged (batch 05, locked decision 1)", () => {
+  // Both routes compare the normalised answer to the stored row, so drive it
+  // through normaliseBriefInput rather than hand-writing canonical strings.
+  function typed(basePostcode: string): string {
+    const r = normaliseBriefInput({ basePostcode, travelLimitMiles: 25 });
+    if (!r.ok) throw new Error(`fixture did not normalise: ${basePostcode}`);
+    return r.brief.basePostcode;
+  }
+  const row = { base_postcode: "YO10 5DD" };
+
+  it("the same postcode, however it is typed, is not a change", () => {
+    expect(basePostcodeChanged(row, { basePostcode: typed("YO10 5DD") })).toBe(false);
+    expect(basePostcodeChanged(row, { basePostcode: typed("yo105dd") })).toBe(false);
+    expect(basePostcodeChanged(row, { basePostcode: typed("  yo10   5dd ") })).toBe(false);
+  });
+
+  it("another postcode is a change, in the same outcode or another", () => {
+    expect(basePostcodeChanged(row, { basePostcode: typed("YO10 4AA") })).toBe(true);
+    expect(basePostcodeChanged(row, { basePostcode: typed("LS1 4AP") })).toBe(true);
+  });
+
+  it("is strict between an outcode and a full postcode in it", () => {
+    expect(basePostcodeChanged(row, { basePostcode: typed("YO10") })).toBe(true);
+    expect(basePostcodeChanged({ base_postcode: "YO10" }, { basePostcode: typed("YO10 5DD") })).toBe(true);
+    expect(basePostcodeChanged({ base_postcode: "YO10" }, { basePostcode: typed("yo10") })).toBe(false);
   });
 });
 

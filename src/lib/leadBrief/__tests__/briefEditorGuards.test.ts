@@ -130,6 +130,46 @@ describe("the edit route", () => {
   });
 });
 
+describe("the base postcode is locked (batch 05, locked decision 1)", () => {
+  it("save: a different postcode is 409 postcode_locked, before any compute or write", () => {
+    const lock = EDIT_ROUTE.indexOf("if (basePostcodeChanged(active, normalised.brief))");
+    expect(lock).toBeGreaterThan(-1);
+    const block = EDIT_ROUTE.slice(lock, lock + 200);
+    expect(block).toContain('code: "postcode_locked"');
+    expect(block).toContain("lockedPostcode: active.base_postcode");
+    expect(block).toContain("status: 409");
+    // After the answers are normalised (the comparison is canonical) ...
+    expect(lock).toBeGreaterThan(EDIT_ROUTE.indexOf("const normalised = normaliseBriefInput(input);"));
+    // ... and before "nothing changed", the compute and the save.
+    expect(lock).toBeLessThan(EDIT_ROUTE.indexOf("if (sameAreaAnswers(active, normalised.brief))"));
+    expect(lock).toBeLessThan(EDIT_ROUTE.indexOf("computeBriefForCustomer("));
+    expect(lock).toBeLessThan(EDIT_ROUTE.indexOf('admin.rpc("save_scheduled_lead_brief"'));
+  });
+
+  it("preview: a different postcode is refused too, before the compute", () => {
+    const lock = EDIT_PREVIEW.indexOf("basePostcodeChanged(versions.active, judged.brief)");
+    expect(lock).toBeGreaterThan(-1);
+    const block = EDIT_PREVIEW.slice(lock, lock + 220);
+    expect(block).toContain('code: "postcode_locked"');
+    expect(block).toContain("status: 409");
+    expect(lock).toBeGreaterThan(EDIT_PREVIEW.indexOf("const judged = normaliseBriefInput(input);"));
+    expect(lock).toBeLessThan(EDIT_PREVIEW.indexOf("computeBriefForCustomer("));
+    // The compute is handed the same input the lock judged.
+    expect(EDIT_PREVIEW).toContain("{ ...parsed, input },");
+  });
+
+  it("the editor shows the postcode read-only, with the note", () => {
+    expect(AREA).toContain("postcodeLockedNote={EDIT_COPY.area.postcodeLocked}");
+  });
+
+  it("the editor names a postcode_locked refusal, from the preview and the save, ahead of the generic 409", () => {
+    const named = Array.from(
+      AREA.matchAll(/if \(res\.status === 409 && data\.code === "postcode_locked"\) setError\(EDIT_COPY\.errors\.postcodeLocked\);\s*else if \(res\.status === 409\) setError\(EDIT_COPY\.errors\.conflict\);/g)
+    );
+    expect(named).toHaveLength(2);
+  });
+});
+
 describe("the renewal cron", () => {
   it("is registered for 00:20 UTC, after the 00:05 reset", () => {
     expect(VERCEL.crons).toContainEqual({ path: "/api/cron/activate-lead-briefs", schedule: "20 0 * * *" });

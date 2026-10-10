@@ -26,7 +26,9 @@ import type { ClientBriefPreview } from "@/lib/leadBrief/preview";
  * The server decides everything: the preview is recomputed against live
  * supply, the ranking and the customer's chosen levels come from their stored
  * brief, and a save that does not match the radius shown is refused with a
- * fresh preview (409 `radius_changed`). There is no "Switch to 10 leads a
+ * fresh preview (409 `radius_changed`). The base postcode is read-only here
+ * (batch 05, locked decision 1) and both routes refuse a different one (409
+ * `postcode_locked`). There is no "Switch to 10 leads a
  * month" here (`allowSwitch={false}`). Every word is in briefCopy.ts and
  * editCopy.ts.
  */
@@ -96,7 +98,8 @@ export function BriefAreaEditor(props: BriefAreaEditorProps) {
         setMode("editing");
         return;
       }
-      if (res.status === 409) setError(EDIT_COPY.errors.conflict);
+      if (res.status === 409 && data.code === "postcode_locked") setError(EDIT_COPY.errors.postcodeLocked);
+      else if (res.status === 409) setError(EDIT_COPY.errors.conflict);
       else setError(res.status === 503 ? EDIT_COPY.errors.unavailable : EDIT_COPY.errors.failed);
     } catch {
       setError(EDIT_COPY.errors.unavailable);
@@ -135,7 +138,8 @@ export function BriefAreaEditor(props: BriefAreaEditorProps) {
         setError(EDIT_COPY.errors.radiusChanged);
         return;
       }
-      if (res.status === 409) setError(EDIT_COPY.errors.conflict);
+      if (res.status === 409 && data.code === "postcode_locked") setError(EDIT_COPY.errors.postcodeLocked);
+      else if (res.status === 409) setError(EDIT_COPY.errors.conflict);
       else if (data.code === "nothing_changed") setError(EDIT_COPY.errors.nothingChanged);
       else if (res.status === 400 && Array.isArray(data.issues)) {
         setIssues(data.issues);
@@ -188,6 +192,7 @@ export function BriefAreaEditor(props: BriefAreaEditorProps) {
                 onAreas={setAreas}
                 issues={issuesFor(1)}
                 idPrefix="edit"
+                postcodeLockedNote={EDIT_COPY.area.postcodeLocked}
               />
             </div>
             <div className="space-y-4">

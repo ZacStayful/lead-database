@@ -235,6 +235,24 @@ export function sameAreaAnswers(row: StoredAreaAnswers, next: AreaAnswers): bool
   );
 }
 
+/**
+ * Batch 05, locked decision 1: "The base postcode is locked once the brief is
+ * confirmed." The postcode sets the centre of the service area, so changing it
+ * here could be used to move the area wherever leads are; a change goes
+ * through a request Zac reviews instead (batch 05, not yet built).
+ *
+ * Both sides are canonical ("YO10 5DD", or just "YO10"): the stored row holds
+ * normaliseBriefInput's output, the same as `next`. Strict on purpose: "YO10"
+ * to "YO10 5DD" is refused too, though the outcode is the same. The editor
+ * shows the postcode read-only, so only a hand-made request can reach this.
+ */
+export function basePostcodeChanged(
+  row: Pick<StoredAreaAnswers, "base_postcode">,
+  next: Pick<AreaAnswers, "basePostcode">
+): boolean {
+  return row.base_postcode !== next.basePostcode;
+}
+
 // --- the request body ------------------------------------------------------
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

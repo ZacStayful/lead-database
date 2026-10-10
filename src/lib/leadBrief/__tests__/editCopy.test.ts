@@ -96,4 +96,15 @@ describe("editCopy", () => {
   it("the editor's address", () => {
     expect(BRIEF_EDITOR_HREF).toBe("/dashboard/leads/brief");
   });
+
+  it("the postcode is locked (batch 05): says so, says how to change it, promises no review", () => {
+    for (const line of [EDIT_COPY.area.postcodeLocked, EDIT_COPY.errors.postcodeLocked]) {
+      expect(line).toContain("can't be changed here");
+      expect(line).toContain("get in touch through Support");
+      // The request-and-review flow is batch 05's, not built yet.
+      expect(line).not.toMatch(/review|request|48 hours|72 hours/i);
+    }
+    // The area section no longer offers the postcode as something to change.
+    expect(EDIT_COPY.area.intro).not.toMatch(/postcode/i);
+  });
 });

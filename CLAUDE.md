@@ -20273,3 +20273,59 @@ invoice to see Sign-up source land once.
 No migration (0166's table is all it needs). The code is inert until the three
 env vars are set: every write is `not_configured`, and the cron only runs while
 `funnel_enabled` is on. Part B step 1 first, then the env vars, then redeploy.
+
+---
+
+## 77. A confirmed brief's postcode can't be changed in the editor *(no migration)*
+
+Batch 05 (`docs/build/05-address-change-guard.md`), locked decision 1: "The
+base postcode is locked once the brief is confirmed." The postcode sets the
+centre of the service area, so changing it moves the area wherever the leads
+are. The rest of batch 05 — a request with a reason, Zac's 48-hour review, a
+72-hour delay, then 04's confirm screen — waits on batch 04. This section is
+only the lock, shipped ahead of it on Zac's go-ahead (10 Oct), because the
+"Your brief" editor (Lead Brief Phase 5B) did the opposite: the area editor
+offered the postcode as an ordinary input, `POST /api/customer/lead-brief/edit`
+saved it as the `scheduled` version, and `/api/cron/activate-lead-briefs`
+made it active at the next renewal.
+
+Nobody could have used it: `lead_brief_enabled` is off, and production held
+no `customer_lead_briefs` rows at all on 10 Oct.
+
+- **`basePostcodeChanged()`** (`src/lib/leadBrief/editBrief.ts`) is the one
+  comparison. Both sides are canonical (normaliseBriefInput's output, which is
+  what the row stores), so "yo105dd" against "YO10 5DD" is not a change.
+  ⚠️ **Strict between an outcode and a full postcode in it**: "YO10" to
+  "YO10 5DD" is refused, though routing measures from the outcode. The locked
+  decision says postcode, and nothing short of a hand-made request reaches the
+  check anyway.
+- **Both editor routes refuse, before any compute or write**, with 409
+  `{ code: "postcode_locked", lockedPostcode }` — the code the funnel already
+  uses (§75). The save checks after the answers are normalised and before
+  "nothing changed"; the preview checks before the compute, so no area is ever
+  previewed round another centre. Input that won't normalise falls through to
+  the compute and reports its issues as before.
+- **The editor shows the postcode read-only** through `WhereStep`'s
+  `postcodeLockedNote`, the funnel's own affordance. The note says to get in
+  touch through Support. ⚠️ **It must not mention a review or a request**
+  until batch 05 Phase 2 builds one; `editCopy.test.ts` bans both words.
+- "Add another area", the travel limit and the essentials are unchanged.
+
+⚠️ **Not closed here: a funnel payer can still change their postcode while
+confirming.** `BriefWizard`'s confirmation mode (02 Phase 5, C1) lets them
+"go back and change any answer", and the funnel's lock
+(`funnel_sessions.base_postcode_locked`) does not reach it. 05 decision 1
+("for funnel customers it is already locked at their first preview") and 02's
+prompt ("changing it means contacting Zac") both say it should; 02's approved
+C1 built it otherwise. That is Zac's call — `05-phase0-report.md` C2.
+
+⚠️ **Nor at the database.** `save_scheduled_lead_brief` (0164) would store a
+changed postcode if handed one. A SQL guard there means replacing a 0164
+function that batch 04 is about to work beside (its C9/C10), so it belongs in
+05's own migration, after the merge rule's function-overlap check.
+
+Verified: 10 mutations, all caught — the lock removed or neutered in either
+route, the save lock moved below "nothing changed", the editor note dropped,
+one refusal handler dropped, the helper always false or comparing outcodes
+only, the copy promising a review, and the preview computing from input the
+lock never judged.
