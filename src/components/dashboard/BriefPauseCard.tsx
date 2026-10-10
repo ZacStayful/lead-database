@@ -18,6 +18,7 @@ import {
   type PauseReason,
 } from "@/lib/pauseOptions";
 import { KEEP_CRM_SUMMARY } from "@/lib/retentionCopy";
+import { AREA_CONFIRM_PATH } from "@/lib/leadBrief/areaConfirmCopy";
 
 /**
  * The pause card for a Lead Brief customer (batch 04 Phase 2). Replaces the
@@ -155,6 +156,12 @@ export function BriefPauseCard(props: BriefPauseCardProps) {
     try {
       const res = await fetch("/api/customer/subscription/resume", { method: "POST" });
       const data = await res.json();
+      // Batch 04 Phase 3: their recalculated area is waiting. Take them to it
+      // to confirm, which is what restarts the leads.
+      if (res.status === 409 && data?.code === "area_review_required") {
+        window.location.assign(AREA_CONFIRM_PATH);
+        return;
+      }
       if (!res.ok) throw new Error(data?.error || "Could not restart your leads.");
       setResumeArmed(false);
       props.onResumed();

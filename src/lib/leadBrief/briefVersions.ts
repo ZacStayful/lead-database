@@ -22,10 +22,17 @@ export interface BriefVersionRow {
   similar_areas: string[] | null;
   service_radius_miles: number;
   created_at: string;
+  /** 'customer', 'recompute' or 'admin' (0162). */
+  origin: string;
+  confirmed_at: string | null;
+  /** First picks are held until this date (0162). */
+  locked_until: string | null;
+  /** When a pending_confirmation version takes effect (0167). */
+  effective_at: string | null;
 }
 
 export const BRIEF_VERSION_COLUMNS =
-  "id, version, status, base_postcode, base_outcode, travel_limit_miles, allocation, priorities, essentials, min_bedrooms, min_gross, priority_outcodes, similar_areas, service_radius_miles, created_at";
+  "id, version, status, base_postcode, base_outcode, travel_limit_miles, allocation, priorities, essentials, min_bedrooms, min_gross, priority_outcodes, similar_areas, service_radius_miles, created_at, origin, confirmed_at, locked_until, effective_at";
 
 export interface BriefVersions {
   active: BriefVersionRow | null;

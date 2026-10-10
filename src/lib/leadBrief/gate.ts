@@ -59,3 +59,27 @@ export function briefPlanFor(
   const allocation = customer.pending_monthly_allocation ?? customer.monthly_allocation;
   return typeof allocation === "number" && allocation <= 10 ? 10 : 20;
 }
+
+/** The confirm-on-login screen (batch 04 Phase 3); defined in the import-free copy module. */
+export { AREA_CONFIRM_PATH } from "@/lib/leadBrief/areaConfirmCopy";
+
+/**
+ * Who must review a recalculated area before the dashboard (batch 04 Phase 3,
+ * locked decision 4): a customer who has confirmed a brief, still holds
+ * Management, and has a `pending_confirmation` version.
+ *
+ * `hasPending` is the server's read of that row. NULL means the read failed,
+ * and that FAILS OPEN: an unreadable table must never lock a customer out of
+ * their own leads. The cost is one sign-in without the screen; a return stays
+ * held regardless (the customer is still paused, C4), and the 72-hour
+ * auto-accept is the backstop.
+ *
+ * False for every customer who existed before the brief shipped: they fail
+ * canEditLeadBrief, and they never have a brief row at all.
+ */
+export function needsAreaConfirmation(
+  customer: BriefGateFields | null | undefined,
+  hasPending: boolean | null
+): boolean {
+  return canEditLeadBrief(customer) && hasPending === true;
+}

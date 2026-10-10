@@ -310,7 +310,9 @@ describe("settleLongPauseReturn", () => {
     expect(tables.n8n_events[0]).toMatchObject({
       event_type: "brief_area_updated",
       customer_id: "c1",
-      subject_id: "ep-1",
+      // The pending brief, not the episode (0169): an extended pause is
+      // recalculated again and announced again.
+      subject_id: tables.customer_lead_briefs.find((b) => b.status === "pending_confirmation")!.id,
       payload: { first_name: "Lin", phone: "+447700900123", return_date: "2026-12-11", radius_miles: 30, previous_radius_miles: 20 },
     });
     // After the return date the pending version is effective from it.

@@ -205,7 +205,6 @@ async function handle(request: NextRequest) {
       await announceAreaUpdated(
         admin,
         customer,
-        read.episode,
         result,
         londonToday(new Date(customer.pause_resumes_at)),
         "resume-paused-subscriptions"

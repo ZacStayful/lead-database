@@ -82,9 +82,24 @@ const FUNNEL_PAGES = [
 // Batch 04 Phase 2: the brief customer's pause card and its copy.
 const BRIEF_PAUSE_SRC = readFileSync("src/lib/briefPause.ts", "utf8");
 const BRIEF_PAUSE_CARD = readFileSync("src/components/dashboard/BriefPauseCard.tsx", "utf8");
+// Batch 04 Phase 3: the confirm-on-login screen, its copy and its email.
+const AREA_CONFIRM_SRC = readFileSync("src/lib/leadBrief/areaConfirmCopy.ts", "utf8");
+const AREA_CONFIRM_SCREENS = [
+  "src/components/leadBrief/AreaConfirmScreen.tsx",
+  "src/components/leadBrief/AreaChangeMap.tsx",
+  "src/app/onboarding/area/page.tsx",
+].map((p) => readFileSync(p, "utf8"));
+const AREA_CONFIRMED_EMAIL = (() => {
+  const src = readFileSync("src/lib/emails.ts", "utf8");
+  const start = src.indexOf("export async function sendBriefAreaConfirmedEmail");
+  return src.slice(start, src.indexOf("\n}\n", start));
+})();
 const CUSTOMER_TEXT = [
   stringLiterals(BRIEF_PAUSE_SRC),
   jsxText(BRIEF_PAUSE_CARD),
+  stringLiterals(AREA_CONFIRM_SRC),
+  ...AREA_CONFIRM_SCREENS.map(jsxText),
+  stringLiterals(AREA_CONFIRMED_EMAIL),
   stringLiterals(COPY),
   stringLiterals(LABEL_COPY),
   stringLiterals(EDIT_COPY_SRC),
@@ -125,6 +140,8 @@ describe("brief copy — A9 words to avoid", () => {
     expect(CUSTOMER_TEXT).toContain("Send to my partner");
     expect(CUSTOMER_TEXT).toContain("Pausing your leads");
     expect(CUSTOMER_TEXT).toContain("Start receiving leads again now?");
+    expect(CUSTOMER_TEXT).toContain("Confirm and start my leads");
+    expect(CUSTOMER_TEXT).toContain("Your leads have restarted within");
   });
 });
 

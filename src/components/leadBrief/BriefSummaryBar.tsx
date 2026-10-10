@@ -11,13 +11,23 @@ import { BRIEF_EDITOR_HREF, EDIT_COPY } from "@/lib/leadBrief/editCopy";
  * The expected mix is deliberately absent: a priorities save keeps the mix
  * from the last area save, so it would read as stale.
  */
-export function BriefSummaryBar({ summary, pending }: { summary: string; pending: string | null }) {
+export function BriefSummaryBar({
+  summary,
+  pending,
+  updated = null,
+}: {
+  summary: string;
+  pending: string | null;
+  /** "Area updated 7 November", for the first cycle after a recalculated area (batch 04 Phase 3). */
+  updated?: string | null;
+}) {
   return (
     <div className="flex items-start justify-between gap-3 rounded-lg border-[0.5px] border-border bg-brand-light/60 px-4 py-3 text-sm">
       <div className="flex min-w-0 flex-1 items-start gap-3">
         <Target className="mt-0.5 h-4 w-4 shrink-0 text-brand-dark" aria-hidden />
         <div>
           <p className="font-medium text-ink">{summary}</p>
+          {updated && <p className="mt-1 text-ink-2">{updated}</p>}
           {pending && <p className="mt-1 text-ink-2">{pending}</p>}
         </div>
       </div>
