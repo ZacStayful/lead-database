@@ -15,13 +15,13 @@ import {
   type BriefAreaUpdatedPayload,
   type RecalibrationState,
 } from "@/lib/briefPause";
-import { canEditLeadBrief } from "@/lib/leadBrief/gate";
+import { AREA_CONFIRM_PATH, canEditLeadBrief } from "@/lib/leadBrief/gate";
 import { checkPauseReasons } from "@/lib/pauseOptions";
 import { syncCustomerMondayStatus } from "@/lib/mondayStatus";
 import { getStripe } from "@/lib/stripe";
 import { briefRowFromPreview } from "@/lib/leadBrief/briefRow";
 import { computeBriefForCustomer } from "@/lib/leadBrief/briefServer";
-import { keptForRecompute, planAndTravelOf, readStoredPriorities } from "@/lib/leadBrief/editBrief";
+import { parsedBodyFromRow } from "@/lib/leadBrief/rowInput";
 import { BriefSupplyUnavailableError } from "@/lib/leadBrief/supply";
 import type { Customer } from "@/lib/types";
 
@@ -149,33 +149,11 @@ export async function recalibrateLongPause(
   const scheduled = rows.find((r) => r.status === "scheduled") ?? null;
   const basis = scheduled ?? active;
 
-  const kept = keptForRecompute(readStoredPriorities(basis.priorities), {
-    minBedrooms: basis.min_bedrooms,
-    minGross: basis.min_gross,
-  });
-  const { travel } = planAndTravelOf(basis);
+  const { parsed, chosenKeys } = parsedBodyFromRow(basis);
 
   let computed;
   try {
-    computed = await computeBriefForCustomer(
-      admin,
-      customer,
-      {
-        input: {
-          basePostcode: basis.base_postcode,
-          priorityOutcodes: basis.priority_outcodes ?? [],
-          travelLimitMiles: travel,
-          minBedrooms: basis.min_bedrooms,
-          minGross: basis.min_gross,
-          similarAreas: basis.similar_areas ?? [],
-          ranking: kept.ranking,
-          thresholds: kept.thresholds,
-        },
-        similarAreasGiven: true,
-        shownRadiusMiles: null,
-      },
-      { autoTickRecommended: false }
-    );
+    computed = await computeBriefForCustomer(admin, customer, parsed, { autoTickRecommended: false });
   } catch (err) {
     if (err instanceof BriefSupplyUnavailableError) return { kind: "retry", error: err.message };
     return { kind: "retry", error: err instanceof Error ? err.message : String(err) };
@@ -212,7 +190,7 @@ export async function recalibrateLongPause(
     version: 1,
     lockedUntil: null,
     now: opts.now,
-    chosenKeys: Object.keys(kept.thresholds) as (keyof typeof kept.thresholds)[],
+    chosenKeys,
   });
   const { data: written, error: writeError } = await admin.rpc("write_pending_lead_brief", {
     p_customer_id: customer.id,
@@ -257,13 +235,15 @@ export interface AnnounceCustomer {
  * version is already written, and the dashboard (Phase 3) shows it whether or
  * not either message lands.
  *
- * Once per pause by construction: only the run that wrote the pending version
- * gets here, and the event is also unique per episode (0168).
+ * Once per recalculated area by construction: only the run that wrote the
+ * pending version gets here, and the event is also unique per subject (0168).
+ * The subject is the PENDING BRIEF, not the episode (batch 04 Phase 3, 0169):
+ * "Extend my pause" sets the episode back to not recalculated, and an event
+ * keyed on the episode would swallow the second recalculation's WhatsApp.
  */
 export async function announceAreaUpdated(
   admin: SupabaseClient,
   customer: AnnounceCustomer,
-  episode: Pick<LongPauseEpisode, "id">,
   written: Extract<RecalibrationResult, { kind: "written" }>,
   restartDate: string,
   source: string
@@ -294,16 +274,16 @@ export async function announceAreaUpdated(
     radius_miles: written.radiusMiles,
     previous_radius_miles: written.previousRadiusMiles,
     base_postcode: written.basePostcode,
-    review_url: `${APP_URL}/dashboard`,
+    review_url: `${APP_URL}${AREA_CONFIRM_PATH}`,
   };
   try {
     const { error } = await admin.from("n8n_events").insert({
       event_type: "brief_area_updated",
       customer_id: customer.id,
-      subject_id: episode.id,
+      subject_id: written.briefId,
       payload,
     });
-    // 23505: already recorded for this pause. Not an error.
+    // 23505: already recorded for this area. Not an error.
     if (error && error.code !== "23505") {
       console.error(`[${source}] n8n event insert failed`, { customer: customer.id, error: error.message });
     } else {
@@ -422,7 +402,7 @@ export async function settleLongPauseReturn(
     case "unchanged":
       return { action: "resume" };
     case "written":
-      await announceAreaUpdated(admin, customer, episode, result, londonToday(opts.now), opts.source);
+      await announceAreaUpdated(admin, customer, result, londonToday(opts.now), opts.source);
       return { action: "hold" };
     case "invalid":
       console.error(`[${opts.source}] the engine refused the stored brief; resuming without a recalculation`, {

@@ -98,6 +98,22 @@ export function pendingLine(startsOnIso: string | null): string {
   return d ? `Your new area starts on ${d}.` : "Your new area starts at your next renewal.";
 }
 
+/**
+ * "Area updated 7 November" on the "Your brief" bar, for the first cycle after
+ * a recalculated area was confirmed (batch 04 Phase 3). A recalculated version
+ * is origin 'recompute'; "the first cycle" is until its first picks' lock ends,
+ * which is the next renewal (0169 sets it on confirm). Null otherwise.
+ */
+export function areaUpdatedLine(
+  row: { origin: string; confirmed_at: string | null; locked_until: string | null },
+  todayYmd: string
+): string | null {
+  if (row.origin !== "recompute" || !row.confirmed_at || !row.locked_until) return null;
+  if (todayYmd >= row.locked_until.slice(0, 10)) return null;
+  const d = dayMonth(row.confirmed_at);
+  return d ? `Area updated ${d}` : null;
+}
+
 export const EDIT_COPY = {
   barEdit: "Edit",
   editBriefLink: "Edit your brief",

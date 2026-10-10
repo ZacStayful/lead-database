@@ -7,7 +7,13 @@ import { AppShell } from "@/components/shell/AppShell";
 import { messagingActiveFor } from "@/lib/messaging/service";
 import { unreadReplyCount } from "@/lib/messaging/inbox";
 import { holdsProduct } from "@/lib/products";
-import { needsLeadBrief } from "@/lib/leadBrief/gate";
+import {
+  AREA_CONFIRM_PATH,
+  canEditLeadBrief,
+  needsAreaConfirmation,
+  needsLeadBrief,
+} from "@/lib/leadBrief/gate";
+import { pendingAreaRead } from "@/lib/leadBrief/pendingArea";
 import { adsEnabledFor } from "@/lib/ads/gate";
 import { buildSidebar, type NavFlags } from "@/lib/dashboardNav";
 import { initials } from "@/lib/utils";
@@ -52,6 +58,19 @@ export default async function DashboardLayout({
     // customer who existed before the brief shipped. Never while an admin is
     // viewing the customer (§62): the admin sees their dashboard as it is.
     if (!viewAs && needsLeadBrief(customer)) redirect("/onboarding/brief");
+
+    // The confirm-on-login screen (batch 04 Phase 3, locked decision 4): a
+    // recalculated coverage area is reviewed before the dashboard. Only a
+    // customer who has confirmed a brief is ever read for it, so no existing
+    // customer pays the query or sees the screen. A failed read does not gate
+    // (needsAreaConfirmation fails open). Never while an admin is viewing.
+    if (
+      !viewAs &&
+      canEditLeadBrief(customer) &&
+      needsAreaConfirmation(customer, await pendingAreaRead(createAdminClient(), customer.id))
+    ) {
+      redirect(AREA_CONFIRM_PATH);
+    }
 
     const admin = createAdminClient();
     // ⌘K's lead rows are NOT loaded here: the palette fetches

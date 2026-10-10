@@ -11,7 +11,8 @@ import { BriefSummaryBar } from "@/components/leadBrief/BriefSummaryBar";
 import { briefPlanFor, canEditLeadBrief } from "@/lib/leadBrief/gate";
 import { BriefVersionsUnavailableError, loadBriefVersions } from "@/lib/leadBrief/briefVersions";
 import { readStoredPriorities } from "@/lib/leadBrief/editBrief";
-import { EDIT_COPY, pendingLine, summaryLine } from "@/lib/leadBrief/editCopy";
+import { EDIT_COPY, areaUpdatedLine, pendingLine, summaryLine } from "@/lib/leadBrief/editCopy";
+import { londonToday } from "@/lib/briefPause";
 import { nextGrantDate } from "@/lib/quality/replacementEntitlement";
 import type { AssignmentWithLead } from "@/lib/types";
 
@@ -42,7 +43,7 @@ export default async function LeadsPage() {
   // "Your brief" bar (Lead Brief Phase 5), for a customer who has confirmed a
   // brief and nobody else. A failed read hides the bar: the leads below matter
   // more than a summary of how they are matched.
-  let briefBar: { summary: string; pending: string | null } | null = null;
+  let briefBar: { summary: string; pending: string | null; updated: string | null } | null = null;
   if (canEditLeadBrief(customer)) {
     try {
       const versions = await loadBriefVersions(admin, customer.id);
@@ -57,6 +58,7 @@ export default async function LeadsPage() {
             minGross: a.min_gross,
             ranking: readStoredPriorities(a.priorities).map((p) => p.key),
           }),
+          updated: areaUpdatedLine(a, londonToday(new Date())),
           pending: !versions.scheduled
             ? null
             : briefPlanFor(customer) !== versions.scheduled.allocation
@@ -117,7 +119,7 @@ export default async function LeadsPage() {
         </div>
       </div>
 
-      {briefBar && <BriefSummaryBar summary={briefBar.summary} pending={briefBar.pending} />}
+      {briefBar && <BriefSummaryBar summary={briefBar.summary} pending={briefBar.pending} updated={briefBar.updated} />}
 
       <LeadsList assignments={assignments} canSequence={canSequence} />
     </div>

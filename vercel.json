@@ -106,6 +106,10 @@
     {
       "path": "/api/cron/activate-lead-briefs",
       "schedule": "20 0 * * *"
+    },
+    {
+      "path": "/api/cron/accept-lead-brief-areas",
+      "schedule": "35 8 * * *"
     }
   ]
 }

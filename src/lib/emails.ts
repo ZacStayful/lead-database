@@ -1120,6 +1120,46 @@ export async function sendBriefAreaUpdatedEmail(params: {
   }
 }
 
+/**
+ * A recalculated area was auto-accepted 72 hours after its return or
+ * effective date (batch 04 Phase 3, locked decision 4). The return wording is
+ * the batch's own: "Your leads have restarted within [X] miles of [postcode]."
+ * A monthly widening never stopped the leads (C4), so it says the area moved
+ * instead of claiming a restart.
+ */
+export async function sendBriefAreaConfirmedEmail(params: {
+  to: string;
+  contactName: string;
+  radiusMiles: number;
+  basePostcode: string;
+  restarted: boolean;
+}): Promise<{ id: string | null; error: unknown }> {
+  const { to, contactName, radiusMiles, basePostcode, restarted } = params;
+  const firstName = contactName.trim().split(/\s+/)[0] || contactName;
+  const subject = restarted ? "Your leads have restarted" : "Your coverage area has been updated";
+  const line = restarted
+    ? `Your leads have restarted within ${radiusMiles} miles of ${basePostcode}.`
+    : `Your coverage area is now within ${radiusMiles} miles of ${basePostcode}. Your next leads come from it.`;
+
+  const inner = `
+    <h1 style="margin:0 0 4px;font-size:18px">${esc(subject)}, ${esc(firstName)}</h1>
+    <p style="margin:0 0 14px;color:#6b706a;font-size:14px">${esc(line)}</p>
+    <p style="margin:0 0 18px;color:#6b706a;font-size:14px">We recalibrated your coverage area from live supply, so your leads match your brief as closely as possible. Your brief, your priorities and must-haves, and every credit you're owed stay the same. "Top match" and "First pick" are now measured against this area.</p>
+    ${button(`${APP_URL}/dashboard/leads`, "View your leads")}
+  `;
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: fromAddress(),
+      to,
+      subject,
+      html: shell(inner),
+    });
+    return { id: data?.id ?? null, error };
+  } catch (error) {
+    return { id: null, error };
+  }
+}
+
 /** Join phrases as "a", "a and b", or "a, b and c". */
 function joinWithAnd(parts: string[]): string {
   if (parts.length <= 1) return parts[0] ?? "";
