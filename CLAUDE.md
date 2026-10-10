@@ -74,7 +74,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/sweep-lead-pool` | `30 10 * * *` | Expired leads pool: enter, exit, expire (§19) |
 | `/api/cron/escalate-leads` | `0 11 * * *` | Inactivity escalation + daily engagement & capacity snapshots (§18) |
 | `/api/cron/progress-report` | `0 16 * * 5` | Fridays: weekly summary |
-| `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule |
+| `/api/cron/resume-paused-subscriptions` | `0 8 * * *` | Un-pause on schedule. Batch 04: also recalculates a Lead Brief customer's long pause 7 days before its return, and keeps them paused while a changed area waits to be confirmed (§78.2) |
 | `/api/cron/run-lead-analysis` | `0 6 * * *` | **Backstop only** for the paid lead-analysis queue (§31). The queue is driven by the purchase, a self-chain and the progress poll; this catches the case where all three failed |
 | `/api/cron/parse-income-reports` | `0 12 * * *` | Read the property-analysis PDF off each lead's Monday item (§25) |
 | `/api/cron/monthly-insights` | `30 9 2 * *` | Monthly customer insight email |
@@ -91,6 +91,7 @@ Three consequences that are not obvious, because `main` **is** production:
 | `/api/cron/batch-reviews` | `40 9 * * *` | The monthly lead-batch review (§73): the shortfall email on reset day, the review email 7 days after a billing month ends, one reminder 3 days later. Reads the snapshot `reset_monthly_counts` captures. Switch `batch_reviews_enabled` on `/admin/allocation`; ships off |
 | `/api/cron/activate-lead-briefs` | `20 0 * * *` | Lead Brief: make each area change saved in the "Your brief" editor the customer's active brief once their renewal has come, after the 00:05 reset (0164). A change saved for a different plan than the customer is now on is left for them to review, not applied. Not tied to `lead_brief_enabled` |
 | `/api/cron/post-call-offer-reminders` | `*/15 * * * *` | The 12h / 4h / 1h email and text before a `FOUNDING10-` code expires. Registered again by batch 02 Phase 5 (it had been removed in `173a746` under Hobby's daily-cron cap). A funnel-issued code's links go back through the funnel's own checkout |
+| `/api/cron/accept-lead-brief-areas` | `35 8 * * *` | Batch 04: auto-accept a Lead Brief customer's recalculated coverage area 72 hours after its effective date, restart a return from pause, and email them (§78.4). Does nothing until a `pending_confirmation` brief exists |
 | `/api/cron/funnel-discounts` | `*/15 * * * *` | Batch 02 Phase 5: somebody who previewed in the funnel and has not paid an hour later gets the 24-hour `FOUNDING10-` code, one per person across both routes. Batch 03 Phase 2: writes the funnel's Monday statuses ("Funnel started", "Funnel finished, not paid") first, before the discount pass (§76.5). Runs only while `funnel_enabled` is on |
 
 ⚠️ **THE HOBBY WARNING THAT USED TO BE HERE IS OUT OF DATE. The team is on
@@ -102,11 +103,12 @@ Pro.** `GET /v2/teams` returns `plan: "pro"` for `zacs-projects-bcdb6016`
 That correction matters in three directions, so it is worth stating rather than
 just deleting:
 
-- ~~The **14** crons in the table above genuinely all fire.~~ ⚠️ **26** since
-  batch 02 Phase 5, all of them in the table above. The table had fallen three
-  rows behind `vercel.json` (ticket-synthesis, prospect-nudges and
-  monday-enquiry-sync were registered and never listed) and was brought back
-  into step in batch 02 Phase 6. Count `vercel.json`'s `crons` rather than
+- ~~The **14** crons in the table above genuinely all fire.~~ ⚠️ **27** since
+  batch 04 Phase 3 (`accept-lead-brief-areas`), all of them in the table above.
+  The table had fallen three rows behind `vercel.json` (ticket-synthesis,
+  prospect-nudges and monday-enquiry-sync were registered and never listed) and
+  was brought back into step in batch 02 Phase 6; batch 04 Phase 3 left it one
+  row behind again until §78 added it. Count `vercel.json`'s `crons` rather than
   trusting a number here. Under Hobby only two would fire, and §31.8 records a
   whole feature that was designed around believing they might not.
 - `maxDuration = 300` works. `parse-income-reports`, the 0092 backfill and
@@ -1888,6 +1890,8 @@ signal the business has. Until 0084 it collected nothing.
 
 Management-only. The customer picks **1, 2 or 3 months** and must give at least
 one reason (`/dashboard/settings`, `POST /api/customer/subscription/pause`).
+⚠️ **Except a Lead Brief customer, who pauses to a return date** and whose
+pause keeps or releases their coverage area by its length (§78.1).
 Stripe collection is paused with `behavior: "void"` — not cancelled — so nothing
 is billed. `account_status` deliberately stays `'active'` so the **routing** slot
 is reserved, and `lead_balance` is untouched so credits carry forward.
@@ -15232,7 +15236,7 @@ a stored balance, credited on a schedule, spent one at a time.
 | Existing customers | **Seeded from tenure** — one grant per cycle since their first paid invoice, minus claims already consumed |
 | 0142's earned streak bonus | **Retired.** Rollover is the loyalty rule; a streak that also bought headroom would pay for restraint twice |
 | The credit-back report on the lead page | **The same balance.** Over it a credit report still goes to review (§51.3); the self-serve swap is still the one hard stop (§53) |
-| Who accrues | A **paused** customer does. A **past-due** one sees a notice and cannot swap until it clears, keeps the balance, and still accrues — until written off under §59, when accrual stops |
+| Who accrues | A **paused** customer does (⚠️ except a paused Lead Brief customer's Management grant, since 0167: §78.1, C2). A **past-due** one sees a notice and cannot swap until it clears, keeps the balance, and still accrues — until written off under §59, when accrual stops |
 | Nothing banked, a dead lead to report | Swap stays greyed; the copy points at the lead page and names the next grant date |
 | Admin | "Replacements banked" is **editable** on the customer form |
 | Top-ups | **Counted, immediately**: each top-up banks round(credits × pct), so a 5-lead top-up banks one |
@@ -20336,3 +20340,299 @@ route, the save lock moved below "nothing changed", the editor note dropped,
 one refusal handler dropped, the helper always false or comparing outcodes
 only, the copy promising a review, and the preview computing from input the
 lock never judged.
+
+---
+
+## 78. Area changes, pauses and top-ups (brief customers) *(0167–0170)*
+
+Batch 04 (`docs/build/04-area-changes-pause-topups.md`; the Phase 0 report and
+decisions C1–C10 are in `docs/build/04-phase0-report.md`). A Lead Brief
+customer's coverage area is the thing their labels are measured against, so
+every change to it is shown to them before it takes effect. This section covers
+the three ways it can move: a pause, the confirm screen that follows a long
+one, and a top-up.
+
+⚠️ **Lead Brief customers only.** Every existing customer's pause, top-up and
+area behaviour is unchanged, and guard tests pin it (78.7). The test is
+`canEditLeadBrief(customer)`: `lead_brief_required` and a confirmed brief. The
+Lead Brief itself has no section in this file yet (its Phase 7 writes one); its
+rules are in `docs/build/lead-brief-build-prompt.md`, `01-lead-brief-additions.md`
+and 0161–0164.
+
+⚠️ **Nothing here has run for a real customer.** `lead_brief_enabled` is off and
+production held **0** `customer_lead_briefs` rows when 0170 was applied
+(10 Oct). All four migrations are inert until briefs exist.
+
+| Locked decision | |
+|---|---|
+| 1 | Nothing accrues while paused. Credits already held carry over |
+| 2 | A pause of **up to 4 weeks** keeps the area exactly as it is, and the customer still counts as committed demand |
+| 3 | A **longer** pause (up to 3 months) releases the area at once; the return date is fixed when they pause; the area is recalculated 7 days before return |
+| 4 | A `pending_confirmation` brief is confirmed on login. Auto-accepted 72 hours after its effective date, with an email |
+| 5 | "Switch to 10 leads a month" is offered beside pause, never hidden |
+| 6 | A top-up delivers from just beyond the area, nearest first, never past the plan maximum (40 or 75 miles), labelled Nearby opportunity, and never adds supply inside the area |
+
+### 78.1 — A pause is a return date, and its length decides the area
+
+`POST /api/customer/subscription/pause` with `{ returnDate, reasons, note }`
+goes to `pauseBriefCustomer` (`src/lib/briefPauseServer.ts`). The card is
+`BriefPauseCard`; the existing pause card still renders for everyone else.
+
+- ⚠️ **A return DATE, never months (C6).** "1 month" runs 28 to 31 days, so it
+  would be a short or a long pause depending on the month. A brief customer who
+  posts `months` gets 409 `return_date_required` before anything is written.
+  `subscription_pauses.months` is nullable for exactly these episodes (0167).
+- **Counted in London dates** (`src/lib/briefPause.ts`, pure, shared by the card
+  and the route): tomorrow to 3 months away. `pause_resumes_at` is London
+  midnight of the return date, so the 08:00 UTC resume cron restarts leads on
+  the day the customer was told.
+- **28 days or fewer keeps the area** (`pause_holds_area = true`); longer
+  releases it (`false`). Every other pause carries `null`, and both pause
+  clearers (`resumePausedCustomer` and the webhook's resume detection) null it.
+  0167's CHECKs repeat the 28-day rule and the 3-month maximum.
+- ⚠️ **The episode row is inserted BEFORE Stripe and is not best effort.** The
+  existing route treats `subscription_pauses` as reporting; here a long pause's
+  recalculation is claimed on it, so a pause with no episode could never be
+  recalculated. A failed insert rolls the pause back; a failed Stripe call
+  deletes the episode too.
+- "Switch to 10 leads" sits beside pause on the card (decision 5) and uses the
+  existing plan route (§24).
+
+**Committed demand.** The engine shares each lead by headcount and already
+counts paused customers, so a short pause needed no change (decision 2).
+`toOtherBriefs` (`src/lib/leadBrief/supply.ts`) skips a customer with
+`paused_at` set and `pause_holds_area === false`, which releases a long-paused
+customer's area and first picks to new sign-ups (decision 3).
+`fetchAreaContention` is untouched: it drives the §28 forecast, and brief
+customers are filter-off, so they never appear in it.
+
+⚠️ **C2: a paused brief customer banks no Management replacements.** Locked
+decision 1 ("owed nothing for the paused period") overrides §61's "a paused
+customer does accrue", for brief customers only. `replacement_monthly_grant`
+gained a brief branch in 0167, and its TypeScript twin `monthlyReplacementGrant`
+(`src/lib/quality/deadLeadPolicy.ts`) matches it. Two edges, both tested: the
+branch keys on `lead_brief_required`, so a flagged customer who has not
+finished the questionnaire is covered too; and their GR share still accrues,
+because a Management pause never gates GR (invariant 6). Existing customers
+keep §61.
+
+### 78.2 — Recalculating a long pause, 7 days out
+
+A pass in `/api/cron/resume-paused-subscriptions`, before the pause-ending
+notice pass, runs `recalibrateLongPause` for each long brief pause whose return
+is 7 days away or less and that is not cancelling:
+
+1. The area is recomputed from live supply through the ordinary engine
+   (`computeBriefForCustomer`).
+2. ⚠️ **C9: it recalculates from the `scheduled` row when one exists, and
+   replaces it.** 0164 allows one change in flight, so a customer who saved an
+   area change while paused would otherwise block the recalculation, or be
+   cancelled by it. Their newer choice is the one recalculated. A pending
+   widening is superseded.
+3. **An unchanged area writes nothing** and sends the ordinary pause-ending
+   notice. The card promises "if it changes, we'll tell you first", so an
+   unchanged area asks nothing of them.
+4. **A changed area** becomes a `pending_confirmation` row effective at the
+   return date, through `write_pending_lead_brief` (0168). The episode is
+   stamped `recalibrated_at` / `pending_brief_id`, the customer is emailed
+   ("Your area has been updated…"), and an n8n event is queued (78.3).
+
+**At the return date**, `settleLongPauseReturn` asks `returnDecision`:
+`recalibrate` (the 7-day pass missed it), `resume` (unchanged, confirmed, or
+replaced by the customer's own save), or `await_confirmation`.
+
+- ⚠️ **C4: a changed area keeps the customer PAUSED until they confirm.** That is
+  the only delivery hold in this batch: no leads and no billing, and no new
+  gate anywhere. A monthly widening (Lead Brief Phase 6) keeps delivering on
+  the current area and holds nothing.
+- **It fails CLOSED to `retry`** while the area cannot be recalculated, so a
+  customer is neither sent leads on an unchecked area nor charged. Two cases
+  fail OPEN to `resume`, logged loudly, because holding them would have no end:
+  no open episode, and the engine refusing their stored answers.
+- **An early resume** (`POST /api/customer/subscription/resume`) recalculates
+  first, exactly as on the return date, and answers 409
+  `area_review_required` when the area changed. The card sends them to the
+  confirm screen.
+
+### 78.3 — The n8n outbox (C8)
+
+There was no outbound event mechanism (the only n8n code is inbound), so 0168
+added a pull outbox. `n8n_events` holds one row per (event type, subject), RLS
+on with no policies. n8n calls `POST /api/internal/n8n-events/claim` on a
+schedule with `Bearer N8N_WEBHOOK_SECRET`, the secret it already presents to
+this app; the route fails closed when the secret is unset.
+
+- `claim_n8n_events` stamps an event in the same statement that returns it, so
+  each one is handed out **once**, and **never after 48 hours**: a message about
+  a return that has already happened is not sent late. Body `{ limit }`, 1–100,
+  default 25.
+- One type today, `brief_area_updated`. Its `subject_id` is the pending brief,
+  so an extended pause that is recalculated again is announced again; its
+  `review_url` is the confirm screen.
+- ⚠️ **The WhatsApp wording is not in this app.** The payload carries facts
+  (first name, phone, email, restart date, radius, review link); Zac approves
+  the message in n8n. A claimed event that n8n fails to send is not re-offered:
+  the email is the message of record.
+
+⚠️ **The n8n workflow that polls this does not exist yet.** It is needed before
+`lead_brief_enabled` goes on.
+
+### 78.4 — The confirm-on-login screen
+
+`src/app/dashboard/layout.tsx` sends a customer with a `pending_confirmation`
+brief to `/onboarding/area`, beside the Lead Brief gate.
+
+- **Only a customer who has confirmed a brief is ever read for it**
+  (`canEditLeadBrief`), so no existing customer pays the query.
+  `pendingAreaRead` is kept in its own file so the layout loads none of the
+  confirm screen's module (`src/lib/briefAreaConfirm.ts`).
+- **A failed read does not gate** (`needsAreaConfirmation` fails open), and the
+  gate is skipped while an admin is viewing as the customer (§62).
+- ⚠️ **The browser gets a point and two radii, never an outcode list (A4).** The
+  map draws the old area outlined and the new one shaded, as circles round the
+  base.
+
+**Three buttons**, each a session-only route:
+
+| Button | Route | Does |
+|---|---|---|
+| Confirm | `…/lead-brief/area/confirm` | `confirm_pending_lead_brief` (0169), then the restart when it is due |
+| Switch to 10 leads | `…/area/confirm` with `forSwitch`, then the plan route (§24), then `…/area/tighten` | C5: the plan route refuses a paused customer, so it confirms first (restarting a return's leads today, said on the screen before the press), switches, then saves the 10-lead area as the scheduled change starting at the renewal |
+| Extend my pause | `…/area/extend` | Returns only. `extend_brief_pause` (0169): later than the current return date, from tomorrow, at most 3 months from the day they paused. The waiting area is set aside and recalculated again 7 days before the new date; the pause email is resent |
+
+**`confirm_pending_lead_brief` (C10)** sits beside 0164's `promote_lead_brief`,
+which is unchanged. It takes the brief's advisory lock (`'lead_brief:' ||
+customer_id`), refuses a moved active row or a version that is not pending,
+supersedes the active row before activating the new one (the one-active index
+is not deferrable), stamps `confirmed_at`, and locks first picks to the next
+renewal. First picks are recomputed from live supply, keeping the stored ones
+when supply is unreadable and dropping any another live brief covers.
+
+**When confirming restarts leads.** Decided in the build, for Zac to confirm:
+a return confirmed **before** its date keeps that date (the button reads
+"Confirm my area", and the area-updated email promised "before your leads
+restart on [date]"); from the date on, it reads "Confirm and start my leads"
+and restarts them now. A widening reads "Confirm my area" and holds nothing.
+
+**The 72-hour auto-accept** is `/api/cron/accept-lead-brief-areas`, daily at
+08:35 UTC. It confirms (`auto_accepted_at` stamped; the function refuses one
+before 72 hours with `not_due`), restarts a return, and emails "Your leads have
+restarted within [X] miles of [postcode]." only when leads did restart. A
+widening gets "Your coverage area is now within…". An auto-accepted return also
+gets the existing "You're back" email from `resumePausedCustomer`, unchanged.
+
+The "Your brief" bar shows "Area updated [date]" until the first renewal after a
+recalculated area.
+
+### 78.5 — Top-ups
+
+`customers.brief_topup_credits` (0170, default 0, never negative) is **part of**
+`lead_balance`, never added to it. It is how many of those credits came from a
+top-up and are kept for leads beyond the area.
+
+- **Raised** by `record_lead_topup_success`: 0153's body plus one line, on the
+  Management branch, only when `lead_brief_required`. Every other top-up,
+  GR included, is exactly what it was.
+- **The in-area pool needs a plan credit.** `get_brief_candidates_for_lead` is
+  0163's body with one predicate changed, `lead_balance > brief_topup_credits`,
+  so a top-up never adds supply inside the area (decision 6). The release's
+  passes 2 and 3 use the same rule (`briefPlanCredits`).
+- ⚠️ **A credit spent anywhere else comes out of plan credits first** (an admin
+  assign, a pool claim, a swap). `briefTopupCredits` is
+  `min(brief_topup_credits, lead_balance)` and `briefPlanCredits` is what is
+  left, so the counter can never claim more credit than the balance holds.
+
+**Delivery is the morning release's pass 4** (`src/lib/leadBrief/briefRelease.ts`),
+after the area passes, whoever has waited longest first:
+
+- the reach (`topupReach`) is every outcode **outside** the service area and
+  within the plan maximum of the base, 40 miles on 10 leads and 75 on 20.
+  ⚠️ **C7: the plan maximum, not the travel limit**, so it can reach past the
+  customer's own travel limit;
+- nearest first, measured from the customer's nearest area (base or a priority
+  area), then oldest lead first, up to 10 a customer a run;
+- each lead is re-checked through `get_brief_topup_candidates_for_lead`
+  (Management, not retired, not paused, the essentials, the release curve and
+  daily cap) and assigned through `assign_brief_topup_lead`.
+
+⚠️ **`assign_brief_topup_lead` calls `assign_lead_to_customer` FIRST and
+unchanged**, so the lock order is lead then customer as everywhere else, and
+then re-checks under that lock that the lead is beyond the area and spends one
+top-up credit. Any refusal rolls back the assignment with it. The batch's rule
+was "do not change the body of `assign_lead_to_customer`", and a test pins its
+md5. Nothing else calls the wrapper (a guard walks `src/`).
+
+**Label and reason.** Every top-up lead is Nearby opportunity, even in a
+first-pick outcode, with the reason "From just outside your area, as part of
+your top-up." and no first-pick or competition claim. ⚠️ **C3: that one string
+is exempt from A9's ban on "top-up"**, in both banned-word scans, and nowhere
+else.
+
+**The notice** ("How top-ups are delivered", `src/lib/leadBrief/topupCopy.ts`,
+import-free) shows on both top-up screens, the dashboard card and the emailed
+link, for brief customers only (`briefTopupApplies`).
+
+Decided in the build, for Zac to confirm:
+- top-up leads arrive in the morning release only, under the daily cap and the
+  one-a-working-day curve like any routed lead;
+- nothing refuses a top-up when no lead is in reach yet; the credits wait, as
+  every top-up's do;
+- the curve's entitlement counts top-up credits, so in-area leads may arrive a
+  little sooner in the month.
+
+### 78.6 — Known gaps, not built
+
+- **A resume through the Stripe billing portal skips the recalculation.** The
+  webhook's resume detection clears the pause without asking the engine.
+- **`promote_lead_brief`'s pruning does not know about long pauses** (C10). Lead
+  Brief Phase 6 owns that function.
+- **The monthly-widening half of the confirm screen** waits on Lead Brief
+  Phase 6, which writes those `pending_confirmation` rows.
+- **The n8n workflow** that polls the claim endpoint (78.3).
+- **Existing pause defects, every customer, out of scope** (04 Phase 0 §5): a
+  customer with a pending cancellation can still pause; the "pause ends soon"
+  email offers "Change plan", which the plan route refuses while paused; the
+  pause card shows for a customer with no Stripe subscription id; and the route
+  writes `paused_at` before the Stripe call.
+- **Nothing here has been exercised in a browser** (§45).
+
+### 78.7 — What keeps existing customers unchanged
+
+| Guard | Pins |
+|---|---|
+| `briefPauseGuards.test.ts` | the existing pause route's month path and the existing pause card, by md5 against main; the notice pass still reaching every pause with no area flag; a return date taking the brief path before the month path reads anything |
+| `0167_brief_pause_data_test.sql` | a paused ordinary customer still accrues replacements (§61), and so does a paused brief customer's GR share |
+| `topupGuards.test.ts` | `record_lead_topup_success` and `get_brief_candidates_for_lead` each 0153's / 0163's body with exactly one change; `assign_lead_to_customer` not redefined |
+| `0170_brief_topups_test.sql` | a non-brief customer's top-up, a GR top-up and a replay set aside nothing |
+
+### Verification
+
+Each phase: its SQL suite on a scratch Postgres 16 built from empty (all 30
+suites green after 0170), `npx tsc --noEmit`, `npm run lint`, `npx vitest run`
+(4,393 cases after Phase 4), `npm run build`, and mutation runs (Phase 3: 16
+TypeScript and 12 SQL, all caught; Phase 4: 16 SQL and 30 TypeScript, 45 caught
+and one behaviour-preserving). The full per-phase record is row 04 of
+`docs/build/00-index.md`.
+
+### Deployment order — each migration before its merge
+
+All four were applied to `znlfwbnvhlacwzgfalcf` on 10 Oct, after CI was green
+and before each merge (`00-index.md`, parallel merge rule 3), and each was
+checked there against a scratch build by md5 of every function body, with a
+rolled-back test on production:
+
+| | How | Ledger |
+|---|---|---|
+| 0167 | verbatim, one call | `0167_brief_pause_data` |
+| 0168 | two parts: the outbox by the tool, `write_pending_lead_brief` by hand in the SQL editor (a `delete from` in its body hangs the tool, as 0164) | `0168_…_part1`, `_part2` |
+| 0169 | two parts by the tool, after two comments inside `extend_brief_pause` lost their semicolons (§76) | `0169_…_part1`, `_part2` |
+| 0170 | one call, comments outside function bodies stripped (proved schema-identical to the full file on scratch first) | `0170_brief_topups` |
+
+All four are inert: 0 brief rows, and every default reproduces the behaviour
+before it. Nothing touches a balance, counter, pacing or capacity column for an
+existing customer.
+
+**Before `lead_brief_enabled` goes on**, for this batch: the n8n workflow
+(78.3), and a browser pass on `leads.stayful.co.uk` of a short pause, a long
+pause through recalculation to the confirm screen (all three buttons), the
+auto-accept, and a top-up on a brief customer.
