@@ -105,9 +105,11 @@ select test_util.assert_eq(
 
 insert into public.customer_lead_briefs
   (customer_id, version, status, origin, base_postcode, base_outcode, operating_mode,
-   travel_limit_miles, allocation, priorities, service_radius_miles, service_outcodes, expected_mix)
+   travel_limit_miles, allocation, priorities, service_radius_miles, service_outcodes, expected_mix,
+   effective_at)
 values ('c1640000-0000-0000-0000-000000000002', 2, 'pending_confirmation', 'recompute', 'HG2', 'HG2', 'anywhere',
-        null, 20, '[{"key":"location"}]'::jsonb, 30, '{HG2,HG1}', '{}'::jsonb);
+        null, 20, '[{"key":"location"}]'::jsonb, 30, '{HG2,HG1}', '{}'::jsonb,
+        now());
 select test_util.assert_eq(
   test_util.raises($$insert into public.customer_lead_briefs
     (customer_id, version, status, origin, base_postcode, base_outcode, operating_mode,

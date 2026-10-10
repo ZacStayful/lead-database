@@ -185,7 +185,7 @@ export default async function AdminQualityPage() {
             "clean_leads_streak, quality_review_required, account_status, " +
             "subscription_status, gr_subscription_status, monthly_allocation, " +
             "gr_monthly_allocation, quality_allowance_pct, replacement_balance, " +
-            "lapsed_at, gr_lapsed_at, paused_at",
+            "lapsed_at, gr_lapsed_at, paused_at, lead_brief_required",
         )
         .in("id", customerIds)
     : { data: [] };

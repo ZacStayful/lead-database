@@ -39,7 +39,7 @@ import {
   type PauseBand,
   type PauseFacts,
 } from "@/lib/pauseOutlook";
-import { pauseMonthsLabel, pauseReasonLabel } from "@/lib/pauseOptions";
+import { pauseEpisodeLengthLabel, pauseReasonLabel } from "@/lib/pauseOptions";
 import { pendingCancellation } from "@/lib/cancelOptions";
 
 type Tab =
@@ -1091,7 +1091,7 @@ function PauseDetailCell({
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            {pauseMonthsLabel(episode.months)} from{" "}
+            {pauseEpisodeLengthLabel(episode)} from{" "}
             {formatDate(episode.paused_at)} · resumes{" "}
             {formatDate(episode.resumes_at)} · pause #{customer.pause_count}
           </p>

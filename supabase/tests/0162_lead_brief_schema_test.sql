@@ -258,7 +258,7 @@ select test_util.assert_raises(
   '⚠️ a second ACTIVE brief for one customer is refused');
 
 do $$ begin
-  execute test_util.brief_sql('{"version":"2","status":"''pending_confirmation''","confirmed_at":"null","origin":"''recompute''"}');
+  execute test_util.brief_sql('{"version":"2","status":"''pending_confirmation''","confirmed_at":"null","origin":"''recompute''","effective_at":"now()"}');
 end $$;
 select test_util.assert_eq(
   (select count(*)::int from public.customer_lead_briefs
@@ -266,7 +266,7 @@ select test_util.assert_eq(
   2, 'a pending version can sit beside the active one');
 
 select test_util.assert_raises(
-  test_util.brief_sql('{"version":"3","status":"''pending_confirmation''","confirmed_at":"null"}'),
+  test_util.brief_sql('{"version":"3","status":"''pending_confirmation''","confirmed_at":"null","effective_at":"now()"}'),
   '⚠️ a second PENDING brief for one customer is refused');
 
 select test_util.assert_raises(
