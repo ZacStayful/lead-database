@@ -109,6 +109,8 @@ describe("issuing", () => {
     expect(db.writes).toHaveLength(0);
   });
 
+  // The code expires 10 hours after NOW and the real clock is long past that,
+  // so this only passes when the pass hands its clock to issuePostCallOffer.
   it("ONE CODE PER PERSON: a live call-route code is linked, never doubled", async () => {
     const db = fakeDb({ funnel_sessions: [session()], post_call_offers: [offer()], customers: [] });
     const s = stripeStub();

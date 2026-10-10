@@ -19944,6 +19944,12 @@ the admin offer route and used by both:
 The code is linked to the session only while it is still unpaid and unlinked,
 so a session gets one code ever.
 
+⚠️ **The pass hands its own clock to `issuePostCallOffer`**, so "is the
+existing code still live" is judged at the same moment as "is this session
+due". It used to read the real clock there, which made no difference in
+production but turned `discount.test.ts`'s one-code-per-person case red the
+moment the real clock passed the fixture's expiry (10 Oct, PR #157).
+
 The code reaches them through `post-call-offer-reminders` (12h, 4h and 1h
 before it expires), registered again in `vercel.json` by Phase 5. The reminder
 names the funnel rather than "our web meeting" for a funnel code. It is also
