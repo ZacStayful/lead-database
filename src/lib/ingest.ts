@@ -757,7 +757,12 @@ export async function completeAssignment(
   // admin assign, swaps, claims, owed replacements — keeps the default, so a
   // Nearby reason never claims "sent to keep your leads on track" for a lead
   // nobody sent for that.
-  delivery: "routed" | "placed" = "placed"
+  //
+  // Batch 04 Phase 4: "topup" is the morning release's top-up pass, a lead
+  // beyond the brief customer's service area sent on a top-up credit. It is
+  // labelled Nearby opportunity with the top-up reason, and carries no
+  // progress sentence (a top-up is paid for, not a catch-up).
+  delivery: "routed" | "placed" | "topup" = "placed"
 ): Promise<void> {
   const { data: customer } = await supabase
     .from("customers")
@@ -774,6 +779,7 @@ export async function completeAssignment(
   // then every alert is exactly what it was.
   const match = await recordBriefMatch(supabase, typedCustomer, lead, assignmentId, {
     routed: delivery === "routed",
+    topup: delivery === "topup",
   });
 
   // New-lead alerts (in-portal notification + Resend email) are gated together

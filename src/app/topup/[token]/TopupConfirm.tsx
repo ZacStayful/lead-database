@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { BRIEF_TOPUP_NOTICE } from "@/lib/leadBrief/topupCopy";
 
 type Status = "idle" | "loading" | "success" | "error" | "pending";
 
@@ -18,6 +19,7 @@ export function TopupConfirm({
   priceLabel,
   deliveryNote,
   filterWarning,
+  briefNotice = false,
 }: {
   token: string;
   credits: number;
@@ -35,6 +37,13 @@ export function TopupConfirm({
    * filter widens.
    */
   filterWarning: string | null;
+  /**
+   * Batch 04 Phase 4: a Lead Brief customer's Management top-up delivers from
+   * beyond their area. Told before they pay, on this emailed page as well as
+   * the dashboard's (the page most likely to be used when the balance has
+   * just run out, §69).
+   */
+  briefNotice?: boolean;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
@@ -104,6 +113,12 @@ export function TopupConfirm({
     <div>
       {status === "error" && (
         <p className="mb-3 text-center text-sm text-destructive">{message}</p>
+      )}
+      {briefNotice && (
+        <div className="mb-3 rounded-md border-[0.5px] border-black/10 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-[#52514e]">
+          <p className="font-medium text-[#1a1a19]">{BRIEF_TOPUP_NOTICE.title}</p>
+          <p className="mt-1">{BRIEF_TOPUP_NOTICE.body}</p>
+        </div>
       )}
       {filterWarning && (
         <div className="mb-3 rounded-md border-[0.5px] border-amber-300 bg-amber-50 px-3 py-2">

@@ -9,6 +9,7 @@ import {
   topupFilterWarning,
 } from "@/lib/topup";
 import { holdsTopupProduct, topupIneligibilityReason } from "@/lib/topupCharge";
+import { briefTopupApplies } from "@/lib/leadBrief/topup";
 import { TopupPurchasePanel } from "@/components/dashboard/TopupPurchasePanel";
 import type { LeadType } from "@/lib/types";
 
@@ -66,6 +67,9 @@ export default async function TopupTabPage() {
       filterInForce,
       deliveryNote: topupDeliveryNote(filterInForce),
       filterWarning: topupFilterWarning(customer, leadType, TOPUP_CREDITS),
+      // Batch 04 Phase 4: a brief customer's Management top-up comes from
+      // beyond their area, and the card says so before they buy.
+      briefNotice: briefTopupApplies(customer, leadType),
     };
   });
 
@@ -106,6 +110,7 @@ export default async function TopupTabPage() {
               deliveryNote={card.deliveryNote}
               filterInForce={card.filterInForce}
               filterWarning={card.filterWarning}
+              briefNotice={card.briefNotice}
             />
           ))}
         </div>

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { BRIEF_TOPUP_NOTICE } from "@/lib/leadBrief/topupCopy";
 import type { LeadType } from "@/lib/types";
 
 type Status = "idle" | "confirming" | "loading" | "success" | "error" | "pending";
@@ -25,6 +26,7 @@ export function TopupPurchasePanel({
   deliveryNote,
   filterInForce,
   filterWarning,
+  briefNotice = false,
 }: {
   leadType: LeadType;
   productLabel: string;
@@ -39,6 +41,12 @@ export function TopupPurchasePanel({
    *  constraint — see topupFilterWarning. Null when we have nothing
    *  specific and true to say. */
   filterWarning: string | null;
+  /**
+   * Batch 04 Phase 4: a Lead Brief customer's Management top-up delivers from
+   * beyond their area, and they are told so before they buy. False for
+   * everyone else, whose card is unchanged.
+   */
+  briefNotice?: boolean;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>("idle");
@@ -106,6 +114,13 @@ export function TopupPurchasePanel({
           {priceLabel} one-off
         </div>
       </div>
+
+      {briefNotice && !blockedReason && (
+        <div className="mb-4 rounded-lg border border-black/10 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          <p className="font-medium text-foreground">{BRIEF_TOPUP_NOTICE.title}</p>
+          <p className="mt-1">{BRIEF_TOPUP_NOTICE.body}</p>
+        </div>
+      )}
 
       {/* ⚠️ BEFORE the charge, not after. When the FILTER rather than the
           balance is what is holding delivery back, buying more credit does not

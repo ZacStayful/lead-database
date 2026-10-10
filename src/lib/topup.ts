@@ -13,6 +13,7 @@
  */
 import { createHash, randomBytes } from "crypto";
 import { APP_URL } from "@/lib/env";
+import { briefTopupApplies } from "@/lib/leadBrief/topup";
 import { sendCreditsExhaustedEmail } from "@/lib/emails";
 import { sendSms } from "@/lib/sms";
 import type { createAdminClient } from "@/lib/supabase/admin";
@@ -174,6 +175,12 @@ export type TopupTokenView =
        * the worst moment was the one saying least.
        */
       filterWarning: string | null;
+      /**
+       * Batch 04 Phase 4: a Lead Brief customer's Management top-up delivers
+       * from beyond their area, and the page says so (BRIEF_TOPUP_NOTICE).
+       * False on a failed read, which costs the notice and never the sale.
+       */
+      briefNotice: boolean;
     };
 
 /**
@@ -215,7 +222,7 @@ export async function describeTopupToken(
     // type from this literal, and splitting it across `+` collapses the result
     // to GenericStringError and every field read below stops typechecking.
     .select(
-      "filter_status, gr_filter_status, filter_expected_leads, gr_filter_expected_leads, monthly_allocation, gr_monthly_allocation, lead_balance, gr_lead_balance"
+      "filter_status, gr_filter_status, filter_expected_leads, gr_filter_expected_leads, monthly_allocation, gr_monthly_allocation, lead_balance, gr_lead_balance, lead_brief_required"
     )
     .eq("id", data.customer_id)
     .maybeSingle();
@@ -239,6 +246,9 @@ export async function describeTopupToken(
           credits
         )
       : null,
+    briefNotice: customer
+      ? briefTopupApplies(customer as Pick<Customer, "lead_brief_required">, leadType)
+      : false,
   };
 }
 
